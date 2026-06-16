@@ -1,0 +1,73 @@
+# Publish a self-contained single-file .exe for Windows x64.
+# Produces one KetoanMini.exe that users can run without installing .NET.
+# Triggers: manual "Run workflow" button, or any tag matching v*.*.* (e.g. v1.2.3).
+name: Publish Release (self-contained .exe)
+
+on:
+  workflow_dispatch:         # bấm tay từ tab Actions
+  push:
+    tags:
+      - "v*.*.*"             # ví dụ: git tag v1.0.0 && git push --tags
+
+jobs:
+  publish:
+    runs-on: windows-latest  # bắt buộc Windows vì net8.0-windows (WinForms/WPF)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # Tạo file thay thế cho các file bị .gitignore trước khi build/publish.
+      # Nếu thiếu, MSBuild sẽ báo lỗi MSB3030 "could not copy ... not found".
+      - name: Prepare gitignored local files
+        shell: pwsh
+        run: |
+          $cfg = "src/KetoanMini/config/database.json"
+          if (-not (Test-Path $cfg)) {
+            Copy-Item "src/KetoanMini/config/database.lan.example.json" $cfg
+          }
+          $xlsx = "src/KetoanMini/data/ThongtinKH.xlsx"
+          if (-not (Test-Path $xlsx)) {
+            New-Item -ItemType File -Path $xlsx -Force | Out-Null
+          }
+
+      - name: Restore
+        run: dotnet restore src/KetoanMini/KetoanMini.csproj
+
+      # PublishSingleFile=true   → gói toàn bộ app vào 1 file .exe duy nhất
+      # SelfContained=true       → nhúng .NET runtime, máy không cần cài .NET
+      # EnableCompressionInSingleFile=true → nén để giảm kích thước file
+      # IncludeNativeLibrariesForSelfExtract=true → nhúng luôn thư viện native
+      # PublishReadyToRun=true   → AOT nhẹ, khởi động nhanh hơn
+      - name: Publish (Release, win-x64, single-file)
+        run: >
+          dotnet publish src/KetoanMini/KetoanMini.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          /p:PublishSingleFile=true
+          /p:EnableCompressionInSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
+          /p:PublishReadyToRun=true
+          --no-restore
+          -o publish/
+
+      # Xoá database.json khỏi thư mục publish (chứa config ví dụ, không phải DB thật,
+      # nhưng tốt hơn không đưa vào artifact để tránh nhầm lẫn).
+      - name: Remove placeholder database config from artifact
+        shell: pwsh
+        run: Remove-Item "publish/database.json" -ErrorAction SilentlyContinue
+
+      # Tải .exe lên Actions → Artifacts. Khi có tag v*.*.*, tên artifact gồm version.
+      - name: Upload Release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KetoanMini-${{ github.ref_name }}-win-x64
+          path: publish/KetoanMini.exe
+          if-no-files-found: error
+          retention-days: 90
