@@ -1,0 +1,33 @@
+HUONG DAN KET NOI SQL SERVER QUA LAN CHO KETOAN MINI
+
+1. Tren may chu SQL
+   - Chay file tools\RUN_AS_ADMIN_configure_sql_lan.bat.
+   - Bam Yes neu Windows hoi quyen Administrator.
+   - Khi PowerShell hoi mat khau SQL cho login ketoan_app, nhap mat khau ban muon dung.
+     Goi y tam thoi: KetoanMini@2026!
+   - Script se:
+     + Bat TCP/IP cho SQLEXPRESS01.
+     + Dat port co dinh 1433.
+     + Mo firewall TCP 1433.
+     + Tao database KetoanMini neu chua co.
+     + Tao login SQL ketoan_app.
+     + Ghi connection string vao config\database.json.
+
+2. Tren may con trong LAN
+   - Copy thu muc app sang may con.
+   - Sua file config\database.json tren may con.
+   - Doi ConnectionString ve IP may chu SQL:
+
+     {
+       "ConnectionString": "Server=IP_MAY_CHU,1433;Database=KetoanMini;User Id=ketoan_app;Password=KetoanMini@202;Encrypt=False;TrustServerCertificate=True;"
+     }
+
+3. Kiem tra nhanh
+   - Tren may con mo PowerShell:
+     Test-NetConnection IP_MAY_CHU -Port 1433
+   - Neu TcpTestSucceeded = True thi may con thay duoc SQL Server.
+
+4. Luu y
+   - IP may chu nen dat tinh, tranh DHCP doi IP.
+   - Neu doi mat khau ketoan_app tren may chu thi phai sua lai config\database.json tren cac may con.
+   - Neu Windows Firewall hoac antivirus chan port 1433 thi may con se khong ket noi duoc.

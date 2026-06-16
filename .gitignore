@@ -1,0 +1,34 @@
+# Build output
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs
+*.log
+
+# Local runtime data and databases
+*.db
+*.sqlite
+*.sqlite3
+*.mdf
+*.ldf
+*.bak
+src/KetoanMini/data/*.xlsx
+
+# Real local configuration. Keep only examples in git.
+src/KetoanMini/config/database.json
+!src/KetoanMini/config/*.example.json
+
+# Publish artifacts
+publish/
+artifacts/
+*.nupkg
