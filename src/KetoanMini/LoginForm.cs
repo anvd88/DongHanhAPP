@@ -87,15 +87,15 @@ public sealed class LoginForm : Form
             NavyBottom);
         e.Graphics.FillRectangle(brush, ClientRectangle);
 
-        // Small footer credit at the bottom, drawn over the gradient so it stays crisp.
+        // Small footer credit at the bottom-right, drawn over the gradient so it stays crisp.
         const string footer = "Powered by Codex and Claude";
         using var footerFont  = new Font("Segoe UI", 8F);
         using var footerBrush = new SolidBrush(TextLight);
         var size = e.Graphics.MeasureString(footer, footerFont);
         e.Graphics.DrawString(
             footer, footerFont, footerBrush,
-            (ClientSize.Width - size.Width) / 2f,
-            ClientSize.Height - size.Height - 12f);
+            ClientSize.Width  - size.Width  - 16f,
+            ClientSize.Height - size.Height - 10f);
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)

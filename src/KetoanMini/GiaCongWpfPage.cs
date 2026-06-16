@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using Wpf = System.Windows;
 using WpfControls = System.Windows.Controls;
 using WpfData = System.Windows.Data;
@@ -6,6 +7,7 @@ using WpfEffects = System.Windows.Media.Effects;
 using WpfInput = System.Windows.Input;
 using WpfMedia = System.Windows.Media;
 using WpfPrimitives = System.Windows.Controls.Primitives;
+using Forms = System.Windows.Forms;
 
 namespace KetoanMini;
 
@@ -22,6 +24,7 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
     private WpfControls.DataGrid _phieuGrid = null!;
     private WpfControls.Grid _detailHost = null!;
     private WpfControls.TextBlock _footerText = null!;
+    private WpfControls.Border? _detailStatusPill;
     private WpfControls.ProgressBar _loadingProgress = null!;
     private WpfControls.TextBlock _loadingPercentText = null!;
     private System.Windows.Threading.DispatcherTimer? _loadingTimer;
@@ -392,10 +395,9 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         scroll.Content = stack;
 
         var header = new WpfControls.DockPanel { LastChildFill = true, Margin = new Wpf.Thickness(0, 0, 0, 14) };
-        var statusButton = MakeButton("\uE895", "Cập nhật trạng thái", primary: true, minWidth: 176);
-        statusButton.Click += (_, _) => OpenStatusMenu(statusButton);
-        WpfControls.DockPanel.SetDock(statusButton, WpfControls.Dock.Right);
-        header.Children.Add(statusButton);
+        var headerActions = BuildHeaderActions();
+        WpfControls.DockPanel.SetDock(headerActions, WpfControls.Dock.Right);
+        header.Children.Add(headerActions);
         header.Children.Add(HeaderTitle("\uE8A5", $"Chi tiết phiếu gia công - {Clean(phieu.MaPhieu)}"));
         stack.Children.Add(header);
         stack.Children.Add(Separator());
@@ -404,8 +406,6 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         stack.Children.Add(BuildSummaryCards(phieu));
         stack.Children.Add(SectionTitle("Danh sách hàng hóa"));
         stack.Children.Add(BuildHangHoaGrid(phieu.HangHoaList.Count));
-        stack.Children.Add(SectionTitle("Tiến độ xử lý"));
-        stack.Children.Add(BuildProgress(phieu));
         stack.Children.Add(BuildValueSummary(phieu));
         stack.Children.Add(BuildActions());
 
@@ -443,11 +443,12 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         grid.Children.Add(panel);
     }
 
-    private static void AddStatusInfoCell(WpfControls.Grid grid, int column, int row, string status)
+    private void AddStatusInfoCell(WpfControls.Grid grid, int column, int row, string status)
     {
         var panel = new WpfControls.StackPanel { Margin = new Wpf.Thickness(0, 0, 22, 18) };
         panel.Children.Add(Text("Trạng thái", 13, false, MutedBrush));
         var pill = StatusPill(status);
+        _detailStatusPill = pill;
         pill.HorizontalAlignment = Wpf.HorizontalAlignment.Left;
         pill.Margin = new Wpf.Thickness(0, 8, 0, 0);
         panel.Children.Add(pill);
@@ -501,7 +502,6 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         grid.Height = Math.Max(100, Math.Min(250, lineCount * 36 + 42));
         grid.Margin = new Wpf.Thickness(0, 0, 0, 18);
         grid.Columns.Add(TextColumn("#", nameof(GiaCongHangHoaRow.Stt), 46, alignRight: true));
-        grid.Columns.Add(TextColumn("Loại hàng", nameof(GiaCongHangHoaRow.LoaiDong), 100));
         grid.Columns.Add(TextColumn("Mã hàng", nameof(GiaCongHangHoaRow.MaHang), 92));
         grid.Columns.Add(TextColumn("Tên hàng", nameof(GiaCongHangHoaRow.TenHang), 1, star: true));
         grid.Columns.Add(TextColumn("ĐVT", nameof(GiaCongHangHoaRow.DonViTinh), 72));
@@ -510,65 +510,6 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         grid.Columns.Add(TextColumn("Thành tiền", nameof(GiaCongHangHoaRow.ThanhTienText), 112, alignRight: true));
         grid.Columns.Add(StatusColumn("Trạng thái", nameof(GiaCongHangHoaRow.TrangThaiDong), 92));
         return grid;
-    }
-
-    private WpfControls.Border BuildProgress(GiaCongPhieu phieu)
-    {
-        var clampedProgress = Math.Clamp(phieu.TienDo, 0, 100);
-        var grid = new WpfControls.Grid();
-        grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = Wpf.GridLength.Auto });
-        grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
-
-        var circle = new WpfControls.Border
-        {
-            Width = 46,
-            Height = 46,
-            BorderBrush = LineBrush,
-            BorderThickness = new Wpf.Thickness(3),
-            CornerRadius = new Wpf.CornerRadius(23),
-            Background = SurfaceBrush,
-            Child = new WpfControls.TextBlock
-            {
-                Text = $"{clampedProgress}%",
-                Foreground = TextBrush,
-                FontSize = 12,
-                FontWeight = Wpf.FontWeights.SemiBold,
-                HorizontalAlignment = Wpf.HorizontalAlignment.Center,
-                VerticalAlignment = Wpf.VerticalAlignment.Center
-            }
-        };
-        WpfControls.Grid.SetColumn(circle, 0);
-        grid.Children.Add(circle);
-
-        var progressPanel = new WpfControls.Grid { Margin = new Wpf.Thickness(18, 0, 0, 0) };
-        progressPanel.RowDefinitions.Add(new WpfControls.RowDefinition { Height = Wpf.GridLength.Auto });
-        progressPanel.RowDefinitions.Add(new WpfControls.RowDefinition { Height = Wpf.GridLength.Auto });
-        progressPanel.Children.Add(Text($"Bước hiện tại: {Math.Clamp(phieu.BuocHienTai, 1, 5)}/5 - Tiến độ {clampedProgress}%", 13, false, MutedBrush));
-        var progress = new WpfControls.ProgressBar
-        {
-            Height = 8,
-            Minimum = 0,
-            Maximum = 100,
-            Value = clampedProgress,
-            Foreground = AccentBrush,
-            Background = Brush("#CBD5E1"),
-            Margin = new Wpf.Thickness(0, 12, 0, 0)
-        };
-        WpfControls.Grid.SetRow(progress, 1);
-        progressPanel.Children.Add(progress);
-        WpfControls.Grid.SetColumn(progressPanel, 1);
-        grid.Children.Add(progressPanel);
-
-        return new WpfControls.Border
-        {
-            Background = SurfaceBrush,
-            BorderBrush = LineBrush,
-            BorderThickness = new Wpf.Thickness(1),
-            CornerRadius = new Wpf.CornerRadius(8),
-            Padding = new Wpf.Thickness(18, 14, 18, 14),
-            Margin = new Wpf.Thickness(0, 0, 0, 14),
-            Child = grid
-        };
     }
 
     private WpfControls.Border BuildValueSummary(GiaCongPhieu phieu)
@@ -626,12 +567,36 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         grid.Children.Add(valueText);
     }
 
-    private WpfControls.Grid BuildActions()
+    private WpfControls.Panel BuildActions()
     {
-        var grid = new WpfControls.Grid();
-        grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(2.2, Wpf.GridUnitType.Star) });
+        var actions = new WpfControls.WrapPanel
+        {
+            HorizontalAlignment = Wpf.HorizontalAlignment.Left,
+            Margin = new Wpf.Thickness(0, 2, 0, 0)
+        };
+
+        var edit = MakeButton("\uE70F", "Sửa phiếu", primary: false, minWidth: 112);
+        edit.Click += async (_, _) => await EditCurrentPhieuAsync();
+        var delete = MakeButton("\uE74D", "Xóa phiếu", primary: false, minWidth: 112);
+        delete.BorderBrush = DangerBrush;
+        delete.Click += async (_, _) => await DeleteCurrentPhieuAsync();
+
+        foreach (var button in new[] { edit, delete })
+        {
+            button.Margin = new Wpf.Thickness(0, 0, 10, 10);
+            actions.Children.Add(button);
+        }
+
+        return actions;
+    }
+
+    private WpfControls.Panel BuildHeaderActions()
+    {
+        var actions = new WpfControls.StackPanel
+        {
+            Orientation = WpfControls.Orientation.Horizontal,
+            HorizontalAlignment = Wpf.HorizontalAlignment.Right
+        };
 
         var print = MakeButton("\uE749", "In phiếu", primary: false, minWidth: 120);
         print.Click += (_, _) => Wpf.MessageBox.Show("Tính năng in phiếu đang phát triển.", "Thông báo");
@@ -641,15 +606,60 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         status.Click += (_, _) => OpenStatusMenu(status);
 
         print.Margin = new Wpf.Thickness(0, 0, 10, 0);
-        excel.Margin = new Wpf.Thickness(10, 0, 12, 0);
-        status.Margin = new Wpf.Thickness(12, 0, 0, 0);
-        WpfControls.Grid.SetColumn(print, 0);
-        WpfControls.Grid.SetColumn(excel, 1);
-        WpfControls.Grid.SetColumn(status, 2);
-        grid.Children.Add(print);
-        grid.Children.Add(excel);
-        grid.Children.Add(status);
-        return grid;
+        excel.Margin = new Wpf.Thickness(0, 0, 10, 0);
+
+        actions.Children.Add(print);
+        actions.Children.Add(excel);
+        actions.Children.Add(status);
+
+        return actions;
+    }
+
+    private async Task EditCurrentPhieuAsync()
+    {
+        if (_currentPhieu == null)
+            return;
+
+        try
+        {
+            var latest = await Task.Run(() => _store.GetPhieuById(_currentPhieu.Id)) ?? _currentPhieu;
+            using var dialog = new GiaCongFormDialog(_store, latest);
+            if (dialog.ShowDialog() != Forms.DialogResult.OK)
+                return;
+
+            var updated = await Task.Run(() => _store.GetPhieuById(latest.Id));
+            if (updated != null)
+                ApplyUpdatedPhieuInPlace(updated);
+        }
+        catch (Exception ex)
+        {
+            Wpf.MessageBox.Show(ex.Message, "Lỗi", Wpf.MessageBoxButton.OK, Wpf.MessageBoxImage.Error);
+        }
+    }
+
+    private async Task DeleteCurrentPhieuAsync()
+    {
+        if (_currentPhieu == null)
+            return;
+
+        var phieu = _currentPhieu;
+        var confirm = Wpf.MessageBox.Show(
+            $"Xóa phiếu gia công {Clean(phieu.MaPhieu)}?",
+            "Xác nhận",
+            Wpf.MessageBoxButton.YesNo,
+            Wpf.MessageBoxImage.Warning);
+        if (confirm != Wpf.MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            await Task.Run(() => _store.DeletePhieu(phieu.Id));
+            RemovePhieuInPlace(phieu.Id);
+        }
+        catch (Exception ex)
+        {
+            Wpf.MessageBox.Show(ex.Message, "Lỗi", Wpf.MessageBoxButton.OK, Wpf.MessageBoxImage.Error);
+        }
     }
 
     private void OpenStatusMenu(WpfControls.Button target)
@@ -679,21 +689,142 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         if (_currentPhieu == null)
             return;
 
-        ShowLoading(true);
         try
         {
             var phieu = _currentPhieu;
             await Task.Run(() => _store.UpdatePhieuTrangThai(phieu.Id, status, phieu.TienDo, phieu.BuocHienTai));
-            await RefreshDataAsync(phieu.Id, showLoading: false);
+            ApplyStatusInPlace(phieu.Id, status);
         }
         catch (Exception ex)
         {
             Wpf.MessageBox.Show(ex.Message, "Lỗi", Wpf.MessageBoxButton.OK, Wpf.MessageBoxImage.Error);
         }
-        finally
+    }
+
+    private void ApplyStatusInPlace(long phieuId, string status)
+    {
+        var row = _phieuRows.FirstOrDefault(r => r.Id == phieuId);
+        var source = row?.Source ?? _allPhieu.FirstOrDefault(p => p.Id == phieuId) ?? _currentPhieu;
+        if (source == null)
+            return;
+
+        source.TrangThai = status;
+        source.UpdatedAt = DateTime.Now;
+        if (_currentPhieu?.Id == phieuId)
         {
-            ShowLoading(false);
+            _currentPhieu.TrangThai = status;
+            _currentPhieu.UpdatedAt = source.UpdatedAt;
         }
+
+        row?.ApplyStatus(status);
+        UpdateDetailStatusPill(status);
+
+        if (row != null && !PhieuMatchesCurrentFilter(source))
+        {
+            var oldIndex = _phieuRows.IndexOf(row);
+            _phieuRows.Remove(row);
+            _footerText.Text = $"Hiển thị {_phieuRows.Count} phiếu";
+
+            var nextIndex = Math.Min(oldIndex, _phieuRows.Count - 1);
+            _phieuGrid.SelectedItem = nextIndex >= 0 ? _phieuRows[nextIndex] : null;
+            return;
+        }
+
+        _footerText.Text = $"Hiển thị {_phieuRows.Count} phiếu";
+    }
+
+    private void ApplyUpdatedPhieuInPlace(GiaCongPhieu updated)
+    {
+        var existing = _allPhieu.FirstOrDefault(p => p.Id == updated.Id);
+        if (existing != null)
+            CopyPhieu(existing, updated);
+        else
+            _allPhieu.Insert(0, updated);
+
+        var row = _phieuRows.FirstOrDefault(r => r.Id == updated.Id);
+        if (row != null)
+        {
+            row.ApplyPhieu(updated);
+            if (!PhieuMatchesCurrentFilter(row.Source))
+            {
+                RemoveVisibleRow(row);
+                return;
+            }
+
+            _phieuGrid.SelectedItem = row;
+            _phieuGrid.ScrollIntoView(row);
+        }
+        else if (PhieuMatchesCurrentFilter(updated))
+        {
+            row = new GiaCongPhieuRow(updated);
+            _phieuRows.Insert(0, row);
+            _phieuGrid.SelectedItem = row;
+            _phieuGrid.ScrollIntoView(row);
+        }
+
+        _currentPhieu = updated;
+        _footerText.Text = $"Hiển thị {_phieuRows.Count} phiếu";
+        ShowDetail(updated);
+    }
+
+    private void RemovePhieuInPlace(long phieuId)
+    {
+        _allPhieu.RemoveAll(p => p.Id == phieuId);
+        var row = _phieuRows.FirstOrDefault(r => r.Id == phieuId);
+        if (row != null)
+        {
+            RemoveVisibleRow(row);
+            return;
+        }
+
+        _currentPhieu = null;
+        _footerText.Text = $"Hiển thị {_phieuRows.Count} phiếu";
+        ShowPlaceholder("Chọn một phiếu để xem chi tiết");
+    }
+
+    private void RemoveVisibleRow(GiaCongPhieuRow row)
+    {
+        var oldIndex = _phieuRows.IndexOf(row);
+        _phieuRows.Remove(row);
+        _footerText.Text = $"Hiển thị {_phieuRows.Count} phiếu";
+
+        var nextIndex = Math.Min(oldIndex, _phieuRows.Count - 1);
+        if (nextIndex >= 0)
+        {
+            _phieuGrid.SelectedItem = _phieuRows[nextIndex];
+        }
+        else
+        {
+            _currentPhieu = null;
+            ShowPlaceholder("Chọn một phiếu để xem chi tiết");
+        }
+    }
+
+    private bool PhieuMatchesCurrentFilter(GiaCongPhieu phieu)
+    {
+        if (_filter == "nhap" && !Normalize(phieu.LoaiPhieu).Contains("nhap", StringComparison.Ordinal))
+            return false;
+        if (_filter == "xuat" && !Normalize(phieu.LoaiPhieu).Contains("xuat", StringComparison.Ordinal))
+            return false;
+        if (_filter == GiaCongTrangThai.DangXuLy && phieu.TrangThai != GiaCongTrangThai.DangXuLy)
+            return false;
+
+        var query = Normalize(_searchBox?.Text ?? "");
+        return string.IsNullOrWhiteSpace(query)
+               || Normalize(phieu.MaPhieu).Contains(query, StringComparison.Ordinal)
+               || Normalize(phieu.DoiTac).Contains(query, StringComparison.Ordinal)
+               || Normalize(phieu.LoaiPhieu).Contains(query, StringComparison.Ordinal)
+               || Normalize(phieu.TrangThai).Contains(query, StringComparison.Ordinal);
+    }
+
+    private void UpdateDetailStatusPill(string status)
+    {
+        if (_detailStatusPill == null)
+            return;
+
+        _detailStatusPill.Background = StatusSoftBrush(status);
+        _detailStatusPill.BorderBrush = StatusLineBrush(status);
+        _detailStatusPill.Child = Text(status, 13, true, StatusBrush(status));
     }
 
     private long? GetSelectedId()
@@ -1217,8 +1348,29 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
     private static string Normalize(string value)
         => TextUtil.RemoveDiacritics(Clean(value)).ToLowerInvariant();
 
-    private sealed class GiaCongPhieuRow(GiaCongPhieu source)
+    private static void CopyPhieu(GiaCongPhieu target, GiaCongPhieu source)
     {
+        target.MaPhieu = source.MaPhieu;
+        target.LoaiPhieu = source.LoaiPhieu;
+        target.DoiTac = source.DoiTac;
+        target.NhanVienPhuTrach = source.NhanVienPhuTrach;
+        target.NgayLap = source.NgayLap;
+        target.HanHoanThanh = source.HanHoanThanh;
+        target.TrangThai = source.TrangThai;
+        target.TienDo = source.TienDo;
+        target.BuocHienTai = source.BuocHienTai;
+        target.GhiChu = source.GhiChu;
+        target.CreatedAt = source.CreatedAt;
+        target.UpdatedAt = source.UpdatedAt;
+        target.HangHoaList = source.HangHoaList;
+        target.SoMatHang = source.SoMatHang;
+        target.TongGiaTri = source.TongGiaTri;
+    }
+
+    private sealed class GiaCongPhieuRow(GiaCongPhieu source) : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler? PropertyChanged;
+
         public GiaCongPhieu Source { get; } = source;
         public long Id => Source.Id;
         public string MaPhieu => Clean(Source.MaPhieu);
@@ -1231,6 +1383,34 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         public WpfMedia.Brush StatusForeground => StatusBrush(Source.TrangThai);
         public WpfMedia.Brush StatusBackground => StatusSoftBrush(Source.TrangThai);
         public WpfMedia.Brush StatusBorder => StatusLineBrush(Source.TrangThai);
+
+        public void ApplyPhieu(GiaCongPhieu updated)
+        {
+            CopyPhieu(Source, updated);
+            OnPropertyChanged(nameof(MaPhieu));
+            OnPropertyChanged(nameof(DoiTac));
+            OnPropertyChanged(nameof(LoaiPhieu));
+            OnPropertyChanged(nameof(NgayLapText));
+            OnPropertyChanged(nameof(SoMatHangText));
+            OnPropertyChanged(nameof(TongGiaTriText));
+            OnPropertyChanged(nameof(TrangThai));
+            OnPropertyChanged(nameof(StatusForeground));
+            OnPropertyChanged(nameof(StatusBackground));
+            OnPropertyChanged(nameof(StatusBorder));
+        }
+
+        public void ApplyStatus(string status)
+        {
+            Source.TrangThai = status;
+            Source.UpdatedAt = DateTime.Now;
+            OnPropertyChanged(nameof(TrangThai));
+            OnPropertyChanged(nameof(StatusForeground));
+            OnPropertyChanged(nameof(StatusBackground));
+            OnPropertyChanged(nameof(StatusBorder));
+        }
+
+        private void OnPropertyChanged(string propertyName)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
     private sealed class GiaCongHangHoaRow(int stt, GiaCongHangHoa source)
