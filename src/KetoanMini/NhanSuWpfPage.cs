@@ -104,6 +104,9 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     public async void RefreshUsers()
         => await RefreshUsersAsync(GetSelectedUsername(), showLoading: true);
 
+    public async void RefreshUsersQuiet()
+        => await RefreshUsersAsync(GetSelectedUsername(), showLoading: false);
+
     public void RefreshPresenceOnly()
     {
         try

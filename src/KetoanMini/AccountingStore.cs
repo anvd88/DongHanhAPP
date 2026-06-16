@@ -903,12 +903,15 @@ public sealed class AccountingStore
         }
         using (var check = connection.CreateCommand())
         {
-            // Join the user so a runtime lock/delete (is_active = 0 / is_deleted = 1)
-            // also ends the session, not just a takeover from another machine.
+            // Look at the LIVE account row only. A deleted-then-recreated username keeps
+            // soft-deleted rows (is_deleted = 1) alongside the active one, so a plain JOIN
+            // could read a stale deleted row and log a valid user out as "locked".
             check.CommandText = """
-                SELECT s.is_active AS session_active, u.is_active AS user_active, u.is_deleted AS user_deleted
+                SELECT s.is_active AS session_active,
+                       (SELECT TOP 1 u.is_active
+                        FROM app_users u
+                        WHERE u.username = s.username AND u.is_deleted = 0) AS user_active
                 FROM user_sessions s
-                LEFT JOIN app_users u ON u.username = s.username
                 WHERE s.session_token = @token;
                 """;
             check.Parameters.AddWithValue("@token", sessionToken);
@@ -916,10 +919,10 @@ public sealed class AccountingStore
             if (!reader.Read()) return SessionStatus.EndedElsewhere;
 
             bool sessionActive = !reader.IsDBNull(0) && Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture) == 1;
-            bool userActive = !reader.IsDBNull(1) && Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture) == 1;
-            bool userDeleted = !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture) == 1;
+            // user_active is NULL only when no live (non-deleted) account exists → it was deleted.
+            bool accountLocked = reader.IsDBNull(1) || Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture) != 1;
 
-            if (!userActive || userDeleted) return SessionStatus.AccountLocked;
+            if (accountLocked) return SessionStatus.AccountLocked;
             return sessionActive ? SessionStatus.Alive : SessionStatus.EndedElsewhere;
         }
     }
@@ -1390,8 +1393,51 @@ public sealed class AccountingStore
 
         using var connection = OpenConnection();
         using var transaction = connection.BeginTransaction();
-        var now = DateTime.Now;
-        var deletedCodes = 0;
+
+        // Hard-delete EVERYTHING tied to this user so no data lingers in the DB
+        // (no soft-deleted rows left behind). Chat rows are removed child-first to
+        // satisfy the foreign keys: file_offers → messages → conversations.
+        void RunUserDelete(string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("@id", userId.ToString("D"));
+            command.Parameters.AddWithValue("@username", user.Username);
+            command.ExecuteNonQuery();
+        }
+
+        // The set of conversations this user takes part in (used to clear their
+        // messages/offers even when only the username or only the id column is set).
+        const string userConvos = """
+            SELECT id FROM chat_conversations
+            WHERE user_a_id = @id OR user_b_id = @id OR user_a = @username OR user_b = @username
+            """;
+
+        RunUserDelete($"""
+            DELETE FROM chat_file_offers
+            WHERE sender_id = @id OR receiver_id = @id
+               OR sender_username = @username OR receiver_username = @username
+               OR conversation_id IN ({userConvos})
+               OR message_id IN (
+                    SELECT id FROM chat_messages
+                    WHERE sender_id = @id OR receiver_id = @id
+                       OR sender_username = @username OR receiver_username = @username);
+            """);
+
+        RunUserDelete($"""
+            DELETE FROM chat_messages
+            WHERE sender_id = @id OR receiver_id = @id
+               OR sender_username = @username OR receiver_username = @username
+               OR conversation_id IN ({userConvos});
+            """);
+
+        RunUserDelete("""
+            DELETE FROM chat_conversations
+            WHERE user_a_id = @id OR user_b_id = @id OR user_a = @username OR user_b = @username;
+            """);
+
+        int deletedCodes;
         using (var deleteCodes = connection.CreateCommand())
         {
             deleteCodes.Transaction = transaction;
@@ -1405,72 +1451,7 @@ public sealed class AccountingStore
             deletedCodes = deleteCodes.ExecuteNonQuery();
         }
 
-        using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = """
-                UPDATE app_users
-                SET is_deleted = 1,
-                    deleted_at = @deletedAt,
-                    is_active = 0
-                WHERE id = @id
-                  AND is_deleted = 0;
-                """;
-            command.Parameters.AddWithValue("@id", userId.ToString("D"));
-            command.Parameters.AddWithValue("@deletedAt", ToDatabaseDateTime(now));
-            command.ExecuteNonQuery();
-        }
-
-        using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = """
-                UPDATE chat_conversations
-                SET is_deleted = 1,
-                    deleted_at = @deletedAt
-                WHERE is_deleted = 0
-                  AND (user_a_id = @id OR user_b_id = @id OR user_a = @username OR user_b = @username);
-                """;
-            command.Parameters.AddWithValue("@id", userId.ToString("D"));
-            command.Parameters.AddWithValue("@username", user.Username);
-            command.Parameters.AddWithValue("@deletedAt", ToDatabaseDateTime(now));
-            command.ExecuteNonQuery();
-        }
-
-        using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = """
-                UPDATE chat_messages
-                SET is_deleted = 1,
-                    deleted_at = @deletedAt
-                WHERE is_deleted = 0
-                  AND (sender_id = @id OR receiver_id = @id OR sender_username = @username OR receiver_username = @username);
-                """;
-            command.Parameters.AddWithValue("@id", userId.ToString("D"));
-            command.Parameters.AddWithValue("@username", user.Username);
-            command.Parameters.AddWithValue("@deletedAt", ToDatabaseDateTime(now));
-            command.ExecuteNonQuery();
-        }
-
-        using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = """
-                UPDATE chat_file_offers
-                SET is_deleted = 1,
-                    deleted_at = @deletedAt
-                WHERE is_deleted = 0
-                  AND (sender_id = @id OR receiver_id = @id OR sender_username = @username OR receiver_username = @username);
-                """;
-            command.Parameters.AddWithValue("@id", userId.ToString("D"));
-            command.Parameters.AddWithValue("@username", user.Username);
-            command.Parameters.AddWithValue("@deletedAt", ToDatabaseDateTime(now));
-            command.ExecuteNonQuery();
-        }
-
-        // Hard-delete per-username records so a recreated same-username account
-        // does NOT inherit old overtime approvals / reset requests / sessions.
+        // Per-username records (overtime requests, reset requests, login sessions).
         foreach (var table in new[] { "work_access_requests", "password_reset_requests", "user_sessions" })
         {
             using var cleanup = connection.CreateCommand();
@@ -1480,9 +1461,21 @@ public sealed class AccountingStore
             cleanup.ExecuteNonQuery();
         }
 
+        // Finally remove the account row itself — a real DELETE, not a soft delete.
+        // Also purges any leftover soft-deleted rows of the same username so the DB
+        // never accumulates stale duplicates.
+        using (var deleteUser = connection.CreateCommand())
+        {
+            deleteUser.Transaction = transaction;
+            deleteUser.CommandText = "DELETE FROM app_users WHERE id = @id OR username = @username;";
+            deleteUser.Parameters.AddWithValue("@id", userId.ToString("D"));
+            deleteUser.Parameters.AddWithValue("@username", user.Username);
+            deleteUser.ExecuteNonQuery();
+        }
+
         transaction.Commit();
 
-        RecordAudit("Xóa tài khoản", "User", user.Username, $"Admin xóa tài khoản User. Đã xóa dữ liệu tăng ca/đổi mật khẩu/phiên đăng nhập và {deletedCodes} mã kích hoạt liên quan.");
+        RecordAudit("Xóa tài khoản", "User", user.Username, $"Admin xóa vĩnh viễn tài khoản User: đã xóa toàn bộ hội thoại/tin nhắn/file chat, dữ liệu tăng ca, yêu cầu đổi mật khẩu, phiên đăng nhập và {deletedCodes} mã kích hoạt liên quan.");
     }
 
     public IReadOnlyList<AuditLogEntry> GetAuditLogs(int take = 500)

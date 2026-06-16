@@ -158,7 +158,7 @@ public sealed partial class MainForm
 
     private void ShowCreateGiaCongForm()
     {
-        using var dlg = new GiaCongFormDialog(_giaCongStore);
+        using var dlg = new GiaCongFormDialog(_giaCongStore, _currentUser.Username);
         if (dlg.ShowDialog(this) == DialogResult.OK)
             _store.RecordAudit("Tạo phiếu gia công", "GiaCongPhieu", dlg.MaPhieu, "Tạo phiếu gia công mới");
     }

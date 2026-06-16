@@ -14,7 +14,7 @@ public sealed partial class MainForm
 
         var page = new NhanSuWpfPage(_store, _currentUser);
         _nhanSuWpfPage = page;
-        Action reload = page.RefreshUsers;
+        Action reload = page.RefreshUsersQuiet;
         Action refreshPresence = page.RefreshPresenceOnly;
 
         page.AddUserRequested += (_, _) =>
@@ -30,7 +30,7 @@ public sealed partial class MainForm
             if (dlg.ShowDialog(this) == DialogResult.OK)
             {
                 page.RefreshUsers();
-                RefreshNotifCount();
+                RefreshNhanSuNotificationsAndBaseline();
             }
         };
 
@@ -53,7 +53,7 @@ public sealed partial class MainForm
                 var code = _store.AdminCreatePasswordResetCode(e.User.Id);
                 CodeDisplayDialog.Show(this, e.User.Username, code);
                 page.RefreshPresenceOnly();
-                RefreshNotifCount();
+                RefreshNhanSuNotificationsAndBaseline();
             }
             catch (Exception ex)
             {
@@ -61,7 +61,7 @@ public sealed partial class MainForm
             }
         };
 
-        page.NotificationsChanged += (_, _) => RefreshNotifCount();
+        page.NotificationsChanged += (_, _) => RefreshNhanSuNotificationsAndBaseline();
 
         // Admin locked/deleted an account -> push an instant force-logout to that user
         // over the LAN (the DB heartbeat also catches it as a fallback).
@@ -88,5 +88,11 @@ public sealed partial class MainForm
         };
 
         return container;
+    }
+
+    private void RefreshNhanSuNotificationsAndBaseline()
+    {
+        RefreshNotifCount();
+        try { _usersToken = _store.GetUsersChangeToken(); } catch { }
     }
 }
