@@ -1,0 +1,153 @@
+name: Build Installer (Setup EXE)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional version override, for example 1.2.3"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  PROJECT_PATH: src/KetoanMini/KetoanMini.csproj
+  PUBLISH_DIR: ${{ github.workspace }}\publish\win-x64
+  INSTALLER_DIR: ${{ github.workspace }}\artifacts\installer
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Prepare gitignored local files
+        shell: pwsh
+        run: |
+          $cfg = "src/KetoanMini/config/database.json"
+          if (-not (Test-Path $cfg)) {
+            Copy-Item "src/KetoanMini/config/database.lan.example.json" $cfg
+          }
+
+          $xlsx = "src/KetoanMini/data/ThongtinKH.xlsx"
+          if (-not (Test-Path $xlsx)) {
+            New-Item -ItemType File -Path $xlsx -Force | Out-Null
+          }
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content $env:PROJECT_PATH
+          $projectVersion = ($project.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
+          if ([string]::IsNullOrWhiteSpace($projectVersion)) {
+            $projectVersion = "1.0.0"
+          }
+
+          $inputVersion = "${{ github.event.inputs.version }}"
+          $tagVersion = ""
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tagVersion = "${{ github.ref_name }}".TrimStart("v")
+          }
+
+          $version = $projectVersion
+          if (-not [string]::IsNullOrWhiteSpace($tagVersion)) {
+            $version = $tagVersion
+          }
+          if (-not [string]::IsNullOrWhiteSpace($inputVersion)) {
+            $version = $inputVersion.Trim()
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Version must use x.y.z format. Current value: $version"
+          }
+
+          $assemblyVersion = "$version.0"
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+          "ASSEMBLY_VERSION=$assemblyVersion" >> $env:GITHUB_ENV
+          "Installer version: $version" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT_PATH }}
+
+      - name: Publish app (Release, win-x64, self-contained)
+        shell: pwsh
+        run: |
+          dotnet publish $env:PROJECT_PATH `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            /p:PublishSingleFile=true `
+            /p:EnableCompressionInSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:PublishReadyToRun=true `
+            /p:Version=$env:APP_VERSION `
+            /p:AssemblyVersion=$env:ASSEMBLY_VERSION `
+            /p:FileVersion=$env:ASSEMBLY_VERSION `
+            --no-restore `
+            -o $env:PUBLISH_DIR
+
+      - name: Remove placeholder database config
+        shell: pwsh
+        run: |
+          Remove-Item "$env:PUBLISH_DIR\database.json" -ErrorAction SilentlyContinue
+          Remove-Item "$env:PUBLISH_DIR\config\database.json" -ErrorAction SilentlyContinue
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:INSTALLER_DIR | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found: $iscc"
+          }
+
+          & $iscc `
+            "installer\KetoanMini.iss" `
+            "/DSourceDir=$env:PUBLISH_DIR" `
+            "/DOutputDir=$env:INSTALLER_DIR" `
+            "/DMyAppVersion=$env:APP_VERSION" `
+            "/DIconPath=${{ github.workspace }}\src\KetoanMini\assets\logo_cuong_phat.ico"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KetoanMiniSetup-${{ env.APP_VERSION }}-win-x64
+          path: artifacts/installer/*.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = Get-ChildItem $env:INSTALLER_DIR -Filter "*.exe" | Select-Object -First 1
+          if ($null -eq $installer) {
+            throw "Installer file not found."
+          }
+
+          gh release view "${{ github.ref_name }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "${{ github.ref_name }}" $installer.FullName --clobber
+          }
+          else {
+            gh release create "${{ github.ref_name }}" $installer.FullName `
+              --title "KetoanMini $env:APP_VERSION" `
+              --notes "Installer build generated by GitHub Actions."
+          }
