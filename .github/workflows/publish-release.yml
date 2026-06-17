@@ -37,7 +37,7 @@ jobs:
           }
 
       - name: Restore
-        run: dotnet restore src/KetoanMini/KetoanMini.csproj
+        run: dotnet restore src/KetoanMini/KetoanMini.csproj -r win-x64 /p:PublishReadyToRun=true
 
       # PublishSingleFile=true   → gói toàn bộ app vào 1 file .exe duy nhất
       # SelfContained=true       → nhúng .NET runtime, máy không cần cài .NET
@@ -61,7 +61,9 @@ jobs:
       # nhưng tốt hơn không đưa vào artifact để tránh nhầm lẫn).
       - name: Remove placeholder database config from artifact
         shell: pwsh
-        run: Remove-Item "publish/database.json" -ErrorAction SilentlyContinue
+        run: |
+          Remove-Item "publish/database.json" -ErrorAction SilentlyContinue
+          Remove-Item "publish/config/database.json" -ErrorAction SilentlyContinue
 
       # Tải .exe lên Actions → Artifacts. Khi có tag v*.*.*, tên artifact gồm version.
       - name: Upload Release artifact
