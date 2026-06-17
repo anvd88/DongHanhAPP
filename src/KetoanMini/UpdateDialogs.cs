@@ -8,30 +8,13 @@ namespace KetoanMini;
 internal static class UpdateInstaller
 {
     /// <summary>
-    /// Tải file setup của bản phát hành (ưu tiên UNC, fallback file nhúng DB) về máy
-    /// và khởi chạy. Trả về true nếu đã chạy setup (lúc đó nên thoát app để cập nhật).
+    /// Tải file setup (ưu tiên UNC, fallback file nhúng DB) về thư mục tạm, báo tiến độ
+    /// qua <paramref name="progress"/> (0..1). Trả về đường dẫn file đã lưu.
     /// </summary>
-    public static bool TryDownloadAndRun(AccountingStore store, AppRelease release, out string error)
-    {
-        error = "";
-        try
-        {
-            var savedPath = Download(store, release);
-            Process.Start(new ProcessStartInfo(savedPath) { UseShellExecute = true });
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
-
-    /// <summary>Chỉ tải file setup về máy (không chạy). Trả về đường dẫn file đã lưu.</summary>
-    public static string Download(AccountingStore store, AppRelease release)
+    public static async Task<string> DownloadAsync(AccountingStore store, AppRelease release, IProgress<double>? progress, CancellationToken ct = default)
     {
         var fileName = ResolveFileName(release);
-        var targetDir = DownloadsFolder();
+        var targetDir = UpdatesFolder();
         Directory.CreateDirectory(targetDir);
         var targetPath = UniquePath(Path.Combine(targetDir, fileName));
 
@@ -46,7 +29,7 @@ internal static class UpdateInstaller
 
             if (File.Exists(source))
             {
-                File.Copy(source, targetPath, overwrite: true);
+                await CopyWithProgressAsync(source, targetPath, progress, ct);
                 return targetPath;
             }
 
@@ -62,13 +45,58 @@ internal static class UpdateInstaller
         // 2) Fallback: file nhúng trong DB.
         if (release.HasEmbeddedFile)
         {
-            var bytes = store.GetReleaseSetupFile(release.Id)
+            progress?.Report(0);
+            var bytes = await Task.Run(() => store.GetReleaseSetupFile(release.Id), ct)
                 ?? throw new InvalidOperationException("Không đọc được file setup từ cơ sở dữ liệu.");
-            File.WriteAllBytes(targetPath, bytes);
+            await WriteWithProgressAsync(targetPath, bytes, progress, ct);
             return targetPath;
         }
 
         throw new InvalidOperationException("Bản phát hành này chưa có file setup để tải.");
+    }
+
+    /// <summary>Mở trình cài đặt đã tải về.</summary>
+    public static void RunInstaller(string setupPath)
+        => Process.Start(new ProcessStartInfo(setupPath) { UseShellExecute = true });
+
+    private static async Task CopyWithProgressAsync(string source, string dest, IProgress<double>? progress, CancellationToken ct)
+    {
+        const int bufferSize = 1024 * 1024;
+        var buffer = new byte[bufferSize];
+        await using var src = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, useAsync: true);
+        await using var dst = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, useAsync: true);
+
+        var total = src.Length;
+        long copied = 0;
+        int read;
+        while ((read = await src.ReadAsync(buffer.AsMemory(0, bufferSize), ct)) > 0)
+        {
+            await dst.WriteAsync(buffer.AsMemory(0, read), ct);
+            copied += read;
+            if (total > 0)
+            {
+                progress?.Report((double)copied / total);
+            }
+        }
+
+        progress?.Report(1);
+    }
+
+    private static async Task WriteWithProgressAsync(string dest, byte[] bytes, IProgress<double>? progress, CancellationToken ct)
+    {
+        const int chunk = 1024 * 1024;
+        await using var dst = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, chunk, useAsync: true);
+        for (var offset = 0; offset < bytes.Length; offset += chunk)
+        {
+            var count = Math.Min(chunk, bytes.Length - offset);
+            await dst.WriteAsync(bytes.AsMemory(offset, count), ct);
+            if (bytes.Length > 0)
+            {
+                progress?.Report((double)(offset + count) / bytes.Length);
+            }
+        }
+
+        progress?.Report(1);
     }
 
     private static string ResolveFileName(AppRelease release)
@@ -88,19 +116,48 @@ internal static class UpdateInstaller
         return name;
     }
 
-    private static string DownloadsFolder()
+    /// <summary>Thư mục tạm riêng để tải file cài (sẽ được dọn sau khi cập nhật xong).</summary>
+    private static string UpdatesFolder()
     {
-        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(profile))
+        var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(baseDir))
         {
-            var downloads = Path.Combine(profile, "Downloads");
-            if (Directory.Exists(downloads))
-            {
-                return downloads;
-            }
+            baseDir = Path.GetTempPath();
         }
 
-        return Path.Combine(Path.GetTempPath(), "KetoanMiniUpdate");
+        return Path.Combine(baseDir, "KetoanMini", "Updates");
+    }
+
+    /// <summary>
+    /// Dọn file cài đã tải sau khi cập nhật. Gọi lúc khởi động app: sau khi bản mới
+    /// được cài và chạy lên, file setup cũ trong thư mục tạm sẽ bị xóa.
+    /// </summary>
+    public static void CleanupAfterUpdate()
+    {
+        try
+        {
+            var dir = UpdatesFolder();
+            if (!Directory.Exists(dir))
+            {
+                return;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(dir))
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch
+                {
+                    // File có thể đang được dùng (trình cài chưa đóng) → bỏ qua, lần khởi động sau dọn tiếp.
+                }
+            }
+        }
+        catch
+        {
+            // Không để lỗi dọn dẹp chặn khởi động app.
+        }
     }
 
     private static string UniquePath(string path)
@@ -138,6 +195,12 @@ internal sealed class UpdateDialog : Form
     private readonly AccountingStore _store;
     private readonly AppRelease _release;
     private readonly bool _blocking;
+
+    private RoundedButton _btnUpdate = null!;
+    private RoundedButton _btnLater = null!;
+    private Panel _progressPanel = null!;
+    private ProgressBar _progressBar = null!;
+    private Label _statusLabel = null!;
 
     public UpdateDialog(AccountingStore store, AppRelease release, bool blocking)
     {
@@ -242,8 +305,8 @@ internal sealed class UpdateDialog : Form
             BackColor = Color.Transparent
         };
 
-        var btnUpdate = new RoundedButton { Text = "⬇  Cập nhật ngay", Width = 150, Height = 36, CornerRadius = 8, BackColor = AppTheme.Accent, ForeColor = Color.White, Font = AppTheme.F9B };
-        var btnLater = new RoundedButton
+        _btnUpdate = new RoundedButton { Text = "⬇  Cập nhật ngay", Width = 150, Height = 36, CornerRadius = 8, BackColor = AppTheme.Accent, ForeColor = Color.White, Font = AppTheme.F9B };
+        _btnLater = new RoundedButton
         {
             Text = _blocking ? "Thoát" : "Để sau",
             Width = 100,
@@ -254,45 +317,90 @@ internal sealed class UpdateDialog : Form
             BorderColor = AppTheme.Border
         };
 
-        btnUpdate.Click += (s, e) => DoUpdate();
-        btnLater.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
+        _btnUpdate.Click += (s, e) => DoUpdate();
+        _btnLater.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
 
-        btnFlow.Controls.Add(btnUpdate);
-        btnFlow.Controls.Add(btnLater);
+        btnFlow.Controls.Add(_btnUpdate);
+        btnFlow.Controls.Add(_btnLater);
+
+        // Khu vực tiến trình tải (ẩn cho tới khi bấm Cập nhật ngay).
+        _progressPanel = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 48,
+            Padding = new Padding(24, 4, 24, 4),
+            BackColor = Color.Transparent,
+            Visible = false
+        };
+        _progressBar = new ProgressBar
+        {
+            Dock = DockStyle.Bottom,
+            Height = 16,
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            Style = ProgressBarStyle.Continuous
+        };
+        _statusLabel = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 20,
+            Text = "",
+            Font = AppTheme.F9,
+            ForeColor = AppTheme.TextSecondary,
+            TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = Color.Transparent
+        };
+        _progressPanel.Controls.Add(_progressBar);
+        _progressPanel.Controls.Add(_statusLabel);
 
         Controls.Add(main);
+        Controls.Add(_progressPanel);
         Controls.Add(btnFlow);
 
         if (!_release.HasSetupSource)
         {
-            btnUpdate.Enabled = false;
-            btnUpdate.Text = "Chưa có file setup";
+            _btnUpdate.Enabled = false;
+            _btnUpdate.Text = "Chưa có file setup";
         }
     }
 
-    private void DoUpdate()
+    private async void DoUpdate()
     {
-        UseWaitCursor = true;
-        Enabled = false;
+        _btnUpdate.Enabled = false;
+        _btnLater.Enabled = false;
+        ControlBox = false; // không cho đóng giữa chừng khi đang tải
+        _progressPanel.Visible = true;
+        _progressBar.Value = 0;
+        _statusLabel.Text = "Đang tải bản cập nhật... 0%";
+
+        var progress = new Progress<double>(p =>
+        {
+            var pct = (int)Math.Round(Math.Clamp(p, 0, 1) * 100);
+            _progressBar.Value = Math.Clamp(pct, 0, 100);
+            _statusLabel.Text = $"Đang tải bản cập nhật... {pct}%";
+        });
+
         try
         {
-            if (UpdateInstaller.TryDownloadAndRun(_store, _release, out var error))
-            {
-                DialogResult = DialogResult.OK; // caller sẽ thoát app
-                Close();
-                return;
-            }
-
+            var path = await UpdateInstaller.DownloadAsync(_store, _release, progress);
+            _progressBar.Value = 100;
+            _statusLabel.Text = "Đang mở trình cài đặt...";
+            UpdateInstaller.RunInstaller(path);
+            DialogResult = DialogResult.OK; // caller sẽ thoát app để cài đặt
+            Close();
+        }
+        catch (Exception ex)
+        {
+            _progressPanel.Visible = false;
+            _btnUpdate.Enabled = true;
+            _btnLater.Enabled = true;
+            ControlBox = !_blocking;
             MessageBox.Show(
-                $"Không tải/chạy được file cập nhật.\n\n{error}",
+                $"Không tải/chạy được file cập nhật.\n\n{ex.Message}",
                 "Lỗi cập nhật",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
-        }
-        finally
-        {
-            UseWaitCursor = false;
-            Enabled = true;
         }
     }
 }

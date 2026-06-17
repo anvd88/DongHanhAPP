@@ -22,6 +22,9 @@ internal static class Program
         // WinForms trong giai đoạn chuyển tiếp và chạy qua WinForms message loop.
         EnsureWpfApplication();
 
+        // Dọn file cài đã tải ở lần cập nhật trước (sau khi bản mới đã được cài và chạy lên).
+        UpdateInstaller.CleanupAfterUpdate();
+
         var store = CreateStore();
         if (store is null)
         {
