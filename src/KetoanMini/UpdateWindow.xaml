@@ -130,11 +130,9 @@
         </Style>
     </Window.Resources>
 
-    <!-- Lề ngoài chừa chỗ cho bóng đổ + lớp nền tối nhẹ phía sau cửa sổ -->
-    <Grid>
-        <!-- Lớp nền mờ tối nhẹ (mô phỏng blur phía sau dialog) -->
-        <Rectangle Fill="#33000000"/>
-
+    <!-- Lề ngoài trong suốt, chỉ chừa chỗ cho bóng đổ mềm của card (không có lớp nền
+         phủ kín cửa sổ — tránh tạo "viền mờ đục" hình chữ nhật quanh card). -->
+    <Grid Background="Transparent">
         <Grid Margin="30">
             <!-- Lớp đổ bóng riêng (không gắn effect lên card chứa nội dung để chữ không bị mờ) -->
             <Border Background="#F6FAFF" CornerRadius="20" Margin="4">

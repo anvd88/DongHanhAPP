@@ -207,10 +207,8 @@
         </EventTrigger>
     </Window.Triggers>
 
-    <!-- Lớp nền tối nhẹ phía sau (mô phỏng blur) -->
-    <Grid>
-        <Rectangle Fill="#33000000"/>
-
+    <!-- Lề ngoài trong suốt, chỉ chừa chỗ cho bóng đổ mềm (không phủ nền kín cửa sổ). -->
+    <Grid Background="Transparent">
         <Grid Margin="30">
             <!-- Lớp đổ bóng -->
             <Border Background="#F6FAFF" CornerRadius="20" Margin="4">

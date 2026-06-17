@@ -11,9 +11,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>assets\logo_cuong_phat.ico</ApplicationIcon>
-    <Version>26.6.3</Version>
-    <AssemblyVersion>26.6.3.0</AssemblyVersion>
-    <FileVersion>26.6.3.0</FileVersion>
+    <Version>26.6.4</Version>
+    <AssemblyVersion>26.6.4.0</AssemblyVersion>
+    <FileVersion>26.6.4.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
