@@ -97,23 +97,23 @@ public sealed partial class MainForm
         var win = new UpdateWindow(_store, release, blocking: false);
         _ = new WindowInteropHelper(win) { Owner = Handle };
 
-        bool? result;
         try
         {
-            result = win.ShowDialog();
+            // Sau khi cập nhật xong, màn "Cập nhật thành công" sẽ tự gọi LogoutToLogin()
+            // để quay lại trang đăng nhập (qua BeginInvoke, chạy sau khi dialog đóng).
+            win.ShowDialog();
         }
         catch
         {
-            result = false;
+            // Bỏ qua lỗi hiển thị dialog.
         }
+    }
 
-        if (result == true)
-        {
-            // Đã cập nhật xong → đăng xuất để mở lại trang đăng nhập
-            // (vòng lặp trong Program.Main sẽ tự hiện LoginWindow).
-            LogoutRequested = true;
-            _closeConfirmed = true; // bỏ qua hộp thoại xác nhận thoát trong OnFormClosing
-            Close();
-        }
+    /// <summary>Đăng xuất và quay lại trang đăng nhập (vòng lặp trong Program.Main mở lại LoginWindow).</summary>
+    public void LogoutToLogin()
+    {
+        LogoutRequested = true;
+        _closeConfirmed = true; // bỏ qua hộp thoại xác nhận thoát trong OnFormClosing
+        Close();
     }
 }

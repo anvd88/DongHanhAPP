@@ -143,15 +143,14 @@ public partial class UpdateWindow : Wpf.Window
             return;
         }
 
-        // Cập nhật xong -> hiện màn "Cập nhật thành công" (onFinish rỗng để không bật MessageBox demo).
+        // Cập nhật xong -> hiện màn "Cập nhật thành công". onFinish = null để nút "Hoàn tất"
+        // dùng hành vi mặc định: tự đăng xuất và quay lại trang đăng nhập.
         var success = new UpdateSuccessWindow(
             oldVersion: AppVersion.CurrentText,
-            currentVersion: _release.Version,
-            successMessage: null,
-            onFinish: () => { }) { Owner = this };
+            currentVersion: _release.Version) { Owner = this };
         success.ShowDialog();
 
-        DialogResult = true; // báo caller: đã cập nhật -> chuyển tới đăng nhập
+        DialogResult = true; // báo caller: đã cập nhật xong
         Close();
     }
 }
