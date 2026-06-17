@@ -78,7 +78,7 @@ jobs:
           "Installer version: $version" >> $env:GITHUB_STEP_SUMMARY
 
       - name: Restore
-        run: dotnet restore ${{ env.PROJECT_PATH }}
+        run: dotnet restore ${{ env.PROJECT_PATH }} -r win-x64 /p:PublishReadyToRun=true
 
       - name: Publish app (Release, win-x64, self-contained)
         shell: pwsh
