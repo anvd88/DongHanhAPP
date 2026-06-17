@@ -94,8 +94,10 @@ public sealed partial class MainForm
             _giaCongWpfPage = new GiaCongWpfPage(_giaCongStore);
             _giaCongWpfPage.CreateRequested += (_, _) =>
             {
-                ShowCreateGiaCongForm();
-                _giaCongWpfPage?.RefreshData();
+                // Chỉ làm mới khi thực sự tạo phiếu (bấm Hủy thì không reload → không nháy),
+                // và làm mới không bật overlay loading.
+                if (ShowCreateGiaCongForm())
+                    _giaCongWpfPage?.RefreshDataQuiet();
             };
             _giaCongWpfPage.InitialLoadCompleted += (_, _) =>
             {
@@ -156,10 +158,15 @@ public sealed partial class MainForm
         c.Invalidate(true);
     }
 
-    private void ShowCreateGiaCongForm()
+    private bool ShowCreateGiaCongForm()
     {
         using var dlg = new GiaCongFormDialog(_giaCongStore, _currentUser.Username);
         if (dlg.ShowDialog(this) == DialogResult.OK)
+        {
             _store.RecordAudit("Tạo phiếu gia công", "GiaCongPhieu", dlg.MaPhieu, "Tạo phiếu gia công mới");
+            return true;
+        }
+
+        return false;
     }
 }

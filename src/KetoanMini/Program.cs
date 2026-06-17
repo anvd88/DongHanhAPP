@@ -17,8 +17,18 @@ internal static class Program
 
         ApplicationConfiguration.Initialize();
 
+        // Vỏ ứng dụng đang chuyển dần sang WPF: tạo một WPF Application duy nhất
+        // cho tiến trình để các cửa sổ WPF (đăng nhập…) hoạt động. MainForm vẫn là
+        // WinForms trong giai đoạn chuyển tiếp và chạy qua WinForms message loop.
+        EnsureWpfApplication();
+
         var store = CreateStore();
         if (store is null)
+        {
+            return;
+        }
+
+        if (!HandleVersionCheck(store))
         {
             return;
         }
@@ -26,8 +36,8 @@ internal static class Program
         while (true)
         {
             store.CurrentUser = null;
-            using var login = new LoginForm(store);
-            if (login.ShowDialog() != DialogResult.OK || login.AuthenticatedUser is null)
+            var login = new LoginWindow(store);
+            if (login.ShowDialog() != true || login.AuthenticatedUser is null)
             {
                 return;
             }
@@ -40,6 +50,59 @@ internal static class Program
                 return;
             }
         }
+    }
+
+    private static System.Windows.Application EnsureWpfApplication()
+    {
+        return System.Windows.Application.Current
+            ?? new System.Windows.Application
+            {
+                ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown
+            };
+    }
+
+    /// <summary>
+    /// Kiểm tra phiên bản khi mở app. Trả về false nếu phải thoát (đã chạy setup,
+    /// hoặc bị chặn đăng nhập do bản quá cũ).
+    /// </summary>
+    private static bool HandleVersionCheck(AccountingStore store)
+    {
+        VersionCheckResult result;
+        try
+        {
+            result = store.CheckVersion();
+        }
+        catch
+        {
+            // Không chặn khởi động app nếu việc kiểm tra phiên bản gặp lỗi.
+            return true;
+        }
+
+        if (result.Latest is null)
+        {
+            return true;
+        }
+
+        // Bản quá cũ + admin đã bật chặn → bắt buộc cập nhật, không cho đăng nhập.
+        if (result.MustBlock)
+        {
+            using var dialog = new UpdateDialog(store, result.Latest, blocking: true);
+            dialog.ShowDialog();
+            return false;
+        }
+
+        // Có bản mới (không bắt buộc) → popup với tùy chọn Cập nhật ngay / Để sau.
+        if (result.UpdateAvailable)
+        {
+            using var dialog = new UpdateDialog(store, result.Latest, blocking: false);
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                // Đã chạy setup → thoát để cài đặt cập nhật.
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool TryRunCommandLineExport(string[] args)

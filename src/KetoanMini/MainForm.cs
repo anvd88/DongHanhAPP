@@ -151,8 +151,8 @@ public sealed partial class MainForm : Form
     // ── NAVIGATE ──────────────────────────────────────────────────────────────
     private void Navigate(string key)
     {
-        // Nhân sự is admin-only; deflect non-admins back to the dashboard.
-        if (key == "nhansu" && !_currentUser.IsAdmin)
+        // Nhân sự + Cập nhật are admin-only; deflect non-admins back to the dashboard.
+        if ((key == "nhansu" || key == "capnhat") && !_currentUser.IsAdmin)
             key = "dashboard";
 
         _activeKey = key;
@@ -180,6 +180,7 @@ public sealed partial class MainForm : Form
                     "danhmuc"   => BuildPlaceholderPage("Danh mục", "Danh mục hệ thống"),
                     "caidat"    => BuildPlaceholderPage("Cài đặt", "Cài đặt ứng dụng"),
                     "saoluu"    => BuildSaoLuuPage(),
+                    "capnhat"   => BuildCapNhatPage(),
                     _           => BuildPlaceholderPage(key, "")
                 };
                 page.Dock = DockStyle.Fill;
@@ -261,7 +262,7 @@ public sealed partial class MainForm : Form
             using var dotBrush = new SolidBrush(AppTheme.Success);
             g.FillEllipse(dotBrush, 14, 14, 10, 10);
             var txtRect = new Rectangle(30, 0, 170, 40);
-            TextRenderer.DrawText(g, "Phiên bản 1.1.0", AppTheme.F8, txtRect, AppTheme.SidebarText,
+            TextRenderer.DrawText(g, $"Phiên bản {AppVersion.CurrentText}", AppTheme.F8, txtRect, AppTheme.SidebarText,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
         };
 
@@ -324,6 +325,8 @@ public sealed partial class MainForm : Form
         AddSection("HỆ THỐNG");
         AddNavBtn("caidat",   "⚙",  "Cài đặt");
         AddNavBtn("saoluu",   "💾", "Sao lưu");
+        if (_currentUser.IsAdmin)
+            AddNavBtn("capnhat",  "⬆", "Cập nhật");
 
         // Add in reverse order because Dock=Top stacks bottom-up
         for (int i = navItems.Count - 1; i >= 0; i--)
