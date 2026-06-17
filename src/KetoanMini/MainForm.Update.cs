@@ -109,15 +109,11 @@ public sealed partial class MainForm
 
         if (result == true)
         {
-            // Đã khởi chạy trình cài im lặng → thoát app để Inno Setup thay file.
-            ExitForUpdate();
+            // Đã cập nhật xong → đăng xuất để mở lại trang đăng nhập
+            // (vòng lặp trong Program.Main sẽ tự hiện LoginWindow).
+            LogoutRequested = true;
+            _closeConfirmed = true; // bỏ qua hộp thoại xác nhận thoát trong OnFormClosing
+            Close();
         }
-    }
-
-    /// <summary>Đóng app (không hỏi xác nhận, không quay lại đăng nhập) để trình cài chạy.</summary>
-    private void ExitForUpdate()
-    {
-        _closeConfirmed = true; // bỏ qua hộp thoại xác nhận thoát trong OnFormClosing
-        Close();
     }
 }

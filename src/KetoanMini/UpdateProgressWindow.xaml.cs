@@ -156,10 +156,10 @@ public partial class UpdateProgressWindow : Wpf.Window
 
             SetStep(StepState.Done, StepState.Done, StepState.Done);
             ProgressPercent = 100;
-            StatusText = "Hoàn tất! Ứng dụng sẽ đóng để cài đặt bản mới...";
-            await Task.Delay(1200, _cts.Token);
+            StatusText = "Đã cài đặt xong phiên bản mới.";
+            await Task.Delay(700, _cts.Token);
 
-            DialogResult = true; // caller thoát app để Inno Setup thay thế file
+            DialogResult = true; // báo UpdateWindow: tải + cài xong -> hiện màn thành công
             Close();
         }
         catch (OperationCanceledException)
