@@ -89,7 +89,7 @@ internal static class Program
         // Bản quá cũ + admin đã bật chặn → bắt buộc cập nhật, không cho đăng nhập.
         if (result.MustBlock)
         {
-            using var dialog = new UpdateDialog(store, result.Latest, blocking: true);
+            var dialog = new UpdateWindow(store, result.Latest, blocking: true);
             dialog.ShowDialog();
             return false;
         }
@@ -97,8 +97,8 @@ internal static class Program
         // Có bản mới (không bắt buộc) → popup với tùy chọn Cập nhật ngay / Để sau.
         if (result.UpdateAvailable)
         {
-            using var dialog = new UpdateDialog(store, result.Latest, blocking: false);
-            if (dialog.ShowDialog() == DialogResult.OK)
+            var dialog = new UpdateWindow(store, result.Latest, blocking: false);
+            if (dialog.ShowDialog() == true)
             {
                 // Đã chạy setup → thoát để cài đặt cập nhật.
                 return false;
@@ -121,7 +121,7 @@ internal static class Program
             outputPath = Path.ChangeExtension(outputPath, ".xlsx");
         }
 
-        var store = CreateStore();
+        var store = CreateStore(showSetupDialog: false);
         if (store is null)
         {
             return true;
@@ -183,16 +183,42 @@ internal static class Program
         return fallback;
     }
 
-    private static AccountingStore? CreateStore()
+    private static AccountingStore? CreateStore(bool showSetupDialog = true)
     {
+        var connectionString = DatabaseConnectionConfig.LoadConnectionString();
         try
         {
-            return new AccountingStore(DatabaseConnectionConfig.LoadConnectionString());
+            return new AccountingStore(connectionString);
         }
         catch (Exception ex)
         {
+            if (showSetupDialog)
+            {
+                using var dialog = new DatabaseSetupDialog(connectionString, ex.Message);
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        return new AccountingStore(dialog.SavedConnectionString);
+                    }
+                    catch (Exception retryEx)
+                    {
+                        MessageBox.Show(
+                            $"Đã lưu cấu hình nhưng vẫn chưa kết nối được SQL Server.\n\n{retryEx.Message}",
+                            "Lỗi kết nối database",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                        return null;
+                    }
+                }
+            }
+
             MessageBox.Show(
-                $"Không kết nối được SQL Server.\n\n{ex.Message}\n\nKiểm tra file cấu hình: {DatabaseConnectionConfig.PrimaryConfigPath}",
+                "Không kết nối được SQL Server.\n\n" +
+                $"{ex.Message}\n\n" +
+                "Các file cấu hình đang được app đọc:\n" +
+                $"- Ưu tiên user: {DatabaseConnectionConfig.UserConfigPath}\n" +
+                $"- Cạnh app: {DatabaseConnectionConfig.PrimaryConfigPath}",
                 "Lỗi kết nối database",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
