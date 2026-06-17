@@ -1,122 +1,303 @@
-# KetoanMiniDotNet
+# KetoanMini
 
-Ban nang cap giao dien C# .NET 8 WinForms theo huong phan mem ke toan desktop kieu MISA mini.
+KetoanMini là ứng dụng desktop nội bộ cho Công ty TNHH Inox Cường Phát, viết bằng C# .NET 8, kết hợp WinForms và WPF. Ứng dụng dùng SQL Server qua LAN để nhiều máy cùng làm việc trên một cơ sở dữ liệu chung.
 
-## Da co trong ban nay
+Phiên bản hiện tại: `1.2.2`.
 
-- Header: logo, ten cong ty/chi nhanh, ky ke toan, thong bao, profile.
-- Header co thanh gio lam viec 8h-12h va 13h-17h, hien gio hien tai chay theo thanh tien do.
-- Tu 12:00 den 13:00, tai khoan User se duoc thong bao den gio nghi trua va khoa vung lam viec; tai khoan Admin khong bi khoa.
-- Khi mo app se hien man hinh dang nhap/dang ky.
-  - Tai khoan admin mac dinh: `admin`
-  - Mat khau admin mac dinh: `admin`
-  - Mat khau duoc luu trong SQLite bang hash PBKDF2, khong luu mat khau tho.
-- Form dang nhap khong hien goi y admin tren giao dien; co tuy chon hien/an mat khau.
-- Link `Quen mat khau` nam ngay trong man hinh dang nhap, cho nhan vien nhap ten tai khoan de gui yeu cau cho admin.
-- Khi admin dang nhap, nut `Thong bao` se hien so luong yeu cau quen mat khau dang cho; trong `Quan ly User`, dong user do hien `Can doi MK`.
-- Khi admin nhap mat khau moi cho user va bam luu, yeu cau quen mat khau cua user do tu chuyen sang da xu ly.
-- Khu vuc ten nguoi dung ben canh nut `Thong bao` la nut ho so:
-  - `Sua ho so`: doi ten hien thi va doi mat khau cua chinh tai khoan dang dang nhap.
-  - `Dang xuat`: app hoi xac nhan truoc khi dang xuat va quay lai man hinh dang nhap.
-- Tai khoan thuong co the dang ky o man hinh dang nhap, quyen mac dinh la `User`.
-- Chi admin moi thay muc `Quan ly User` va `Nhat ky` tren sidebar.
-- Man hinh `Quan ly User` cho admin xem admin mac dinh va them/sua/xoa/khoa tai khoan User cap thap hon.
-- Man hinh `Nhat ky` cho admin xem ai dang nhap, ai nhap chung tu/thanh toan, ai sua/xoa thanh toan, ai sua/xoa KH, ai xuat Excel.
-- Nhat ky thao tac chi bat dau ghi tu ban co dang nhap nay; du lieu cu truoc do khong co thong tin nguoi nhap/sua.
-- Logo app da cap nhat theo logo tach nen Inox Cuong Phat; header hien `Cong ty TNHH Inox Cuong Phat` va icon exe dung asset trong `assets/logo_cuong_phat.png` / `.ico`.
-- Sidebar trai co the thu gon.
-- Workspace mot man hinh: khong con thanh tab tren cung; dang mo muc nao thi muc do duoc lam noi bat tren sidebar trai.
-- Chuyen muc da giam nhay: app tao man hinh moi truoc khi thay man hinh cu, bat double-buffer cho Form/Panel/DataGridView va chi refresh du lieu cua man hinh dang mo.
-- Dashboard tile-based, co drill-down khi double click KPI.
-- Bieu do dong tien Thu/Chi va co cau chi phi ve bang custom WinForms, khong can package ngoai.
-- Man hinh phieu thu/chi dang master-detail.
-- Goi y Ten KH khi go: hien ca ten chuan va bi danh, ho tro go khong dau, dung phim len/xuong va Enter/Tab de chon.
-- Bang bi danh KH: app doc `data/ThongtinKH.xlsx`, table `Thong_tin_thanh_toan`, roi luu vao SQLite de them/xoa trong app.
-  - Cot 1 la Ten KH chuan trong app.
-  - Cac cot sau la ten goi nhanh/ten nho.
-  - Khi nhap ten goi nhanh vao o Ten KH, app tu doi ve ten chuan o cot 1.
-- Man hinh `Khach hang`:
-  - Click chuot phai vao mot KH de mo menu `Xem chi tiet`, `Sua thong tin KH`, `Sua bi danh`, `Xoa khach hang`.
-  - Menu chuot phai hien ngay gan o dang bam, ke ca khi bam vao cot MST/dien thoai/dia chi/ghi chu.
-  - `Sua bi danh` mo mot cua so noi rieng, cho phep them/xoa bi danh cua KH dang chon.
-  - Neu nhap KH bang bi danh, app van doi ve `Ten KH` chuan nhung luu them cot `Ten da nhap` de tra soat.
-- Man hinh Thanh toan co them/sua/xoa:
-  - O `So tien` nam ngay sau `Ten KH`, chon KH xong bam Tab la nhap so tien.
-  - Nhap tien dang `100000000` app tu hien thi thanh `100.000.000`.
-  - Them moi: nhap thong tin roi bam `Luu`.
-  - Sua nhap nham: chon dong trong bang roi bam `Sua`, hoac double-click dong do, sua tren form roi bam `Cap nhat`.
-  - Xoa: chon dong trong bang roi bam `Xoa`, app se hoi xac nhan truoc khi xoa.
-  - Dang sua ma khong muon luu: bam `Huy`.
-- Man hinh Ban hang:
-  - Nhap Ten KH, ngay ban, so phieu, dien giai.
-  - Nhap hang hoa/dich vu theo grid: ten hang, DVT, so luong, don gia, thanh tien tu tinh.
-  - Cot `Don gia` tu dinh dang tien khi nhap, vi du `100000000` thanh `100.000.000`.
-  - Co checkbox `VAT` mac dinh duoc tich san; neu bo tich thi khi luu/lam moi sang phieu moi app tu tich lai.
-  - Bam `Luu ban hang` de tao chung tu `Ban hang`; du lieu vao dashboard, so cai, pivot va export Excel.
-- DataGrid nhap lieu ke toan:
-  - Cot `So tien` tu dinh dang tien khi nhap/paste, vi du `100000000` thanh `100.000.000`.
-  - Copy/Paste tu Excel bang `Ctrl+V`.
-  - `Enter` nhay sang o tiep theo, cuoi dong tu tao dong moi.
-  - `Insert` them dong.
-  - `Delete` / `Ctrl+Delete` xoa dong.
-  - `F4` mo popup lookup tai khoan ngay tai o dang dung.
-  - Click vao o `TK No` / `TK Co` hien lookup tai o, khong mo cua so moi.
-  - Footer sum realtime.
-  - Co dinh cac cot dau nhu Excel.
-- So cai la man hinh rieng de doi chieu voi phieu chi/phieu thu.
-- `Chi tiet KH`: o chon Ten KH va dropdown da mo rong de hien ten dai ro hon; chon KH de xem lich su mua/ban/thanh toan, tong ban, tong mua, da thanh toan va con lai.
-- Cac bang tra soat nhu Thanh toan gan day, Ban hang gan day, So cai, Chi tiet KH va file Excel xuat ra co cot `Ten da nhap` de xem lai bi danh/ten goi ban dau.
-- Trong man hinh `Khach hang`, double-click mot KH de mo nhanh man hinh chi tiet giao dich cua KH do.
-- Pivot bao cao co khu vuc truong du lieu va vung Rows de keo/tha truong, tao bao cao nhom du lieu local.
-- Luu du lieu local bang SQLite tai `data/ketoan_mini.db`.
-  - Bang `app_users` luu tai khoan.
-  - Bang `audit_logs` luu nhat ky thao tac.
-  - Bang `password_reset_requests` luu yeu cau quen mat khau.
-- Neu co file JSON cu `data/ketoan_data.json`, app se tu import sang SQLite khi database moi chua co du lieu.
-- Xuat Excel truc tiep dang `.xlsx` bang OpenXML noi bo, khong can mo Excel/PowerShell khi xuat.
-  - Co sheet `Tong hop`.
-  - Moi KH co 1 sheet rieng, gom chi tiet giao dich mua/ban/thanh toan va cot `Con lai`.
-  - Moi sheet KH co them cot `Ten da nhap` de doi chieu neu giao dich duoc nhap bang bi danh.
-  - Man hinh xuat co thanh loading 0-100%, khoa nut khi dang xuat de tranh bam lap.
-  - Ho tro chay dong lenh: `KetoanMini.exe --export-openxml C:\duongdan\Cong_no.xlsx`.
+## Tính Năng Chính
 
-## Yeu cau cai dat
+- Đăng nhập, đăng ký tài khoản, duyệt tài khoản, khóa/mở khóa tài khoản.
+- Phân quyền `Admin` và `User`.
+- Một tài khoản chỉ có một phiên đăng nhập đang hoạt động; phiên cũ sẽ bị đăng xuất khi đăng nhập nơi khác.
+- Theo dõi trạng thái online và số phút hoạt động trong ngày.
+- Quản lý tăng ca, chấm công tăng ca và duyệt yêu cầu tăng ca.
+- Nhật ký thao tác cho các hành động quan trọng.
+- Quản lý khách hàng, bí danh khách hàng và truy xuất tên khách hàng không dấu.
+- Nhập chứng từ kế toán, thanh toán, bán hàng và xuất dữ liệu Excel.
+- Màn hình Gia công bằng WPF, gồm danh sách phiếu, chi tiết phiếu, tạo/sửa/xóa phiếu, cập nhật trạng thái.
+- Màn hình Nhân sự bằng WPF cho admin quản lý người dùng.
+- Chat LAN và lưu lịch sử tin nhắn/file trong SQL Server.
+- Quản lý cập nhật phiên bản: admin phát hành file setup, máy client tự báo có bản mới.
+- GitHub Actions build Debug, publish exe self-contained và build installer `.exe`.
+
+## Module Đang Có
+
+- `Tổng quan`: dashboard số liệu tổng hợp.
+- `Kế toán`: chứng từ, thanh toán, khách hàng và xuất Excel.
+- `Bán hàng`: nhập đơn bán hàng cơ bản.
+- `Gia công`: quản lý phiếu gia công, danh sách hàng hóa, trạng thái và giá trị.
+- `Nhân sự`: quản lý tài khoản, vai trò, online/offline, khóa/mở khóa, duyệt tài khoản.
+- `Báo cáo`: tổng hợp số liệu và các bảng tra soát.
+- `Sao lưu`: xuất dữ liệu.
+- `Cập nhật`: phát hành phiên bản mới cho người dùng.
+
+Các mục `Hàng tồn kho`, `Mua hàng`, `Tài sản cố định`, `Danh mục`, `Cài đặt` hiện là khung placeholder để phát triển tiếp.
+
+## Công Nghệ
+
+- .NET 8
+- WinForms
+- WPF
+- SQL Server / SQL Server Express
+- Microsoft.Data.SqlClient
+- Inno Setup cho installer
+- GitHub Actions cho CI/CD
+
+## Yêu Cầu
+
+Máy người dùng:
+
+- Windows 10/11.
+- Kết nối LAN tới máy chủ SQL Server.
+- Không cần cài .NET nếu dùng installer hoặc bản publish self-contained.
+
+Máy phát triển:
 
 - Windows.
-- Microsoft Excel hoac LibreOffice/WPS de mo file `.xlsx` sau khi xuat. App khong can Excel de tao file `.xlsx`.
 - .NET 8 SDK.
+- SQL Server hoặc SQL Server Express để chạy đầy đủ app.
+- Git.
 
-Tai .NET 8 SDK tu Microsoft:
-https://dotnet.microsoft.com/en-us/download/dotnet/8.0
+Máy chủ SQL:
 
-## Chay trong VS Code
+- SQL Server Express hoặc SQL Server.
+- TCP/IP enabled.
+- Port cố định, khuyến nghị `1433`.
+- Firewall mở inbound TCP `1433`.
+- Login SQL dùng cho app, mặc định gợi ý là `ketoan_app`.
 
-Mo thu muc:
+## Tài Khoản Mặc Định
 
-`outputs/KetoanMiniDotNet/src/KetoanMini`
+Khi database mới được tạo, app tự tạo tài khoản admin:
 
-Sau khi cai .NET 8 SDK:
+```text
+Username: admin
+Password: admin
+```
+
+Nên đổi mật khẩu admin ngay sau lần đăng nhập đầu tiên.
+
+## Cấu Hình SQL Server LAN
+
+Trên máy chủ SQL, chạy file sau bằng quyền Administrator:
+
+```text
+src/KetoanMini/tools/RUN_AS_ADMIN_configure_sql_lan.bat
+```
+
+Script sẽ:
+
+- Bật TCP/IP cho SQL Server instance.
+- Đặt port SQL cố định.
+- Mở firewall TCP.
+- Tạo database `KetoanMini` nếu chưa có.
+- Tạo login SQL cho app.
+- Ghi connection string mẫu vào `config/database.json`.
+
+Tài liệu chi tiết nằm tại:
+
+```text
+src/KetoanMini/HUONG_DAN_SQL_LAN.txt
+```
+
+## Cấu Hình Máy Client
+
+Khi mở app trên máy client mà chưa kết nối được database, app sẽ hiện cửa sổ `Cấu hình kết nối SQL Server`.
+
+Nhập ví dụ:
+
+```text
+Máy chủ / IP:   192.168.1.88,1433
+Database:      KetoanMini
+Tài khoản SQL: ketoan_app
+Mật khẩu:      KetoanMini@2026
+```
+
+Bấm `Kiểm tra & lưu`. Nếu kết nối thành công, app lưu cấu hình vào:
+
+```text
+%AppData%\KetoanMini\config\database.json
+```
+
+Ví dụ đường dẫn thật:
+
+```text
+C:\Users\<User>\AppData\Roaming\KetoanMini\config\database.json
+```
+
+App ưu tiên đọc cấu hình theo thứ tự:
+
+1. Biến môi trường `KETOANMINI_CONNECTION_STRING`.
+2. `%AppData%\KetoanMini\config\database.json`.
+3. `config/database.json` cạnh file chạy app.
+4. `database.json` cạnh file chạy app.
+5. Fallback local `localhost\SQLEXPRESS01`.
+
+Không nên sửa trực tiếp file trong `C:\Program Files\KetoanMini` nếu không cần, vì thư mục này yêu cầu quyền admin.
+
+## Kiểm Tra Kết Nối SQL
+
+Trên máy client, chạy PowerShell:
 
 ```powershell
+Test-NetConnection 192.168.1.88 -Port 1433
+```
+
+Kết quả cần có:
+
+```text
+TcpTestSucceeded : True
+```
+
+Nếu ping được nhưng lệnh trên `False`, app vẫn không kết nối được SQL Server. Khi đó kiểm tra TCP/IP SQL Server, firewall, IP máy chủ và port.
+
+## Chạy Dev
+
+Từ thư mục repo:
+
+```powershell
+cd src/KetoanMini
 dotnet run
 ```
 
-## Build file chay
+Hoặc build:
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true
+cd src/KetoanMini
+dotnet build
 ```
 
-File publish nam trong:
+File Debug:
 
-`bin/Release/net8.0-windows/win-x64/publish`
+```text
+src/KetoanMini/bin/Debug/net8.0-windows/KetoanMini.exe
+```
 
-## Database va backup
+## Publish Exe Self-Contained
 
-- File database khi chay ban Debug nam tai:
+```powershell
+dotnet restore src/KetoanMini/KetoanMini.csproj -r win-x64 /p:PublishReadyToRun=true
+dotnet publish src/KetoanMini/KetoanMini.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:EnableCompressionInSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:PublishReadyToRun=true --no-restore -o publish/win-x64
+```
 
-`src/KetoanMini/bin/Debug/net8.0-windows/data/ketoan_mini.db`
+File chạy:
 
-- Khi dong goi/publish, database se nam trong thu muc `data` canh file `KetoanMini.exe`.
-- Muon backup du lieu, chi can copy file `ketoan_mini.db` khi app da dong.
-- Build hien tai da chay duoc tren .NET 8 SDK voi 0 warning, 0 error.
+```text
+publish/win-x64/KetoanMini.exe
+```
+
+## Build Installer
+
+Workflow GitHub Actions:
+
+```text
+.github/workflows/build-installer.yml
+```
+
+Khi chạy workflow này, GitHub Actions sẽ:
+
+1. Restore project cho `win-x64`.
+2. Publish app Release self-contained.
+3. Cài Inno Setup trên runner.
+4. Build file installer:
+
+```text
+KetoanMiniSetup-<version>-win-x64.exe
+```
+
+File installer dùng cho cả:
+
+- Cài mới.
+- Cập nhật bản đã cài, vì `AppId` trong Inno Setup được giữ cố định.
+
+Script Inno Setup:
+
+```text
+installer/KetoanMini.iss
+```
+
+## Phát Hành Cập Nhật Cho Người Dùng
+
+1. Tăng version trong `src/KetoanMini/KetoanMini.csproj`.
+2. Push code lên GitHub.
+3. Chạy workflow `Build Installer (Setup EXE)`.
+4. Tải artifact `KetoanMiniSetup-<version>-win-x64.exe`.
+5. Đăng nhập app bằng admin.
+6. Vào tab `Cập nhật`.
+7. Nhập version, ghi chú phát hành và chọn file setup.
+8. Bấm phát hành.
+
+Khi client mở app, nếu có bản mới:
+
+- Nếu không bắt buộc, người dùng có thể cập nhật hoặc để sau.
+- Nếu admin bật chặn bản cũ, người dùng phải cập nhật mới được đăng nhập.
+
+## GitHub Actions
+
+- `.github/workflows/dotnet-desktop.yml`: build Debug khi push/PR vào `main`.
+- `.github/workflows/publish-release.yml`: publish single-file `.exe`.
+- `.github/workflows/build-installer.yml`: build installer `.exe` bằng Inno Setup.
+
+## Dữ Liệu Và Bảo Mật
+
+- Dữ liệu chính nằm trong SQL Server database `KetoanMini`.
+- Mật khẩu người dùng được hash bằng PBKDF2, không lưu mật khẩu thô.
+- Chat sử dụng khóa bảo mật cục bộ trong `%LocalAppData%\KetoanMini\chat-keys`.
+- File cấu hình thật `config/database.json` không nên commit lên GitHub.
+- Installer không đóng gói `database.json` thật vào artifact release.
+
+## Xuất Excel
+
+App có thể xuất workbook `.xlsx` trực tiếp, không cần mở Excel để tạo file.
+
+Chạy từ dòng lệnh:
+
+```powershell
+KetoanMini.exe --export-openxml C:\duongdan\Cong_no.xlsx
+```
+
+## Review Kỹ Thuật
+
+Điểm tốt:
+
+- App đã chuyển các màn nặng như Gia công/Nhân sự sang WPF, giảm giật và dễ mở rộng UI.
+- SQL Server LAN phù hợp cho nhiều máy cùng dùng chung dữ liệu.
+- Có cơ chế update nội bộ bằng installer, phù hợp triển khai trong công ty.
+- Có phân quyền admin/user, audit log, session control và hash mật khẩu.
+- Workflow CI/CD đã có đủ build, publish và installer.
+
+Điểm cần lưu ý:
+
+- Một số module trên sidebar vẫn là placeholder, cần tránh giới thiệu là tính năng hoàn chỉnh.
+- `AccountingStore` đang là lớp rất lớn, chứa nhiều trách nhiệm: database, user, kế toán, chat, update. Về lâu dài nên tách repository/service theo module.
+- App còn lai WinForms/WPF, nên khi thêm màn mới cần chọn nhất quán; màn dữ liệu nặng nên ưu tiên WPF.
+- Cấu hình SQL Server là điểm dễ lỗi nhất khi triển khai client. Dialog cấu hình trong app đã giảm rủi ro, nhưng vẫn cần tài liệu rõ cho port/firewall/login.
+- Cần có chiến lược backup SQL Server định kỳ trên máy chủ, vì dữ liệu không còn nằm local trong thư mục app.
+
+## Troubleshooting
+
+Lỗi `error: 26 - Error Locating Server/Instance Specified`:
+
+- Kiểm tra IP/port trong connection string.
+- Chạy `Test-NetConnection IP_MAY_CHU -Port 1433`.
+- Bật TCP/IP trong SQL Server Configuration Manager.
+- Mở firewall TCP 1433 trên máy chủ.
+- Kiểm tra SQL Server service đang chạy.
+
+Không sửa được file trong `Program Files`:
+
+- Không cần sửa trực tiếp.
+- Mở app và dùng cửa sổ cấu hình SQL.
+- App sẽ lưu vào `%AppData%\KetoanMini\config\database.json`.
+
+Build GitHub Actions lỗi thiếu `net8.0-windows/win-x64`:
+
+- Restore phải có runtime:
+
+```powershell
+dotnet restore src/KetoanMini/KetoanMini.csproj -r win-x64 /p:PublishReadyToRun=true
+```
+
+Installer lỗi thiếu `Vietnamese.isl`:
+
+- Installer hiện dùng `compiler:Default.isl`, không phụ thuộc file tiếng Việt của Inno Setup.
