@@ -116,6 +116,20 @@ public static class TextUtil
         return value.ToString("#,##0.##", CultureInfo.GetCultureInfo("vi-VN"));
     }
 
+    public static string FormatFileSize(long size)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        var value = (double)Math.Max(0, size);
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return unit == 0 ? $"{value:0} {units[unit]}" : $"{value:0.##} {units[unit]}";
+    }
+
     public static decimal ParseMoney(string value)
     {
         if (string.IsNullOrWhiteSpace(value))

@@ -86,6 +86,11 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
     public async void RefreshData()
         => await RefreshDataAsync(GetSelectedId(), showLoading: true);
 
+    /// <summary>Làm mới dữ liệu mà KHÔNG bật overlay loading (tránh nháy màn hình
+    /// sau khi đóng dialog tạo/sửa phiếu).</summary>
+    public async void RefreshDataQuiet()
+        => await RefreshDataAsync(GetSelectedId(), showLoading: false);
+
     private WpfControls.Grid BuildLayout()
     {
         _root = new WpfControls.Grid
@@ -306,9 +311,7 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         _applyingSelection = true;
         try
         {
-            _phieuRows.Clear();
-            foreach (var phieu in list)
-                _phieuRows.Add(new GiaCongPhieuRow(phieu));
+            ReconcileRows(list);
 
             _footerText.Text = $"Hiển thị {list.Count} phiếu";
 
@@ -324,6 +327,47 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         }
 
         await LoadSelectedDetailAsync(showLoading: false);
+    }
+
+    /// <summary>
+    /// Cập nhật lưới phiếu theo kiểu tăng tiến (diff theo Id) thay vì clear-rồi-đổ-lại:
+    /// gỡ dòng đã mất, cập nhật dòng cũ tại chỗ, chèn dòng mới, di chuyển khi đổi thứ tự.
+    /// Nhờ vậy lưới không bị nháy/đặt lại cuộn và lựa chọn khi làm mới.
+    /// </summary>
+    private void ReconcileRows(IReadOnlyList<GiaCongPhieu> list)
+    {
+        var newIds = new HashSet<long>(list.Select(p => p.Id));
+        for (var i = _phieuRows.Count - 1; i >= 0; i--)
+        {
+            if (!newIds.Contains(_phieuRows[i].Id))
+                _phieuRows.RemoveAt(i);
+        }
+
+        for (var i = 0; i < list.Count; i++)
+        {
+            var phieu = list[i];
+
+            var found = -1;
+            for (var j = i; j < _phieuRows.Count; j++)
+            {
+                if (_phieuRows[j].Id == phieu.Id)
+                {
+                    found = j;
+                    break;
+                }
+            }
+
+            if (found < 0)
+            {
+                _phieuRows.Insert(i, new GiaCongPhieuRow(phieu));
+            }
+            else
+            {
+                if (found != i)
+                    _phieuRows.Move(found, i);
+                _phieuRows[i].ApplyPhieu(phieu);
+            }
+        }
     }
 
     private async Task LoadSelectedDetailAsync(bool showLoading)

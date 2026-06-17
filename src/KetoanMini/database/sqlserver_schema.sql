@@ -587,3 +587,53 @@ BEGIN
     ALTER TABLE dbo.work_access_requests ADD punch_at DATETIME2(0) NULL;
 END
 GO
+
+-- =========================================================================
+-- Cập nhật phiên bản ứng dụng: cấu hình + lịch sử phát hành (releases)
+-- =========================================================================
+
+IF OBJECT_ID(N'dbo.app_settings', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.app_settings
+    (
+        setting_key NVARCHAR(100) NOT NULL CONSTRAINT PK_app_settings PRIMARY KEY,
+        setting_value NVARCHAR(MAX) NOT NULL CONSTRAINT DF_app_settings_value DEFAULT N'',
+        updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_app_settings_updated_at DEFAULT SYSUTCDATETIME(),
+        updated_by NVARCHAR(100) NOT NULL CONSTRAINT DF_app_settings_updated_by DEFAULT N''
+    );
+END
+GO
+
+-- Mặc định tắt chế độ chặn đăng nhập khi bản quá cũ.
+IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'update.enforce_block')
+BEGIN
+    INSERT INTO dbo.app_settings (setting_key, setting_value, updated_by)
+    VALUES (N'update.enforce_block', N'0', N'system');
+END
+GO
+
+IF OBJECT_ID(N'dbo.app_releases', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.app_releases
+    (
+        id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_app_releases PRIMARY KEY,
+        version NVARCHAR(50) NOT NULL,
+        release_notes NVARCHAR(MAX) NOT NULL CONSTRAINT DF_app_releases_notes DEFAULT N'',
+        setup_path NVARCHAR(500) NOT NULL CONSTRAINT DF_app_releases_setup_path DEFAULT N'',
+        setup_file_name NVARCHAR(255) NOT NULL CONSTRAINT DF_app_releases_setup_file_name DEFAULT N'',
+        setup_file VARBINARY(MAX) NULL,
+        file_size BIGINT NOT NULL CONSTRAINT DF_app_releases_file_size DEFAULT 0,
+        is_mandatory BIT NOT NULL CONSTRAINT DF_app_releases_is_mandatory DEFAULT 0,
+        is_published BIT NOT NULL CONSTRAINT DF_app_releases_is_published DEFAULT 1,
+        published_at DATETIME2(0) NOT NULL CONSTRAINT DF_app_releases_published_at DEFAULT SYSUTCDATETIME(),
+        published_by NVARCHAR(100) NOT NULL CONSTRAINT DF_app_releases_published_by DEFAULT N'',
+        created_at DATETIME2(0) NOT NULL CONSTRAINT DF_app_releases_created_at DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_app_releases_published' AND object_id = OBJECT_ID(N'dbo.app_releases'))
+BEGIN
+    CREATE INDEX IX_app_releases_published ON dbo.app_releases(is_published, id DESC);
+END
+GO

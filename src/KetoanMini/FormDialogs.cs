@@ -1,6 +1,5 @@
 using System.Drawing.Drawing2D;
 using System.Globalization;
-using System.Runtime.InteropServices;
 
 namespace KetoanMini;
 
@@ -221,49 +220,6 @@ internal sealed class GiaCongFormDialog : Form
         InitDialog();
     }
 
-    private const int WM_NCHITTEST = 0x0084;
-    private const int WM_NCLBUTTONDOWN = 0x00A1;
-    private const int HTCLIENT = 1;
-    private const int HTCAPTION = 2;
-    private const int HTLEFT = 10;
-    private const int HTRIGHT = 11;
-    private const int HTTOP = 12;
-    private const int HTTOPLEFT = 13;
-    private const int HTTOPRIGHT = 14;
-    private const int HTBOTTOM = 15;
-    private const int HTBOTTOMLEFT = 16;
-    private const int HTBOTTOMRIGHT = 17;
-
-    [DllImport("user32.dll")]
-    private static extern bool ReleaseCapture();
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
-
-    protected override void WndProc(ref Message m)
-    {
-        base.WndProc(ref m);
-
-        if (m.Msg != WM_NCHITTEST || WindowState != FormWindowState.Normal || (int)m.Result != HTCLIENT)
-            return;
-
-        const int grip = 8;
-        var p = PointToClient(Cursor.Position);
-        var left = p.X <= grip;
-        var right = p.X >= ClientSize.Width - grip;
-        var top = p.Y <= grip;
-        var bottom = p.Y >= ClientSize.Height - grip;
-
-        if (left && top) m.Result = HTTOPLEFT;
-        else if (right && top) m.Result = HTTOPRIGHT;
-        else if (left && bottom) m.Result = HTBOTTOMLEFT;
-        else if (right && bottom) m.Result = HTBOTTOMRIGHT;
-        else if (left) m.Result = HTLEFT;
-        else if (right) m.Result = HTRIGHT;
-        else if (top) m.Result = HTTOP;
-        else if (bottom) m.Result = HTBOTTOM;
-    }
-
     private void InitDialog()
     {
         Text = _editingPhieu == null ? "Tạo phiếu gia công mới" : $"Sửa phiếu gia công - {_editingPhieu.MaPhieu}";
@@ -272,108 +228,27 @@ internal sealed class GiaCongFormDialog : Form
         StartPosition = FormStartPosition.CenterParent;
         BackColor = AppTheme.Background;
         Font = AppTheme.F10;
-        FormBorderStyle = FormBorderStyle.None;
+        // Cửa sổ chuẩn như app (thanh tiêu đề + nút thu nhỏ/phóng to/đóng của Windows)
+        // thay cho thanh tiêu đề tự vẽ borderless trước đây.
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = true;
+        MinimizeBox = true;
+        ShowInTaskbar = false;
         DoubleBuffered = true;
-        Padding = new Padding(4);
 
         var shell = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 3,
+            RowCount = 1,
             ColumnCount = 1,
             BackColor = AppTheme.Background,
-            Padding = new Padding(20, 18, 20, 8)
+            Padding = new Padding(20, 16, 20, 12)
         };
-        shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 70f));
         shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
 
-        shell.Controls.Add(BuildTitleBar(), 0, 0);
-        shell.Controls.Add(BuildCreateCard(), 0, 1);
-
-        var footer = new Label
-        {
-            Text = "Powered by Codex and Claude",
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleRight,
-            Font = AppTheme.F9,
-            ForeColor = AppTheme.TextSecondary,
-            BackColor = Color.Transparent
-        };
-        shell.Controls.Add(footer, 0, 2);
+        shell.Controls.Add(BuildCreateCard(), 0, 0);
 
         Controls.Add(shell);
-    }
-
-    private Control BuildTitleBar()
-    {
-        var bar = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
-        bar.MouseDown += (_, e) => BeginDrag(e);
-
-        var iconBox = new RoundedPanel
-        {
-            Width = 52,
-            Height = 52,
-            Left = 0,
-            Top = 0,
-            FillColor = Color.White,
-            BorderColor = AppTheme.Border,
-            CornerRadius = 8,
-            ShadowDepth = 1
-        };
-        iconBox.Controls.Add(new Label
-        {
-            Text = "\uE8A5",
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe MDL2 Assets", 20f),
-            ForeColor = AppTheme.Accent,
-            BackColor = Color.Transparent
-        });
-        iconBox.MouseDown += (_, e) => BeginDrag(e);
-        bar.Controls.Add(iconBox);
-
-        var title = new Label
-        {
-            Text = Text,
-            AutoSize = false,
-            Left = 70,
-            Top = 8,
-            Width = 620,
-            Height = 42,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Font = AppTheme.F18B,
-            ForeColor = AppTheme.TextPrimary,
-            BackColor = Color.Transparent
-        };
-        title.MouseDown += (_, e) => BeginDrag(e);
-        bar.Controls.Add(title);
-
-        var close = MakeWindowButton("×");
-        var max = MakeWindowButton("□");
-        var min = MakeWindowButton("−");
-        close.Click += (_, _) => Close();
-        max.Click += (_, _) =>
-        {
-            WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
-            max.Text = WindowState == FormWindowState.Maximized ? "❐" : "□";
-        };
-        min.Click += (_, _) => WindowState = FormWindowState.Minimized;
-
-        void PositionButtons()
-        {
-            close.Left = bar.Width - 42;
-            max.Left = close.Left - 44;
-            min.Left = max.Left - 44;
-            close.Top = max.Top = min.Top = 10;
-        }
-
-        bar.Controls.Add(close);
-        bar.Controls.Add(max);
-        bar.Controls.Add(min);
-        bar.Resize += (_, _) => PositionButtons();
-        PositionButtons();
-        return bar;
     }
 
     private Control BuildCreateCard()
@@ -665,30 +540,6 @@ internal sealed class GiaCongFormDialog : Form
                 Padding = new Padding(8, 0, 8, 0)
             }
         };
-    }
-
-    private static RoundedButton MakeWindowButton(string text)
-    {
-        return new RoundedButton
-        {
-            Text = text,
-            Width = 34,
-            Height = 34,
-            CornerRadius = 6,
-            BackColor = AppTheme.Background,
-            BorderColor = Color.Transparent,
-            ForeColor = AppTheme.TextPrimary,
-            Font = AppTheme.F12B
-        };
-    }
-
-    private void BeginDrag(MouseEventArgs e)
-    {
-        if (e.Button != MouseButtons.Left)
-            return;
-
-        ReleaseCapture();
-        SendMessage(Handle, WM_NCLBUTTONDOWN, HTCAPTION, 0);
     }
 
     private void LoadDoiTacSuggestions()

@@ -2083,6 +2083,286 @@ public sealed class AccountingStore
         command.ExecuteNonQuery();
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // CẬP NHẬT PHIÊN BẢN (releases + cấu hình chặn đăng nhập)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Kiểm tra phiên bản khi mở app. An toàn gọi trước khi đăng nhập.</summary>
+    public VersionCheckResult CheckVersion()
+    {
+        var result = new VersionCheckResult { CurrentVersion = AppVersion.CurrentText };
+
+        var published = ReadPublishedReleases();
+        if (published.Count == 0)
+        {
+            return result;
+        }
+
+        var latest = published
+            .OrderByDescending(release => AppVersion.Parse(release.Version))
+            .First();
+        result.Latest = latest;
+        result.UpdateAvailable = AppVersion.IsValid(latest.Version) && AppVersion.CurrentIsOlderThan(latest.Version);
+
+        if (IsUpdateEnforcementEnabled())
+        {
+            var mandatory = published
+                .Where(release => release.IsMandatory && AppVersion.IsValid(release.Version))
+                .Select(release => release.Version)
+                .OrderByDescending(AppVersion.Parse)
+                .FirstOrDefault();
+
+            if (mandatory is not null && AppVersion.CurrentIsOlderThan(mandatory))
+            {
+                result.MustBlock = true;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Bản phát hành mới nhất (theo số phiên bản) đang được công bố. Null nếu chưa có.</summary>
+    public AppRelease? GetLatestPublishedRelease()
+    {
+        return ReadPublishedReleases()
+            .OrderByDescending(release => AppVersion.Parse(release.Version))
+            .FirstOrDefault();
+    }
+
+    /// <summary>Công tắc chặn đăng nhập khi bản quá cũ (do admin bật/tắt).</summary>
+    public bool IsUpdateEnforcementEnabled()
+    {
+        return string.Equals(GetSetting("update.enforce_block"), "1", StringComparison.Ordinal);
+    }
+
+    /// <summary>Admin bật/tắt chế độ chặn đăng nhập với bản cũ.</summary>
+    public void SetUpdateEnforcementEnabled(bool enabled)
+    {
+        EnsureCurrentAdmin();
+        SetSetting("update.enforce_block", enabled ? "1" : "0");
+        RecordAudit(
+            enabled ? "Bật chặn đăng nhập bản cũ" : "Tắt chặn đăng nhập bản cũ",
+            "AppUpdate",
+            "update.enforce_block",
+            enabled ? "Yêu cầu cập nhật bắt buộc" : "Không bắt buộc cập nhật");
+    }
+
+    /// <summary>Toàn bộ lịch sử phát hành (admin xem/quản lý).</summary>
+    public IReadOnlyList<AppRelease> GetReleaseHistory(int take = 100)
+    {
+        EnsureCurrentAdmin();
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT TOP (@take)
+                id, version, release_notes, setup_path, setup_file_name, file_size,
+                CASE WHEN setup_file IS NULL THEN 0 ELSE 1 END AS has_file,
+                is_mandatory, is_published, published_at, published_by
+            FROM app_releases
+            ORDER BY id DESC;
+            """;
+        command.Parameters.AddWithValue("@take", Math.Clamp(take, 1, 1000));
+        using var reader = command.ExecuteReader();
+        var releases = new List<AppRelease>();
+        while (reader.Read())
+        {
+            releases.Add(ReadRelease(reader));
+        }
+
+        return releases;
+    }
+
+    /// <summary>Admin công bố một bản phát hành mới. Lưu UNC và/hoặc file nhúng DB.</summary>
+    public AppRelease PublishRelease(string version, string releaseNotes, string setupPath, bool isMandatory, byte[]? setupFile, string setupFileName)
+    {
+        EnsureCurrentAdmin();
+
+        version = (version ?? "").Trim();
+        if (!AppVersion.IsValid(version))
+        {
+            throw new InvalidOperationException("Số phiên bản không hợp lệ (vd: 1.2.0).");
+        }
+
+        setupPath = (setupPath ?? "").Trim();
+        setupFileName = (setupFileName ?? "").Trim();
+        var hasEmbedded = setupFile is { Length: > 0 };
+        if (string.IsNullOrWhiteSpace(setupPath) && !hasEmbedded)
+        {
+            throw new InvalidOperationException("Phải nhập đường dẫn LAN (UNC) hoặc chọn file setup để nhúng.");
+        }
+
+        if (hasEmbedded && string.IsNullOrWhiteSpace(setupFileName))
+        {
+            setupFileName = $"KetoanMiniSetup_{version}.exe";
+        }
+
+        long fileSize = hasEmbedded ? setupFile!.Length : 0;
+        if (!hasEmbedded && !string.IsNullOrWhiteSpace(setupPath))
+        {
+            try
+            {
+                if (File.Exists(setupPath))
+                {
+                    fileSize = new FileInfo(setupPath).Length;
+                    if (string.IsNullOrWhiteSpace(setupFileName))
+                    {
+                        setupFileName = Path.GetFileName(setupPath);
+                    }
+                }
+            }
+            catch
+            {
+                // Bỏ qua: không truy cập được UNC lúc công bố vẫn cho lưu (client sẽ thử lại khi tải).
+            }
+        }
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO app_releases
+                (version, release_notes, setup_path, setup_file_name, setup_file, file_size, is_mandatory, is_published, published_at, published_by, created_at)
+            OUTPUT INSERTED.id
+            VALUES
+                (@version, @notes, @setupPath, @fileName, @file, @fileSize, @mandatory, 1, @publishedAt, @publishedBy, @createdAt);
+            """;
+        command.Parameters.AddWithValue("@version", version);
+        command.Parameters.AddWithValue("@notes", TextUtil.RepairMojibake((releaseNotes ?? "").Trim()));
+        command.Parameters.AddWithValue("@setupPath", setupPath);
+        command.Parameters.AddWithValue("@fileName", setupFileName);
+        command.Parameters.AddWithValue("@file", (object?)setupFile ?? DBNull.Value);
+        command.Parameters.AddWithValue("@fileSize", fileSize);
+        command.Parameters.AddWithValue("@mandatory", isMandatory ? 1 : 0);
+        command.Parameters.AddWithValue("@publishedAt", ToDatabaseDateTime(DateTime.Now));
+        command.Parameters.AddWithValue("@publishedBy", CurrentUser?.Username ?? "admin");
+        command.Parameters.AddWithValue("@createdAt", ToDatabaseDateTime(DateTime.Now));
+        var newId = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+
+        RecordAudit("Phát hành phiên bản", "AppUpdate", version,
+            $"Bắt buộc: {(isMandatory ? "Có" : "Không")}; Nguồn: {(hasEmbedded ? "File nhúng DB" : "UNC")} {setupPath}".Trim());
+
+        return new AppRelease
+        {
+            Id = newId,
+            Version = version,
+            ReleaseNotes = (releaseNotes ?? "").Trim(),
+            SetupPath = setupPath,
+            SetupFileName = setupFileName,
+            FileSize = fileSize,
+            HasEmbeddedFile = hasEmbedded,
+            IsMandatory = isMandatory,
+            IsPublished = true,
+            PublishedAt = DateTime.Now,
+            PublishedBy = CurrentUser?.Username ?? "admin"
+        };
+    }
+
+    /// <summary>Admin xóa một bản phát hành khỏi lịch sử.</summary>
+    public void DeleteRelease(long releaseId)
+    {
+        EnsureCurrentAdmin();
+        string version;
+        using (var connection = OpenConnection())
+        {
+            using (var read = connection.CreateCommand())
+            {
+                read.CommandText = "SELECT version FROM app_releases WHERE id = @id;";
+                read.Parameters.AddWithValue("@id", releaseId);
+                version = Convert.ToString(read.ExecuteScalar(), CultureInfo.InvariantCulture) ?? "";
+            }
+
+            if (string.IsNullOrEmpty(version))
+            {
+                throw new InvalidOperationException("Không tìm thấy bản phát hành cần xóa.");
+            }
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM app_releases WHERE id = @id;";
+            command.Parameters.AddWithValue("@id", releaseId);
+            command.ExecuteNonQuery();
+        }
+
+        RecordAudit("Xóa phiên bản", "AppUpdate", version, "Xóa khỏi lịch sử cập nhật");
+    }
+
+    /// <summary>Đọc file setup nhúng trong DB (dùng khi không có UNC). An toàn gọi trước khi đăng nhập.</summary>
+    public byte[]? GetReleaseSetupFile(long releaseId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT setup_file FROM app_releases WHERE id = @id;";
+        command.Parameters.AddWithValue("@id", releaseId);
+        var value = command.ExecuteScalar();
+        return value is byte[] bytes && bytes.Length > 0 ? bytes : null;
+    }
+
+    private List<AppRelease> ReadPublishedReleases()
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                id, version, release_notes, setup_path, setup_file_name, file_size,
+                CASE WHEN setup_file IS NULL THEN 0 ELSE 1 END AS has_file,
+                is_mandatory, is_published, published_at, published_by
+            FROM app_releases
+            WHERE is_published = 1;
+            """;
+        using var reader = command.ExecuteReader();
+        var releases = new List<AppRelease>();
+        while (reader.Read())
+        {
+            releases.Add(ReadRelease(reader));
+        }
+
+        return releases;
+    }
+
+    private static AppRelease ReadRelease(SqlDataReader reader)
+    {
+        return new AppRelease
+        {
+            Id = GetInt64(reader, "id"),
+            Version = GetString(reader, "version"),
+            ReleaseNotes = GetString(reader, "release_notes"),
+            SetupPath = GetString(reader, "setup_path"),
+            SetupFileName = GetString(reader, "setup_file_name"),
+            FileSize = GetInt64(reader, "file_size"),
+            HasEmbeddedFile = GetInt64(reader, "has_file") != 0,
+            IsMandatory = GetInt64(reader, "is_mandatory") != 0,
+            IsPublished = GetInt64(reader, "is_published") != 0,
+            PublishedAt = ParseDateTime(GetString(reader, "published_at")),
+            PublishedBy = GetString(reader, "published_by")
+        };
+    }
+
+    private string GetSetting(string key)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT setting_value FROM app_settings WHERE setting_key = @key;";
+        command.Parameters.AddWithValue("@key", key);
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) ?? "";
+    }
+
+    private void SetSetting(string key, string value)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE app_settings
+            SET setting_value = @value, updated_at = @updatedAt, updated_by = @updatedBy
+            WHERE setting_key = @key;
+            IF @@ROWCOUNT = 0
+                INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by)
+                VALUES (@key, @value, @updatedAt, @updatedBy);
+            """;
+        command.Parameters.AddWithValue("@key", key);
+        command.Parameters.AddWithValue("@value", value);
+        command.Parameters.AddWithValue("@updatedAt", ToDatabaseDateTime(DateTime.Now));
+        command.Parameters.AddWithValue("@updatedBy", CurrentUser?.Username ?? "system");
+        command.ExecuteNonQuery();
+    }
+
     private Guid GetOrCreateChatConversationId(string username1, string username2)
     {
         var pair = ChatPair(username1, username2);

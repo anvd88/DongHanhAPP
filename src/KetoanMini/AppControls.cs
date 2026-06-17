@@ -183,6 +183,10 @@ namespace KetoanMini
             Cursor                       = Cursors.Hand;
         }
 
+        // Không vẽ khung focus chấm chấm (dotted focus rectangle) — nút tự vẽ bo góc
+        // nên khung mặc định của WinForms khiến nút trông bị "vỡ".
+        protected override bool ShowFocusCues => false;
+
         protected override void OnMouseEnter(EventArgs e) { _hovered = true;  _pressed = false; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { _hovered = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
         protected override void OnMouseDown(MouseEventArgs e)
