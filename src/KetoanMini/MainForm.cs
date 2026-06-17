@@ -512,6 +512,13 @@ public sealed partial class MainForm : Form
         menu.Items.Add("⚙  Tùy chỉnh tài khoản", null, (_, __) => OpenProfileDialog());
         menu.Items.Add("🔑  Đổi mật khẩu", null, (_, __) => OpenChangePasswordDialog());
         menu.Items.Add(new ToolStripSeparator());
+        var updItem = new ToolStripMenuItem(
+            _pendingUpdate is null
+                ? "⬆  Kiểm tra cập nhật"
+                : $"⬆  Cập nhật bản mới {_pendingUpdate.Version}");
+        updItem.Click += (_, __) => CheckForUpdatesInteractive();
+        menu.Items.Add(updItem);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("⎋  Đăng xuất", null, (_, __) => PerformLogout());
         menu.Show(anchor, new Point(anchor.Width - menu.Width + 4, anchor.Height - 6));
     }
@@ -519,28 +526,33 @@ public sealed partial class MainForm : Form
     private void ShowNotificationsMenu(Control anchor)
     {
         var menu = new ContextMenuStrip { Font = AppTheme.F9 };
+        menu.Items.Add(new ToolStripMenuItem("THÔNG BÁO") { Enabled = false, Font = AppTheme.FSect });
+        var headerCount = menu.Items.Count;
 
-        if (!_currentUser.IsAdmin)
+        // (1) Thông báo cập nhật phiên bản — hiển thị cho MỌI người dùng.
+        if (_pendingUpdate is not null)
         {
-            menu.Items.Add(new ToolStripMenuItem("Không có thông báo mới") { Enabled = false });
-            menu.Show(anchor, new Point(anchor.Width - menu.Width + 4, anchor.Height - 6));
-            return;
+            var release = _pendingUpdate;
+            var updItem = new ToolStripMenuItem($"⬆  Có bản cập nhật mới: {release.Version}");
+            updItem.Click += (_, __) => OpenUpdateDialog(release);
+            menu.Items.Add(updItem);
         }
 
-        try
+        // (2) Thông báo quản trị (duyệt tài khoản / đổi mật khẩu / tăng ca).
+        if (_currentUser.IsAdmin)
         {
-            var pendingUsers = _store.GetUsers().Where(u => u.IsPendingApproval && !u.IsAdmin).ToList();
-            var resetReqs = _store.GetPendingPasswordResetRequests();
-            var otReqs = _store.GetPendingWorkAccessRequests();
-
-            menu.Items.Add(new ToolStripMenuItem("THÔNG BÁO") { Enabled = false, Font = AppTheme.FSect });
-
-            if (pendingUsers.Count == 0 && resetReqs.Count == 0 && otReqs.Count == 0)
+            try
             {
-                menu.Items.Add(new ToolStripMenuItem("Không có thông báo mới") { Enabled = false });
-            }
-            else
-            {
+                var pendingUsers = _store.GetUsers().Where(u => u.IsPendingApproval && !u.IsAdmin).ToList();
+                var resetReqs = _store.GetPendingPasswordResetRequests();
+                var otReqs = _store.GetPendingWorkAccessRequests();
+
+                if ((pendingUsers.Count > 0 || resetReqs.Count > 0 || otReqs.Count > 0)
+                    && _pendingUpdate is not null)
+                {
+                    menu.Items.Add(new ToolStripSeparator());
+                }
+
                 foreach (var u in pendingUsers)
                 {
                     var item = new ToolStripMenuItem($"✓  Duyệt tài khoản: {u.Username}");
@@ -576,10 +588,15 @@ public sealed partial class MainForm : Form
                     menu.Items.Add(openOt);
                 }
             }
+            catch (Exception ex)
+            {
+                menu.Items.Add(new ToolStripMenuItem("Lỗi tải thông báo: " + ex.Message) { Enabled = false });
+            }
         }
-        catch (Exception ex)
+
+        if (menu.Items.Count == headerCount)
         {
-            menu.Items.Add(new ToolStripMenuItem("Lỗi tải thông báo: " + ex.Message) { Enabled = false });
+            menu.Items.Add(new ToolStripMenuItem("Không có thông báo mới") { Enabled = false });
         }
 
         menu.Show(anchor, new Point(anchor.Width - menu.Width + 4, anchor.Height - 6));
@@ -623,6 +640,10 @@ public sealed partial class MainForm : Form
     private void RefreshNotifCount()
     {
         int count = 0;
+        if (_pendingUpdate is not null)
+        {
+            count += 1; // có bản cập nhật mới (mọi người dùng đều thấy)
+        }
         if (_currentUser.IsAdmin)
         {
             try
@@ -631,7 +652,7 @@ public sealed partial class MainForm : Form
                 count += _store.GetPendingPasswordResetRequests().Count;
                 count += _store.GetPendingWorkAccessRequests().Count;
             }
-            catch { count = 0; }
+            catch { /* giữ nguyên phần đếm cập nhật ở trên */ }
         }
         _notifCount = count;
         _userPanel?.Invalidate();

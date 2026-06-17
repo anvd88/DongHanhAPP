@@ -55,9 +55,30 @@ internal static class UpdateInstaller
         throw new InvalidOperationException("Bản phát hành này chưa có file setup để tải.");
     }
 
-    /// <summary>Mở trình cài đặt đã tải về.</summary>
-    public static void RunInstaller(string setupPath)
-        => Process.Start(new ProcessStartInfo(setupPath) { UseShellExecute = true });
+    /// <summary>
+    /// Cờ cài đặt im lặng cho trình cài Inno Setup 6 — cài ngầm, không hiện UI.
+    ///   /VERYSILENT        : không hiện cửa sổ wizard lẫn thanh tiến trình.
+    ///   /SUPPRESSMSGBOXES  : không hỏi hộp thoại xác nhận.
+    ///   /NORESTART         : không tự khởi động lại máy.
+    ///   /CLOSEAPPLICATIONS : tự đóng app đang chạy để thay thế file.
+    /// </summary>
+    private const string InnoSilentArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS";
+
+    /// <summary>
+    /// Mở trình cài đặt đã tải về. Khi <paramref name="silent"/> = true, chạy ở
+    /// chế độ im lặng (Inno Setup /VERYSILENT) — máy tự cài, không hiện giao diện.
+    /// </summary>
+    public static void RunInstaller(string setupPath, bool silent = false)
+    {
+        var psi = new ProcessStartInfo(setupPath) { UseShellExecute = true };
+        if (silent)
+        {
+            psi.Arguments = InnoSilentArgs;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+        }
+
+        Process.Start(psi);
+    }
 
     private static async Task CopyWithProgressAsync(string source, string dest, IProgress<double>? progress, CancellationToken ct)
     {
