@@ -137,13 +137,21 @@ public partial class UpdateWindow : Wpf.Window
     private void DoUpdate()
     {
         var progress = new UpdateProgressWindow(_store, _release, _blocking) { Owner = this };
-        var installed = progress.ShowDialog() == true;
-
-        if (installed)
+        if (progress.ShowDialog() != true)
         {
-            DialogResult = true; // đã khởi chạy trình cài -> caller thoát app để cài
-            Close();
+            // Người dùng hủy lúc đang tải: cửa sổ này vẫn hiển thị bên dưới.
+            return;
         }
-        // Nếu người dùng hủy lúc đang tải: cửa sổ này vẫn hiển thị bên dưới, không cần làm gì.
+
+        // Cập nhật xong -> hiện màn "Cập nhật thành công" (onFinish rỗng để không bật MessageBox demo).
+        var success = new UpdateSuccessWindow(
+            oldVersion: AppVersion.CurrentText,
+            currentVersion: _release.Version,
+            successMessage: null,
+            onFinish: () => { }) { Owner = this };
+        success.ShowDialog();
+
+        DialogResult = true; // báo caller: đã cập nhật -> chuyển tới đăng nhập
+        Close();
     }
 }

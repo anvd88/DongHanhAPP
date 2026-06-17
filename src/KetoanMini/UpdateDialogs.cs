@@ -60,9 +60,10 @@ internal static class UpdateInstaller
     ///   /VERYSILENT        : không hiện cửa sổ wizard lẫn thanh tiến trình.
     ///   /SUPPRESSMSGBOXES  : không hỏi hộp thoại xác nhận.
     ///   /NORESTART         : không tự khởi động lại máy.
-    ///   /CLOSEAPPLICATIONS : tự đóng app đang chạy để thay thế file.
+    /// Không dùng /CLOSEAPPLICATIONS vì app vẫn chạy để hiện màn "Cập nhật thành công"
+    /// rồi quay lại đăng nhập; file exe/dll đang khóa sẽ được thay hoàn toàn ở lần khởi động kế tiếp.
     /// </summary>
-    private const string InnoSilentArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS";
+    private const string InnoSilentArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART";
 
     /// <summary>
     /// Mở trình cài đặt đã tải về. Khi <paramref name="silent"/> = true, chạy ở
