@@ -1,5 +1,5 @@
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
+using WpfMedia = System.Windows.Media;
+using WpfImaging = System.Windows.Media.Imaging;
 
 namespace KetoanMini;
 
@@ -29,8 +29,8 @@ public static class AvatarStore
 
     public static bool Has(string username) => File.Exists(PathFor(username));
 
-    /// <summary>Loads the avatar as an independent Bitmap (no file lock), or null.</summary>
-    public static Image? Load(string username)
+    /// <summary>Loads the avatar as a WPF image source with no file lock, or null.</summary>
+    public static WpfMedia.ImageSource? Load(string username)
     {
         try
         {
@@ -38,8 +38,13 @@ public static class AvatarStore
             if (!File.Exists(path)) return null;
             var bytes = File.ReadAllBytes(path);
             using var ms = new MemoryStream(bytes);
-            using var img = Image.FromStream(ms);
-            return new Bitmap(img);
+            var image = new WpfImaging.BitmapImage();
+            image.BeginInit();
+            image.CacheOption = WpfImaging.BitmapCacheOption.OnLoad;
+            image.StreamSource = ms;
+            image.EndInit();
+            image.Freeze();
+            return image;
         }
         catch
         {
@@ -51,11 +56,21 @@ public static class AvatarStore
     public static void Save(string username, string sourcePath)
     {
         Directory.CreateDirectory(Dir);
-        byte[] bytes = File.ReadAllBytes(sourcePath);
-        using var ms = new MemoryStream(bytes);
-        using var src = Image.FromStream(ms);
-        using var square = CropSquare(src, AvatarSize);
-        square.Save(PathFor(username), ImageFormat.Png);
+        using var input = File.OpenRead(sourcePath);
+        var decoder = WpfImaging.BitmapDecoder.Create(input, WpfImaging.BitmapCreateOptions.PreservePixelFormat, WpfImaging.BitmapCacheOption.OnLoad);
+        var source = decoder.Frames[0];
+        var side = Math.Min(source.PixelWidth, source.PixelHeight);
+        var crop = new WpfImaging.CroppedBitmap(source, new System.Windows.Int32Rect(
+            Math.Max(0, (source.PixelWidth - side) / 2),
+            Math.Max(0, (source.PixelHeight - side) / 2),
+            side,
+            side));
+        var scale = AvatarSize / (double)side;
+        var resized = new WpfImaging.TransformedBitmap(crop, new WpfMedia.ScaleTransform(scale, scale));
+        var encoder = new WpfImaging.PngBitmapEncoder();
+        encoder.Frames.Add(WpfImaging.BitmapFrame.Create(resized));
+        using var output = File.Create(PathFor(username));
+        encoder.Save(output);
     }
 
     public static void Delete(string username)
@@ -71,35 +86,4 @@ public static class AvatarStore
         }
     }
 
-    private static Bitmap CropSquare(Image src, int size)
-    {
-        int side = Math.Min(src.Width, src.Height);
-        int sx = (src.Width - side) / 2;
-        int sy = (src.Height - side) / 2;
-
-        var bmp = new Bitmap(size, size);
-        using var g = Graphics.FromImage(bmp);
-        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        g.DrawImage(src, new Rectangle(0, 0, size, size), new Rectangle(sx, sy, side, side), GraphicsUnit.Pixel);
-        return bmp;
-    }
-
-    /// <summary>Draws an image clipped to a circle inside the given rectangle.</summary>
-    public static void DrawCircular(Graphics g, Image img, Rectangle rect)
-    {
-        var saved = g.Save();
-        try
-        {
-            using var clip = new GraphicsPath();
-            clip.AddEllipse(rect);
-            g.SetClip(clip);
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g.DrawImage(img, rect);
-        }
-        finally
-        {
-            g.Restore(saved);
-        }
-    }
 }

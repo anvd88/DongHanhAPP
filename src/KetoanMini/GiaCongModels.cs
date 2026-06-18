@@ -63,19 +63,19 @@ public static class GiaCongTrangThai
         Huy,
     ];
 
-    public static Color GetStatusColor(string trangThai) => trangThai switch
+    private static (byte R, byte G, byte B) GetStatusRgb(string trangThai) => trangThai switch
     {
-        DangXuLy => Color.FromArgb(59, 130, 246),   // blue
-        HoanThanh => Color.FromArgb(34, 197, 94),   // green
-        ChoDauTac => Color.FromArgb(234, 179, 8),   // amber
-        Huy        => Color.FromArgb(239, 68, 68),  // red
-        _          => Color.Gray,
+        DangXuLy => (59, 130, 246),   // blue
+        HoanThanh => (34, 197, 94),   // green
+        ChoDauTac => (234, 179, 8),   // amber
+        Huy        => (239, 68, 68),  // red
+        _          => (128, 128, 128),
     };
 
     // Returns a CSS-style hex color string, e.g. "#3B82F6"
     public static string GetStatusHexColor(string trangThai)
     {
-        var c = GetStatusColor(trangThai);
+        var c = GetStatusRgb(trangThai);
         return $"#{c.R:X2}{c.G:X2}{c.B:X2}";
     }
 }

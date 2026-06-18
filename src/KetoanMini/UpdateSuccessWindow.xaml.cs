@@ -1,7 +1,6 @@
 using Wpf = System.Windows;
 using WpfInput = System.Windows.Input;
 using WpfMedia = System.Windows.Media;
-using WinForms = System.Windows.Forms;
 
 namespace KetoanMini;
 
@@ -80,17 +79,17 @@ public partial class UpdateSuccessWindow : Wpf.Window
     }
 
     /// <summary>
-    /// Đăng xuất và quay lại trang đăng nhập. Dùng BeginInvoke để việc đóng MainForm
+    /// Đăng xuất và quay lại trang đăng nhập. Dùng Dispatcher để việc đóng MainWindow
     /// chạy SAU khi toàn bộ hộp thoại modal (UpdateWindow/Progress/Success) đã đóng,
-    /// tránh đóng MainForm khi dialog vẫn đang mở. Khi MainForm đóng với
+    /// tránh đóng MainWindow khi dialog vẫn đang mở. Khi MainWindow đóng với
     /// LogoutRequested = true, vòng lặp trong Program.Main sẽ tự mở lại LoginWindow.
     /// </summary>
     private static void NavigateToLogin()
     {
-        var main = WinForms.Application.OpenForms.OfType<MainForm>().FirstOrDefault();
-        if (main is not null && main.IsHandleCreated)
+        var main = Wpf.Application.Current?.Windows.OfType<MainWindow>().FirstOrDefault();
+        if (main is not null)
         {
-            main.BeginInvoke(new Action(main.LogoutToLogin));
+            main.Dispatcher.BeginInvoke(new Action(main.LogoutToLogin));
         }
     }
 
