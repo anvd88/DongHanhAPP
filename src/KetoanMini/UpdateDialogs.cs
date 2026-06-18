@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 
 namespace KetoanMini;
 
@@ -118,6 +119,57 @@ internal static class UpdateInstaller
         }
     }
 
+    public static bool IsZipUpdatePackage(string path)
+    {
+        var ext = Path.GetExtension(path);
+        return ext.Equals(".zip", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".kup", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static void RunZipUpdaterAfterCurrentProcessExit(string packagePath)
+    {
+        if (!File.Exists(packagePath))
+        {
+            throw new FileNotFoundException("Khong tim thay goi cap nhat da tai.", packagePath);
+        }
+
+        var installedUpdater = Path.Combine(AppContext.BaseDirectory, "KetoanMiniUpdater.exe");
+        if (!File.Exists(installedUpdater))
+        {
+            throw new InvalidOperationException(
+                "Ban dang chay phien ban chua co KetoanMiniUpdater.exe. " +
+                "Hay cap nhat bang bo cai setup mot lan, sau do cac lan sau co the dung goi .zip.");
+        }
+
+        var targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var appPath = Environment.ProcessPath ?? Path.Combine(targetDir, "KetoanMini.exe");
+        var updaterDir = Path.Combine(UpdatesFolder(), "Runner_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+        Directory.CreateDirectory(updaterDir);
+
+        var updaterPath = Path.Combine(updaterDir, "KetoanMiniUpdater.exe");
+        File.Copy(installedUpdater, updaterPath, overwrite: true);
+
+        var psi = new ProcessStartInfo(updaterPath)
+        {
+            UseShellExecute = true,
+            Verb = "runas",
+            WorkingDirectory = updaterDir,
+            Arguments = string.Join(" ",
+            [
+                "--package",
+                CommandLineQuote(packagePath),
+                "--target",
+                CommandLineQuote(targetDir),
+                "--app",
+                CommandLineQuote(appPath),
+                "--wait-pid",
+                Environment.ProcessId.ToString(CultureInfo.InvariantCulture)
+            ])
+        };
+
+        Process.Start(psi);
+    }
+
     private static string BuildDeferredInstallerScript(int parentPid, string setupPath, IReadOnlyList<string> args)
     {
         var psArgs = string.Join(", ", args.Select(PowerShellQuote));
@@ -134,6 +186,11 @@ internal static class UpdateInstaller
     private static string PowerShellQuote(string value)
     {
         return "'" + value.Replace("'", "''") + "'";
+    }
+
+    private static string CommandLineQuote(string value)
+    {
+        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     }
 
     private static async Task CopyWithProgressAsync(string source, string dest, IProgress<double>? progress, CancellationToken ct)
@@ -227,7 +284,19 @@ internal static class UpdateInstaller
                 }
                 catch
                 {
-                    // File có thể đang được dùng (trình cài chưa đóng) → bỏ qua, lần khởi động sau dọn tiếp.
+                    // File co the dang duoc dung; lan khoi dong sau don tiep.
+                }
+            }
+
+            foreach (var subdir in Directory.EnumerateDirectories(dir))
+            {
+                try
+                {
+                    Directory.Delete(subdir, recursive: true);
+                }
+                catch
+                {
+                    // Runner updater co the con bi Windows giu file; lan sau don tiep.
                 }
             }
         }

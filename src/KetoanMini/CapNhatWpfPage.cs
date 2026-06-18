@@ -142,7 +142,7 @@ public sealed class CapNhatWpfPage : WpfControls.UserControl
         AddRow(grid, 2, "", _chkMandatory);
 
         _txtUnc = NewTextBox();
-        AddRow(grid, 3, "Đường dẫn LAN:", WithHint(Wrap(_txtUnc), @"VD: \\SERVER\share\KetoanMiniSetup_x.y.z.exe"));
+        AddRow(grid, 3, "Đường dẫn LAN:", WithHint(Wrap(_txtUnc), @"VD: \\SERVER\share\KetoanMiniUpdate-x.y.z-win-x64.zip hoặc KetoanMiniSetup-x.y.z-win-x64.exe"));
 
         var filePanel = new WpfControls.DockPanel { Margin = new Wpf.Thickness(0, 6, 0, 6) };
         var btnPick = WpfUi.OutlineButton("Chọn file...", WpfTheme.TextPrimary, WpfTheme.Border, fontPt: 9, bold: false);
@@ -188,8 +188,8 @@ public sealed class CapNhatWpfPage : WpfControls.UserControl
     {
         var ofd = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Chọn file setup để nhúng vào DB",
-            Filter = "File cài đặt (*.exe;*.msi;*.zip)|*.exe;*.msi;*.zip|Tất cả (*.*)|*.*"
+            Title = "Chọn file cập nhật để nhúng vào DB",
+            Filter = "File cập nhật (*.zip;*.kup;*.exe;*.msi)|*.zip;*.kup;*.exe;*.msi|Tất cả (*.*)|*.*"
         };
         if (ofd.ShowDialog() != true)
         {

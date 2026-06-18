@@ -149,10 +149,18 @@ public partial class UpdateProgressWindow : Wpf.Window
             _installing = true;
             BtnClose.IsEnabled = false;
             SetStep(StepState.Done, StepState.Done, StepState.Active);
-            StatusText = "Đang cài đặt bản cập nhật...";
+            var isZipPackage = UpdateInstaller.IsZipUpdatePackage(path);
+            StatusText = isZipPackage ? "Đang chuẩn bị cập nhật nhanh..." : "Đang cài đặt bản cập nhật...";
             await RampProgressAsync(ProgressPercent, 100, _cts.Token);
 
-            UpdateInstaller.RunInstallerAfterCurrentProcessExit(path, silent: true);
+            if (isZipPackage)
+            {
+                UpdateInstaller.RunZipUpdaterAfterCurrentProcessExit(path);
+            }
+            else
+            {
+                UpdateInstaller.RunInstallerAfterCurrentProcessExit(path, silent: true);
+            }
 
             SetStep(StepState.Done, StepState.Done, StepState.Done);
             ProgressPercent = 100;

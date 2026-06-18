@@ -198,11 +198,14 @@ Khi chạy workflow này, GitHub Actions sẽ:
 
 1. Restore project cho `win-x64`.
 2. Publish app Release self-contained.
-3. Cài Inno Setup trên runner.
-4. Build file installer:
+3. Publish `KetoanMiniUpdater.exe`.
+4. Tạo gói cập nhật nhanh `.zip`.
+5. Cài Inno Setup trên runner.
+6. Build file installer:
 
 ```text
 KetoanMiniSetup-<version>-win-x64.exe
+KetoanMiniUpdate-<version>-win-x64.zip
 ```
 
 File installer dùng cho cả:
@@ -210,10 +213,21 @@ File installer dùng cho cả:
 - Cài mới.
 - Cập nhật bản đã cài, vì `AppId` trong Inno Setup được giữ cố định.
 
+Workflow cũng tạo bộ gỡ độc lập:
+
+```text
+KetoanMiniUninstall-<version>-win-x64.exe
+```
+
+Bộ cài vẫn tự tạo uninstaller chuẩn của Inno Setup trong Windows Apps/Programs và thêm shortcut `Go KetoanMini` ở Start Menu. Bộ gỡ độc lập chỉ gọi uninstaller của app đã cài; không xóa database SQL Server hay cấu hình người dùng trong `%AppData%`.
+
+Gói `KetoanMiniUpdate-<version>-win-x64.zip` dùng cho cập nhật nhanh: app tải zip, đóng lại, `KetoanMiniUpdater.exe` tự backup, giải nén đè file mới, rollback nếu lỗi và mở lại app. Lần đầu chuyển sang kiểu cập nhật nhanh, hãy phát hành bộ setup mới một lần để máy client có `KetoanMiniUpdater.exe`; các lần sau có thể phát hành file zip.
+
 Script Inno Setup:
 
 ```text
 installer/KetoanMini.iss
+installer/KetoanMiniUninstall.iss
 ```
 
 ## Phát Hành Cập Nhật Cho Người Dùng
@@ -221,16 +235,24 @@ installer/KetoanMini.iss
 1. Tăng version trong `src/KetoanMini/KetoanMini.csproj`.
 2. Push code lên GitHub.
 3. Chạy workflow `Build Installer (Setup EXE)`.
-4. Tải artifact `KetoanMiniSetup-<version>-win-x64.exe`.
+4. Tải artifact:
+   - `KetoanMiniSetup-<version>-win-x64.exe` nếu cần cài mới, sửa updater, hoặc chuyển máy cũ sang cơ chế update nhanh.
+   - `KetoanMiniUpdate-<version>-win-x64.zip` cho các lần cập nhật thường ngày.
 5. Đăng nhập app bằng admin.
 6. Vào tab `Cập nhật`.
-7. Nhập version, ghi chú phát hành và chọn file setup.
+7. Nhập version, ghi chú phát hành và chọn file zip update hoặc file setup.
 8. Bấm phát hành.
 
 Khi client mở app, nếu có bản mới:
 
 - Nếu không bắt buộc, người dùng có thể cập nhật hoặc để sau.
 - Nếu admin bật chặn bản cũ, người dùng phải cập nhật mới được đăng nhập.
+
+Khuyến nghị vận hành:
+
+- Dùng file setup cho lần cài đầu, khi sửa chính updater, hoặc khi cần đảm bảo mọi máy đều có đủ thành phần nền.
+- Dùng file zip update cho các bản sửa app thông thường để cập nhật mượt hơn, không chạy lại wizard cài đặt.
+- Không tự copy đè file bằng tay trên máy client; để `KetoanMiniUpdater.exe` tự backup, copy và rollback.
 
 ## GitHub Actions
 
