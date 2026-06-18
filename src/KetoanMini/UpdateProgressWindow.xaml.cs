@@ -152,14 +152,14 @@ public partial class UpdateProgressWindow : Wpf.Window
             StatusText = "Đang cài đặt bản cập nhật...";
             await RampProgressAsync(ProgressPercent, 100, _cts.Token);
 
-            UpdateInstaller.RunInstaller(path, silent: true);
+            UpdateInstaller.RunInstallerAfterCurrentProcessExit(path, silent: true);
 
             SetStep(StepState.Done, StepState.Done, StepState.Done);
             ProgressPercent = 100;
-            StatusText = "Đã cài đặt xong phiên bản mới.";
-            await Task.Delay(700, _cts.Token);
+            StatusText = "Đã sẵn sàng cài đặt. Ứng dụng sẽ đóng để cập nhật...";
+            await Task.Delay(1200, _cts.Token);
 
-            DialogResult = true; // báo UpdateWindow: tải + cài xong -> hiện màn thành công
+            DialogResult = true; // báo UpdateWindow: đã lên lịch chạy setup -> thoát app
             Close();
         }
         catch (OperationCanceledException)

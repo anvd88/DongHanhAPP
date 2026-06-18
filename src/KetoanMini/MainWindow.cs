@@ -808,7 +808,11 @@ public sealed class MainWindow : Wpf.Window
     private void OpenUpdateDialog(AppRelease release)
     {
         var win = new UpdateWindow(_store, release, blocking: false) { Owner = this };
-        win.ShowDialog();
+        if (win.ShowDialog() == true)
+        {
+            _closeConfirmed = true;
+            Close();
+        }
     }
 
     private void PerformLogout()
