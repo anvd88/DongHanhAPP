@@ -98,7 +98,7 @@ public sealed class LoginWindow : Wpf.Window
 
         var shadowLayer = new WpfControls.Border
         {
-            Background = WpfMedia.Brushes.White,
+            Background = WpfTheme.Surface,
             CornerRadius = new Wpf.CornerRadius(14),
             // Thụt vào 2px + bo góc nhỏ hơn card → nằm hẳn dưới card, không thò viền
             // trắng ra ở góc. Bóng vẫn lan ra ngoài nhờ BlurRadius.
@@ -115,7 +115,7 @@ public sealed class LoginWindow : Wpf.Window
 
         _card = new WpfControls.Border
         {
-            Background = WpfMedia.Brushes.White,
+            Background = WpfTheme.Surface,
             CornerRadius = new Wpf.CornerRadius(16)
         };
         // Clip toàn bộ card theo hình chữ nhật bo góc 16 → góc mượt, không bị
@@ -218,7 +218,7 @@ public sealed class LoginWindow : Wpf.Window
     // ── Tab bar ───────────────────────────────────────────────────────────
     private WpfControls.Grid BuildTabBar()
     {
-        var grid = new WpfControls.Grid { Background = WpfMedia.Brushes.White };
+        var grid = new WpfControls.Grid { Background = WpfTheme.Surface };
         grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition());
         grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition());
 
@@ -257,7 +257,7 @@ public sealed class LoginWindow : Wpf.Window
                 Child = new WpfControls.Grid { Children = { text, underline } }
             };
             cell.MouseLeftButtonUp += (_, _) => SwitchTab(index);
-            cell.MouseEnter += (_, _) => { if (_activeTab != index) cell.Background = WpfTheme.Brush("#F4F7FF"); };
+            cell.MouseEnter += (_, _) => { if (_activeTab != index) cell.Background = WpfTheme.RowHover; };
             cell.MouseLeave += (_, _) => cell.Background = WpfMedia.Brushes.Transparent;
 
             WpfControls.Grid.SetColumn(cell, i);
@@ -601,7 +601,7 @@ internal sealed class LoginInputBox : WpfControls.Border
         _isPassword = isPassword;
 
         Height = 38;
-        Background = WpfMedia.Brushes.White;
+        Background = WpfTheme.Surface;
         CornerRadius = new Wpf.CornerRadius(6);
         BorderThickness = new Wpf.Thickness(1);
         BorderBrush = WpfTheme.InputBorderNormal;

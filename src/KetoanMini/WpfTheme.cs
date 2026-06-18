@@ -9,50 +9,71 @@ namespace KetoanMini;
 /// </summary>
 public static class WpfTheme
 {
+    // Mỗi brush trả về theo theme đang chọn (Sáng/Tối) để đổi giao diện "live".
+    // D = đang ở chế độ tối. Bn(...) chọn brush theo theme (đã cache + Freeze).
+    private static bool D => ThemeState.IsDark;
+    private static WpfMedia.Brush Bn(string light, string dark) => Cached(D ? dark : light);
+
     // ── Sidebar ───────────────────────────────────────────────────────────
-    public static readonly WpfMedia.Brush SidebarBg        = Brush("#0F172A");
-    public static readonly WpfMedia.Brush SidebarHover     = Brush("#1E293B");
-    public static readonly WpfMedia.Brush SidebarActive    = Brush("#2563EB");
-    public static readonly WpfMedia.Brush SidebarText      = Brush("#94A3B8");
-    public static readonly WpfMedia.Brush SidebarSection   = Brush("#475569");
+    public static WpfMedia.Brush SidebarBg      => Bn("#0F172A", "#050608");
+    public static WpfMedia.Brush SidebarHover    => Bn("#1E293B", "#101317");
+    public static WpfMedia.Brush SidebarActive   => Bn("#2563EB", "#11C5BF");
+    public static WpfMedia.Brush SidebarText     => Bn("#94A3B8", "#9AA3AF");
+    public static WpfMedia.Brush SidebarSection  => Bn("#475569", "#5F6875");
 
     // ── Surfaces ──────────────────────────────────────────────────────────
-    public static readonly WpfMedia.Brush Background = Brush("#F1F5F9");
-    public static readonly WpfMedia.Brush Surface    = Brush("#FFFFFF");
-    public static readonly WpfMedia.Brush SurfaceAlt  = Brush("#F8FAFC");
-    public static readonly WpfMedia.Brush Border      = Brush("#E2E8F0");
+    public static WpfMedia.Brush Background => Bn("#F1F5F9", "#050608");
+    public static WpfMedia.Brush Surface    => Bn("#FFFFFF", "#0A0C0F");
+    public static WpfMedia.Brush SurfaceAlt  => Bn("#F8FAFC", "#0E1116");
+    public static WpfMedia.Brush Border      => Bn("#E2E8F0", "#1C222B");
+    public static WpfMedia.Brush GridLine    => Bn("#EEF2F7", "#161B22");
+    public static WpfMedia.Brush RowHover     => Bn("#F7FBFF", "#12161C");
 
     // ── Text ──────────────────────────────────────────────────────────────
-    public static readonly WpfMedia.Brush TextPrimary   = Brush("#0F172A");
-    public static readonly WpfMedia.Brush TextSecondary = Brush("#64748B");
-    public static readonly WpfMedia.Brush TextMuted     = Brush("#94A3B8");
+    public static WpfMedia.Brush TextPrimary   => Bn("#0F172A", "#F5F7FA");
+    public static WpfMedia.Brush TextSecondary => Bn("#64748B", "#A8B0BD");
+    public static WpfMedia.Brush TextMuted     => Bn("#94A3B8", "#7D8794");
 
     // ── Accent / brand ────────────────────────────────────────────────────
-    public static readonly WpfMedia.Brush Accent      = Brush("#2563EB");
-    public static readonly WpfMedia.Brush AccentLight  = Brush("#DBEAFE");
-    public static readonly WpfMedia.Brush AccentHover  = Brush("#1D4ED8");
+    public static WpfMedia.Brush Accent      => Bn("#2563EB", "#11C5BF");
+    public static WpfMedia.Brush AccentLight  => Bn("#DBEAFE", "#0E2221");
+    public static WpfMedia.Brush AccentHover  => Bn("#1D4ED8", "#18D7D0");
 
     // ── Semantic ──────────────────────────────────────────────────────────
-    public static readonly WpfMedia.Brush Success      = Brush("#10B981");
-    public static readonly WpfMedia.Brush SuccessLight = Brush("#D1FAE5");
-    public static readonly WpfMedia.Brush Warning      = Brush("#F59E0B");
-    public static readonly WpfMedia.Brush WarningLight = Brush("#FEF3C7");
-    public static readonly WpfMedia.Brush Danger       = Brush("#EF4444");
-    public static readonly WpfMedia.Brush DangerLight  = Brush("#FEE2E2");
-    public static readonly WpfMedia.Brush Purple       = Brush("#8B5CF6");
-    public static readonly WpfMedia.Brush PurpleLight  = Brush("#EDE9FE");
+    public static WpfMedia.Brush Success      => Bn("#10B981", "#22C55E");
+    public static WpfMedia.Brush SuccessLight => Bn("#D1FAE5", "#0E1A12");
+    public static WpfMedia.Brush Warning      => Bn("#F59E0B", "#F59E0B");
+    public static WpfMedia.Brush WarningLight => Bn("#FEF3C7", "#1C1406");
+    public static WpfMedia.Brush Danger       => Bn("#EF4444", "#EF4444");
+    public static WpfMedia.Brush DangerLight  => Bn("#FEE2E2", "#1A0C0C");
+    public static WpfMedia.Brush Purple       => Bn("#8B5CF6", "#8B5CF6");
+    public static WpfMedia.Brush PurpleLight  => Bn("#EDE9FE", "#1A1430");
 
     // ── Login gradient (navy top → navy bottom) ───────────────────────────
     public static readonly WpfMedia.Color NavyTop    = Color("#0F172A");
     public static readonly WpfMedia.Color NavyBottom = Color("#1E3A5F");
 
     // ── Input border states (khớp LoginInputWrapPanel) ────────────────────
-    public static readonly WpfMedia.Brush InputBorderNormal = Brush("#CBD5E1");
-    public static readonly WpfMedia.Brush InputBorderFocus  = Brush("#2563EB");
-    public static readonly WpfMedia.Brush InputBorderError  = Brush("#EF4444");
+    public static WpfMedia.Brush InputBorderNormal => Bn("#CBD5E1", "#2A323D");
+    public static WpfMedia.Brush InputBorderFocus  => Bn("#2563EB", "#11C5BF");
+    public static WpfMedia.Brush InputBorderError  => Bn("#EF4444", "#EF4444");
 
     // ── Fonts ─────────────────────────────────────────────────────────────
     public static readonly WpfMedia.FontFamily Font = new("Segoe UI");
+
+    // Cache brush theo mã hex để không tạo lại mỗi lần đọc thuộc tính.
+    private static readonly Dictionary<string, WpfMedia.Brush> _brushCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private static WpfMedia.Brush Cached(string hex)
+    {
+        if (!_brushCache.TryGetValue(hex, out var brush))
+        {
+            brush = Brush(hex);
+            _brushCache[hex] = brush;
+        }
+
+        return brush;
+    }
 
     public static WpfMedia.SolidColorBrush Brush(string hex)
     {

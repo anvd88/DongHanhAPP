@@ -37,26 +37,30 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
     private bool _applyingSelection;
     private int _detailLoadVersion;
 
-    private static readonly WpfMedia.Brush BackgroundBrush = Brush("#F3F7FB");
-    private static readonly WpfMedia.Brush SurfaceBrush = Brush("#FFFFFF");
-    private static readonly WpfMedia.Brush SurfaceAltBrush = Brush("#F8FAFC");
-    private static readonly WpfMedia.Brush LineBrush = Brush("#DDE6F2");
-    private static readonly WpfMedia.Brush TextBrush = Brush("#0F172A");
-    private static readonly WpfMedia.Brush MutedBrush = Brush("#64748B");
-    private static readonly WpfMedia.Brush AccentBrush = Brush("#0B5FEA");
-    private static readonly WpfMedia.Brush AccentSoftBrush = Brush("#EAF2FF");
-    private static readonly WpfMedia.Brush TealBrush = Brush("#0F9F95");
-    private static readonly WpfMedia.Brush TealSoftBrush = Brush("#EEFDFC");
-    private static readonly WpfMedia.Brush AmberBrush = Brush("#D97706");
-    private static readonly WpfMedia.Brush AmberSoftBrush = Brush("#FFF7E6");
-    private static readonly WpfMedia.Brush SuccessBrush = Brush("#16A34A");
-    private static readonly WpfMedia.Brush DangerBrush = Brush("#DC2626");
+    // Bảng màu hỗ trợ Sáng/Tối: mỗi token chọn hex theo ThemeState.IsDark.
+    // Giữ nguyên hex chế độ Sáng; bổ sung hex chế độ Tối tương ứng để bật dark mode.
+    private static bool Dark => ThemeState.IsDark;
+    private static WpfMedia.Brush BackgroundBrush => Bn("#F3F7FB", "#050608");
+    private static WpfMedia.Brush SurfaceBrush => Bn("#FFFFFF", "#0A0C0F");
+    private static WpfMedia.Brush SurfaceAltBrush => Bn("#F8FAFC", "#0E1116");
+    private static WpfMedia.Brush LineBrush => Bn("#DDE6F2", "#1C222B");
+    private static WpfMedia.Brush TextBrush => Bn("#0F172A", "#F5F7FA");
+    private static WpfMedia.Brush MutedBrush => Bn("#64748B", "#A8B0BD");
+    private static WpfMedia.Brush AccentBrush => Bn("#0B5FEA", "#11C5BF");
+    private static WpfMedia.Brush AccentSoftBrush => Bn("#EAF2FF", "#0E2221");
+    private static WpfMedia.Brush TealBrush => Bn("#0F9F95", "#2DD4BF");
+    private static WpfMedia.Brush TealSoftBrush => Bn("#EEFDFC", "#0E2221");
+    private static WpfMedia.Brush AmberBrush => Bn("#D97706", "#F59E0B");
+    private static WpfMedia.Brush AmberSoftBrush => Bn("#FFF7E6", "#1C1406");
+    private static WpfMedia.Brush SuccessBrush => Bn("#16A34A", "#22C55E");
+    private static WpfMedia.Brush DangerBrush => Bn("#DC2626", "#EF4444");
     private static readonly WpfMedia.Brush TransparentBrush = WpfMedia.Brushes.Transparent;
 
     private static readonly Wpf.Style ChromeButtonStyle = CreateButtonStyle();
-    private static readonly Wpf.Style DataGridRowChrome = CreateRowStyle();
+    // Row/Header style nhúng màu theo theme nên dựng lại mỗi lần dùng (theo theme hiện tại).
+    private static Wpf.Style DataGridRowChrome => CreateRowStyle();
     private static readonly Wpf.Style DataGridCellChrome = CreateCellStyle();
-    private static readonly Wpf.Style DataGridHeaderChrome = CreateHeaderStyle();
+    private static Wpf.Style DataGridHeaderChrome => CreateHeaderStyle();
 
     public event EventHandler? CreateRequested;
     public event EventHandler? InitialLoadCompleted;
@@ -508,9 +512,9 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
             grid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
 
         var totalQty = phieu.HangHoaList.Sum(h => h.SoLuong);
-        AddSummaryCard(grid, 0, "▱", $"{phieu.SoMatHang} mặt hàng", AccentBrush, AccentSoftBrush, Brush("#BFD5FF"));
-        AddSummaryCard(grid, 1, "☷", $"SL: {totalQty:N2}", TealBrush, TealSoftBrush, Brush("#BFEFED"));
-        AddSummaryCard(grid, 2, "₫", $"{TextUtil.FormatMoney(phieu.TongGiaTri)} đ", AmberBrush, AmberSoftBrush, Brush("#F7D596"));
+        AddSummaryCard(grid, 0, "▱", $"{phieu.SoMatHang} mặt hàng", AccentBrush, AccentSoftBrush, Bn("#BFD5FF", "#173532"));
+        AddSummaryCard(grid, 1, "☷", $"SL: {totalQty:N2}", TealBrush, TealSoftBrush, Bn("#BFEFED", "#15403E"));
+        AddSummaryCard(grid, 2, "₫", $"{TextUtil.FormatMoney(phieu.TongGiaTri)} đ", AmberBrush, AmberSoftBrush, Bn("#F7D596", "#3A2E0A"));
         return grid;
     }
 
@@ -968,7 +972,7 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
             Value = 0,
             IsIndeterminate = false,
             Foreground = AccentBrush,
-            Background = Brush("#D8E4F3"),
+            Background = Bn("#D8E4F3", "#1C222B"),
             Margin = new Wpf.Thickness(0, 14, 0, 0)
         };
         _loadingPercentText = Text("0%", 12, true, AccentBrush);
@@ -987,7 +991,9 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
 
         return new WpfControls.Border
         {
-            Background = new WpfMedia.SolidColorBrush(WpfMedia.Color.FromArgb(247, 243, 247, 251)),
+            Background = new WpfMedia.SolidColorBrush(Dark
+                ? WpfMedia.Color.FromArgb(247, 5, 6, 8)
+                : WpfMedia.Color.FromArgb(247, 243, 247, 251)),
             Child = stack,
             Visibility = Wpf.Visibility.Visible
         };
@@ -1132,9 +1138,9 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
             Effect = new WpfEffects.DropShadowEffect
             {
                 BlurRadius = 16,
-                Color = WpfMedia.Color.FromRgb(15, 23, 42),
+                Color = Dark ? WpfMedia.Colors.Black : WpfMedia.Color.FromRgb(15, 23, 42),
                 Direction = 270,
-                Opacity = 0.08,
+                Opacity = Dark ? 0.5 : 0.08,
                 ShadowDepth = 2
             }
         };
@@ -1179,8 +1185,8 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
             SelectionUnit = WpfControls.DataGridSelectionUnit.FullRow,
             HeadersVisibility = WpfControls.DataGridHeadersVisibility.Column,
             GridLinesVisibility = WpfControls.DataGridGridLinesVisibility.Horizontal,
-            HorizontalGridLinesBrush = Brush("#EEF2F7"),
-            VerticalGridLinesBrush = Brush("#EEF2F7"),
+            HorizontalGridLinesBrush = Bn("#EEF2F7", "#161B22"),
+            VerticalGridLinesBrush = Bn("#EEF2F7", "#161B22"),
             Background = SurfaceBrush,
             BorderBrush = LineBrush,
             BorderThickness = new Wpf.Thickness(1),
@@ -1281,7 +1287,7 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         style.Triggers.Add(selected);
 
         var hover = new Wpf.Trigger { Property = WpfControls.DataGridRow.IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Brush("#F7FBFF")));
+        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#F7FBFF", "#12161C")));
         style.Triggers.Add(hover);
         return style;
     }
@@ -1359,11 +1365,11 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
     {
         var brush = StatusBrush(status);
         if (brush == SuccessBrush)
-            return Brush("#DCFCE7");
+            return Bn("#DCFCE7", "#0E1A12");
         if (brush == DangerBrush)
-            return Brush("#FEE2E2");
+            return Bn("#FEE2E2", "#1A0C0C");
         if (brush == AmberBrush)
-            return Brush("#FEF3C7");
+            return Bn("#FEF3C7", "#1C1406");
         return AccentSoftBrush;
     }
 
@@ -1371,12 +1377,28 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
     {
         var brush = StatusBrush(status);
         if (brush == SuccessBrush)
-            return Brush("#BBF7D0");
+            return Bn("#BBF7D0", "#16361F");
         if (brush == DangerBrush)
-            return Brush("#FECACA");
+            return Bn("#FECACA", "#3A1414");
         if (brush == AmberBrush)
-            return Brush("#FDE68A");
-        return Brush("#BFDBFE");
+            return Bn("#FDE68A", "#3A2E0A");
+        return Bn("#BFDBFE", "#173532");
+    }
+
+    // Cache brush theo mã hex để getter màu không tạo lại brush mỗi lần đọc.
+    private static readonly Dictionary<string, WpfMedia.Brush> _brushCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Chọn brush theo theme: hex chế độ Sáng hoặc Tối (đã cache + Freeze).</summary>
+    private static WpfMedia.Brush Bn(string light, string dark)
+    {
+        var hex = Dark ? dark : light;
+        if (!_brushCache.TryGetValue(hex, out var brush))
+        {
+            brush = Brush(hex);
+            _brushCache[hex] = brush;
+        }
+
+        return brush;
     }
 
     private static WpfMedia.SolidColorBrush Brush(string hex)

@@ -369,7 +369,7 @@ public sealed partial class MainForm : Form
         tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260f));
         tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250f));
-        tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200f));
+        tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240f));
         tbl.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         // Col 0: Company name + subtitle
@@ -426,9 +426,10 @@ public sealed partial class MainForm : Form
         _userPanel = userPanel;
 
         // Shared geometry (used by both Paint and hit-testing)
-        Rectangle NotifRect()  => new Rectangle(54, (userPanel.Height - 28) / 2, 28, 28);
-        Rectangle AvatarRect() => new Rectangle(86, (userPanel.Height - 30) / 2, 30, 30);
-        Rectangle UserHit()    => new Rectangle(86, 0, Math.Max(0, userPanel.Width - 86), userPanel.Height);
+        Rectangle ThemeRect()  => new Rectangle(54, (userPanel.Height - 28) / 2, 28, 28);
+        Rectangle NotifRect()  => new Rectangle(88, (userPanel.Height - 28) / 2, 28, 28);
+        Rectangle AvatarRect() => new Rectangle(120, (userPanel.Height - 30) / 2, 30, 30);
+        Rectangle UserHit()    => new Rectangle(120, 0, Math.Max(0, userPanel.Width - 120), userPanel.Height);
 
         userPanel.Paint += (s, e) =>
         {
@@ -440,6 +441,19 @@ public sealed partial class MainForm : Form
             string period = DateTime.Now.ToString("MM/yyyy");
             TextRenderer.DrawText(g, period, AppTheme.F8, new Rectangle(0, 0, 50, userPanel.Height), AppTheme.TextSecondary,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+
+            // Theme toggle button (sun in dark mode → switch to light; moon in light mode → switch to dark)
+            var themeRect = ThemeRect();
+            using (var themePath = RoundedPanel.RoundedRect(themeRect, 8))
+            using (var themeBrush = new SolidBrush(AppTheme.SurfaceAlt))
+            using (var themePen = new Pen(AppTheme.Border, 1f))
+            {
+                g.FillPath(themeBrush, themePath);
+                g.DrawPath(themePen, themePath);
+            }
+            TextRenderer.DrawText(g, ThemeState.IsDark ? "☀" : "🌙", AppTheme.F9,
+                themeRect, ThemeState.IsDark ? AppTheme.Warning : AppTheme.TextSecondary,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine);
 
             // Notif button
             var notifRect = NotifRect();
@@ -480,7 +494,7 @@ public sealed partial class MainForm : Form
             }
 
             // Name label
-            var nameRect = new Rectangle(120, 0, userPanel.Width - 120, userPanel.Height);
+            var nameRect = new Rectangle(154, 0, userPanel.Width - 154, userPanel.Height);
             if (nameRect.Width > 0)
             {
                 string shortName = _currentUser.DisplayName.Split(' ').LastOrDefault() ?? _currentUser.DisplayName;
@@ -491,6 +505,7 @@ public sealed partial class MainForm : Form
 
         userPanel.MouseClick += (s, e) =>
         {
+            if (ThemeRect().Contains(e.Location)) { ToggleThemeLive(); return; }
             if (NotifRect().Contains(e.Location)) { ShowNotificationsMenu(userPanel); return; }
             if (UserHit().Contains(e.Location))   { ShowUserMenu(userPanel); return; }
         };

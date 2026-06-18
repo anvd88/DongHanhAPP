@@ -30,7 +30,7 @@ internal static class WpfUi
         double cornerRadius = 8, double fontPt = 9.5, bool bold = true)
     {
         var button = NewButton(text, foreground, fontPt, bold, cornerRadius);
-        button.Background = WpfMedia.Brushes.White;
+        button.Background = WpfTheme.Surface;
         button.BorderBrush = border;
         button.BorderThickness = new Wpf.Thickness(1);
         return button;

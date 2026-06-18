@@ -22,6 +22,9 @@ internal static class Program
         // WinForms trong giai đoạn chuyển tiếp và chạy qua WinForms message loop.
         EnsureWpfApplication();
 
+        // Nạp lựa chọn theme (Sáng/Tối) đã lưu trước khi dựng bất kỳ giao diện nào.
+        ThemeState.Load();
+
         // Dọn file cài đã tải ở lần cập nhật trước (sau khi bản mới đã được cài và chạy lên).
         UpdateInstaller.CleanupAfterUpdate();
 
