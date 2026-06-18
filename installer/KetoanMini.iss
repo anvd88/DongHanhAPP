@@ -55,6 +55,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 
 [Icons]
 Name: "{autoprograms}\KetoanMini"; Filename: "{app}\KetoanMini.exe"; WorkingDir: "{app}"
+Name: "{autoprograms}\Go KetoanMini"; Filename: "{uninstallexe}"; WorkingDir: "{app}"
 Name: "{autodesktop}\KetoanMini"; Filename: "{app}\KetoanMini.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]

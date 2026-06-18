@@ -16,8 +16,12 @@ permissions:
 
 env:
   PROJECT_PATH: src/KetoanMini/KetoanMini.csproj
+  UPDATER_PROJECT_PATH: src/KetoanMiniUpdater/KetoanMiniUpdater.csproj
   PUBLISH_DIR: ${{ github.workspace }}\publish\win-x64
+  UPDATER_PUBLISH_DIR: ${{ github.workspace }}\publish\updater-win-x64
+  UPDATE_PUBLISH_DIR: ${{ github.workspace }}\publish\update-win-x64
   INSTALLER_DIR: ${{ github.workspace }}\artifacts\installer
+  UPDATE_DIR: ${{ github.workspace }}\artifacts\update
 
 jobs:
   build-installer:
@@ -97,11 +101,59 @@ jobs:
             --no-restore `
             -o $env:PUBLISH_DIR
 
+      - name: Publish updater (Release, win-x64, self-contained)
+        shell: pwsh
+        run: |
+          dotnet publish $env:UPDATER_PROJECT_PATH `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            /p:PublishSingleFile=true `
+            /p:EnableCompressionInSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:Version=$env:APP_VERSION `
+            /p:AssemblyVersion=$env:ASSEMBLY_VERSION `
+            /p:FileVersion=$env:ASSEMBLY_VERSION `
+            -o $env:UPDATER_PUBLISH_DIR
+
+          Copy-Item "$env:UPDATER_PUBLISH_DIR\KetoanMiniUpdater.exe" "$env:PUBLISH_DIR\KetoanMiniUpdater.exe" -Force
+
       - name: Remove placeholder database config
         shell: pwsh
         run: |
           Remove-Item "$env:PUBLISH_DIR\database.json" -ErrorAction SilentlyContinue
           Remove-Item "$env:PUBLISH_DIR\config\database.json" -ErrorAction SilentlyContinue
+
+      - name: Publish app for zip update package
+        shell: pwsh
+        run: |
+          dotnet publish $env:PROJECT_PATH `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            /p:PublishSingleFile=true `
+            /p:EnableCompressionInSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:PublishReadyToRun=false `
+            /p:Version=$env:APP_VERSION `
+            /p:AssemblyVersion=$env:ASSEMBLY_VERSION `
+            /p:FileVersion=$env:ASSEMBLY_VERSION `
+            --no-restore `
+            -o $env:UPDATE_PUBLISH_DIR
+
+          Remove-Item "$env:UPDATE_PUBLISH_DIR\database.json" -ErrorAction SilentlyContinue
+          Remove-Item "$env:UPDATE_PUBLISH_DIR\config\database.json" -ErrorAction SilentlyContinue
+
+      - name: Build zip update package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:UPDATE_DIR | Out-Null
+          $zip = Join-Path $env:UPDATE_DIR "KetoanMiniUpdate-$env:APP_VERSION-win-x64.zip"
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+          $items = Get-ChildItem -Path $env:UPDATE_PUBLISH_DIR -Force
+          Compress-Archive -Path ($items | ForEach-Object { $_.FullName }) -DestinationPath $zip -CompressionLevel Optimal
 
       - name: Install Inno Setup
         shell: pwsh
@@ -123,11 +175,25 @@ jobs:
             "/DMyAppVersion=$env:APP_VERSION" `
             "/DIconPath=${{ github.workspace }}\src\KetoanMini\assets\logo_cuong_phat.ico"
 
+          & $iscc `
+            "installer\KetoanMiniUninstall.iss" `
+            "/DOutputDir=$env:INSTALLER_DIR" `
+            "/DMyAppVersion=$env:APP_VERSION" `
+            "/DIconPath=${{ github.workspace }}\src\KetoanMini\assets\logo_cuong_phat.ico"
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: KetoanMiniSetup-${{ env.APP_VERSION }}-win-x64
           path: artifacts/installer/*.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload zip update artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KetoanMiniUpdate-${{ env.APP_VERSION }}-win-x64
+          path: artifacts/update/*.zip
           if-no-files-found: error
           retention-days: 90
 
@@ -137,17 +203,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $installer = Get-ChildItem $env:INSTALLER_DIR -Filter "*.exe" | Select-Object -First 1
-          if ($null -eq $installer) {
-            throw "Installer file not found."
+          $packages = @()
+          $packages += Get-ChildItem $env:INSTALLER_DIR -Filter "*.exe"
+          $packages += Get-ChildItem $env:UPDATE_DIR -Filter "*.zip"
+          if ($packages.Count -eq 0) {
+            throw "Release package files not found."
           }
 
           gh release view "${{ github.ref_name }}" *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload "${{ github.ref_name }}" $installer.FullName --clobber
+            foreach ($package in $packages) {
+              gh release upload "${{ github.ref_name }}" $package.FullName --clobber
+            }
           }
           else {
-            gh release create "${{ github.ref_name }}" $installer.FullName `
+            gh release create "${{ github.ref_name }}" ($packages | ForEach-Object { $_.FullName }) `
               --title "KetoanMini $env:APP_VERSION" `
-              --notes "Installer build generated by GitHub Actions."
+              --notes "Installer, uninstaller, and zip update package generated by GitHub Actions."
           }
