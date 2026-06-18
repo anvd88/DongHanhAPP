@@ -30,7 +30,7 @@ internal sealed class ForgotPasswordWindow : Wpf.Window
         ResizeMode = Wpf.ResizeMode.NoResize;
         WindowStartupLocation = Wpf.WindowStartupLocation.CenterOwner;
         FontFamily = WpfTheme.Font;
-        Background = WpfMedia.Brushes.White;
+        Background = WpfTheme.Surface;
         WpfMedia.TextOptions.SetTextFormattingMode(this, WpfMedia.TextFormattingMode.Display);
 
         var root = new WpfControls.StackPanel();

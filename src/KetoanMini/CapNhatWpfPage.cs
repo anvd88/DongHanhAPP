@@ -354,9 +354,9 @@ public sealed class CapNhatWpfPage : WpfControls.UserControl
         Effect = new WpfEffects.DropShadowEffect
         {
             BlurRadius = 16,
-            Color = WpfMedia.Color.FromRgb(15, 23, 42),
+            Color = ThemeState.IsDark ? WpfMedia.Colors.Black : WpfMedia.Color.FromRgb(15, 23, 42),
             Direction = 270,
-            Opacity = 0.08,
+            Opacity = ThemeState.IsDark ? 0.5 : 0.08,
             ShadowDepth = 2
         }
     };
@@ -404,7 +404,7 @@ public sealed class CapNhatWpfPage : WpfControls.UserControl
     private static WpfControls.Border Wrap(WpfControls.Control inner, double height = 34, double width = double.NaN)
         => new()
         {
-            Background = WpfMedia.Brushes.White,
+            Background = WpfTheme.Surface,
             BorderBrush = WpfTheme.Border,
             BorderThickness = new Wpf.Thickness(1),
             CornerRadius = new Wpf.CornerRadius(8),
@@ -448,7 +448,7 @@ public sealed class CapNhatWpfPage : WpfControls.UserControl
             SelectionUnit = WpfControls.DataGridSelectionUnit.FullRow,
             HeadersVisibility = WpfControls.DataGridHeadersVisibility.Column,
             GridLinesVisibility = WpfControls.DataGridGridLinesVisibility.Horizontal,
-            HorizontalGridLinesBrush = WpfTheme.Brush("#EEF2F7"),
+            HorizontalGridLinesBrush = WpfTheme.GridLine,
             Background = WpfTheme.Surface,
             BorderBrush = WpfTheme.Border,
             BorderThickness = new Wpf.Thickness(1),
@@ -496,7 +496,7 @@ public sealed class CapNhatWpfPage : WpfControls.UserControl
         style.Triggers.Add(selected);
 
         var hover = new Wpf.Trigger { Property = WpfControls.DataGridRow.IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, WpfTheme.Brush("#F7FBFF")));
+        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, WpfTheme.RowHover));
         style.Triggers.Add(hover);
         return style;
     }

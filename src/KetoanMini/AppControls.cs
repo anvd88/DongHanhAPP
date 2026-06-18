@@ -26,7 +26,7 @@ namespace KetoanMini
     // ════════════════════════════════════════════════════════════════════════════
     public class RoundedPanel : Panel
     {
-        private Color _fillColor    = Color.White;
+        private Color _fillColor    = AppTheme.Surface;
         private Color _borderColor  = Color.Transparent;
         private int   _cornerRadius = 12;
         private int   _shadowDepth  = 0;
@@ -431,7 +431,11 @@ namespace KetoanMini
 
         public StatCard()
         {
-            FillColor    = Color.White;
+            // Đọc màu theo theme hiện tại (thẻ được dựng lại khi đổi theme) để
+            // không bị nền trắng cố định ở chế độ tối. Viền giúp thấy mép thẻ khi
+            // bóng đổ gần như vô hình trên nền tối.
+            FillColor    = AppTheme.Surface;
+            BorderColor  = AppTheme.Border;
             CornerRadius = 12;
             ShadowDepth  = 2;
             Height       = 110;
@@ -633,7 +637,7 @@ namespace KetoanMini
             using var path = RoundedPanel.RoundedRect(bounds, _cornerRadius);
 
             // ── Background fill ─────────────────────────────────────
-            Color bgColor = _hovered ? AppTheme.SurfaceAlt : Color.White;
+            Color bgColor = _hovered ? AppTheme.SurfaceAlt : AppTheme.Surface;
             using var bgBrush = new SolidBrush(bgColor);
             g.FillPath(bgBrush, path);
 

@@ -10,58 +10,63 @@ namespace KetoanMini
     /// </summary>
     public static class AppTheme
     {
+        // Mỗi token màu trả về giá trị theo theme đang chọn (Sáng/Tối) để hỗ trợ
+        // đổi giao diện "live". D = đang ở chế độ tối. C("#hex") tạo Color từ mã hex.
+        private static bool D => ThemeState.IsDark;
+        private static Color C(string hex) => ColorTranslator.FromHtml(hex);
+
         // ────────────────────────────────────────────────────────────
         // SIDEBAR COLORS
         // ────────────────────────────────────────────────────────────
-        public static readonly Color SidebarBg          = Color.FromArgb(15,  23,  42);   // #0F172A very dark navy
-        public static readonly Color SidebarHover        = Color.FromArgb(30,  41,  59);   // #1E293B
-        public static readonly Color SidebarActive       = Color.FromArgb(37,  99,  235);  // #2563EB blue
-        public static readonly Color SidebarActiveAlpha  = Color.FromArgb(30,  37,  99, 235); // subtle blue overlay
-        public static readonly Color SidebarText         = Color.FromArgb(148, 163, 184);  // #94A3B8
-        public static readonly Color SidebarTextActive   = Color.White;
-        public static readonly Color SidebarSection      = Color.FromArgb(71,  85,  105);  // #475569
+        public static Color SidebarBg         => D ? C("#050608") : C("#0F172A");
+        public static Color SidebarHover       => D ? C("#101317") : C("#1E293B");
+        public static Color SidebarActive      => D ? C("#11C5BF") : C("#2563EB");
+        public static Color SidebarActiveAlpha => D ? Color.FromArgb(40, 17, 197, 191) : Color.FromArgb(30, 37, 99, 235);
+        public static Color SidebarText        => D ? C("#9AA3AF") : C("#94A3B8");
+        public static Color SidebarTextActive  => D ? C("#F5F7FA") : Color.White;
+        public static Color SidebarSection     => D ? C("#5F6875") : C("#475569");
 
         // ────────────────────────────────────────────────────────────
         // MAIN SURFACE COLORS
         // ────────────────────────────────────────────────────────────
-        public static readonly Color Background    = Color.FromArgb(241, 245, 249);  // #F1F5F9 light gray-blue
-        public static readonly Color Surface       = Color.White;
-        public static readonly Color SurfaceAlt    = Color.FromArgb(248, 250, 252);
-        public static readonly Color Border        = Color.FromArgb(226, 232, 240);  // #E2E8F0
-        public static readonly Color HeaderBg      = Color.White;
-        public static readonly Color WorkCardBg    = Color.FromArgb(15,  23,  42);
+        public static Color Background => D ? C("#050608") : C("#F1F5F9");
+        public static Color Surface    => D ? C("#0A0C0F") : Color.White;
+        public static Color SurfaceAlt => D ? C("#0E1116") : C("#F8FAFC");
+        public static Color Border     => D ? C("#1C222B") : C("#E2E8F0");
+        public static Color HeaderBg   => D ? C("#000000") : Color.White;
+        public static Color WorkCardBg => D ? C("#0B0E12") : C("#0F172A");
 
         // ────────────────────────────────────────────────────────────
         // TEXT COLORS
         // ────────────────────────────────────────────────────────────
-        public static readonly Color TextPrimary   = Color.FromArgb(15,  23,  42);   // #0F172A
-        public static readonly Color TextSecondary = Color.FromArgb(100, 116, 139);  // #64748B
-        public static readonly Color TextMuted     = Color.FromArgb(148, 163, 184);  // #94A3B8
+        public static Color TextPrimary   => D ? C("#F5F7FA") : C("#0F172A");
+        public static Color TextSecondary => D ? C("#A8B0BD") : C("#64748B");
+        public static Color TextMuted     => D ? C("#7D8794") : C("#94A3B8");
 
         // ────────────────────────────────────────────────────────────
         // ACCENT / BRAND COLORS
         // ────────────────────────────────────────────────────────────
-        public static readonly Color Accent        = Color.FromArgb(37,  99,  235);  // #2563EB
-        public static readonly Color AccentLight   = Color.FromArgb(219, 234, 254);  // #DBEAFE
-        public static readonly Color AccentHover   = Color.FromArgb(29,  78,  216);  // #1D4ED8
+        public static Color Accent      => D ? C("#11C5BF") : C("#2563EB");
+        public static Color AccentLight => D ? C("#0E2221") : C("#DBEAFE");
+        public static Color AccentHover => D ? C("#18D7D0") : C("#1D4ED8");
 
         // ────────────────────────────────────────────────────────────
         // SEMANTIC COLORS
         // ────────────────────────────────────────────────────────────
-        public static readonly Color Success       = Color.FromArgb(16,  185, 129);
-        public static readonly Color SuccessLight  = Color.FromArgb(209, 250, 229);
+        public static Color Success      => D ? C("#22C55E") : C("#10B981");
+        public static Color SuccessLight => D ? C("#0E1A12") : C("#D1FAE5");
 
-        public static readonly Color Warning       = Color.FromArgb(245, 158, 11);
-        public static readonly Color WarningLight  = Color.FromArgb(254, 243, 199);
+        public static Color Warning      => C("#F59E0B");
+        public static Color WarningLight => D ? C("#1C1406") : C("#FEF3C7");
 
-        public static readonly Color Danger        = Color.FromArgb(239, 68,  68);
-        public static readonly Color DangerLight   = Color.FromArgb(254, 226, 226);
+        public static Color Danger      => C("#EF4444");
+        public static Color DangerLight => D ? C("#1A0C0C") : C("#FEE2E2");
 
-        public static readonly Color Purple        = Color.FromArgb(139, 92,  246);
-        public static readonly Color PurpleLight   = Color.FromArgb(237, 233, 254);
+        public static Color Purple      => C("#8B5CF6");
+        public static Color PurpleLight => D ? C("#1A1430") : C("#EDE9FE");
 
-        public static readonly Color NeutralBadge      = Color.FromArgb(100, 116, 139);
-        public static readonly Color NeutralBadgeLight = Color.FromArgb(241, 245, 249);
+        public static Color NeutralBadge      => D ? C("#7D8794") : C("#64748B");
+        public static Color NeutralBadgeLight => D ? C("#111418") : C("#F1F5F9");
 
         // ────────────────────────────────────────────────────────────
         // FONTS
@@ -111,7 +116,7 @@ namespace KetoanMini
             grid.DefaultCellStyle.Padding      = new Padding(8, 0, 8, 0);
 
             // Alternating rows
-            grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(250, 252, 254);
+            grid.AlternatingRowsDefaultCellStyle.BackColor = D ? C("#0D1014") : Color.FromArgb(250, 252, 254);
 
             // Header
             grid.ColumnHeadersDefaultCellStyle.BackColor   = SurfaceAlt;

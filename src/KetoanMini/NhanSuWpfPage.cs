@@ -44,30 +44,34 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     private List<AppUser> _allUsers = [];
     private Dictionary<string, UserPresence> _presence = new(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly WpfMedia.Brush BackgroundBrush = Brush("#F3F7FB");
-    private static readonly WpfMedia.Brush SurfaceBrush = Brush("#FFFFFF");
-    private static readonly WpfMedia.Brush SurfaceAltBrush = Brush("#F8FAFC");
-    private static readonly WpfMedia.Brush LineBrush = Brush("#DDE6F2");
-    private static readonly WpfMedia.Brush TextBrush = Brush("#0F172A");
-    private static readonly WpfMedia.Brush MutedBrush = Brush("#64748B");
-    private static readonly WpfMedia.Brush AccentBrush = Brush("#0B5FEA");
-    private static readonly WpfMedia.Brush AccentSoftBrush = Brush("#EAF2FF");
-    private static readonly WpfMedia.Brush SuccessBrush = Brush("#16A34A");
-    private static readonly WpfMedia.Brush SuccessSoftBrush = Brush("#DCFCE7");
-    private static readonly WpfMedia.Brush SuccessLineBrush = Brush("#BBF7D0");
-    private static readonly WpfMedia.Brush WarningBrush = Brush("#D97706");
-    private static readonly WpfMedia.Brush WarningSoftBrush = Brush("#FEF3C7");
-    private static readonly WpfMedia.Brush WarningLineBrush = Brush("#FDE68A");
-    private static readonly WpfMedia.Brush DangerBrush = Brush("#DC2626");
-    private static readonly WpfMedia.Brush DangerSoftBrush = Brush("#FEE2E2");
-    private static readonly WpfMedia.Brush DangerLineBrush = Brush("#FECACA");
-    private static readonly WpfMedia.Brush NeutralDotBrush = Brush("#9CA3AF");
+    // Bảng màu hỗ trợ Sáng/Tối: mỗi token chọn hex theo ThemeState.IsDark.
+    // Giữ nguyên hex chế độ Sáng; bổ sung hex chế độ Tối tương ứng để bật dark mode.
+    private static bool Dark => ThemeState.IsDark;
+    private static WpfMedia.Brush BackgroundBrush => Bn("#F3F7FB", "#050608");
+    private static WpfMedia.Brush SurfaceBrush => Bn("#FFFFFF", "#0A0C0F");
+    private static WpfMedia.Brush SurfaceAltBrush => Bn("#F8FAFC", "#0E1116");
+    private static WpfMedia.Brush LineBrush => Bn("#DDE6F2", "#1C222B");
+    private static WpfMedia.Brush TextBrush => Bn("#0F172A", "#F5F7FA");
+    private static WpfMedia.Brush MutedBrush => Bn("#64748B", "#A8B0BD");
+    private static WpfMedia.Brush AccentBrush => Bn("#0B5FEA", "#11C5BF");
+    private static WpfMedia.Brush AccentSoftBrush => Bn("#EAF2FF", "#0E2221");
+    private static WpfMedia.Brush SuccessBrush => Bn("#16A34A", "#22C55E");
+    private static WpfMedia.Brush SuccessSoftBrush => Bn("#DCFCE7", "#0E1A12");
+    private static WpfMedia.Brush SuccessLineBrush => Bn("#BBF7D0", "#16361F");
+    private static WpfMedia.Brush WarningBrush => Bn("#D97706", "#F59E0B");
+    private static WpfMedia.Brush WarningSoftBrush => Bn("#FEF3C7", "#1C1406");
+    private static WpfMedia.Brush WarningLineBrush => Bn("#FDE68A", "#3A2E0A");
+    private static WpfMedia.Brush DangerBrush => Bn("#DC2626", "#EF4444");
+    private static WpfMedia.Brush DangerSoftBrush => Bn("#FEE2E2", "#1A0C0C");
+    private static WpfMedia.Brush DangerLineBrush => Bn("#FECACA", "#3A1414");
+    private static WpfMedia.Brush NeutralDotBrush => Bn("#9CA3AF", "#7D8794");
     private static readonly WpfMedia.Brush TransparentBrush = WpfMedia.Brushes.Transparent;
 
     private static readonly Wpf.Style ChromeButtonStyle = CreateButtonStyle();
-    private static readonly Wpf.Style DataGridRowChrome = CreateRowStyle();
+    // Row/Header style nhúng màu theo theme nên dựng lại mỗi lần dùng (theo theme hiện tại).
+    private static Wpf.Style DataGridRowChrome => CreateRowStyle();
     private static readonly Wpf.Style DataGridCellChrome = CreateCellStyle();
-    private static readonly Wpf.Style DataGridHeaderChrome = CreateHeaderStyle();
+    private static Wpf.Style DataGridHeaderChrome => CreateHeaderStyle();
     private static readonly Wpf.Style ActionButtonChrome = CreateActionButtonStyle();
 
     public event EventHandler? AddUserRequested;
@@ -354,7 +358,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
             Maximum = 100,
             Value = 0,
             Foreground = AccentBrush,
-            Background = Brush("#D8E4F3"),
+            Background = Bn("#D8E4F3", "#1C222B"),
             Margin = new Wpf.Thickness(0, 14, 0, 0)
         };
         _loadingPercentText = Text("0%", 12, true, AccentBrush);
@@ -373,7 +377,9 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
 
         return new WpfControls.Border
         {
-            Background = new WpfMedia.SolidColorBrush(WpfMedia.Color.FromArgb(247, 243, 247, 251)),
+            Background = new WpfMedia.SolidColorBrush(Dark
+                ? WpfMedia.Color.FromArgb(247, 5, 6, 8)
+                : WpfMedia.Color.FromArgb(247, 243, 247, 251)),
             Child = stack,
             Visibility = Wpf.Visibility.Visible
         };
@@ -805,9 +811,9 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
             Effect = new WpfEffects.DropShadowEffect
             {
                 BlurRadius = 16,
-                Color = WpfMedia.Color.FromRgb(15, 23, 42),
+                Color = Dark ? WpfMedia.Colors.Black : WpfMedia.Color.FromRgb(15, 23, 42),
                 Direction = 270,
-                Opacity = 0.08,
+                Opacity = Dark ? 0.5 : 0.08,
                 ShadowDepth = 2
             }
         };
@@ -853,8 +859,8 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
             SelectionUnit = WpfControls.DataGridSelectionUnit.FullRow,
             HeadersVisibility = WpfControls.DataGridHeadersVisibility.Column,
             GridLinesVisibility = WpfControls.DataGridGridLinesVisibility.Horizontal,
-            HorizontalGridLinesBrush = Brush("#EEF2F7"),
-            VerticalGridLinesBrush = Brush("#EEF2F7"),
+            HorizontalGridLinesBrush = Bn("#EEF2F7", "#161B22"),
+            VerticalGridLinesBrush = Bn("#EEF2F7", "#161B22"),
             Background = SurfaceBrush,
             BorderBrush = LineBrush,
             BorderThickness = new Wpf.Thickness(0, 1, 0, 0),
@@ -1007,7 +1013,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         style.Triggers.Add(selected);
 
         var hover = new Wpf.Trigger { Property = WpfControls.DataGridRow.IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Brush("#F7FBFF")));
+        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#F7FBFF", "#12161C")));
         style.Triggers.Add(hover);
         return style;
     }
@@ -1095,7 +1101,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         => AccentSoftBrush;
 
     private static WpfMedia.Brush RoleLineBrush(string role)
-        => Brush("#BFDBFE");
+        => Bn("#BFDBFE", "#173532");
 
     private static string StatusText(AppUser user)
     {
@@ -1123,6 +1129,22 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         if (user.IsPendingApproval)
             return WarningLineBrush;
         return user.IsActive ? SuccessLineBrush : DangerLineBrush;
+    }
+
+    // Cache brush theo mã hex để getter màu không tạo lại brush mỗi lần đọc.
+    private static readonly Dictionary<string, WpfMedia.Brush> _brushCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Chọn brush theo theme: hex chế độ Sáng hoặc Tối (đã cache + Freeze).</summary>
+    private static WpfMedia.Brush Bn(string light, string dark)
+    {
+        var hex = Dark ? dark : light;
+        if (!_brushCache.TryGetValue(hex, out var brush))
+        {
+            brush = Brush(hex);
+            _brushCache[hex] = brush;
+        }
+
+        return brush;
     }
 
     private static WpfMedia.SolidColorBrush Brush(string hex)
