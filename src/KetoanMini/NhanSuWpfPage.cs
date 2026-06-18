@@ -47,25 +47,31 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     // Bảng màu hỗ trợ Sáng/Tối: mỗi token chọn hex theo ThemeState.IsDark.
     // Giữ nguyên hex chế độ Sáng; bổ sung hex chế độ Tối tương ứng để bật dark mode.
     private static bool Dark => ThemeState.IsDark;
-    private static WpfMedia.Brush BackgroundBrush => Bn("#F3F7FB", "#050608");
-    private static WpfMedia.Brush SurfaceBrush => Bn("#FFFFFF", "#0A0C0F");
-    private static WpfMedia.Brush SurfaceAltBrush => Bn("#F8FAFC", "#0E1116");
-    private static WpfMedia.Brush LineBrush => Bn("#DDE6F2", "#1C222B");
-    private static WpfMedia.Brush TextBrush => Bn("#0F172A", "#F5F7FA");
-    private static WpfMedia.Brush MutedBrush => Bn("#64748B", "#A8B0BD");
-    private static WpfMedia.Brush AccentBrush => Bn("#0B5FEA", "#11C5BF");
-    private static WpfMedia.Brush AccentSoftBrush => Bn("#EAF2FF", "#0E2221");
-    private static WpfMedia.Brush SuccessBrush => Bn("#16A34A", "#22C55E");
-    private static WpfMedia.Brush SuccessSoftBrush => Bn("#DCFCE7", "#0E1A12");
-    private static WpfMedia.Brush SuccessLineBrush => Bn("#BBF7D0", "#16361F");
+    private static WpfMedia.Brush BackgroundBrush => Bn("#EDF4FC", "#080B10");
+    private static WpfMedia.Brush SurfaceBrush => Bn("#BFFFFFFF", "#A6151B25");
+    private static WpfMedia.Brush SurfaceAltBrush => Bn("#92FFFFFF", "#8C111720");
+    private static WpfMedia.Brush LineBrush => Bn("#CFFFFFFF", "#667B8FA8");
+    private static WpfMedia.Brush TextBrush => Bn("#07173A", "#F4F7FC");
+    private static WpfMedia.Brush MutedBrush => Bn("#647694", "#A9B5C7");
+    private static WpfMedia.Brush AccentBrush => Bn("#086CFF", "#3B8CFF");
+    private static WpfMedia.Brush AccentSoftBrush => Bn("#E9F2FF", "#243B5E");
+    private static WpfMedia.Brush SuccessBrush => Bn("#10B968", "#27D980");
+    private static WpfMedia.Brush SuccessSoftBrush => Bn("#DDF9EC", "#173C2C");
+    private static WpfMedia.Brush SuccessLineBrush => Bn("#AFEBCF", "#236B4B");
     private static WpfMedia.Brush WarningBrush => Bn("#D97706", "#F59E0B");
     private static WpfMedia.Brush WarningSoftBrush => Bn("#FEF3C7", "#1C1406");
     private static WpfMedia.Brush WarningLineBrush => Bn("#FDE68A", "#3A2E0A");
     private static WpfMedia.Brush DangerBrush => Bn("#DC2626", "#EF4444");
     private static WpfMedia.Brush DangerSoftBrush => Bn("#FEE2E2", "#1A0C0C");
     private static WpfMedia.Brush DangerLineBrush => Bn("#FECACA", "#3A1414");
-    private static WpfMedia.Brush NeutralDotBrush => Bn("#9CA3AF", "#7D8794");
+    private static WpfMedia.Brush NeutralDotBrush => Bn("#9AA9BD", "#748198");
+    private static WpfMedia.Brush TableFrameBrush => Bn("#FFFFFFFF", "#F2141A24");
+    private static WpfMedia.Brush TableBodyBrush => Bn("#F6FAFF", "#F2111720");
+    private static WpfMedia.Brush TableFooterBrush => Bn("#FBFDFF", "#F2161F2C");
+    private static WpfMedia.Brush TableFooterLineBrush => Bn("#D8E5F3", "#45556B");
+    private static WpfMedia.Color GlowColor => (WpfMedia.Color)WpfMedia.ColorConverter.ConvertFromString(Dark ? "#8060A5FA" : "#AA5CA9FF")!;
     private static readonly WpfMedia.Brush TransparentBrush = WpfMedia.Brushes.Transparent;
+    private static Dictionary<string, WpfMedia.Brush>? _brushCache;
 
     private static readonly Wpf.Style ChromeButtonStyle = CreateButtonStyle();
     // Row/Header style nhúng màu theo theme nên dựng lại mỗi lần dùng (theo theme hiện tại).
@@ -130,8 +136,8 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     {
         _root = new WpfControls.Grid
         {
-            Background = BackgroundBrush,
-            Margin = new Wpf.Thickness(24, 18, 24, 24)
+            Background = PageBackgroundBrush(),
+            Margin = new Wpf.Thickness(24, 22, 24, 24)
         };
         _root.RowDefinitions.Add(new WpfControls.RowDefinition { Height = Wpf.GridLength.Auto });
         _root.RowDefinitions.Add(new WpfControls.RowDefinition { Height = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
@@ -141,7 +147,8 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         _root.Children.Add(header);
 
         var card = Card(new Wpf.Thickness(0));
-        card.Margin = new Wpf.Thickness(0, 14, 0, 0);
+        card.Margin = new Wpf.Thickness(0, 30, 0, 0);
+        card.CornerRadius = new Wpf.CornerRadius(28);
         card.Child = BuildUserCard();
         WpfControls.Grid.SetRow(card, 1);
         _root.Children.Add(card);
@@ -160,20 +167,20 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         header.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = Wpf.GridLength.Auto });
         header.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
 
-        var iconCard = Card(new Wpf.Thickness(0));
-        iconCard.Width = 64;
-        iconCard.Height = 64;
-        iconCard.Child = IconText("\uE716", 28, AccentBrush);
+        var iconCard = HeaderIconBadge();
+        iconCard.Width = 70;
+        iconCard.Height = 70;
+        iconCard.Child = IconText("\uE716", 31, AccentBrush);
         iconCard.HorizontalAlignment = Wpf.HorizontalAlignment.Left;
         WpfControls.Grid.SetColumn(iconCard, 0);
         header.Children.Add(iconCard);
 
         var textStack = new WpfControls.StackPanel
         {
-            Margin = new Wpf.Thickness(20, 4, 0, 0),
+            Margin = new Wpf.Thickness(20, 5, 0, 0),
             VerticalAlignment = Wpf.VerticalAlignment.Top
         };
-        textStack.Children.Add(Text("Quản lý người dùng", 24, true, TextBrush));
+        textStack.Children.Add(Text("Quản lý người dùng", 32, true, TextBrush));
         var subtitle = Text("Quản lý tài khoản và thông tin người dùng trong hệ thống.", 15, false, MutedBrush);
         subtitle.Margin = new Wpf.Thickness(0, 6, 0, 0);
         textStack.Children.Add(subtitle);
@@ -183,51 +190,95 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         return header;
     }
 
+    private static WpfControls.Border HeaderIconBadge()
+        => new LiquidGlassBorder
+        {
+            Background = Bn("#FFFFFFFF", "#F0182433"),
+            BaseBorderBrush = Bn("#DCE9F8", "#465A73"),
+            BorderThickness = new Wpf.Thickness(1),
+            CornerRadius = new Wpf.CornerRadius(20),
+            ClipChildToCornerRadius = true,
+            ClipSelfToCornerRadius = true,
+            EnableMouseGlow = false
+        };
+
     private WpfControls.Grid BuildUserCard()
     {
         var cardGrid = new WpfControls.Grid();
         cardGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = Wpf.GridLength.Auto });
         cardGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
-        cardGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = Wpf.GridLength.Auto });
 
         var toolbar = BuildToolbar();
         WpfControls.Grid.SetRow(toolbar, 0);
         cardGrid.Children.Add(toolbar);
+
+        var tableFrame = BuildTableFrame();
+        WpfControls.Grid.SetRow(tableFrame, 1);
+        cardGrid.Children.Add(tableFrame);
+
+        return cardGrid;
+    }
+
+    private WpfControls.Border BuildTableFrame()
+    {
+        var tableGrid = new WpfControls.Grid();
+        tableGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = new Wpf.GridLength(1, Wpf.GridUnitType.Star) });
+        tableGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = Wpf.GridLength.Auto });
 
         _grid = CreateGrid(_rows);
         _grid.Columns.Add(TextColumn("Tên đăng nhập", nameof(NhanSuUserRow.Username), 1.1, star: true, minWidth: 130));
         _grid.Columns.Add(TextColumn("Họ tên", nameof(NhanSuUserRow.FullName), 1.1, star: true, minWidth: 130));
         _grid.Columns.Add(PillColumn("Vai trò", nameof(NhanSuUserRow.Role), nameof(NhanSuUserRow.RoleForeground), nameof(NhanSuUserRow.RoleBackground), nameof(NhanSuUserRow.RoleBorder), 112));
         _grid.Columns.Add(PillColumn("Trạng thái", nameof(NhanSuUserRow.Status), nameof(NhanSuUserRow.StatusForeground), nameof(NhanSuUserRow.StatusBackground), nameof(NhanSuUserRow.StatusBorder), 164));
-        _grid.Columns.Add(OnlineColumn("Trực tuyến", 130));
+        _grid.Columns.Add(OnlineColumn("Trực tuyến", 1.0, star: true, minWidth: 130));
         _grid.Columns.Add(TextColumn("Phút hôm nay", nameof(NhanSuUserRow.MinutesToday), 118));
-        _grid.Columns.Add(TextColumn("Ngày tạo", nameof(NhanSuUserRow.CreatedAtText), 152));
+        _grid.Columns.Add(TextColumn("Ngày tạo", nameof(NhanSuUserRow.CreatedAtText), 1.0, star: true, minWidth: 152));
         _grid.Columns.Add(ActionColumn());
         _grid.PreviewMouseRightButtonDown += OnGridRightClick;
-        WpfControls.Grid.SetRow(_grid, 1);
-        cardGrid.Children.Add(_grid);
+
+        var body = new WpfControls.Border
+        {
+            Background = TableBodyBrush,
+            Child = _grid
+        };
+        WpfControls.Grid.SetRow(body, 0);
+        tableGrid.Children.Add(body);
 
         var footer = BuildFooter();
-        WpfControls.Grid.SetRow(footer, 2);
-        cardGrid.Children.Add(footer);
+        WpfControls.Grid.SetRow(footer, 1);
+        tableGrid.Children.Add(footer);
 
-        return cardGrid;
+        var frame = Card(new Wpf.Thickness(0));
+        frame.Margin = new Wpf.Thickness(20, 0, 20, 20);
+        frame.CornerRadius = new Wpf.CornerRadius(14);
+        frame.Background = TableFrameBrush;
+        if (frame is LiquidGlassBorder glass)
+        {
+            glass.BaseBorderBrush = Bn("#EDF5FF", "#63758D");
+            glass.GlowRadiusX = 0.18;
+            glass.GlowRadiusY = 0.34;
+            glass.ClipChildToCornerRadius = true;
+            glass.ClipSelfToCornerRadius = true;
+        }
+        frame.Child = tableGrid;
+        return frame;
     }
 
     private WpfControls.Grid BuildToolbar()
     {
-        var toolbar = new WpfControls.Grid
-        {
-            Margin = new Wpf.Thickness(24, 20, 24, 16)
-        };
+        var toolbarFrame = Card(new Wpf.Thickness(18));
+        toolbarFrame.Margin = new Wpf.Thickness(20, 20, 20, 18);
+        toolbarFrame.CornerRadius = new Wpf.CornerRadius(22);
+
+        var toolbar = new WpfControls.Grid();
         toolbar.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(1, Wpf.GridUnitType.Star), MinWidth = 260 });
-        toolbar.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = Wpf.GridLength.Auto });
+        toolbar.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new Wpf.GridLength(252) });
         toolbar.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = Wpf.GridLength.Auto });
 
         toolbar.Children.Add(BuildSearchBox());
 
         _roleFilter = BuildRoleFilter();
-        _roleFilter.Margin = new Wpf.Thickness(18, 0, 0, 0);
+        _roleFilter.Margin = new Wpf.Thickness(14, 0, 0, 0);
         _roleFilter.SelectionChanged += (_, _) => ApplyUsers(GetSelectedUsername());
         WpfControls.Grid.SetColumn(_roleFilter, 1);
         toolbar.Children.Add(_roleFilter);
@@ -236,10 +287,10 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         {
             Orientation = WpfControls.Orientation.Horizontal,
             HorizontalAlignment = Wpf.HorizontalAlignment.Right,
-            Margin = new Wpf.Thickness(18, 0, 0, 0)
+            Margin = new Wpf.Thickness(14, 0, 0, 0)
         };
 
-        var refresh = MakeButton("\uE72C", "Làm mới", primary: false, minWidth: 104);
+        var refresh = MakeButton("\uE72C", "Làm mới", primary: false, minWidth: 138);
         refresh.Click += (_, _) => RefreshUsers();
         actions.Children.Add(refresh);
 
@@ -249,14 +300,15 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
             more.Click += (_, _) => ShowAdminQuickMenu(more);
             actions.Children.Add(more);
 
-            var add = MakeButton("\uE710", "Thêm người dùng", primary: true, minWidth: 176);
+            var add = MakeButton("\uE710", "Thêm người dùng", primary: true, minWidth: 204);
             add.Click += (_, _) => AddUserRequested?.Invoke(this, EventArgs.Empty);
             actions.Children.Add(add);
         }
 
         WpfControls.Grid.SetColumn(actions, 2);
         toolbar.Children.Add(actions);
-        return toolbar;
+        toolbarFrame.Child = toolbar;
+        return new WpfControls.Grid { Children = { toolbarFrame } };
     }
 
     private WpfControls.Border BuildSearchBox()
@@ -298,12 +350,12 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     {
         var combo = new WpfControls.ComboBox
         {
-            Width = 210,
-            Height = 44,
-            FontSize = 14,
-            Padding = new Wpf.Thickness(12, 0, 8, 0),
+            Width = 252,
+            Height = 58,
+            FontSize = 15,
+            Padding = new Wpf.Thickness(16, 0, 10, 0),
             VerticalContentAlignment = Wpf.VerticalAlignment.Center,
-            Background = SurfaceBrush,
+            Background = SurfaceAltBrush,
             BorderBrush = LineBrush,
             Foreground = TextBrush
         };
@@ -320,9 +372,10 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     {
         var footer = new WpfControls.Border
         {
-            BorderBrush = LineBrush,
+            BorderBrush = TableFooterLineBrush,
             BorderThickness = new Wpf.Thickness(0, 1, 0, 0),
-            Padding = new Wpf.Thickness(24, 14, 24, 14)
+            Padding = new Wpf.Thickness(24, 16, 24, 16),
+            Background = TableFooterBrush
         };
 
         var grid = new WpfControls.Grid();
@@ -337,7 +390,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
             Orientation = WpfControls.Orientation.Horizontal,
             HorizontalAlignment = Wpf.HorizontalAlignment.Right
         };
-        pager.Children.Add(MakeFooterBox("10 / trang", 116));
+        pager.Children.Add(MakeFooterBox("10 / trang", 126));
         pager.Children.Add(MakeFooterBox("\uE76B", 44, isIcon: true, muted: true));
         pager.Children.Add(MakeFooterBox("1", 44, accent: true));
         pager.Children.Add(MakeFooterBox("\uE76C", 44, isIcon: true, muted: true));
@@ -352,7 +405,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     {
         _loadingProgress = new WpfControls.ProgressBar
         {
-            Width = 260,
+            Width = 290,
             Height = 7,
             Minimum = 0,
             Maximum = 100,
@@ -379,7 +432,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         {
             Background = new WpfMedia.SolidColorBrush(Dark
                 ? WpfMedia.Color.FromArgb(247, 5, 6, 8)
-                : WpfMedia.Color.FromArgb(247, 243, 247, 251)),
+                : WpfMedia.Color.FromArgb(238, 237, 244, 252)),
             Child = stack,
             Visibility = Wpf.Visibility.Visible
         };
@@ -503,7 +556,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
 
     private void ShowAdminQuickMenu(WpfControls.Button button)
     {
-        var menu = new WpfControls.ContextMenu();
+        var menu = CreateGlassContextMenu();
         var reset = new WpfControls.MenuItem { Header = "Yêu cầu đổi mật khẩu" };
         reset.Click += (_, _) => ResetRequestsRequested?.Invoke(this, EventArgs.Empty);
         menu.Items.Add(reset);
@@ -522,7 +575,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         if (!_currentUser.IsAdmin)
             return;
 
-        var menu = new WpfControls.ContextMenu();
+        var menu = CreateGlassContextMenu();
         var added = false;
 
         if (row.Source.IsPendingApproval)
@@ -569,6 +622,27 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         menu.PlacementTarget = target;
         menu.Placement = placement;
         menu.IsOpen = true;
+    }
+
+    private static WpfControls.ContextMenu CreateGlassContextMenu()
+    {
+        return new WpfControls.ContextMenu
+        {
+            Background = SurfaceBrush,
+            BorderBrush = LineBrush,
+            BorderThickness = new Wpf.Thickness(1),
+            Padding = new Wpf.Thickness(6),
+            FontFamily = new WpfMedia.FontFamily("Segoe UI"),
+            FontSize = 13,
+            Foreground = TextBrush,
+            Effect = new WpfEffects.DropShadowEffect
+            {
+                BlurRadius = 18,
+                ShadowDepth = 4,
+                Opacity = Dark ? 0.42 : 0.18,
+                Color = Dark ? WpfMedia.Colors.Black : WpfMedia.Color.FromRgb(90, 122, 160)
+            }
+        };
     }
 
     private void ApproveUser(NhanSuUserRow row)
@@ -745,11 +819,11 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         return new WpfControls.Button
         {
             Content = panel,
-            Height = 44,
+            Height = 58,
             MinWidth = minWidth,
-            Padding = new Wpf.Thickness(12, 0, 12, 1),
+            Padding = new Wpf.Thickness(16, 0, 16, 1),
             Margin = new Wpf.Thickness(0, 0, 10, 0),
-            Background = primary ? AccentBrush : SurfaceBrush,
+            Background = primary ? AccentBrush : SurfaceAltBrush,
             Foreground = primary ? WpfMedia.Brushes.White : TextBrush,
             BorderBrush = primary ? AccentBrush : LineBrush,
             BorderThickness = new Wpf.Thickness(1),
@@ -764,10 +838,10 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         => new()
         {
             Content = IconText(icon, 16, AccentBrush),
-            Width = 44,
-            Height = 44,
+            Width = 58,
+            Height = 58,
             Margin = new Wpf.Thickness(0, 0, 10, 0),
-            Background = SurfaceBrush,
+            Background = SurfaceAltBrush,
             BorderBrush = LineBrush,
             BorderThickness = new Wpf.Thickness(1),
             Cursor = WpfInput.Cursors.Hand,
@@ -776,45 +850,50 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         };
 
     private static WpfControls.Border MakeFooterBox(string text, double width, bool isIcon = false, bool accent = false, bool muted = false)
-        => new()
+        => new LiquidGlassBorder
         {
             Width = width,
-            Height = 42,
+            Height = 48,
             Margin = new Wpf.Thickness(8, 0, 0, 0),
-            Background = SurfaceBrush,
-            BorderBrush = accent ? AccentBrush : LineBrush,
+            Background = accent ? AccentBrush : Bn("#F3F8FF", "#1B2534"),
+            BaseBorderBrush = accent ? AccentBrush : Bn("#D8E6F6", "#3A4B62"),
             BorderThickness = new Wpf.Thickness(1),
-            CornerRadius = new Wpf.CornerRadius(6),
+            CornerRadius = new Wpf.CornerRadius(12),
+            GlowColor = GlowColor,
             Child = isIcon
                 ? IconText(text, 14, muted ? MutedBrush : TextBrush)
-                : Text(text, 14, accent, accent ? AccentBrush : TextBrush)
+                : Text(text, 14, accent, accent ? WpfMedia.Brushes.White : TextBrush)
         };
 
     private static WpfControls.Border InputFrame()
-        => new()
+        => new LiquidGlassBorder
         {
-            Height = 44,
-            Background = SurfaceBrush,
-            BorderBrush = LineBrush,
+            Height = 58,
+            Background = SurfaceAltBrush,
+            BaseBorderBrush = LineBrush,
             BorderThickness = new Wpf.Thickness(1),
-            CornerRadius = new Wpf.CornerRadius(6)
+            CornerRadius = new Wpf.CornerRadius(16),
+            GlowColor = GlowColor
         };
 
     private static WpfControls.Border Card(Wpf.Thickness padding)
-        => new()
+        => new LiquidGlassBorder
         {
             Background = SurfaceBrush,
-            BorderBrush = LineBrush,
+            BaseBorderBrush = LineBrush,
             BorderThickness = new Wpf.Thickness(1),
-            CornerRadius = new Wpf.CornerRadius(8),
+            CornerRadius = new Wpf.CornerRadius(20),
             Padding = padding,
+            GlowColor = GlowColor,
+            ClipChildToCornerRadius = true,
+            ClipSelfToCornerRadius = true,
             Effect = new WpfEffects.DropShadowEffect
             {
-                BlurRadius = 16,
-                Color = Dark ? WpfMedia.Colors.Black : WpfMedia.Color.FromRgb(15, 23, 42),
+                BlurRadius = 28,
+                Color = Dark ? WpfMedia.Colors.Black : WpfMedia.Color.FromRgb(125, 168, 216),
                 Direction = 270,
-                Opacity = Dark ? 0.5 : 0.08,
-                ShadowDepth = 2
+                Opacity = Dark ? 0.38 : 0.22,
+                ShadowDepth = 6
             }
         };
 
@@ -859,14 +938,15 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
             SelectionUnit = WpfControls.DataGridSelectionUnit.FullRow,
             HeadersVisibility = WpfControls.DataGridHeadersVisibility.Column,
             GridLinesVisibility = WpfControls.DataGridGridLinesVisibility.Horizontal,
-            HorizontalGridLinesBrush = Bn("#EEF2F7", "#161B22"),
-            VerticalGridLinesBrush = Bn("#EEF2F7", "#161B22"),
-            Background = SurfaceBrush,
-            BorderBrush = LineBrush,
-            BorderThickness = new Wpf.Thickness(0, 1, 0, 0),
+            HorizontalGridLinesBrush = Bn("#80D7E3F1", "#33405260"),
+            VerticalGridLinesBrush = TransparentBrush,
+            Background = TransparentBrush,
+            BorderBrush = TransparentBrush,
+            BorderThickness = new Wpf.Thickness(0),
             RowHeight = 54,
-            ColumnHeaderHeight = 52,
+            ColumnHeaderHeight = 50,
             FontSize = 14,
+            AlternatingRowBackground = Bn("#30F5F9FF", "#14151B25"),
             RowStyle = DataGridRowChrome,
             CellStyle = DataGridCellChrome,
             ColumnHeaderStyle = DataGridHeaderChrome,
@@ -875,6 +955,8 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         };
 
         WpfControls.ScrollViewer.SetCanContentScroll(grid, true);
+        WpfControls.ScrollViewer.SetHorizontalScrollBarVisibility(grid, WpfControls.ScrollBarVisibility.Auto);
+        WpfControls.ScrollViewer.SetVerticalScrollBarVisibility(grid, WpfControls.ScrollBarVisibility.Auto);
         WpfControls.VirtualizingPanel.SetIsVirtualizing(grid, true);
         WpfControls.VirtualizingPanel.SetVirtualizationMode(grid, WpfControls.VirtualizationMode.Recycling);
         return grid;
@@ -906,8 +988,8 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         borderFactory.SetBinding(WpfControls.Border.BackgroundProperty, new WpfData.Binding(backBinding));
         borderFactory.SetBinding(WpfControls.Border.BorderBrushProperty, new WpfData.Binding(borderBinding));
         borderFactory.SetValue(WpfControls.Border.BorderThicknessProperty, new Wpf.Thickness(1));
-        borderFactory.SetValue(WpfControls.Border.CornerRadiusProperty, new Wpf.CornerRadius(8));
-        borderFactory.SetValue(WpfControls.Border.PaddingProperty, new Wpf.Thickness(10, 4, 10, 5));
+        borderFactory.SetValue(WpfControls.Border.CornerRadiusProperty, new Wpf.CornerRadius(10));
+        borderFactory.SetValue(WpfControls.Border.PaddingProperty, new Wpf.Thickness(12, 5, 12, 6));
         borderFactory.SetValue(WpfControls.Border.HorizontalAlignmentProperty, Wpf.HorizontalAlignment.Center);
         borderFactory.SetValue(WpfControls.Border.VerticalAlignmentProperty, Wpf.VerticalAlignment.Center);
 
@@ -929,14 +1011,14 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         };
     }
 
-    private static WpfControls.DataGridTemplateColumn OnlineColumn(string header, double width)
+    private static WpfControls.DataGridTemplateColumn OnlineColumn(string header, double width, bool star = false, double minWidth = 100)
     {
         var gridFactory = new Wpf.FrameworkElementFactory(typeof(WpfControls.Grid));
         gridFactory.SetValue(WpfControls.Grid.MarginProperty, new Wpf.Thickness(12, 0, 8, 0));
 
         var dotFactory = new Wpf.FrameworkElementFactory(typeof(WpfShapes.Ellipse));
-        dotFactory.SetValue(WpfShapes.Ellipse.WidthProperty, 8.0);
-        dotFactory.SetValue(WpfShapes.Ellipse.HeightProperty, 8.0);
+        dotFactory.SetValue(WpfShapes.Ellipse.WidthProperty, 9.0);
+        dotFactory.SetValue(WpfShapes.Ellipse.HeightProperty, 9.0);
         dotFactory.SetValue(WpfShapes.Ellipse.VerticalAlignmentProperty, Wpf.VerticalAlignment.Center);
         dotFactory.SetValue(WpfShapes.Ellipse.HorizontalAlignmentProperty, Wpf.HorizontalAlignment.Left);
         dotFactory.SetBinding(WpfShapes.Ellipse.FillProperty, new WpfData.Binding(nameof(NhanSuUserRow.OnlineDotBrush)));
@@ -954,8 +1036,10 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         return new WpfControls.DataGridTemplateColumn
         {
             Header = header,
-            Width = new WpfControls.DataGridLength(width),
-            MinWidth = width,
+            Width = star
+                ? new WpfControls.DataGridLength(width, WpfControls.DataGridLengthUnitType.Star)
+                : new WpfControls.DataGridLength(width),
+            MinWidth = minWidth,
             CellTemplate = new Wpf.DataTemplate { VisualTree = gridFactory },
             CanUserResize = false,
             CanUserSort = false
@@ -970,7 +1054,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         buttonFactory.SetValue(WpfControls.Button.HeightProperty, 34.0);
         buttonFactory.SetValue(WpfControls.Button.HorizontalAlignmentProperty, Wpf.HorizontalAlignment.Center);
         buttonFactory.SetValue(WpfControls.Button.VerticalAlignmentProperty, Wpf.VerticalAlignment.Center);
-        buttonFactory.SetValue(WpfControls.Button.ForegroundProperty, MutedBrush);
+        buttonFactory.SetValue(WpfControls.Button.ForegroundProperty, Bn("#7084A3", "#A9B5C7"));
         buttonFactory.SetValue(WpfControls.Button.BackgroundProperty, TransparentBrush);
         buttonFactory.SetValue(WpfControls.Button.BorderBrushProperty, TransparentBrush);
         buttonFactory.SetValue(WpfControls.Button.CursorProperty, WpfInput.Cursors.Hand);
@@ -991,7 +1075,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     private static Wpf.Style CellTextStyle()
     {
         var style = new Wpf.Style(typeof(WpfControls.TextBlock));
-        style.Setters.Add(new Wpf.Setter(WpfControls.TextBlock.PaddingProperty, new Wpf.Thickness(12, 0, 12, 0)));
+        style.Setters.Add(new Wpf.Setter(WpfControls.TextBlock.PaddingProperty, new Wpf.Thickness(20, 0, 20, 0)));
         style.Setters.Add(new Wpf.Setter(WpfControls.TextBlock.VerticalAlignmentProperty, Wpf.VerticalAlignment.Center));
         style.Setters.Add(new Wpf.Setter(WpfControls.TextBlock.TextTrimmingProperty, Wpf.TextTrimming.CharacterEllipsis));
         style.Setters.Add(new Wpf.Setter(WpfControls.TextBlock.ForegroundProperty, TextBrush));
@@ -1001,19 +1085,19 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     private static Wpf.Style CreateRowStyle()
     {
         var style = new Wpf.Style(typeof(WpfControls.DataGridRow));
-        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, SurfaceBrush));
+        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#54FFFFFF", "#22151B25")));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.ForegroundProperty, TextBrush));
-        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BorderBrushProperty, TransparentBrush));
-        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BorderThicknessProperty, new Wpf.Thickness(0)));
+        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BorderBrushProperty, Bn("#DCE7F3", "#2A3A4C")));
+        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BorderThicknessProperty, new Wpf.Thickness(0, 0, 0, 1)));
         style.Setters.Add(new Wpf.Setter(WpfControls.DataGridRow.SnapsToDevicePixelsProperty, true));
 
         var selected = new Wpf.Trigger { Property = WpfControls.DataGridRow.IsSelectedProperty, Value = true };
-        selected.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, AccentSoftBrush));
+        selected.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#9FDCEAFF", "#3345687A")));
         selected.Setters.Add(new Wpf.Setter(WpfControls.Control.ForegroundProperty, AccentBrush));
         style.Triggers.Add(selected);
 
         var hover = new Wpf.Trigger { Property = WpfControls.DataGridRow.IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#F7FBFF", "#12161C")));
+        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#75EAF3FF", "#2A223044")));
         style.Triggers.Add(hover);
         return style;
     }
@@ -1043,15 +1127,32 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     private static Wpf.Style CreateHeaderStyle()
     {
         var style = new Wpf.Style(typeof(WpfPrimitives.DataGridColumnHeader));
-        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, SurfaceAltBrush));
+        style.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#DAFFFFFF", "#8C111720")));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.ForegroundProperty, TextBrush));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.FontWeightProperty, Wpf.FontWeights.SemiBold));
-        style.Setters.Add(new Wpf.Setter(WpfControls.Control.FontSizeProperty, 14.0));
+        style.Setters.Add(new Wpf.Setter(WpfControls.Control.FontSizeProperty, 14.5));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.BorderBrushProperty, LineBrush));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.BorderThicknessProperty, new Wpf.Thickness(0, 0, 0, 1)));
-        style.Setters.Add(new Wpf.Setter(WpfControls.Control.PaddingProperty, new Wpf.Thickness(12, 0, 12, 0)));
+        style.Setters.Add(new Wpf.Setter(WpfControls.Control.PaddingProperty, new Wpf.Thickness(20, 0, 20, 0)));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.HorizontalContentAlignmentProperty, Wpf.HorizontalAlignment.Left));
+        style.Setters.Add(new Wpf.Setter(WpfControls.Control.TemplateProperty, CreateHeaderTemplate()));
         return style;
+    }
+
+    private static WpfControls.ControlTemplate CreateHeaderTemplate()
+    {
+        var borderFactory = new Wpf.FrameworkElementFactory(typeof(WpfControls.Border));
+        borderFactory.SetValue(WpfControls.Border.BackgroundProperty, new Wpf.TemplateBindingExtension(WpfControls.Control.BackgroundProperty));
+        borderFactory.SetValue(WpfControls.Border.BorderBrushProperty, new Wpf.TemplateBindingExtension(WpfControls.Control.BorderBrushProperty));
+        borderFactory.SetValue(WpfControls.Border.BorderThicknessProperty, new Wpf.TemplateBindingExtension(WpfControls.Control.BorderThicknessProperty));
+
+        var presenter = new Wpf.FrameworkElementFactory(typeof(WpfControls.ContentPresenter));
+        presenter.SetValue(WpfControls.ContentPresenter.MarginProperty, new Wpf.TemplateBindingExtension(WpfControls.Control.PaddingProperty));
+        presenter.SetValue(WpfControls.ContentPresenter.VerticalAlignmentProperty, Wpf.VerticalAlignment.Center);
+        presenter.SetValue(WpfControls.ContentPresenter.HorizontalAlignmentProperty, Wpf.HorizontalAlignment.Left);
+        borderFactory.AppendChild(presenter);
+
+        return new WpfControls.ControlTemplate(typeof(WpfPrimitives.DataGridColumnHeader)) { VisualTree = borderFactory };
     }
 
     private static Wpf.Style CreateButtonStyle()
@@ -1060,7 +1161,7 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         borderFactory.SetValue(WpfControls.Border.BackgroundProperty, new Wpf.TemplateBindingExtension(WpfControls.Control.BackgroundProperty));
         borderFactory.SetValue(WpfControls.Border.BorderBrushProperty, new Wpf.TemplateBindingExtension(WpfControls.Control.BorderBrushProperty));
         borderFactory.SetValue(WpfControls.Border.BorderThicknessProperty, new Wpf.TemplateBindingExtension(WpfControls.Control.BorderThicknessProperty));
-        borderFactory.SetValue(WpfControls.Border.CornerRadiusProperty, new Wpf.CornerRadius(6));
+        borderFactory.SetValue(WpfControls.Border.CornerRadiusProperty, new Wpf.CornerRadius(14));
 
         var presenter = new Wpf.FrameworkElementFactory(typeof(WpfControls.ContentPresenter));
         presenter.SetValue(WpfControls.ContentPresenter.HorizontalAlignmentProperty, Wpf.HorizontalAlignment.Center);
@@ -1091,17 +1192,21 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
         var style = new Wpf.Style(typeof(WpfControls.Button));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.TemplateProperty, template));
         style.Setters.Add(new Wpf.Setter(WpfControls.Control.FocusVisualStyleProperty, null));
+        var hover = new Wpf.Trigger { Property = WpfControls.Button.IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.BackgroundProperty, Bn("#DDEBFF", "#26364A")));
+        hover.Setters.Add(new Wpf.Setter(WpfControls.Control.ForegroundProperty, AccentBrush));
+        style.Triggers.Add(hover);
         return style;
     }
 
     private static WpfMedia.Brush RoleBrush(string role)
-        => AccentBrush;
+        => string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ? Bn("#0564E8", "#60A5FA") : AccentBrush;
 
     private static WpfMedia.Brush RoleSoftBrush(string role)
-        => AccentSoftBrush;
+        => string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ? Bn("#E6F1FF", "#203654") : Bn("#EDF5FF", "#1B2C46");
 
     private static WpfMedia.Brush RoleLineBrush(string role)
-        => Bn("#BFDBFE", "#173532");
+        => string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ? Bn("#B6D3FF", "#315E92") : Bn("#C6DCFF", "#31506F");
 
     private static string StatusText(AppUser user)
     {
@@ -1132,11 +1237,11 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
     }
 
     // Cache brush theo mã hex để getter màu không tạo lại brush mỗi lần đọc.
-    private static readonly Dictionary<string, WpfMedia.Brush> _brushCache = new(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>Chọn brush theo theme: hex chế độ Sáng hoặc Tối (đã cache + Freeze).</summary>
     private static WpfMedia.Brush Bn(string light, string dark)
     {
+        _brushCache ??= new Dictionary<string, WpfMedia.Brush>(StringComparer.OrdinalIgnoreCase);
+
         var hex = Dark ? dark : light;
         if (!_brushCache.TryGetValue(hex, out var brush))
         {
@@ -1144,6 +1249,28 @@ public sealed class NhanSuWpfPage : WpfControls.UserControl
             _brushCache[hex] = brush;
         }
 
+        return brush;
+    }
+
+    private static WpfMedia.Brush PageBackgroundBrush()
+    {
+        if (Dark)
+        {
+            return new WpfMedia.LinearGradientBrush(
+                WpfMedia.Color.FromRgb(8, 11, 16),
+                WpfMedia.Color.FromRgb(14, 19, 27),
+                new Wpf.Point(0, 0),
+                new Wpf.Point(1, 1));
+        }
+
+        var brush = new WpfMedia.LinearGradientBrush
+        {
+            StartPoint = new Wpf.Point(0, 0),
+            EndPoint = new Wpf.Point(1, 1)
+        };
+        brush.GradientStops.Add(new WpfMedia.GradientStop(WpfMedia.Color.FromRgb(248, 251, 255), 0));
+        brush.GradientStops.Add(new WpfMedia.GradientStop(WpfMedia.Color.FromRgb(238, 246, 255), 0.48));
+        brush.GradientStops.Add(new WpfMedia.GradientStop(WpfMedia.Color.FromRgb(229, 240, 252), 1));
         return brush;
     }
 

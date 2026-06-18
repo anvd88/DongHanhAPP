@@ -8,10 +8,9 @@ public enum UiTheme
 }
 
 /// <summary>
-/// Trạng thái theme dùng chung cho cả <see cref="AppTheme"/> (WinForms) và
-/// <see cref="WpfTheme"/> (WPF). Lưu lựa chọn vào một file nhỏ trong LocalAppData
-/// để nhớ qua các lần mở app. Việc đổi màu "live" do MainForm dựng lại giao diện
-/// sau khi <see cref="Current"/> đổi.
+/// Shared light/dark theme state for the WPF shell. The selected mode is saved
+/// in LocalAppData and reapplied on startup; MainWindow refreshes live colors
+/// after <see cref="Current"/> changes.
 /// </summary>
 public static class ThemeState
 {

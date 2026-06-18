@@ -21,7 +21,7 @@ public sealed class SessionControlEventArgs : EventArgs
 /// for — it reuses the same UDP broadcast pattern the LAN chat presence uses.
 ///
 /// UDP broadcast is best-effort (a datagram can be dropped, blocked by a
-/// firewall, or fail to cross a subnet), so the DB heartbeat in MainForm stays
+/// firewall, or fail to cross a subnet), so the DB heartbeat in MainWindow stays
 /// in place as a slower safety net. The push makes the common case instant.
 /// </summary>
 public sealed class SessionControlService : IDisposable
@@ -67,7 +67,7 @@ public sealed class SessionControlService : IDisposable
         catch
         {
             // Port busy / firewall blocked — push is disabled, but the DB
-            // heartbeat fallback in MainForm still logs the user out.
+            // heartbeat fallback in MainWindow still logs the user out.
             _receiver?.Dispose();
             _sender?.Dispose();
             _receiver = null;

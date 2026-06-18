@@ -2,7 +2,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <UseWindowsForms>false</UseWindowsForms>
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -11,9 +11,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>assets\logo_cuong_phat.ico</ApplicationIcon>
-    <Version>26.6.5</Version>
-    <AssemblyVersion>26.6.5.0</AssemblyVersion>
-    <FileVersion>26.6.5.0</FileVersion>
+    <Version>26.6.6</Version>
+    <AssemblyVersion>26.6.6.0</AssemblyVersion>
+    <FileVersion>26.6.6.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

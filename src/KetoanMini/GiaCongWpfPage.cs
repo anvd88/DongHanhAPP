@@ -7,7 +7,6 @@ using WpfEffects = System.Windows.Media.Effects;
 using WpfInput = System.Windows.Input;
 using WpfMedia = System.Windows.Media;
 using WpfPrimitives = System.Windows.Controls.Primitives;
-using Forms = System.Windows.Forms;
 
 namespace KetoanMini;
 
@@ -671,8 +670,12 @@ public sealed class GiaCongWpfPage : WpfControls.UserControl
         try
         {
             var latest = await Task.Run(() => _store.GetPhieuById(_currentPhieu.Id)) ?? _currentPhieu;
-            using var dialog = new GiaCongFormDialog(_store, latest);
-            if (dialog.ShowDialog() != Forms.DialogResult.OK)
+            var owner = Wpf.Window.GetWindow(this);
+            var dialog = new GiaCongPhieuWpfWindow(_store, latest, latest.NhanVienPhuTrach)
+            {
+                Owner = owner
+            };
+            if (dialog.ShowDialog() != true)
                 return;
 
             var updated = await Task.Run(() => _store.GetPhieuById(latest.Id));

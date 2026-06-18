@@ -1,3 +1,5 @@
+using Wpf = System.Windows;
+
 namespace KetoanMini;
 
 internal static class Program
@@ -15,15 +17,12 @@ internal static class Program
             return;
         }
 
-        ApplicationConfiguration.Initialize();
-
-        // Vỏ ứng dụng đang chuyển dần sang WPF: tạo một WPF Application duy nhất
-        // cho tiến trình để các cửa sổ WPF (đăng nhập…) hoạt động. MainForm vẫn là
-        // WinForms trong giai đoạn chuyển tiếp và chạy qua WinForms message loop.
+        // Tạo một WPF Application duy nhất cho toàn bộ tiến trình.
         EnsureWpfApplication();
 
         // Nạp lựa chọn theme (Sáng/Tối) đã lưu trước khi dựng bất kỳ giao diện nào.
         ThemeState.Load();
+        WpfTheme.ApplyCurrentTheme();
 
         // Dọn file cài đã tải ở lần cập nhật trước (sau khi bản mới đã được cài và chạy lên).
         UpdateInstaller.CleanupAfterUpdate();
@@ -49,21 +48,21 @@ internal static class Program
             }
 
             store.CurrentUser = login.AuthenticatedUser;
-            using var mainForm = new MainForm(store, login.AuthenticatedUser);
-            Application.Run(mainForm);
-            if (!mainForm.LogoutRequested)
+            var mainWindow = new MainWindow(store, login.AuthenticatedUser);
+            mainWindow.ShowDialog();
+            if (!mainWindow.LogoutRequested)
             {
                 return;
             }
         }
     }
 
-    private static System.Windows.Application EnsureWpfApplication()
+    private static Wpf.Application EnsureWpfApplication()
     {
-        return System.Windows.Application.Current
-            ?? new System.Windows.Application
+        return Wpf.Application.Current
+            ?? new Wpf.Application
             {
-                ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown
+                ShutdownMode = Wpf.ShutdownMode.OnExplicitShutdown
             };
     }
 
@@ -194,8 +193,8 @@ internal static class Program
         {
             if (showSetupDialog)
             {
-                using var dialog = new DatabaseSetupDialog(connectionString, ex.Message);
-                if (dialog.ShowDialog() == DialogResult.OK)
+                var dialog = new DatabaseSetupWpfWindow(connectionString, ex.Message);
+                if (dialog.ShowDialog() == true)
                 {
                     try
                     {
@@ -203,25 +202,25 @@ internal static class Program
                     }
                     catch (Exception retryEx)
                     {
-                        MessageBox.Show(
+                        Wpf.MessageBox.Show(
                             $"Đã lưu cấu hình nhưng vẫn chưa kết nối được SQL Server.\n\n{retryEx.Message}",
                             "Lỗi kết nối database",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Error);
+                            Wpf.MessageBoxButton.OK,
+                            Wpf.MessageBoxImage.Error);
                         return null;
                     }
                 }
             }
 
-            MessageBox.Show(
+            Wpf.MessageBox.Show(
                 "Không kết nối được SQL Server.\n\n" +
                 $"{ex.Message}\n\n" +
                 "Các file cấu hình đang được app đọc:\n" +
                 $"- Ưu tiên user: {DatabaseConnectionConfig.UserConfigPath}\n" +
                 $"- Cạnh app: {DatabaseConnectionConfig.PrimaryConfigPath}",
                 "Lỗi kết nối database",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+                Wpf.MessageBoxButton.OK,
+                Wpf.MessageBoxImage.Error);
             return null;
         }
     }

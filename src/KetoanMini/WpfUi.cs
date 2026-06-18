@@ -7,8 +7,7 @@ using WpfMedia = System.Windows.Media;
 namespace KetoanMini;
 
 /// <summary>
-/// Helper dựng các control WPF dùng lại (nút bo góc, link…) khi migrate vỏ
-/// từ WinForms. Tái tạo phong cách của RoundedButton/LinkLabel cũ.
+/// Reusable WPF control helpers for rounded buttons, links, and compact grids.
 /// </summary>
 internal static class WpfUi
 {
