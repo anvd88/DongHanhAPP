@@ -92,16 +92,20 @@ internal static class Program
         if (result.MustBlock)
         {
             var dialog = new UpdateWindow(store, result.Latest, blocking: true);
-            // Đã cập nhật (DialogResult true) → cho tiếp tục tới đăng nhập;
-            // nếu thoát mà chưa cập nhật → chặn đăng nhập (return false).
-            return dialog.ShowDialog() == true;
+            // DialogResult true nghia la da len lich chay setup; can thoat app de installer thay file.
+            // Neu nguoi dung thoat ma chua cap nhat thi van chan dang nhap.
+            dialog.ShowDialog();
+            return false;
         }
 
         // Có bản mới (không bắt buộc) → popup; dù cập nhật hay để sau đều tiếp tục đăng nhập.
         if (result.UpdateAvailable)
         {
             var dialog = new UpdateWindow(store, result.Latest, blocking: false);
-            dialog.ShowDialog();
+            if (dialog.ShowDialog() == true)
+            {
+                return false;
+            }
         }
 
         return true;

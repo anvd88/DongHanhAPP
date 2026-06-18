@@ -60,10 +60,17 @@ internal static class UpdateInstaller
     ///   /VERYSILENT        : không hiện cửa sổ wizard lẫn thanh tiến trình.
     ///   /SUPPRESSMSGBOXES  : không hỏi hộp thoại xác nhận.
     ///   /NORESTART         : không tự khởi động lại máy.
-    /// Không dùng /CLOSEAPPLICATIONS vì app vẫn chạy để hiện màn "Cập nhật thành công"
-    /// rồi quay lại đăng nhập; file exe/dll đang khóa sẽ được thay hoàn toàn ở lần khởi động kế tiếp.
+    /// Dùng runner bên ngoài để đợi app thoát rồi mới chạy setup, tránh khóa file exe/dll đang cập nhật.
     /// </summary>
-    private const string InnoSilentArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART";
+    private static readonly string[] InnoSilentArgs =
+    [
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/FORCECLOSEAPPLICATIONS",
+        "/RESTARTAPPLICATIONS"
+    ];
 
     /// <summary>
     /// Mở trình cài đặt đã tải về. Khi <paramref name="silent"/> = true, chạy ở
@@ -74,11 +81,59 @@ internal static class UpdateInstaller
         var psi = new ProcessStartInfo(setupPath) { UseShellExecute = true };
         if (silent)
         {
-            psi.Arguments = InnoSilentArgs;
+            psi.Arguments = string.Join(" ", InnoSilentArgs);
             psi.WindowStyle = ProcessWindowStyle.Hidden;
         }
 
         Process.Start(psi);
+    }
+
+    public static void RunInstallerAfterCurrentProcessExit(string setupPath, bool silent = false)
+    {
+        if (!File.Exists(setupPath))
+        {
+            throw new FileNotFoundException("Khong tim thay file setup da tai.", setupPath);
+        }
+
+        var args = silent ? InnoSilentArgs : [];
+        var script = BuildDeferredInstallerScript(Environment.ProcessId, setupPath, args);
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        var psi = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-WindowStyle");
+        psi.ArgumentList.Add("Hidden");
+        psi.ArgumentList.Add("-EncodedCommand");
+        psi.ArgumentList.Add(encoded);
+
+        if (Process.Start(psi) is null)
+        {
+            throw new InvalidOperationException("Khong khoi dong duoc tien trinh cai dat cap nhat.");
+        }
+    }
+
+    private static string BuildDeferredInstallerScript(int parentPid, string setupPath, IReadOnlyList<string> args)
+    {
+        var psArgs = string.Join(", ", args.Select(PowerShellQuote));
+        return
+            "$ErrorActionPreference = 'Stop'\r\n" +
+            "try {\r\n" +
+            $"    Wait-Process -Id {parentPid} -Timeout 120 -ErrorAction SilentlyContinue\r\n" +
+            "} catch { }\r\n" +
+            $"$installerArgs = @({psArgs})\r\n" +
+            $"$p = Start-Process -FilePath {PowerShellQuote(setupPath)} -ArgumentList $installerArgs -Wait -PassThru\r\n" +
+            "if ($p -ne $null -and $p.ExitCode -ne $null) { exit $p.ExitCode }\r\n";
+    }
+
+    private static string PowerShellQuote(string value)
+    {
+        return "'" + value.Replace("'", "''") + "'";
     }
 
     private static async Task CopyWithProgressAsync(string source, string dest, IProgress<double>? progress, CancellationToken ct)

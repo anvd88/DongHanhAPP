@@ -59,3 +59,4 @@ Name: "{autodesktop}\KetoanMini"; Filename: "{app}\KetoanMini.exe"; WorkingDir: 
 
 [Run]
 Filename: "{app}\KetoanMini.exe"; Description: "{cm:LaunchProgram,KetoanMini}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\KetoanMini.exe"; Flags: nowait skipifnotsilent
