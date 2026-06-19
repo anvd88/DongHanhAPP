@@ -1,7 +1,9 @@
 using Wpf = System.Windows;
+using WpfAnimation = System.Windows.Media.Animation;
 using WpfControls = System.Windows.Controls;
 using WpfMedia = System.Windows.Media;
 using WpfShapes = System.Windows.Shapes;
+using WpfThreading = System.Windows.Threading;
 
 namespace KetoanMini;
 
@@ -13,8 +15,24 @@ public sealed class SidebarNavigationEventArgs : EventArgs
 
 public partial class SidebarMenu : WpfControls.UserControl
 {
+    private const double IndicatorVerticalBleed = 2.5;
+    private const double NormalBorderOpacity = 0.62;
+    private const double HoverBorderOpacity = 0.88;
+
+    public static readonly Wpf.DependencyProperty IsMenuItemSelectedProperty =
+        Wpf.DependencyProperty.RegisterAttached(
+            "IsMenuItemSelected",
+            typeof(bool),
+            typeof(SidebarMenu),
+            new Wpf.PropertyMetadata(false));
+
     private readonly Dictionary<string, SidebarMenuEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly WpfMedia.RadialGradientBrush _selectionPointerBorderBrush = CreatePointerBorderBrush();
     private bool _isBuilt;
+    private bool _indicatorPlaced;
+    private bool _pointerBorderActive;
+    private CancellationTokenSource? _selectionAnimationCts;
+    private SidebarMenuEntry? _selectedEntry;
 
     public event EventHandler<SidebarNavigationEventArgs>? NavigationRequested;
 
@@ -27,21 +45,23 @@ public partial class SidebarMenu : WpfControls.UserControl
         InitializeComponent();
         VersionText.Text = $"Phiên bản {AppVersion.CurrentText}";
         Loaded += (_, _) => BuildMenu();
+        SizeChanged += (_, _) => QueueSnapIndicatorToActive();
     }
+
+    public static bool GetIsMenuItemSelected(Wpf.DependencyObject obj)
+        => (bool)obj.GetValue(IsMenuItemSelectedProperty);
+
+    public static void SetIsMenuItemSelected(Wpf.DependencyObject obj, bool value)
+        => obj.SetValue(IsMenuItemSelectedProperty, value);
 
     public void SetActive(string key)
     {
         ActiveKey = key;
-        foreach (var entry in _entries.Values)
-        {
-            var active = string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase);
-            entry.Button.Tag = active ? "Active" : null;
-            entry.IconBox.Background = active ? Brush("#5EA0FF") : Brush("#16284E");
-            entry.IconBox.BorderBrush = active ? Brush("#9DC5FF") : Brush("#27467A");
-            entry.Icon.Stroke = active ? WpfMedia.Brushes.White : Brush("#B8CBF3");
-            entry.Text.Foreground = active ? WpfMedia.Brushes.White : Brush("#F1F5FF");
-            entry.Text.FontWeight = active ? Wpf.FontWeights.SemiBold : Wpf.FontWeights.Medium;
-        }
+
+        if (!_isBuilt || !_entries.TryGetValue(key, out var entry))
+            return;
+
+        _ = MoveSelectionIndicatorAsync(entry.Button);
     }
 
     private void BuildMenu()
@@ -75,6 +95,7 @@ public partial class SidebarMenu : WpfControls.UserControl
             AddMenuItem("capnhat", "Cập nhật", IconData.Update);
 
         SetActive(ActiveKey);
+        MenuHost.SizeChanged += (_, _) => QueueSnapIndicatorToActive();
     }
 
     private void AddGroupHeader(string text)
@@ -101,7 +122,7 @@ public partial class SidebarMenu : WpfControls.UserControl
         var icon = new WpfShapes.Path
         {
             Data = WpfMedia.Geometry.Parse(iconData),
-            Stroke = Brush("#B8CBF3"),
+            Stroke = MutableBrush("#B8CBF3"),
             StrokeThickness = 1.9,
             StrokeStartLineCap = WpfMedia.PenLineCap.Round,
             StrokeEndLineCap = WpfMedia.PenLineCap.Round,
@@ -118,8 +139,8 @@ public partial class SidebarMenu : WpfControls.UserControl
             Width = featured ? 34 : 28,
             Height = featured ? 34 : 28,
             CornerRadius = new Wpf.CornerRadius(featured ? 10 : 8),
-            Background = Brush(featured ? "#1C315E" : "#16284E"),
-            BorderBrush = Brush(featured ? "#31558D" : "#27467A"),
+            Background = MutableBrush(featured ? "#1C315E" : "#16284E"),
+            BorderBrush = MutableBrush(featured ? "#31558D" : "#27467A"),
             BorderThickness = new Wpf.Thickness(1),
             Child = icon
         };
@@ -128,7 +149,7 @@ public partial class SidebarMenu : WpfControls.UserControl
         var label = new WpfControls.TextBlock
         {
             Text = title,
-            Foreground = Brush("#F1F5FF"),
+            Foreground = MutableBrush("#F1F5FF"),
             FontSize = featured ? 14.5 : 13.2,
             FontWeight = featured ? Wpf.FontWeights.SemiBold : Wpf.FontWeights.Medium,
             VerticalAlignment = Wpf.VerticalAlignment.Center,
@@ -139,9 +160,377 @@ public partial class SidebarMenu : WpfControls.UserControl
 
         button.Content = grid;
         button.Click += (_, _) => NavigationRequested?.Invoke(this, new SidebarNavigationEventArgs(key));
+        button.MouseEnter += (_, _) => OnMenuItemMouseEnter(key);
+        button.MouseMove += (_, e) => OnMenuItemMouseMove(key, e.GetPosition(SelectionIndicator));
+        button.MouseLeave += (_, _) => OnMenuItemMouseLeave(key);
+        button.SizeChanged += (_, _) =>
+        {
+            if (string.Equals(ActiveKey, key, StringComparison.OrdinalIgnoreCase))
+                QueueSnapIndicatorToActive();
+        };
 
         MenuPanel.Children.Add(button);
         _entries[key] = new SidebarMenuEntry(key, button, iconBox, icon, label);
+    }
+
+    private async Task MoveSelectionIndicatorAsync(Wpf.FrameworkElement target)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(() => MoveSelectionIndicatorAsync(target)).Task.Unwrap();
+            return;
+        }
+
+        if (!TryGetEntry(target, out var targetEntry))
+            return;
+
+        if (!target.IsLoaded || target.ActualHeight <= 0 || MenuHost.ActualHeight <= 0)
+        {
+            await Dispatcher.InvokeAsync(() => { }, WpfThreading.DispatcherPriority.Loaded);
+            if (!target.IsLoaded || target.ActualHeight <= 0)
+                return;
+        }
+
+        var cts = ResetSelectionAnimation();
+
+        try
+        {
+            var targetBounds = target.TransformToAncestor(MenuHost)
+                .TransformBounds(new Wpf.Rect(0, 0, target.ActualWidth, target.ActualHeight));
+            var targetY = targetBounds.Top - IndicatorVerticalBleed;
+            var targetHeight = Math.Max(1, targetBounds.Height + (IndicatorVerticalBleed * 2));
+
+            if (!_indicatorPlaced || SelectionIndicator.Opacity <= 0.01)
+            {
+                SnapIndicatorTo(targetY, targetHeight);
+                SelectionIndicator.Opacity = 0.96;
+                SelectionBorderBrush.Opacity = NormalBorderOpacity;
+                _indicatorPlaced = true;
+                ApplySelectedEntry(targetEntry, animate: false);
+                return;
+            }
+
+            var currentY = SelectionTranslate.Y;
+            var distance = targetY - currentY;
+            if (Math.Abs(distance) < 0.5 && Math.Abs(SelectionIndicator.Height - targetHeight) < 0.5)
+            {
+                ApplySelectedEntry(targetEntry, animate: true);
+                return;
+            }
+
+            var direction = Math.Sign(distance);
+            if (direction == 0)
+                direction = 1;
+            var overshoot = Math.Clamp(Math.Abs(distance) * 0.07, 2.0, 7.0) * direction;
+            var moveEase = new WpfAnimation.QuinticEase { EasingMode = WpfAnimation.EasingMode.EaseInOut };
+            var settleEase = new WpfAnimation.CubicEase { EasingMode = WpfAnimation.EasingMode.EaseOut };
+
+            await AnimateSelectionPhaseAsync(
+                y: currentY,
+                height: Math.Max(1, SelectionIndicator.Height),
+                scaleX: 1.045,
+                scaleY: 1.18,
+                opacity: 0.88,
+                borderOpacity: 0.62,
+                milliseconds: 90,
+                easing: new WpfAnimation.CubicEase { EasingMode = WpfAnimation.EasingMode.EaseOut },
+                cts.Token);
+
+            await AnimateSelectionPhaseAsync(
+                y: targetY + overshoot,
+                height: targetHeight,
+                scaleX: 1.025,
+                scaleY: 1.1,
+                opacity: 0.91,
+                borderOpacity: 0.58,
+                milliseconds: 315,
+                easing: moveEase,
+                cts.Token);
+
+            await AnimateSelectionPhaseAsync(
+                y: targetY,
+                height: targetHeight,
+                scaleX: 1,
+                scaleY: 1,
+                opacity: 0.96,
+                borderOpacity: NormalBorderOpacity,
+                milliseconds: 145,
+                easing: settleEase,
+                cts.Token);
+
+            StopSelectionAnimationsKeepCurrent();
+            ApplySelectedEntry(targetEntry, animate: true);
+        }
+        catch (OperationCanceledException)
+        {
+            if (ReferenceEquals(_selectionAnimationCts, cts))
+                StopSelectionAnimationsKeepCurrent();
+        }
+        finally
+        {
+            if (ReferenceEquals(_selectionAnimationCts, cts))
+            {
+                _selectionAnimationCts.Dispose();
+                _selectionAnimationCts = null;
+            }
+        }
+    }
+
+    private CancellationTokenSource ResetSelectionAnimation()
+    {
+        _selectionAnimationCts?.Cancel();
+        _selectionAnimationCts?.Dispose();
+        StopSelectionAnimationsKeepCurrent();
+        StopPointerBorder(resetOpacity: true);
+        _selectionAnimationCts = new CancellationTokenSource();
+        return _selectionAnimationCts;
+    }
+
+    private async Task AnimateSelectionPhaseAsync(
+        double y,
+        double height,
+        double scaleX,
+        double scaleY,
+        double opacity,
+        double borderOpacity,
+        int milliseconds,
+        WpfAnimation.IEasingFunction easing,
+        CancellationToken cancellationToken)
+    {
+        var duration = TimeSpan.FromMilliseconds(milliseconds);
+        BeginDoubleAnimation(SelectionTranslate, WpfMedia.TranslateTransform.YProperty, SelectionTranslate.Y, y, duration, easing);
+        BeginDoubleAnimation(SelectionScale, WpfMedia.ScaleTransform.ScaleXProperty, SelectionScale.ScaleX, scaleX, duration, easing);
+        BeginDoubleAnimation(SelectionScale, WpfMedia.ScaleTransform.ScaleYProperty, SelectionScale.ScaleY, scaleY, duration, easing);
+        BeginDoubleAnimation(SelectionIndicator, Wpf.FrameworkElement.HeightProperty, SelectionIndicator.Height, height, duration, easing);
+        BeginDoubleAnimation(SelectionIndicator, Wpf.UIElement.OpacityProperty, SelectionIndicator.Opacity, opacity, duration, easing);
+        BeginDoubleAnimation(SelectionBorderBrush, WpfMedia.Brush.OpacityProperty, SelectionBorderBrush.Opacity, borderOpacity, duration, easing);
+        await Task.Delay(duration, cancellationToken);
+    }
+
+    private void StopSelectionAnimationsKeepCurrent()
+    {
+        var y = SelectionTranslate.Y;
+        var scaleX = SelectionScale.ScaleX;
+        var scaleY = SelectionScale.ScaleY;
+        var height = SelectionIndicator.Height;
+        var opacity = SelectionIndicator.Opacity;
+        var borderOpacity = SelectionBorderBrush.Opacity;
+
+        SelectionTranslate.BeginAnimation(WpfMedia.TranslateTransform.YProperty, null);
+        SelectionScale.BeginAnimation(WpfMedia.ScaleTransform.ScaleXProperty, null);
+        SelectionScale.BeginAnimation(WpfMedia.ScaleTransform.ScaleYProperty, null);
+        SelectionIndicator.BeginAnimation(Wpf.FrameworkElement.HeightProperty, null);
+        SelectionIndicator.BeginAnimation(Wpf.UIElement.OpacityProperty, null);
+        SelectionBorderBrush.BeginAnimation(WpfMedia.Brush.OpacityProperty, null);
+
+        SelectionTranslate.Y = y;
+        SelectionScale.ScaleX = scaleX;
+        SelectionScale.ScaleY = scaleY;
+        SelectionIndicator.Height = Math.Max(1, height);
+        SelectionIndicator.Opacity = opacity;
+        SelectionBorderBrush.Opacity = borderOpacity;
+    }
+
+    private void ApplySelectedEntry(SidebarMenuEntry selectedEntry, bool animate)
+    {
+        _selectedEntry = selectedEntry;
+
+        foreach (var entry in _entries.Values)
+        {
+            var selected = ReferenceEquals(entry, selectedEntry);
+            SetIsMenuItemSelected(entry.Button, selected);
+            ApplyEntryVisualState(entry, selected, hover: false, animate);
+        }
+    }
+
+    private void OnMenuItemMouseEnter(string key)
+    {
+        if (!_entries.TryGetValue(key, out var entry))
+            return;
+
+        if (GetIsMenuItemSelected(entry.Button))
+        {
+            var ease = new WpfAnimation.CubicEase { EasingMode = WpfAnimation.EasingMode.EaseOut };
+            BeginDoubleAnimation(SelectionScale, WpfMedia.ScaleTransform.ScaleXProperty, SelectionScale.ScaleX, 1.02, TimeSpan.FromMilliseconds(170), ease);
+            BeginDoubleAnimation(SelectionScale, WpfMedia.ScaleTransform.ScaleYProperty, SelectionScale.ScaleY, 1.055, TimeSpan.FromMilliseconds(170), ease);
+            BeginDoubleAnimation(SelectionBorderBrush, WpfMedia.Brush.OpacityProperty, SelectionBorderBrush.Opacity, HoverBorderOpacity, TimeSpan.FromMilliseconds(170), ease);
+            StartPointerBorder();
+            return;
+        }
+
+        ApplyEntryVisualState(entry, selected: false, hover: true, animate: true);
+    }
+
+    private void OnMenuItemMouseMove(string key, Wpf.Point pointer)
+    {
+        if (!_entries.TryGetValue(key, out var entry) || !GetIsMenuItemSelected(entry.Button))
+            return;
+
+        if (SelectionIndicator.ActualWidth <= 0 || SelectionIndicator.ActualHeight <= 0)
+            return;
+
+        var x = Math.Clamp(pointer.X / SelectionIndicator.ActualWidth, 0, 1);
+        var y = Math.Clamp(pointer.Y / SelectionIndicator.ActualHeight, 0, 1);
+        var center = new Wpf.Point(x, y);
+        _selectionPointerBorderBrush.Center = center;
+        _selectionPointerBorderBrush.GradientOrigin = center;
+        _selectionPointerBorderBrush.RadiusX = 0.13 + (0.06 * Math.Abs(0.5 - x));
+        _selectionPointerBorderBrush.RadiusY = 0.42 + (0.2 * Math.Abs(0.5 - y));
+
+        if (!_pointerBorderActive)
+            StartPointerBorder();
+    }
+
+    private void OnMenuItemMouseLeave(string key)
+    {
+        if (!_entries.TryGetValue(key, out var entry))
+            return;
+
+        if (GetIsMenuItemSelected(entry.Button))
+        {
+            var ease = new WpfAnimation.CubicEase { EasingMode = WpfAnimation.EasingMode.EaseOut };
+            BeginDoubleAnimation(SelectionScale, WpfMedia.ScaleTransform.ScaleXProperty, SelectionScale.ScaleX, 1, TimeSpan.FromMilliseconds(260), ease);
+            BeginDoubleAnimation(SelectionScale, WpfMedia.ScaleTransform.ScaleYProperty, SelectionScale.ScaleY, 1, TimeSpan.FromMilliseconds(260), ease);
+            BeginDoubleAnimation(SelectionBorderBrush, WpfMedia.Brush.OpacityProperty, SelectionBorderBrush.Opacity, NormalBorderOpacity, TimeSpan.FromMilliseconds(260), ease);
+            FadeOutPointerBorder();
+            return;
+        }
+
+        ApplyEntryVisualState(entry, selected: false, hover: false, animate: true);
+    }
+
+    private void ApplyEntryVisualState(SidebarMenuEntry entry, bool selected, bool hover, bool animate)
+    {
+        entry.Button.Background = selected ? WpfMedia.Brushes.Transparent : hover ? MutableBrush("#1AFFFFFF") : WpfMedia.Brushes.Transparent;
+        entry.Button.BorderBrush = selected ? WpfMedia.Brushes.Transparent : hover ? MutableBrush("#2EDDF5FF") : WpfMedia.Brushes.Transparent;
+
+        var iconBackground = selected ? "#0016284E" : hover ? "#203B70" : "#16284E";
+        var iconBorder = selected ? "#0027467A" : hover ? "#3F6BA5" : "#27467A";
+        var iconStroke = selected ? "#FFFFFF" : hover ? "#E8F7FF" : "#B8CBF3";
+        var textForeground = selected ? "#FFFFFF" : hover ? "#FFFFFF" : "#F1F5FF";
+
+        AnimateBrush(entry.IconBox.Background, Color(iconBackground), animate ? 180 : 0);
+        AnimateBrush(entry.IconBox.BorderBrush, Color(iconBorder), animate ? 180 : 0);
+        AnimateBrush(entry.Icon.Stroke, Color(iconStroke), animate ? 180 : 0);
+        AnimateBrush(entry.Text.Foreground, Color(textForeground), animate ? 180 : 0);
+        entry.Text.FontWeight = selected ? Wpf.FontWeights.SemiBold : Wpf.FontWeights.Medium;
+    }
+
+    private void QueueSnapIndicatorToActive()
+    {
+        if (!_isBuilt || !_entries.ContainsKey(ActiveKey))
+            return;
+
+        Dispatcher.BeginInvoke(new Action(SnapIndicatorToActive), WpfThreading.DispatcherPriority.Loaded);
+    }
+
+    private void SnapIndicatorToActive()
+    {
+        if (!_entries.TryGetValue(ActiveKey, out var entry) || entry.Button.ActualHeight <= 0 || MenuHost.ActualHeight <= 0)
+            return;
+
+        var bounds = entry.Button.TransformToAncestor(MenuHost)
+            .TransformBounds(new Wpf.Rect(0, 0, entry.Button.ActualWidth, entry.Button.ActualHeight));
+        SnapIndicatorTo(bounds.Top - IndicatorVerticalBleed, Math.Max(1, bounds.Height + (IndicatorVerticalBleed * 2)));
+        SelectionIndicator.Opacity = 0.96;
+        SelectionBorderBrush.Opacity = NormalBorderOpacity;
+        _indicatorPlaced = true;
+
+        if (_selectedEntry is null || !ReferenceEquals(_selectedEntry, entry))
+            ApplySelectedEntry(entry, animate: false);
+    }
+
+    private void SnapIndicatorTo(double y, double height)
+    {
+        StopSelectionAnimationsKeepCurrent();
+        SelectionTranslate.Y = y;
+        SelectionScale.ScaleX = 1;
+        SelectionScale.ScaleY = 1;
+        SelectionIndicator.Height = height;
+        SelectionBorderBrush.Opacity = NormalBorderOpacity;
+        StopPointerBorder(resetOpacity: true);
+    }
+
+    private void StartPointerBorder()
+    {
+        _pointerBorderActive = true;
+        _selectionPointerBorderBrush.BeginAnimation(WpfMedia.Brush.OpacityProperty, null);
+        SelectionIndicator.BorderBrush = _selectionPointerBorderBrush;
+
+        BeginDoubleAnimation(
+            _selectionPointerBorderBrush,
+            WpfMedia.Brush.OpacityProperty,
+            _selectionPointerBorderBrush.Opacity,
+            0.96,
+            TimeSpan.FromMilliseconds(180),
+            new WpfAnimation.CubicEase { EasingMode = WpfAnimation.EasingMode.EaseOut });
+    }
+
+    private void FadeOutPointerBorder()
+    {
+        var fade = new WpfAnimation.DoubleAnimation(_selectionPointerBorderBrush.Opacity, 0, TimeSpan.FromMilliseconds(260))
+        {
+            EasingFunction = new WpfAnimation.CubicEase { EasingMode = WpfAnimation.EasingMode.EaseOut },
+            FillBehavior = WpfAnimation.FillBehavior.HoldEnd
+        };
+        fade.Completed += (_, _) => StopPointerBorder(resetOpacity: true);
+        _selectionPointerBorderBrush.BeginAnimation(WpfMedia.Brush.OpacityProperty, fade, WpfAnimation.HandoffBehavior.SnapshotAndReplace);
+    }
+
+    private void StopPointerBorder(bool resetOpacity)
+    {
+        _selectionPointerBorderBrush.BeginAnimation(WpfMedia.Brush.OpacityProperty, null);
+        if (resetOpacity)
+            _selectionPointerBorderBrush.Opacity = 0;
+
+        _pointerBorderActive = false;
+        SelectionIndicator.BorderBrush = SelectionBorderBrush;
+    }
+
+    private bool TryGetEntry(Wpf.FrameworkElement target, out SidebarMenuEntry entry)
+    {
+        entry = _entries.Values.FirstOrDefault(item => ReferenceEquals(item.Button, target))!;
+        return entry is not null;
+    }
+
+    private static void BeginDoubleAnimation(
+        Wpf.DependencyObject target,
+        Wpf.DependencyProperty property,
+        double from,
+        double to,
+        TimeSpan duration,
+        WpfAnimation.IEasingFunction? easing)
+    {
+        var animation = new WpfAnimation.DoubleAnimation(from, to, duration)
+        {
+            EasingFunction = easing,
+            FillBehavior = WpfAnimation.FillBehavior.HoldEnd
+        };
+
+        if (target is Wpf.UIElement element)
+            element.BeginAnimation(property, animation, WpfAnimation.HandoffBehavior.SnapshotAndReplace);
+        else if (target is WpfAnimation.Animatable animatable)
+            animatable.BeginAnimation(property, animation, WpfAnimation.HandoffBehavior.SnapshotAndReplace);
+    }
+
+    private static void AnimateBrush(WpfMedia.Brush? brush, WpfMedia.Color to, int milliseconds)
+    {
+        if (brush is not WpfMedia.SolidColorBrush solid || solid.IsFrozen)
+            return;
+
+        if (milliseconds <= 0)
+        {
+            solid.BeginAnimation(WpfMedia.SolidColorBrush.ColorProperty, null);
+            solid.Color = to;
+            return;
+        }
+
+        var animation = new WpfAnimation.ColorAnimation(solid.Color, to, TimeSpan.FromMilliseconds(milliseconds))
+        {
+            EasingFunction = new WpfAnimation.CubicEase { EasingMode = WpfAnimation.EasingMode.EaseOut },
+            FillBehavior = WpfAnimation.FillBehavior.HoldEnd
+        };
+        solid.BeginAnimation(WpfMedia.SolidColorBrush.ColorProperty, animation, WpfAnimation.HandoffBehavior.SnapshotAndReplace);
     }
 
     private static WpfMedia.Brush Brush(string hex)
@@ -150,6 +539,30 @@ public partial class SidebarMenu : WpfControls.UserControl
         brush.Freeze();
         return brush;
     }
+
+    private static WpfMedia.SolidColorBrush MutableBrush(string hex)
+        => new(Color(hex));
+
+    private static WpfMedia.RadialGradientBrush CreatePointerBorderBrush()
+    {
+        var brush = new WpfMedia.RadialGradientBrush
+        {
+            MappingMode = WpfMedia.BrushMappingMode.RelativeToBoundingBox,
+            Center = new Wpf.Point(0.5, 0.5),
+            GradientOrigin = new Wpf.Point(0.5, 0.5),
+            RadiusX = 0.22,
+            RadiusY = 0.62,
+            Opacity = 0
+        };
+        brush.GradientStops.Add(new WpfMedia.GradientStop(Color("#FFFFFFFF"), 0));
+        brush.GradientStops.Add(new WpfMedia.GradientStop(Color("#D8F5FFFF"), 0.16));
+        brush.GradientStops.Add(new WpfMedia.GradientStop(Color("#7BBFEAFF"), 0.38));
+        brush.GradientStops.Add(new WpfMedia.GradientStop(Color("#244D76A8"), 1));
+        return brush;
+    }
+
+    private static WpfMedia.Color Color(string hex)
+        => (WpfMedia.Color)WpfMedia.ColorConverter.ConvertFromString(hex)!;
 
     private sealed record SidebarMenuEntry(
         string Key,
