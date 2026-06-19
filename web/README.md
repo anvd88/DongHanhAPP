@@ -1,60 +1,102 @@
 # KetoanMini Web
 
-Phiên bản web của ứng dụng kế toán **KetoanMini** (hiện tại là app desktop .NET 8 WPF).
+Phiên bản web của ứng dụng kế toán **KetoanMini** (bản desktop là .NET 8 WPF), giao diện
+**Liquid Glass**, **dùng chung CSDL SQL Server** với bản desktop (không đổi schema).
 
-> Nhánh: `web-version` · Thư mục này độc lập với app WPF trong `src/KetoanMini`.
-
----
-
-## 1. Công nghệ đề xuất
-
-Mục tiêu: **giao diện đẹp, mượt, hiện đại** — đồng thời **tận dụng tối đa code C# và CSDL SQL Server** đang có.
-
-### Kiến trúc: tách Backend (C#) + Frontend (React)
-
-| Tầng | Công nghệ | Lý do |
-|------|-----------|-------|
-| **Frontend** | **Next.js 15 (React 19) + TypeScript** | Hệ sinh thái web UI hiện đại nhất hiện nay; render nhanh, mượt. |
-| Giao diện | **Tailwind CSS + shadcn/ui** | Bộ component cao cấp, đẹp sẵn, dễ tùy biến — chuẩn "đẹp mượt hiện đại". |
-| Bảng dữ liệu | **TanStack Table** | Lưới dữ liệu mạnh cho kế toán (sort, filter, phân trang, cố định cột). |
-| Biểu đồ Dashboard | **Recharts / Tremor** | Biểu đồ dashboard đẹp, tương tác mượt. |
-| **Backend** | **ASP.NET Core Web API (C# .NET 9)** | **Tái sử dụng logic C# sẵn có** (AccountingStore, GiaCongStore, NhanSu…). |
-| Truy cập DB | **Microsoft.Data.SqlClient** (đang dùng) | Giữ nguyên **SQL Server** và schema hiện tại — không phải migrate dữ liệu. |
-| Xác thực | JWT + ASP.NET Identity | Thay cho LoginWindow desktop. |
-
-### Vì sao chọn hướng này thay vì các lựa chọn khác?
-
-- **So với Blazor** (cũng là C#): Blazor cho phép viết toàn bộ bằng C#, nhưng hệ component đẹp/mượt sẵn còn hạn chế hơn React + shadcn/ui. Với yêu cầu "đẹp, mượt, hiện đại" → **React thắng**.
-- **So với viết lại toàn bộ bằng Next.js full-stack (TypeScript)**: phải viết lại toàn bộ nghiệp vụ kế toán đang có trong C# → tốn công, dễ sai sót. Giữ backend C# an toàn hơn.
-
-> **Kết luận:** **Backend ASP.NET Core Web API (C#)** + **Frontend Next.js + Tailwind + shadcn/ui**.
-> Tái dùng nghiệp vụ C# và SQL Server, đổi mới hoàn toàn giao diện.
+> Nhánh: `web-version` · Độc lập với app WPF trong `src/KetoanMini`.
 
 ---
 
-## 2. Cấu trúc thư mục (dự kiến)
+## 1. Công nghệ
+
+| Tầng | Công nghệ | Ghi chú |
+|------|-----------|---------|
+| **Backend** | ASP.NET Core 8 Minimal API (C#) | REST + JWT. Kết nối SQL Server hiện có qua `Microsoft.Data.SqlClient`. |
+| **Frontend** | React 19 + TypeScript + Vite | SPA. |
+| Giao diện | Tailwind CSS v4 + hệ "Liquid Glass" tự xây | Nền gradient động, thẻ kính mờ, **glow bám theo chuột** (tái hiện `LiquidGlassBorder` của bản desktop). |
+| Xác thực mật khẩu | PBKDF2-SHA256 (port nguyên văn) | Xác thực được mọi mật khẩu đã lưu trong DB → **đăng nhập bằng tài khoản hiện có**. |
+
+Bảng màu lấy đúng từ `WpfTheme.cs`: accent sáng `#2563EB`, tối `#11C5BF`. Có **light/dark**.
+
+## 2. Cấu trúc
 
 ```
 web/
-├── README.md          ← file này
-├── backend/           ← ASP.NET Core Web API (C#) — tái dùng logic từ src/KetoanMini
-│   ├── KetoanMini.Api/        (controllers, endpoints)
-│   ├── KetoanMini.Core/       (domain: tách logic kế toán dùng chung)
-│   └── KetoanMini.Data/       (truy cập SQL Server)
-└── frontend/          ← Next.js + TypeScript + Tailwind + shadcn/ui
-    ├── app/                   (các trang: dashboard, nhân sự, gia công…)
-    ├── components/            (UI components)
-    └── lib/                   (gọi API)
+├── backend/KetoanMini.Api/   ASP.NET Core API
+│   ├── Endpoints/            Auth, Accounting (chứng từ/dashboard/báo cáo/nhật ký), GiaCong, Users, Releases
+│   ├── Data/Database.cs      Helper ADO.NET
+│   ├── Security/             PasswordHasher (PBKDF2) + TokenService (JWT)
+│   ├── Models/Dtos.cs
+│   └── appsettings.json      ← chuỗi kết nối SQL Server + khóa JWT
+└── frontend/                 React + Vite
+    └── src/
+        ├── components/       Glass, Sidebar, Header, Layout, Table, Modal, StatCard, ui
+        ├── pages/            Login, Dashboard, KeToan, GiaCong, NhanSu, BaoCao, SaoLuu, CapNhat, StubPage
+        └── lib/              api, auth, theme, format, useApi, types
 ```
 
-## 3. Lộ trình triển khai (gợi ý)
+## 3. Chạy (dev)
 
-1. **Tách nghiệp vụ dùng chung** từ `src/KetoanMini` ra `KetoanMini.Core` (không phụ thuộc WPF).
-2. **Dựng Web API** expose các endpoint: đăng nhập, dashboard, nhân sự, gia công.
-3. **Dựng frontend Next.js** + layout (sidebar giống app desktop) bằng shadcn/ui.
-4. Làm lần lượt từng module: Dashboard → Nhân sự → Gia công → Chat.
-5. Triển khai (IIS / Docker / cloud) + HTTPS.
+Cần: .NET 8 SDK, Node 18+. Hai cửa sổ terminal:
 
----
+```bash
+# 1) Backend  → http://localhost:5239
+cd web/backend/KetoanMini.Api
+dotnet run
 
-*Chưa có code — đây là khung và kế hoạch. Xác nhận công nghệ trước khi mình scaffold backend + frontend.*
+# 2) Frontend → http://localhost:5173  (proxy /api sang backend tự động)
+cd web/frontend
+npm install      # lần đầu
+npm run dev
+```
+
+Mở http://localhost:5173 và đăng nhập bằng **tài khoản hiện có trong hệ thống** (vd: `admin`).
+
+## 3b. Chạy & public qua LAN (1 cổng duy nhất)
+
+Frontend build được gộp thẳng vào `wwwroot` của backend → chỉ cần chạy backend, máy khác
+trong mạng truy cập một địa chỉ duy nhất `http://<IP-máy-chủ>:5080`.
+
+```bash
+# 1) Build giao diện vào wwwroot của backend
+cd web/frontend && npm run build
+
+# 2) Chạy backend ở chế độ LAN (lắng nghe 0.0.0.0:5080)
+cd web/backend/KetoanMini.Api && dotnet run --launch-profile lan
+```
+
+**Mở cổng firewall (chạy PowerShell với quyền Administrator — chỉ làm 1 lần):**
+```powershell
+New-NetFirewallRule -DisplayName "KetoanMini Web (5080)" -Direction Inbound `
+  -Protocol TCP -LocalPort 5080 -Action Allow -Profile Private,Domain
+```
+
+Máy chủ hiện tại: IP LAN `192.168.1.88` → các máy khác mở **http://192.168.1.88:5080**.
+
+> Tùy chọn nâng cao: chạy nền tự khởi động cùng Windows bằng **NSSM** / Windows Service /
+> Task Scheduler (chưa cấu hình — báo nếu cần).
+
+## 4. Chức năng đã hiện thực (chạy thật với DB)
+
+- **Đăng nhập** (JWT, PBKDF2) · light/dark · responsive.
+- **Tổng quan**: 4 thẻ KPI + chứng từ gần đây.
+- **Kế toán**: danh sách + tạo/sửa/xóa chứng từ có dòng hàng, tự tính tổng; tìm kiếm.
+- **Bán hàng**: lọc chứng từ bán hàng.
+- **Gia công**: tab lọc (xuất/nhập/đang xử lý) + tìm kiếm, tạo/sửa/xóa phiếu + hàng hóa, thanh tiến độ.
+- **Nhân sự** (admin): danh sách + lọc vai trò/trạng thái, thêm/duyệt/khóa/mở khóa/đặt lại mật khẩu/xóa mềm.
+- **Báo cáo**: KPI + tổng hợp theo tháng.
+- **Sao lưu**: nhật ký hoạt động (audit log).
+- **Cập nhật** (admin): lịch sử phát hành.
+- Các module **Hàng tồn kho, Mua hàng, Tài sản, Danh mục, Công nợ, Cài đặt, Lịch hẹn, Tích hợp**:
+  hiển thị "Module đang phát triển" — **giống đúng trạng thái trên bản desktop**.
+
+## 5. Chưa port (đặc thù LAN desktop)
+
+- **Chat LAN + truyền file P2P** (UDP/TCP) và **xuất Excel trực tiếp**: cơ chế desktop/LAN, trên web
+  cần thiết kế lại (chat qua WebSocket server, xuất Excel sinh phía server). Ghi nhận làm bước sau.
+
+## 6. Bảo mật cần làm trước khi lên production
+
+- `appsettings.json` đang chứa chuỗi kết nối + khóa JWT mẫu → chuyển sang biến môi trường / user-secrets,
+  **đổi khóa JWT** thành chuỗi ngẫu nhiên ≥ 32 ký tự.
+- Bật HTTPS và giới hạn CORS theo domain thật.

@@ -1,0 +1,17 @@
+# Node / frontend
+node_modules/
+dist/
+*.local
+.vite/
+
+# .NET / backend
+bin/
+obj/
+# Frontend build output gộp vào backend (sinh ra bởi `npm run build`)
+backend/KetoanMini.Api/wwwroot/
+
+# Logs & môi trường
+*.log
+.env
+.env.*
+!.env.example
