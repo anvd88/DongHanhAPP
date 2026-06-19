@@ -126,7 +126,7 @@ internal static class UpdateInstaller
             || ext.Equals(".kup", StringComparison.OrdinalIgnoreCase);
     }
 
-    public static void RunZipUpdaterAfterCurrentProcessExit(string packagePath)
+    public static void RunZipUpdaterAfterCurrentProcessExit(string packagePath, string expectedVersion)
     {
         if (!File.Exists(packagePath))
         {
@@ -162,6 +162,8 @@ internal static class UpdateInstaller
                 CommandLineQuote(targetDir),
                 "--app",
                 CommandLineQuote(appPath),
+                "--expected-version",
+                CommandLineQuote(expectedVersion),
                 "--wait-pid",
                 Environment.ProcessId.ToString(CultureInfo.InvariantCulture)
             ])

@@ -155,7 +155,7 @@ public partial class UpdateProgressWindow : Wpf.Window
 
             if (isZipPackage)
             {
-                UpdateInstaller.RunZipUpdaterAfterCurrentProcessExit(path);
+                UpdateInstaller.RunZipUpdaterAfterCurrentProcessExit(path, _release.Version);
             }
             else
             {
