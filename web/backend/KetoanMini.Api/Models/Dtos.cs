@@ -3,6 +3,7 @@ namespace KetoanMini.Api.Models;
 // ----- Auth -----
 public record LoginRequest(string Username, string Password);
 public record LoginResponse(string Token, UserDto User);
+public record HeartbeatRequest(string? Sid);
 public record UserDto(Guid Id, string Username, string FullName, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt)
 {

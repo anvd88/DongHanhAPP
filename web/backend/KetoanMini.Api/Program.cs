@@ -55,6 +55,46 @@ app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Chặn ngay tài khoản vừa bị admin khóa/xóa (từ web HAY app desktop). JWT có thể còn hạn
+// nhiều giờ, nên nếu chỉ dựa vào hết hạn token thì người dùng web vẫn thao tác được sau khi
+// bị khóa. Kiểm tra is_active mỗi request đã xác thực → trả 401 để client tự đăng xuất.
+// Kết hợp tín hiệu realtime "changed" (đổi is_active) → web refetch → bị đá ra gần như tức thì.
+app.Use(async (ctx, next) =>
+{
+    if (ctx.User.Identity?.IsAuthenticated == true)
+    {
+        var username = ctx.User.Username();
+        if (!string.IsNullOrEmpty(username))
+        {
+            var locked = false;
+            try
+            {
+                var db = ctx.RequestServices.GetRequiredService<Database>();
+                await using var conn = await db.OpenAsync(ctx.RequestAborted);
+                var active = await conn.Cmd(
+                    "SELECT TOP 1 is_active FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
+                    .With("@u", username)
+                    .ExecuteScalarAsync(ctx.RequestAborted);
+                // NULL/không có dòng sống (đã xóa) hoặc is_active = 0 → coi như bị khóa.
+                locked = active is null or DBNull || !Convert.ToBoolean(active);
+            }
+            catch
+            {
+                // DB chập chờn → không đá người dùng ra (fail-open), giống heartbeat của app desktop.
+            }
+
+            if (locked)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await ctx.Response.WriteAsJsonAsync(new { message = "Tài khoản đã bị khóa." });
+                return;
+            }
+        }
+    }
+
+    await next();
+});
+
 // Bắt lỗi DB không kết nối được → trả JSON rõ ràng thay vì 500 trống.
 app.Use(async (ctx, next) =>
 {
@@ -89,5 +129,16 @@ app.MapFallbackToFile("index.html");
 // Tạo bảng gia công nếu chưa có (best-effort, không chặn khởi động nếu DB tạm thời offline).
 try { await GiaCongEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng gia công lúc khởi động: {Msg}", ex.Message); }
+
+// Bảo đảm cột phân loại client cho bảng phiên (để ghi nhận hiện diện web). Thường app desktop
+// đã tạo qua schema, nhưng vẫn ensure ở đây phòng khi backend chạy trước. Best-effort.
+try
+{
+    await using var conn = await app.Services.GetRequiredService<Database>().OpenAsync();
+    await conn.Cmd(@"IF OBJECT_ID(N'dbo.user_sessions', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.user_sessions', N'client_kind') IS NULL
+                     ALTER TABLE dbo.user_sessions ADD client_kind NVARCHAR(20) NOT NULL CONSTRAINT DF_user_sessions_client_kind DEFAULT N'Desktop';")
+        .ExecuteNonQueryAsync();
+}
+catch (Exception ex) { app.Logger.LogWarning("Không thêm được cột client_kind lúc khởi động: {Msg}", ex.Message); }
 
 app.Run();
