@@ -69,6 +69,7 @@ internal static class Program
             Log("Extracting package: " + options.PackagePath);
             ZipFile.ExtractToDirectory(options.PackagePath, extractDir, overwriteFiles: true);
             var payloadDir = ResolvePayloadDirectory(extractDir);
+            ValidatePayloadVersion(payloadDir, options.ExpectedVersion);
 
             Log("Backing up current installation: " + options.TargetDir);
             CopyDirectory(options.TargetDir, backupDir, overwrite: true, skipPaths: [workRoot]);
@@ -93,7 +94,7 @@ internal static class Program
         }
     }
 
-    private static string ResolvePayloadDirectory(string extractDir)
+    private static string ResolvePayloadDirectory(string extractDir, int depth = 0)
     {
         if (File.Exists(Path.Combine(extractDir, AppExeName)))
         {
@@ -110,7 +111,70 @@ internal static class Program
             .Select(Path.GetDirectoryName)
             .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
 
-        return nested ?? throw new InvalidOperationException("Goi cap nhat khong co " + AppExeName + ".");
+        if (!string.IsNullOrWhiteSpace(nested))
+        {
+            return nested;
+        }
+
+        var nestedPackage = Directory.EnumerateFiles(extractDir, "*.zip", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(extractDir, "*.kup", SearchOption.AllDirectories))
+            .ToList();
+        if (depth < 2 && nestedPackage.Count == 1)
+        {
+            var nestedDir = Path.Combine(Path.GetDirectoryName(nestedPackage[0])!, "_nested_update_payload");
+            Directory.CreateDirectory(nestedDir);
+            Log("Extracting nested update package: " + nestedPackage[0]);
+            ZipFile.ExtractToDirectory(nestedPackage[0], nestedDir, overwriteFiles: true);
+            return ResolvePayloadDirectory(nestedDir, depth + 1);
+        }
+
+        throw new InvalidOperationException(
+            "Goi cap nhat khong co " + AppExeName + ". " +
+            "Neu tai tu GitHub Actions, hay giai nen artifact mot lan roi chon file KetoanMiniUpdate-...zip ben trong.");
+    }
+
+    private static void ValidatePayloadVersion(string payloadDir, string? expectedVersion)
+    {
+        if (string.IsNullOrWhiteSpace(expectedVersion))
+        {
+            return;
+        }
+
+        var appPath = Path.Combine(payloadDir, AppExeName);
+        var fileVersion = FileVersionInfo.GetVersionInfo(appPath).FileVersion
+            ?? FileVersionInfo.GetVersionInfo(appPath).ProductVersion
+            ?? "";
+        var payloadVersion = NormalizeVersion(fileVersion);
+        var expected = NormalizeVersion(expectedVersion);
+
+        Log($"Payload version: {payloadVersion}; expected: {expected}");
+        if (payloadVersion.Length == 0)
+        {
+            throw new InvalidOperationException("Khong doc duoc version cua " + AppExeName + " trong goi cap nhat.");
+        }
+
+        if (!string.Equals(payloadVersion, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Version trong goi cap nhat khong khop voi version phat hanh.\n" +
+                "Goi update dang la: " + payloadVersion + "\n" +
+                "Version tren app dang yeu cau: " + expected + "\n\n" +
+                "Hay build lai workflow voi dung input version, hoac tang <Version> trong KetoanMini.csproj roi phat hanh lai.");
+        }
+    }
+
+    private static string NormalizeVersion(string version)
+    {
+        version = (version ?? "").Trim();
+        if (Version.TryParse(version, out var parsed))
+        {
+            return new Version(
+                Math.Max(parsed.Major, 0),
+                Math.Max(parsed.Minor, 0),
+                Math.Max(parsed.Build, 0)).ToString(3);
+        }
+
+        return version;
     }
 
     private static void CopyDirectory(string sourceDir, string targetDir, bool overwrite, IReadOnlyList<string> skipPaths)
@@ -244,7 +308,7 @@ internal static class Program
         }
     }
 
-    private sealed record Options(string PackagePath, string TargetDir, string AppPath, int? WaitPid)
+    private sealed record Options(string PackagePath, string TargetDir, string AppPath, string? ExpectedVersion, int? WaitPid)
     {
         public static Options? Parse(string[] args)
         {
@@ -288,10 +352,13 @@ internal static class Program
                 waitPid = pid;
             }
 
+            values.TryGetValue("expected-version", out var expectedVersion);
+
             return new Options(
                 Path.GetFullPath(package),
                 Path.GetFullPath(target),
                 Path.GetFullPath(app),
+                expectedVersion,
                 waitPid);
         }
     }

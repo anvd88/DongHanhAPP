@@ -252,6 +252,7 @@ Khuyến nghị vận hành:
 
 - Dùng file setup cho lần cài đầu, khi sửa chính updater, hoặc khi cần đảm bảo mọi máy đều có đủ thành phần nền.
 - Dùng file zip update cho các bản sửa app thông thường để cập nhật mượt hơn, không chạy lại wizard cài đặt.
+- Nếu tải từ GitHub Actions artifact, file tải về là zip bọc ngoài; hãy giải nén một lần rồi chọn file `KetoanMiniUpdate-<version>-win-x64.zip` bên trong để phát hành trong app. Nếu tải từ GitHub Release asset thì dùng trực tiếp file zip đó.
 - Không tự copy đè file bằng tay trên máy client; để `KetoanMiniUpdater.exe` tự backup, copy và rollback.
 
 ## GitHub Actions
