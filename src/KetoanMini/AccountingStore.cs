@@ -24,6 +24,13 @@ public sealed class AccountingStore
     public CustomerAliasBook CustomerAliases { get; private set; } = CustomerAliasBook.Empty;
     public AppUser? CurrentUser { get; set; }
 
+    // Baseline: tập Id đã biết từ DB (lúc nạp và sau mỗi lần lưu). Giúp Save() — vốn ghi đè
+    // toàn bộ bảng — KHÔNG xóa nhầm bản ghi do nơi khác (vd bản web) thêm vào sau khi đã nạp.
+    private HashSet<Guid> _knownCustomerIds = new();
+    private HashSet<Guid> _knownAliasIds = new();
+    private HashSet<Guid> _knownDocumentIds = new();
+    private HashSet<Guid> _knownPaymentIds = new();
+
     public string DatabasePath => _connectionString;
 
     public AccountingStore(string connectionString)
@@ -58,6 +65,7 @@ public sealed class AccountingStore
         }
 
         Data = ReadAllFromDatabase();
+        CaptureBaseline();
         if (Data.CustomerAliases.Count == 0)
         {
             SeedCustomerAliasesFromFile();
@@ -74,6 +82,7 @@ public sealed class AccountingStore
     public void Save()
     {
         EnsureDatabase();
+        MergeExternalChanges();
         RefreshAliasBook();
         NormalizeReferences();
         RefreshAliasBook();
@@ -197,6 +206,56 @@ public sealed class AccountingStore
         }
 
         transaction.Commit();
+
+        // Sau khi lưu, DB và bộ nhớ đồng bộ → cập nhật baseline.
+        CaptureBaseline();
+    }
+
+    /// <summary>
+    /// Hợp nhất vào bộ nhớ các bản ghi do tiến trình khác (vd bản web) thêm vào DB sau khi
+    /// desktop đã nạp, để <see cref="Save"/> (ghi đè toàn bộ) không xóa nhầm chúng. Chỉ bỏ qua
+    /// đúng những bản ghi desktop đã chủ động xóa (có trong baseline nhưng không còn trong bộ nhớ).
+    /// </summary>
+    private void MergeExternalChanges()
+    {
+        AccountingData dbData;
+        try
+        {
+            dbData = ReadAllFromDatabase();
+        }
+        catch
+        {
+            return; // Không đọc được DB thì giữ hành vi cũ, không chặn việc lưu.
+        }
+
+        var memCustomers = Data.Customers.Select(item => item.Id).ToHashSet();
+        foreach (var customer in dbData.Customers)
+            if (!memCustomers.Contains(customer.Id) && !_knownCustomerIds.Contains(customer.Id))
+                Data.Customers.Add(customer);
+
+        var memAliases = Data.CustomerAliases.Select(item => item.Id).ToHashSet();
+        foreach (var alias in dbData.CustomerAliases)
+            if (!memAliases.Contains(alias.Id) && !_knownAliasIds.Contains(alias.Id))
+                Data.CustomerAliases.Add(alias);
+
+        var memDocuments = Data.Documents.Select(item => item.Id).ToHashSet();
+        foreach (var document in dbData.Documents)
+            if (!memDocuments.Contains(document.Id) && !_knownDocumentIds.Contains(document.Id))
+                Data.Documents.Add(document);
+
+        var memPayments = Data.Payments.Select(item => item.Id).ToHashSet();
+        foreach (var payment in dbData.Payments)
+            if (!memPayments.Contains(payment.Id) && !_knownPaymentIds.Contains(payment.Id))
+                Data.Payments.Add(payment);
+    }
+
+    /// <summary>Ghi lại tập Id hiện có (baseline) sau khi nạp hoặc lưu xong.</summary>
+    private void CaptureBaseline()
+    {
+        _knownCustomerIds = Data.Customers.Select(item => item.Id).ToHashSet();
+        _knownAliasIds = Data.CustomerAliases.Select(item => item.Id).ToHashSet();
+        _knownDocumentIds = Data.Documents.Select(item => item.Id).ToHashSet();
+        _knownPaymentIds = Data.Payments.Select(item => item.Id).ToHashSet();
     }
 
     public IReadOnlyList<Customer> ActiveCustomers()

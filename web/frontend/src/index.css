@@ -1,111 +1,328 @@
+@import "tailwindcss";
+
+/* =========================================================================
+   KetoanMini Web — Hệ thiết kế "Liquid Glass"
+   Bảng màu lấy từ app desktop (WpfTheme.cs): accent sáng #2563EB, tối #11C5BF.
+   ========================================================================= */
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.14);
+  --accent-rgb: 37, 99, 235;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --bg: #eef2f9;
+  --text: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #7c899c;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* Tấm kính */
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.75);
+  --glass-shadow: 0 10px 40px -12px rgba(15, 23, 42, 0.28);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  --sidebar-bg: rgba(13, 21, 40, 0.82);
+  --sidebar-text: #aeb8c8;
+  --sidebar-active: #2563eb;
+
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --purple: #8b5cf6;
+
+  color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
+html[data-theme="dark"] {
+  --accent: #11c5bf;
+  --accent-hover: #18d7d0;
+  --accent-soft: rgba(17, 197, 191, 0.16);
+  --accent-rgb: 17, 197, 191;
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+  --bg: #04060a;
+  --text: #f5f7fa;
+  --text-secondary: #a8b0bd;
+  --text-muted: #7d8794;
+
+  --glass-bg: rgba(18, 24, 33, 0.58);
+  --glass-bg-strong: rgba(20, 27, 37, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 14px 48px -14px rgba(0, 0, 0, 0.7);
+  --glass-highlight: rgba(255, 255, 255, 0.16);
+
+  --sidebar-bg: rgba(5, 7, 11, 0.86);
+  --sidebar-text: #9aa3af;
+  --sidebar-active: #11c5bf;
+
+  --success: #22c55e;
+  color-scheme: dark;
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
 
 body {
-  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, "Roboto", "Helvetica Neue", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+/* ---------- Nền "liquid": các quầng màu nhòe trôi nhẹ phía sau kính ---------- */
+.liquid-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background: var(--bg);
+}
+.liquid-bg::before,
+.liquid-bg::after,
+.liquid-bg .orb {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.55;
+  will-change: transform;
+}
+.liquid-bg::before {
+  width: 46vw; height: 46vw;
+  left: -8vw; top: -10vw;
+  background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), 0.55), transparent 70%);
+  animation: float1 22s ease-in-out infinite;
+}
+.liquid-bg::after {
+  width: 40vw; height: 40vw;
+  right: -6vw; bottom: -12vw;
+  background: radial-gradient(circle at 60% 40%, rgba(139, 92, 246, 0.45), transparent 70%);
+  animation: float2 26s ease-in-out infinite;
+}
+.liquid-bg .orb {
+  width: 32vw; height: 32vw;
+  left: 45vw; top: 35vh;
+  background: radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.35), transparent 70%);
+  animation: float3 30s ease-in-out infinite;
+}
+html[data-theme="dark"] .liquid-bg::before,
+html[data-theme="dark"] .liquid-bg::after,
+html[data-theme="dark"] .liquid-bg .orb { opacity: 0.4; }
+
+@keyframes float1 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(6vw,4vh) scale(1.12)} }
+@keyframes float2 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(-5vw,-3vh) scale(1.08)} }
+@keyframes float3 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(-4vw,5vh) scale(1.15)} }
+
+/* ---------- Tấm kính (glass surface) ---------- */
+.glass {
+  position: relative;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  border-radius: 20px;
+}
+.glass-strong { background: var(--glass-bg-strong); }
+
+/* Glow bám theo con trỏ — tái hiện LiquidGlassBorder của bản desktop.
+   --mx/--my do JS cập nhật theo vị trí chuột (mặc định ở giữa). */
+.glass-glow { --mx: 50%; --my: 50%; isolation: isolate; }
+.glass-glow::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(220px 120px at var(--mx) var(--my),
+    rgba(255,255,255,0.95), rgba(var(--accent-rgb), 0.85) 42%, transparent 75%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+.glass-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(360px 220px at var(--mx) var(--my),
+    rgba(255,255,255,0.18), transparent 60%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.glass-glow:hover::before { opacity: 0.85; }
+.glass-glow:hover::after { opacity: 1; }
+
+/* ---------- Thanh cuộn mảnh ---------- */
+.scroll-thin::-webkit-scrollbar { width: 9px; height: 9px; }
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(var(--accent-rgb), 0.35);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover { background: rgba(var(--accent-rgb), 0.6); background-clip: content-box; }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Tiện ích nhỏ ---------- */
+.accent-text { color: var(--accent); }
+.fade-in { animation: fadeIn 0.4s ease both; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+input, select, textarea, button { font-family: inherit; }
+::placeholder { color: var(--text-muted); }
+
+/* ---------- Sidebar selected item: Liquid Glass indicator ---------- */
+.liquid-sidebar-nav {
+  isolation: isolate;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+.liquid-active-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  border-radius: 14px;
+  contain: layout paint;
+  will-change: transform, width, height;
+  background:
+    linear-gradient(180deg, rgba(236, 248, 255, 0.18) 0%, rgba(190, 227, 255, 0.08) 28%, rgba(4, 16, 35, 0.02) 58%),
+    radial-gradient(120% 80% at 50% -22%, rgba(255, 255, 255, 0.18), rgba(120, 190, 255, 0.07) 36%, transparent 64%),
+    radial-gradient(95% 130% at 105% 35%, rgba(83, 155, 255, 0.18), transparent 56%),
+    linear-gradient(135deg, rgba(35, 72, 122, 0.42), rgba(7, 20, 43, 0.26) 52%, rgba(17, 51, 91, 0.3));
+  border: 1px solid rgba(176, 225, 255, 0.18);
+  box-shadow:
+    0 12px 24px -20px rgba(0, 9, 24, 0.92),
+    0 0 18px rgba(77, 166, 255, 0.13),
+    inset 0 1px 0 rgba(238, 249, 255, 0.34),
+    inset 0 -18px 42px rgba(2, 11, 29, 0.13);
+  backdrop-filter: blur(16px) saturate(155%);
+  -webkit-backdrop-filter: blur(16px) saturate(155%);
+  transition:
+    opacity 0.22s ease,
+    filter 0.34s ease,
+    box-shadow 0.34s ease,
+    background 0.34s ease;
+}
+
+.liquid-active-indicator::before,
+.liquid-active-indicator::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+.liquid-active-indicator::before {
+  background:
+    linear-gradient(112deg,
+      rgba(244, 251, 255, 0.58) 0%,
+      rgba(138, 207, 255, 0.28) 24%,
+      rgba(255, 255, 255, 0.12) 48%,
+      rgba(76, 164, 255, 0.18) 70%,
+      rgba(221, 246, 255, 0.42) 100%);
+  opacity: 0.74;
+  transition: opacity 0.36s ease;
+}
+
+.liquid-active-indicator::after {
+  inset: -1px;
+  padding: 2px;
+  background:
+    conic-gradient(from 0deg,
+      transparent 0deg,
+      transparent 236deg,
+      rgba(151, 215, 255, 0.08) 250deg,
+      rgba(243, 252, 255, 0.86) 262deg,
+      rgba(118, 202, 255, 0.44) 276deg,
+      transparent 294deg,
+      transparent 360deg);
+  opacity: 0.34;
+  filter: blur(0.15px);
+  animation: sidebarEdgeGlint 8.5s linear infinite;
+  transition:
+    opacity 0.45s ease,
+    filter 0.45s ease;
+}
+
+.liquid-sidebar-link {
+  background: transparent;
+  color: var(--sidebar-text);
+}
+
+.liquid-sidebar-link svg,
+.liquid-sidebar-link span {
+  position: relative;
+  z-index: 1;
+  transition:
+    color 0.3s ease,
+    opacity 0.3s ease,
+    filter 0.3s ease;
+}
+
+.liquid-sidebar-link.is-active {
+  color: rgba(244, 250, 255, 0.96);
+}
+
+.liquid-sidebar-link.is-active svg {
+  color: rgba(221, 244, 255, 0.98);
+}
+
+.liquid-sidebar-link.is-active:hover {
+  color: #fff;
+}
+
+.liquid-sidebar-link.is-active:hover svg {
+  color: #f6fcff;
+}
+
+.liquid-sidebar-nav:has(.liquid-sidebar-link.is-active:hover) .liquid-active-indicator {
+  filter: brightness(1.06) saturate(1.12);
+  background:
+    linear-gradient(180deg, rgba(246, 252, 255, 0.23) 0%, rgba(184, 224, 255, 0.1) 30%, rgba(6, 18, 38, 0.03) 60%),
+    radial-gradient(120% 80% at 50% -22%, rgba(255, 255, 255, 0.23), rgba(111, 190, 255, 0.1) 38%, transparent 66%),
+    radial-gradient(95% 130% at 105% 35%, rgba(96, 174, 255, 0.22), transparent 56%),
+    linear-gradient(135deg, rgba(40, 82, 135, 0.46), rgba(8, 22, 46, 0.27) 52%, rgba(20, 58, 99, 0.32));
+  box-shadow:
+    0 14px 28px -20px rgba(0, 8, 22, 0.95),
+    0 0 22px rgba(94, 184, 255, 0.2),
+    inset 0 1px 0 rgba(250, 254, 255, 0.42),
+    inset 0 -18px 42px rgba(2, 11, 29, 0.12);
+}
+
+.liquid-sidebar-nav:has(.liquid-sidebar-link.is-active:hover) .liquid-active-indicator::before {
+  opacity: 0.92;
+}
+
+.liquid-sidebar-nav:has(.liquid-sidebar-link.is-active:hover) .liquid-active-indicator::after {
+  opacity: 0.78;
+  filter: blur(0);
+  animation-duration: 4.7s;
+}
+
+@keyframes sidebarEdgeGlint {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-active-indicator::after {
+    animation-duration: 18s;
   }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
 }
