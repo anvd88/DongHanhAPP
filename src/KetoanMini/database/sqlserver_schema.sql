@@ -582,6 +582,15 @@ BEGIN
 END
 GO
 
+-- Phân loại nguồn phiên: 'Desktop' (app WPF) hay 'Web' (trình duyệt). Nhờ cột này, cơ chế
+-- single-login của desktop chỉ kết thúc phiên desktop khác, không đụng tới phiên web — và
+-- bản web có thể ghi nhận hiện diện online để app desktop nhìn thấy.
+IF COL_LENGTH(N'dbo.user_sessions', N'client_kind') IS NULL
+BEGIN
+    ALTER TABLE dbo.user_sessions ADD client_kind NVARCHAR(20) NOT NULL CONSTRAINT DF_user_sessions_client_kind DEFAULT N'Desktop';
+END
+GO
+
 IF COL_LENGTH(N'dbo.work_access_requests', N'punch_at') IS NULL
 BEGIN
     ALTER TABLE dbo.work_access_requests ADD punch_at DATETIME2(0) NULL;

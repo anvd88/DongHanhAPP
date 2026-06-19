@@ -907,10 +907,12 @@ public sealed class AccountingStore
 
         using (var endOthers = connection.CreateCommand())
         {
+            // Single-login chỉ áp dụng giữa các máy DESKTOP; không kết thúc phiên web
+            // (client_kind = 'Web') để người dùng có thể vừa mở app vừa mở trình duyệt.
             endOthers.CommandText = """
                 UPDATE user_sessions
                 SET is_active = 0, ended_at = @now, end_reason = N'Đăng nhập ở nơi khác'
-                WHERE username = @username AND is_active = 1;
+                WHERE username = @username AND is_active = 1 AND client_kind = N'Desktop';
                 """;
             endOthers.Parameters.AddWithValue("@now", now);
             endOthers.Parameters.AddWithValue("@username", CurrentUser.Username);
@@ -920,8 +922,8 @@ public sealed class AccountingStore
         using (var insert = connection.CreateCommand())
         {
             insert.CommandText = """
-                INSERT INTO user_sessions (session_token, username, machine_name, started_at, last_seen, is_active)
-                VALUES (@token, @username, @machine, @now, @now, 1);
+                INSERT INTO user_sessions (session_token, username, machine_name, started_at, last_seen, is_active, client_kind)
+                VALUES (@token, @username, @machine, @now, @now, 1, N'Desktop');
                 """;
             insert.Parameters.AddWithValue("@token", token);
             insert.Parameters.AddWithValue("@username", CurrentUser.Username);
