@@ -40,7 +40,7 @@ export function Login() {
             CP
           </div>
           <h1 className="text-2xl font-bold text-[var(--text)]">Công ty TNHH Inox Cường Phát</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">Phần mềm kế toán KetoanMini · Bản web</p>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">Phần mềm kế toán</p>
         </div>
 
         <form onSubmit={submit} className="space-y-4">

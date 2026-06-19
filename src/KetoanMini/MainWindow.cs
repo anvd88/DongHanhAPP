@@ -11,6 +11,7 @@ public sealed class MainWindow : Wpf.Window
 {
     private readonly AccountingStore _store;
     private readonly GiaCongStore _giaCongStore;
+    private readonly RealtimeChangesService _realtimeChanges;
     private readonly AppUser _currentUser;
     private readonly Dictionary<string, Wpf.UIElement> _pages = new();
     private WpfControls.ContentControl _content = null!;
@@ -22,11 +23,14 @@ public sealed class MainWindow : Wpf.Window
     private WpfControls.TextBlock _userNameText = null!;
 
     private WpfThreading.DispatcherTimer? _shiftTimer;
+    private WpfThreading.DispatcherTimer? _realtimeRefreshTimer;
     private SessionControlService? _sessionControl;
     private string _sessionToken = "";
     private string _activeKey = "dashboard";
     private bool _forcedLogout;
     private bool _closeConfirmed;
+    private bool _realtimeRefreshRunning;
+    private bool _realtimeRefreshPending;
     private int _shiftSeconds;
     private DateTime? _otApprovedAt;
     private int _usersToken = int.MinValue;
@@ -36,6 +40,7 @@ public sealed class MainWindow : Wpf.Window
 
     private static readonly TimeSpan WorkStart = new(8, 0, 0);
     private static readonly TimeSpan WorkEnd = new(17, 0, 0);
+    private static readonly string[] DataPageKeys = ["dashboard", "ketoan", "banhang", "baocao", "saoluu"];
 
     public bool LogoutRequested { get; private set; }
 
@@ -45,6 +50,8 @@ public sealed class MainWindow : Wpf.Window
         _currentUser = user;
         _giaCongStore = new GiaCongStore(store.DatabasePath);
         _giaCongStore.EnsureGiaCongTables();
+        _realtimeChanges = new RealtimeChangesService(DatabaseConnectionConfig.LoadRealtimeHubUrl(store.DatabasePath));
+        _realtimeChanges.Changed += OnRealtimeChanged;
 
         try { _sessionToken = _store.StartSession(Environment.MachineName); } catch { _sessionToken = ""; }
         _sessionControl = new SessionControlService();
@@ -70,6 +77,7 @@ public sealed class MainWindow : Wpf.Window
             Navigate("dashboard");
             BeginCheckForUpdates();
             StartWorkShiftTimer();
+            _realtimeChanges.Start();
         };
     }
 
@@ -636,6 +644,87 @@ public sealed class MainWindow : Wpf.Window
         _shiftTimer.Start();
     }
 
+    private void OnRealtimeChanged(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnRealtimeChanged(sender, e)));
+            return;
+        }
+
+        ScheduleRealtimeRefresh();
+    }
+
+    private void ScheduleRealtimeRefresh()
+    {
+        _realtimeRefreshTimer ??= new WpfThreading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+
+        _realtimeRefreshTimer.Tick -= RealtimeRefreshTimerTick;
+        _realtimeRefreshTimer.Tick += RealtimeRefreshTimerTick;
+        _realtimeRefreshTimer.Stop();
+        _realtimeRefreshTimer.Start();
+    }
+
+    private void RealtimeRefreshTimerTick(object? sender, EventArgs e)
+    {
+        _realtimeRefreshTimer?.Stop();
+        _ = RefreshFromRealtimeAsync();
+    }
+
+    private async Task RefreshFromRealtimeAsync()
+    {
+        if (_realtimeRefreshRunning)
+        {
+            _realtimeRefreshPending = true;
+            return;
+        }
+
+        _realtimeRefreshRunning = true;
+        try
+        {
+            do
+            {
+                _realtimeRefreshPending = false;
+                try { await Task.Run(() => _store.Load()); }
+                catch { }
+
+                ApplyRealtimeRefreshToUi();
+            }
+            while (_realtimeRefreshPending);
+        }
+        finally
+        {
+            _realtimeRefreshRunning = false;
+        }
+    }
+
+    private void ApplyRealtimeRefreshToUi()
+    {
+        RefreshNotifCount();
+        RefreshOvertimeFlag();
+
+        foreach (var key in DataPageKeys)
+        {
+            _pages.Remove(key);
+        }
+
+        if (DataPageKeys.Contains(_activeKey))
+        {
+            Navigate(_activeKey);
+        }
+
+        _giaCongWpfPage?.RefreshDataQuiet();
+
+        if (_currentUser.IsAdmin)
+        {
+            try { _usersToken = _store.GetUsersChangeToken(); } catch { }
+            _nhanSuWpfPage?.RefreshUsersQuiet();
+        }
+    }
+
     private void RefreshOvertimeFlag()
     {
         _otApprovedAt = null;
@@ -856,6 +945,8 @@ public sealed class MainWindow : Wpf.Window
     protected override void OnClosed(EventArgs e)
     {
         _shiftTimer?.Stop();
+        _realtimeRefreshTimer?.Stop();
+        _realtimeChanges.Dispose();
         _sessionControl?.Dispose();
         if (!_forcedLogout)
         {
