@@ -258,7 +258,8 @@ Khuyến nghị vận hành:
 
 - `.github/workflows/dotnet-desktop.yml`: build Debug khi push/PR vào `main`.
 - `.github/workflows/publish-release.yml`: publish single-file `.exe`.
-- `.github/workflows/build-installer.yml`: build installer `.exe` bằng Inno Setup.
+- `.github/workflows/build-installer.yml`: build installer `.exe`, bộ gỡ và gói update `.zip`.
+- `.github/workflows/build-update-package.yml`: chỉ build gói update `.zip` cho các lần cập nhật thường ngày.
 
 ## Dữ Liệu Và Bảo Mật
 
