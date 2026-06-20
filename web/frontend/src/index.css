@@ -128,6 +128,12 @@ html[data-theme="dark"] .liquid-bg .orb { opacity: 0.4; }
 }
 .glass-strong { background: var(--glass-bg-strong); }
 
+.profile-menu-popover {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+}
+
 /* Glow bám theo con trỏ — tái hiện LiquidGlassBorder của bản desktop.
    --mx/--my do JS cập nhật theo vị trí chuột (mặc định ở giữa). */
 .glass-glow { --mx: 50%; --my: 50%; isolation: isolate; }
@@ -325,4 +331,381 @@ input, select, textarea, button { font-family: inherit; }
   .liquid-active-indicator::after {
     animation-duration: 18s;
   }
+}
+
+/* ---------- Gia cong toolbar: transparent Liquid Glass ---------- */
+.giacong-liquid-toolbar {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 68px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  overflow: hidden;
+  border-radius: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(232, 243, 255, 0.13) 44%, rgba(189, 219, 255, 0.08)),
+    radial-gradient(120% 140% at 16% -55%, rgba(255, 255, 255, 0.42), transparent 58%),
+    radial-gradient(90% 130% at 84% 145%, rgba(108, 164, 255, 0.13), transparent 62%);
+  box-shadow:
+    0 22px 54px -34px rgba(63, 101, 153, 0.36),
+    0 8px 24px -24px rgba(27, 45, 78, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 rgba(116, 144, 186, 0.08);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+}
+
+.giacong-liquid-toolbar::before,
+.giacong-liquid-toolbar::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.giacong-liquid-toolbar::before {
+  inset: 1px 18px auto;
+  height: 44%;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.44), transparent);
+  opacity: 0.62;
+}
+
+.giacong-liquid-toolbar::after {
+  inset: auto 18px -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(103, 135, 185, 0.2), transparent);
+}
+
+.giacong-liquid-toolbar > * {
+  position: relative;
+  z-index: 1;
+}
+
+.giacong-liquid-toolbar .liquid-tabs {
+  --lt-surface: rgba(255, 255, 255, 0.12);
+  --lt-border: rgba(255, 255, 255, 0.54);
+  --lt-shadow: 0 10px 28px -24px rgba(45, 74, 115, 0.42);
+  --lt-top: rgba(255, 255, 255, 0.74);
+  --lt-bottom: rgba(112, 134, 174, 0.06);
+  --lt-ind-top: rgba(255, 255, 255, 0.38);
+  --lt-ind-bottom: rgba(214, 230, 255, 0.12);
+  --lt-ind-border: rgba(255, 255, 255, 0.72);
+  --lt-ind-hl: rgba(255, 255, 255, 0.9);
+  --lt-ind-glow: 0 11px 22px -14px rgba(91, 108, 224, 0.42), 0 2px 10px -7px rgba(77, 124, 255, 0.28);
+  --lt-ind-lift: 0 12px 26px -16px rgba(72, 92, 135, 0.42);
+
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 42px;
+  padding: 4px;
+  border-color: var(--lt-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(220, 235, 255, 0.05)),
+    var(--lt-surface);
+  box-shadow:
+    var(--lt-shadow),
+    inset 0 1px 0 var(--lt-top),
+    inset 0 -1px 0 var(--lt-bottom);
+  backdrop-filter: blur(14px) saturate(145%);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+}
+
+.giacong-liquid-toolbar .liquid-tabs-tab {
+  padding: 8px 18px;
+  color: #5f6d82;
+  text-shadow: none;
+}
+
+.giacong-liquid-toolbar .liquid-tabs-tab:hover:not([data-active="true"]) {
+  color: #354258;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(214, 232, 255, 0.06));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.giacong-liquid-toolbar .liquid-tabs-tab[data-active="true"] {
+  color: #263244;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+.giacong-liquid-toolbar .liquid-tabs-indicator {
+  top: 4px;
+  height: calc(100% - 8px);
+  border-color: var(--lt-ind-border);
+  background:
+    radial-gradient(120% 95% at 50% -35%, rgba(255, 255, 255, 0.46), transparent 62%),
+    radial-gradient(80% 100% at 82% 120%, rgba(122, 144, 255, 0.12), transparent 62%),
+    linear-gradient(180deg, var(--lt-ind-top), var(--lt-ind-bottom));
+  box-shadow:
+    inset 0 1px 0 var(--lt-ind-hl),
+    inset 0 -1px 0 rgba(105, 124, 166, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    var(--lt-ind-glow),
+    var(--lt-ind-lift);
+  backdrop-filter: blur(8px) saturate(150%);
+  -webkit-backdrop-filter: blur(8px) saturate(150%);
+}
+
+.giacong-liquid-toolbar .liquid-tabs-indicator::before {
+  content: "";
+  position: absolute;
+  inset: 1px 10px auto;
+  height: 46%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent);
+  pointer-events: none;
+  opacity: 0.72;
+}
+
+.giacong-liquid-toolbar .liquid-tabs-indicator::after {
+  background: linear-gradient(108deg, transparent 0%, rgba(255, 255, 255, 0.22) 48%, transparent 100%);
+  opacity: calc(0.12 + 0.36 * var(--speed, 0));
+}
+
+.giacong-liquid-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 300px;
+  max-width: 430px;
+  min-width: min(100%, 250px);
+  min-height: 42px;
+  margin-left: auto;
+  overflow: hidden;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.64);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(222, 237, 255, 0.07)),
+    rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.74),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 12px 24px -22px rgba(58, 89, 136, 0.38);
+  backdrop-filter: blur(15px) saturate(145%);
+  -webkit-backdrop-filter: blur(15px) saturate(145%);
+  transition:
+    border-color 0.26s ease,
+    box-shadow 0.26s ease,
+    background 0.26s ease;
+}
+
+.giacong-liquid-search:focus-within {
+  border-color: rgba(216, 232, 255, 0.88);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.23), rgba(222, 237, 255, 0.09)),
+    rgba(255, 255, 255, 0.11);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.64),
+    0 0 0 3px rgba(94, 126, 255, 0.08),
+    0 14px 30px -24px rgba(72, 94, 184, 0.42);
+}
+
+.giacong-liquid-search-icon {
+  position: absolute;
+  left: 17px;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translateY(-50%);
+  color: #74859d;
+  pointer-events: none;
+}
+
+.giacong-liquid-search-input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 10px 18px 10px 48px;
+  font: inherit;
+  font-size: 0.925rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #334155;
+}
+
+.giacong-liquid-search-input::placeholder {
+  color: #7f8fa6;
+}
+
+html[data-theme="dark"] .giacong-liquid-toolbar {
+  border-color: rgba(255, 255, 255, 0.13);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(93, 130, 180, 0.04) 48%, rgba(5, 12, 27, 0.08)),
+    radial-gradient(120% 140% at 18% -55%, rgba(255, 255, 255, 0.12), transparent 58%),
+    radial-gradient(90% 130% at 84% 145%, rgba(87, 136, 255, 0.12), transparent 62%);
+  box-shadow:
+    0 24px 56px -36px rgba(0, 0, 0, 0.82),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14);
+}
+
+html[data-theme="dark"] .giacong-liquid-toolbar .liquid-tabs-tab {
+  color: rgba(214, 224, 238, 0.72);
+}
+
+html[data-theme="dark"] .giacong-liquid-toolbar .liquid-tabs-tab:hover:not([data-active="true"]),
+html[data-theme="dark"] .giacong-liquid-toolbar .liquid-tabs-tab[data-active="true"] {
+  color: rgba(248, 252, 255, 0.94);
+}
+
+html[data-theme="dark"] .giacong-liquid-search-input {
+  color: rgba(247, 250, 255, 0.92);
+}
+
+html[data-theme="dark"] .giacong-liquid-search-input::placeholder {
+  color: rgba(174, 188, 207, 0.72);
+}
+
+@media (max-width: 760px) {
+  .giacong-liquid-toolbar {
+    align-items: stretch;
+    padding: 10px;
+    border-radius: 22px;
+  }
+
+  .giacong-liquid-toolbar .liquid-tabs {
+    width: 100%;
+  }
+
+  .giacong-liquid-search {
+    width: 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+}
+
+/* ─────────────── Liquid Glass tabs ─────────────── */
+/* Khung capsule: nền kính bán trong suốt, viền mảnh sáng nhẹ, highlight mép trên, bóng mềm. */
+.liquid-tabs {
+  /* Tông kính cho NỀN SÁNG (mặc định): nền gần như trong suốt, dựa vào viền + bóng tối rất nhẹ.
+     Nền tối ghi đè ở khối html[data-theme="dark"] bên dưới (highlight trắng + ánh ngọc nhẹ). */
+  --lt-surface: rgba(255, 255, 255, 0.02);
+  --lt-border: rgba(90, 110, 150, 0.16);
+  --lt-shadow: 0 6px 20px -12px rgba(15, 23, 42, 0.16);
+  --lt-top: rgba(255, 255, 255, 0.45);
+  --lt-bottom: rgba(15, 23, 42, 0.03);
+  --lt-ind-top: rgba(255, 255, 255, 0.10);
+  --lt-ind-bottom: rgba(255, 255, 255, 0.02);
+  --lt-ind-border: rgba(160, 185, 225, 0.40);
+  --lt-ind-hl: rgba(255, 255, 255, 0.6);
+  --lt-ind-glow: 0 0 0 0 transparent;
+  /* Bóng 2 lớp: lan rộng mềm + tiếp xúc gần → pill nổi hẳn trên nền trong = rõ liquid glass. */
+  --lt-ind-lift: 0 8px 20px -6px rgba(15, 23, 42, 0.30), 0 2px 6px -2px rgba(15, 23, 42, 0.22);
+
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 5px;
+  border-radius: 9999px;
+  isolation: isolate;
+  overflow-x: auto;
+  scrollbar-width: none;
+  touch-action: pan-y;
+  background: var(--lt-surface);
+  border: 1px solid var(--lt-border);
+  box-shadow: var(--lt-shadow), inset 0 1px 0 var(--lt-top), inset 0 -1px 0 var(--lt-bottom);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+}
+.liquid-tabs::-webkit-scrollbar { display: none; }
+
+html[data-theme="dark"] .liquid-tabs {
+  --lt-surface: rgba(255, 255, 255, 0.05);
+  --lt-border: rgba(255, 255, 255, 0.12);
+  --lt-shadow: 0 12px 32px -14px rgba(0, 0, 0, 0.6);
+  --lt-top: rgba(255, 255, 255, 0.18);
+  --lt-bottom: rgba(0, 0, 0, 0.10);
+  --lt-ind-top: rgba(255, 255, 255, 0.11);
+  --lt-ind-bottom: rgba(255, 255, 255, 0.02);
+  --lt-ind-border: rgba(255, 255, 255, 0.24);
+  --lt-ind-hl: rgba(255, 255, 255, 0.4);
+  --lt-ind-glow: 0 0 16px -3px rgba(var(--accent-rgb), 0.28); /* ánh ngọc rất nhẹ */
+  --lt-ind-lift: 0 9px 22px -6px rgba(0, 0, 0, 0.6), 0 2px 7px -2px rgba(0, 0, 0, 0.45);
+}
+
+/* Thanh chọn: lớp kính nổi trong suốt (KHÔNG nền trắng đục), blur nền, viền mảnh, glow xanh ngọc nhẹ. */
+.liquid-tabs-indicator {
+  position: absolute;
+  top: 5px;
+  left: 0;
+  height: calc(100% - 10px);
+  width: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform, width;
+  /* Lớp kính trong suốt — rõ hơn khung ngoài nhưng vẫn xuyên thấu. KHÔNG nền xanh/trắng đục. */
+  background: linear-gradient(180deg, var(--lt-ind-top), var(--lt-ind-bottom));
+  border: 1px solid var(--lt-ind-border);
+  box-shadow:
+    inset 0 1px 0 var(--lt-ind-hl),
+    var(--lt-ind-glow),
+    var(--lt-ind-lift);
+  backdrop-filter: blur(5px) saturate(135%);
+  -webkit-backdrop-filter: blur(5px) saturate(135%);
+  overflow: hidden;
+}
+/* Ánh sáng động: vệt sáng dịch theo hướng & tốc độ chuyển động, xong thì trở về cân bằng. */
+.liquid-tabs-indicator::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 0%, rgba(255, 255, 255, 0.16) 50%, transparent 100%);
+  background-size: 55% 100%;
+  background-repeat: no-repeat;
+  background-position: calc(50% + var(--vx, 0) * 45%) 0;
+  opacity: calc(0.16 + 0.5 * var(--speed, 0));
+  transition: opacity 0.25s ease;
+}
+
+/* Tab: chỉ là chữ trên lớp kính; không có capsule riêng cho từng tab. */
+.liquid-tabs-tab {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 9999px;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.25s ease, background-color 0.25s ease, box-shadow 0.25s ease, text-shadow 0.25s ease;
+}
+/* Hover tab chưa chọn: chữ sáng hơn + lớp kính rất mờ (không phải capsule đặc). */
+.liquid-tabs-tab:hover:not([data-active="true"]) {
+  color: var(--text);
+  background: rgba(127, 127, 127, 0.10);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+/* Tab đang chọn: chữ rõ & sáng hơn, glow xanh ngọc tinh tế (không phải neon). */
+.liquid-tabs-tab[data-active="true"] {
+  color: var(--text);
+  text-shadow: 0 0 12px rgba(var(--accent-rgb), 0.40);
+}
+.liquid-tabs-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.55);
 }

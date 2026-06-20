@@ -2,21 +2,42 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { subscribeRealtime } from "./realtime";
 
+type ReloadOptions = {
+  silent?: boolean;
+};
+
 /** Hook fetch GET đơn giản với trạng thái loading/error + refetch. */
 export function useApi<T>(path: string | null, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const dataRef = useRef<T | null>(null);
+  const pathRef = useRef<string | null>(null);
 
-  const reload = useCallback(() => {
+  const reload = useCallback((options: ReloadOptions = {}) => {
     if (!path) return;
-    setLoading(true);
-    setError(null);
+    const pathChanged = pathRef.current !== path;
+    const silent = options.silent || (dataRef.current !== null && !pathChanged);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     api
       .get<T>(path)
-      .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : "Lỗi tải dữ liệu"))
-      .finally(() => setLoading(false));
+      .then((next) => {
+        pathRef.current = path;
+        dataRef.current = next;
+        setData(next);
+        setError(null);
+      })
+      .catch((e) => {
+        if (!silent || dataRef.current === null) {
+          setError(e instanceof Error ? e.message : "Lỗi tải dữ liệu");
+        }
+      })
+      .finally(() => {
+        if (!silent) setLoading(false);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, ...deps]);
 
@@ -28,7 +49,7 @@ export function useApi<T>(path: string | null, deps: unknown[] = []) {
     if (!path) return;
     const unsub = subscribeRealtime(() => {
       clearTimeout(timer.current);
-      timer.current = setTimeout(reload, 250);
+      timer.current = setTimeout(() => reload({ silent: true }), 250);
     });
     return () => {
       unsub();

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, type ChangeEvent, type ReactNode } from "react";
 import { Plus, Search, Trash2, RefreshCw } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { Table } from "../components/Table";
-import { Button, Input, Spinner, Badge } from "../components/ui";
+import { Button, Spinner, Badge } from "../components/ui";
+import { LiquidTabs as LiquidGlassTabs } from "../components/LiquidTabs";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
 import { money, date } from "../lib/format";
@@ -43,32 +44,16 @@ export function GiaCong() {
         subtitle="Quản lý phiếu gia công xuất / nhập"
         actions={
           <>
-            <Button variant="ghost" onClick={reload}><RefreshCw className="h-4 w-4" /> Làm mới</Button>
+            <Button variant="ghost" onClick={() => reload()}><RefreshCw className="h-4 w-4" /> Làm mới</Button>
             <Button onClick={() => setEditing("new")}><Plus className="h-4 w-4" /> Tạo phiếu</Button>
           </>
         }
       />
 
-      <GlassCard className="mb-4 flex flex-wrap items-center gap-3 p-3">
-        <div className="flex flex-wrap gap-1.5">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setFilter(t.key)}
-              className={`rounded-xl px-3.5 py-2 text-sm font-semibold transition-all ${
-                filter === t.key ? "text-white" : "text-[var(--text-secondary)] hover:bg-black/5 dark:hover:bg-white/10"
-              }`}
-              style={filter === t.key ? { background: "var(--accent)" } : undefined}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div className="relative ml-auto max-w-xs flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm mã phiếu, đối tác…" className="pl-9" />
-        </div>
-      </GlassCard>
+      <LiquidGlassToolbar>
+        <LiquidGlassTabs tabs={TABS} value={filter} onChange={setFilter} />
+        <LiquidGlassSearch value={search} onChange={(e) => setSearch(e.target.value)} />
+      </LiquidGlassToolbar>
 
       <GlassCard className="overflow-hidden p-0">
         {loading ? (
@@ -111,5 +96,30 @@ export function GiaCong() {
         <GiaCongEditor id={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />
       )}
     </div>
+  );
+}
+
+function LiquidGlassToolbar({ children }: { children: ReactNode }) {
+  return <div className="giacong-liquid-toolbar">{children}</div>;
+}
+
+function LiquidGlassSearch({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (event: ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <label className="giacong-liquid-search">
+      <Search className="giacong-liquid-search-icon" aria-hidden="true" />
+      <input
+        value={value}
+        onChange={onChange}
+        aria-label="Tìm mã phiếu, đối tác"
+        placeholder="Tìm mã phiếu, đối tác..."
+        className="giacong-liquid-search-input"
+      />
+    </label>
   );
 }

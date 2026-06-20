@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Search, Moon, Sun, Bell, LogOut, ChevronDown, Menu } from "lucide-react";
+import { Search, Moon, Sun, Bell, LogOut, ChevronDown, Menu, UserCog, KeyRound } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
 import { initials } from "../lib/format";
 import { isAdmin } from "../lib/types";
+import { EditProfileModal, ChangePasswordModal } from "./AccountModals";
 
 export function Header({ onMenu }: { onMenu: () => void }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [modal, setModal] = useState<null | "profile" | "password">(null);
   const now = new Date();
 
   return (
@@ -62,10 +64,23 @@ export function Header({ onMenu }: { onMenu: () => void }) {
         {menuOpen && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-            <div className="glass glass-strong fade-in absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-2xl p-1.5">
+            <div className="profile-menu-popover glass glass-strong fade-in z-20 w-56 overflow-hidden rounded-2xl p-1.5">
               <div className="px-3 py-2 text-xs text-[var(--text-muted)]">
                 Đăng nhập với <span className="font-semibold text-[var(--text-secondary)]">{user?.username}</span>
               </div>
+              <button
+                onClick={() => { setMenuOpen(false); setModal("profile"); }}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-black/10 dark:hover:bg-white/[0.12]"
+              >
+                <UserCog className="h-4 w-4" /> Sửa hồ sơ
+              </button>
+              <button
+                onClick={() => { setMenuOpen(false); setModal("password"); }}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-black/10 dark:hover:bg-white/[0.12]"
+              >
+                <KeyRound className="h-4 w-4" /> Đổi mật khẩu
+              </button>
+              <div className="my-1 border-t border-[var(--glass-border)]" />
               <button
                 onClick={logout}
                 className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--danger)] transition-colors hover:bg-red-500/10"
@@ -76,6 +91,9 @@ export function Header({ onMenu }: { onMenu: () => void }) {
           </>
         )}
       </div>
+
+      {modal === "profile" && <EditProfileModal onClose={() => setModal(null)} />}
+      {modal === "password" && <ChangePasswordModal onClose={() => setModal(null)} />}
     </header>
   );
 }

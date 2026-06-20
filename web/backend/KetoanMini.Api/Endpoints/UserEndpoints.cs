@@ -17,26 +17,39 @@ public static class UserEndpoints
         g.MapGet("/", async (Database db, string? search, string? role) =>
         {
             await using var conn = await db.OpenAsync();
-            var where = "WHERE is_deleted = 0";
-            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username LIKE @s OR full_name LIKE @s)";
+            var where = "WHERE u.is_deleted = 0";
+            if (!string.IsNullOrWhiteSpace(search)) where += " AND (u.username LIKE @s OR u.full_name LIKE @s)";
             where += role switch
             {
-                "Admin" => " AND role = N'Admin'",
-                "User" => " AND role = N'User'",
-                "Pending" => " AND approval_status = N'Pending'",
-                "Locked" => " AND is_active = 0",
+                "Admin" => " AND u.role = N'Admin'",
+                "User" => " AND u.role = N'User'",
+                "Pending" => " AND u.approval_status = N'Pending'",
+                "Locked" => " AND u.is_active = 0",
                 _ => ""
             };
 
             var list = new List<UserAdminDto>();
             var cmd = conn.Cmd(
-                $@"SELECT id, username, full_name, role, is_active, approval_status, created_at
-                   FROM dbo.app_users {where} ORDER BY created_at DESC");
+                $@"SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.approval_status, u.created_at,
+                          CAST(ISNULL(p.is_online, 0) AS bit) AS is_online,
+                          p.last_seen
+                   FROM dbo.app_users u
+                   OUTER APPLY (
+                       SELECT
+                           MAX(CASE WHEN us.is_active = 1 AND us.last_seen >= DATEADD(SECOND, -90, SYSDATETIME()) THEN 1 ELSE 0 END) AS is_online,
+                           MAX(us.last_seen) AS last_seen
+                       FROM dbo.user_sessions us
+                       WHERE us.username = u.username
+                         AND (us.last_seen >= CONVERT(date, SYSDATETIME()) OR us.is_active = 1)
+                   ) p
+                   {where}
+                   ORDER BY u.created_at DESC");
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
                 list.Add(new UserAdminDto(r.Guid("id"), r.Str("username"), r.Str("full_name"),
-                    r.Str("role"), r.Bool("is_active"), r.Str("approval_status"), r.DtNull("created_at")));
+                    r.Str("role"), r.Bool("is_active"), r.Str("approval_status"), r.DtNull("created_at"),
+                    r.Bool("is_online"), r.DtNull("last_seen")));
             return Results.Ok(list);
         });
 
