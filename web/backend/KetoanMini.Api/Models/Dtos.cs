@@ -63,6 +63,7 @@ public record DangKyKhuonMatRequest(string Username, string FullName, string Ima
 public record FaceNguoiDungDto(string Username, string FullName, int SoMau, DateTime? CreatedAt);
 public record FaceRegistrationLogDto(long Id, string Username, string FullName, DateTime CreatedAt, string CreatedBy);
 public record NhanDienRequest(string ImageBase64);
+public record FacePoseDto(bool Found, double Yaw, double Pitch);
 public record NhanDienResult(bool Matched, string? Username, string? FullName, double Similarity,
     string? Loai, DateTime? OccurredAt, string Message);
 public record ChamCongLogDto(long Id, string Username, string FullName, string Loai, double Similarity,

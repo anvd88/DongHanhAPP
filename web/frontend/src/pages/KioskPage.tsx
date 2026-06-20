@@ -22,7 +22,7 @@ export function KioskPage() {
         </Link>
       </header>
 
-      <CheckInScanner />
+      <CheckInScanner returnToLoginOnOk />
     </div>
   );
 }
