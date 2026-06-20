@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, UserPlus } from "lucide-react";
+import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, UserPlus, Wifi, WifiOff } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { Table } from "../components/Table";
@@ -7,7 +7,7 @@ import { Modal } from "../components/Modal";
 import { Button, Input, Select, Field, Spinner, Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
-import { date } from "../lib/format";
+import { date, dateTime } from "../lib/format";
 import type { UserAdmin } from "../lib/types";
 
 const ROLES = [
@@ -28,7 +28,7 @@ export function NhanSu() {
   );
 
   const act = async (fn: () => Promise<unknown>) => {
-    try { await fn(); reload(); } catch (e) { alert(e instanceof Error ? e.message : "Lỗi"); }
+    try { await fn(); reload({ silent: true }); } catch (e) { alert(e instanceof Error ? e.message : "Lỗi"); }
   };
   const resetPw = async (u: UserAdmin) => {
     try {
@@ -69,6 +69,15 @@ export function NhanSu() {
               { header: "Tên đăng nhập", cell: (r) => <span className="font-semibold">{r.username}</span> },
               { header: "Họ tên", cell: (r) => r.fullName || "—" },
               { header: "Vai trò", cell: (r) => <Badge color={r.role === "Admin" ? "purple" : "muted"}>{r.role}</Badge> },
+              { header: "Online", cell: (r) => (
+                <div className="inline-flex min-w-[112px] flex-col gap-1">
+                  <Badge color={r.isOnline ? "success" : "muted"}>
+                    {r.isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+                    {r.isOnline ? "Online" : "Offline"}
+                  </Badge>
+                  {r.lastSeen && <span className="text-xs text-[var(--text-muted)]">{dateTime(r.lastSeen)}</span>}
+                </div>
+              ) },
               { header: "Trạng thái", cell: (r) =>
                 r.approvalStatus === "Pending" ? <Badge color="warning">Chờ duyệt</Badge>
                 : !r.isActive ? <Badge color="danger">Đã khóa</Badge>
@@ -93,7 +102,7 @@ export function NhanSu() {
         )}
       </GlassCard>
 
-      {adding && <AddUser onClose={() => setAdding(false)} onSaved={() => { setAdding(false); reload(); }} />}
+      {adding && <AddUser onClose={() => setAdding(false)} onSaved={() => { setAdding(false); reload({ silent: true }); }} />}
     </div>
   );
 }

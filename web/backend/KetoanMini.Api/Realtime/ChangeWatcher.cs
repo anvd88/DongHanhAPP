@@ -27,6 +27,8 @@ public sealed class ChangeWatcher(
             (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, name, is_active))), '0') FROM dbo.customers), '|',
             (SELECT COUNT(*) FROM dbo.app_users), '|',
             (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, role, is_active, approval_status, is_deleted))), '0') FROM dbo.app_users), '|',
+            (SELECT COUNT(*) FROM (SELECT username FROM dbo.user_sessions WHERE is_active = 1 AND last_seen >= DATEADD(SECOND, -90, SYSDATETIME()) GROUP BY username) online_users), '|',
+            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(username))), '0') FROM (SELECT username FROM dbo.user_sessions WHERE is_active = 1 AND last_seen >= DATEADD(SECOND, -90, SYSDATETIME()) GROUP BY username) online_users), '|',
             (SELECT COUNT(*) FROM dbo.gia_cong_phieu), '|',
             (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, trang_thai, tien_do, doi_tac))), '0') FROM dbo.gia_cong_phieu), '|',
             (SELECT COUNT(*) FROM dbo.gia_cong_hang_hoa), '|',

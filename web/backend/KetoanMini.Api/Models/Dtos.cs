@@ -4,6 +4,8 @@ namespace KetoanMini.Api.Models;
 public record LoginRequest(string Username, string Password);
 public record LoginResponse(string Token, UserDto User);
 public record HeartbeatRequest(string? Sid);
+public record UpdateProfileRequest(string FullName);
+public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record UserDto(Guid Id, string Username, string FullName, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt)
 {
@@ -37,7 +39,7 @@ public record CustomerDto(Guid Id, string Name, string TaxCode, string Phone, st
 
 // ----- Users (Nhân sự) -----
 public record UserAdminDto(Guid Id, string Username, string FullName, string Role, bool IsActive,
-    string ApprovalStatus, DateTime? CreatedAt);
+    string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen);
 public record CreateUserRequest(string Username, string FullName, string Password, string Role);
 public record SetLockRequest(bool Locked);
 public record ResetPasswordResponse(string Code);

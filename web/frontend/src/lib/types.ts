@@ -79,6 +79,8 @@ export interface UserAdmin {
   isActive: boolean;
   approvalStatus: string;
   createdAt?: string;
+  isOnline: boolean;
+  lastSeen?: string;
 }
 
 export interface GiaCongLine {
