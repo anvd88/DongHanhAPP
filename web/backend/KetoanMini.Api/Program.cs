@@ -25,7 +25,6 @@ builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<TokenService>();
 
 // Bộ máy nhận diện khuôn mặt cho chấm công — OpenCV YuNet + SFace ONNX (nhận diện THẬT).
-// Nếu máy thiếu model/thư viện, có thể đổi tạm về PlaceholderFaceEngine để chạy thử luồng.
 // Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
 builder.Services.AddSingleton<IFaceEngine, OpenCvSFaceEngine>();
 

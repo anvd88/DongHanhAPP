@@ -127,14 +127,14 @@ public static class ChamCongEndpoints
             return Results.Ok(new { message = "Đã lưu mẫu khuôn mặt." });
         }).RequireAuthorization(p => p.RequireRole("Admin"));
 
-        // Ước lượng hướng mặt (cho wizard quét tự động kiểm tra tư thế trước khi lưu mẫu). Admin.
+        // Ước lượng hướng mặt. Kiosk dùng để nhắc người dùng nhìn thẳng trước khi nhận diện.
         g.MapPost("/huongmat", (NhanDienRequest req, IFaceEngine engine) =>
         {
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
                 return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
             var pose = engine.EstimatePose(bytes);
             return Results.Ok(pose is { } p ? new FacePoseDto(true, p.Yaw, p.Pitch) : new FacePoseDto(false, 0, 0));
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).AllowAnonymous();
 
         // Xóa toàn bộ mẫu khuôn mặt của 1 nhân viên (Admin).
         g.MapDelete("/dangky/{username}", async (string username, ClaimsPrincipal u, Database db) =>

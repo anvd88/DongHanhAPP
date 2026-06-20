@@ -159,6 +159,424 @@ html[data-theme="dark"] .cc-banner { color: #fbbf24; }
   accent-color: rgb(var(--accent-rgb));
 }
 
+/* Kiosk chấm công tại màn hình đăng nhập */
+.cc-kiosk-page {
+  min-height: 100dvh;
+  height: 100dvh;
+  width: 100%;
+  overflow-y: auto;
+  padding: max(1.1rem, env(safe-area-inset-top)) clamp(1rem, 4.8vw, 3.5rem) max(1.1rem, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: clamp(1.45rem, 4.2vh, 3.25rem);
+  background:
+    radial-gradient(circle at 8% 12%, rgba(37, 99, 235, 0.18), transparent 32%),
+    radial-gradient(circle at 88% 76%, rgba(20, 184, 166, 0.2), transparent 36%),
+    linear-gradient(135deg, rgba(249, 252, 255, 0.96), rgba(235, 243, 255, 0.9) 48%, rgba(231, 250, 249, 0.86));
+}
+
+.cc-kiosk-header,
+.cc-kiosk-main {
+  width: min(100%, 820px);
+  margin: 0 auto;
+}
+
+.cc-kiosk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: clamp(0.85rem, 3.6vh, 2.4rem);
+}
+
+.cc-kiosk-heading {
+  min-width: 0;
+}
+
+.cc-kiosk-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.cc-kiosk-title-row h1 {
+  margin: 0;
+  color: #08245a;
+  font-size: clamp(1.85rem, 6.6vw, 2.8rem);
+  font-weight: 950;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.cc-kiosk-heading p {
+  margin: 0.6rem 0 0;
+  color: #657694;
+  font-size: clamp(0.95rem, 3.7vw, 1.2rem);
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.cc-kiosk-brand-icon {
+  width: clamp(2rem, 7.8vw, 2.6rem);
+  height: clamp(2rem, 7.8vw, 2.6rem);
+  flex: 0 0 auto;
+  color: #2f6df6;
+  filter: drop-shadow(0 12px 18px rgba(47, 109, 246, 0.18));
+}
+
+.cc-kiosk-login {
+  min-width: max-content;
+  height: clamp(3rem, 11vw, 3.85rem);
+  padding: 0 clamp(1rem, 3.7vw, 1.35rem);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  border-radius: 999px;
+  color: #50658b;
+  font-size: clamp(0.95rem, 3.7vw, 1.05rem);
+  font-weight: 900;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.52));
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  box-shadow: 0 18px 38px rgba(54, 91, 140, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+}
+
+.cc-kiosk-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Kiosk biometric: camera chạy nền, không hiện preview */
+.cc-bio-shell {
+  position: relative;
+  min-height: 0;
+  width: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  text-align: center;
+}
+
+.cc-bio-shell::before {
+  display: none;
+}
+
+.cc-bio-video {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transform: scaleX(-1);
+}
+
+.cc-bio-island {
+  position: relative;
+  width: 100%;
+  min-height: min(68dvh, 720px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1.15rem, 3.2vh, 1.75rem);
+  padding: clamp(2rem, 6vw, 4rem);
+  border-radius: clamp(2.2rem, 9vw, 4.6rem);
+  color: #08245a;
+  background:
+    radial-gradient(circle at 18% 16%, rgba(255, 255, 255, 0.84), transparent 30%),
+    radial-gradient(circle at 82% 76%, rgba(119, 226, 216, 0.2), transparent 34%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.34));
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 34px 90px rgba(63, 86, 123, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(26px) saturate(1.35);
+  -webkit-backdrop-filter: blur(26px) saturate(1.35);
+  overflow: hidden;
+}
+
+html[data-theme="dark"] .cc-bio-island {
+  color: #eff6ff;
+  background:
+    radial-gradient(circle at 18% 16%, rgba(148, 220, 255, 0.12), transparent 30%),
+    radial-gradient(circle at 82% 76%, rgba(45, 212, 191, 0.12), transparent 34%),
+    linear-gradient(145deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.44));
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.cc-bio-island[data-phase="success"] {
+  background:
+    linear-gradient(135deg, rgba(236, 253, 245, 0.9), rgba(209, 250, 229, 0.54)),
+    rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.38);
+  box-shadow: 0 28px 78px rgba(22, 163, 74, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+html[data-theme="dark"] .cc-bio-island[data-phase="success"] {
+  background:
+    linear-gradient(135deg, rgba(6, 78, 59, 0.68), rgba(6, 95, 70, 0.38)),
+    rgba(34, 197, 94, 0.12);
+  border-color: rgba(74, 222, 128, 0.32);
+}
+
+.cc-bio-island[data-phase="warning"] {
+  border-color: rgba(251, 191, 36, 0.42);
+}
+
+.cc-bio-mark {
+  position: relative;
+  width: clamp(6.4rem, 29vw, 8rem);
+  height: clamp(6.4rem, 29vw, 8rem);
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.94), transparent 36%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.34));
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  box-shadow: 0 22px 48px rgba(47, 109, 246, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+html[data-theme="dark"] .cc-bio-mark {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.cc-bio-mark[data-phase="success"] {
+  color: #16a34a;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+html[data-theme="dark"] .cc-bio-mark[data-phase="success"] {
+  color: #86efac;
+}
+
+.cc-bio-corner {
+  position: absolute;
+  width: clamp(1.45rem, 6.4vw, 1.85rem);
+  height: clamp(1.45rem, 6.4vw, 1.85rem);
+  border-color: #09245a;
+}
+
+html[data-theme="dark"] .cc-bio-corner {
+  border-color: rgba(255, 255, 255, 0.82);
+}
+.cc-bio-corner--tl {
+  top: 31%;
+  left: 31%;
+  border-top: 2px solid;
+  border-left: 2px solid;
+  border-top-left-radius: 0.55rem;
+}
+.cc-bio-corner--tr {
+  top: 31%;
+  right: 31%;
+  border-top: 2px solid;
+  border-right: 2px solid;
+  border-top-right-radius: 0.55rem;
+}
+.cc-bio-corner--bl {
+  bottom: 31%;
+  left: 31%;
+  border-bottom: 2px solid;
+  border-left: 2px solid;
+  border-bottom-left-radius: 0.55rem;
+}
+.cc-bio-corner--br {
+  right: 31%;
+  bottom: 31%;
+  border-right: 2px solid;
+  border-bottom: 2px solid;
+  border-bottom-right-radius: 0.55rem;
+}
+
+.cc-bio-scanline {
+  position: absolute;
+  left: 36%;
+  right: 36%;
+  top: 50%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.96), transparent);
+  box-shadow: 0 0 16px rgba(var(--accent-rgb), 0.68);
+  animation: cc-bio-scan 1.3s ease-in-out infinite;
+}
+
+.cc-bio-check {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.cc-bio-copy {
+  min-width: 0;
+  text-align: center;
+}
+
+.cc-bio-title {
+  max-width: 10ch;
+  margin: 0 auto;
+  color: inherit;
+  font-size: clamp(1.7rem, 7vw, 2.35rem);
+  font-weight: 950;
+  line-height: 1.08;
+}
+
+.cc-bio-hint {
+  max-width: 25ch;
+  margin: 0.9rem auto 0;
+  font-size: clamp(1rem, 4vw, 1.2rem);
+  font-weight: 800;
+  color: #6d7f9f;
+  line-height: 1.35;
+}
+
+.cc-bio-hint[data-warn="true"] {
+  color: #b45309;
+}
+
+.cc-bio-success {
+  margin: 0.85rem auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.cc-bio-success-name {
+  max-width: min(26ch, 100%);
+  color: #14532d;
+  font-size: clamp(1.05rem, 4.4vw, 1.32rem);
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.cc-bio-success-meta {
+  min-height: 1.2rem;
+  color: #16803a;
+  font-size: clamp(0.9rem, 3.5vw, 1rem);
+  font-weight: 850;
+}
+
+html[data-theme="dark"] .cc-bio-hint {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+html[data-theme="dark"] .cc-bio-hint[data-warn="true"] {
+  color: #fde68a;
+}
+
+html[data-theme="dark"] .cc-bio-success-name {
+  color: #dcfce7;
+}
+
+html[data-theme="dark"] .cc-bio-success-meta {
+  color: #86efac;
+}
+
+.cc-bio-start {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: min(100%, 31rem);
+  height: clamp(3.8rem, 14vw, 4.6rem);
+  border-radius: 999px;
+  font-size: clamp(1rem, 4.2vw, 1.18rem);
+  font-weight: 900;
+  color: #fff;
+  background: linear-gradient(135deg, #1d5cff, #3479ff 58%, #2b65e9);
+  box-shadow: 0 18px 36px rgba(37, 99, 235, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.cc-bio-start--secondary {
+  color: #14532d;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88), 0 16px 34px rgba(22, 163, 74, 0.14);
+}
+
+html[data-theme="dark"] .cc-bio-start--secondary {
+  color: #dcfce7;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(74, 222, 128, 0.26);
+}
+
+.cc-bio-active-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  width: min(100%, 31rem);
+  height: clamp(3.8rem, 14vw, 4.6rem);
+  border-radius: 999px;
+  color: #2d5ec9;
+  font-size: clamp(1rem, 4.2vw, 1.18rem);
+  font-weight: 900;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+html[data-theme="dark"] .cc-bio-active-pill {
+  color: #a7f3d0;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.cc-bio-note {
+  max-width: 34ch;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.cc-bio-note[data-warn="true"] {
+  color: var(--danger);
+}
+
+@keyframes cc-bio-scan {
+  0%, 100% { transform: translateY(-14px); opacity: 0.45; }
+  50% { transform: translateY(14px); opacity: 1; }
+}
+
+@media (max-width: 520px) {
+  .cc-kiosk-page {
+    gap: clamp(1.25rem, 3.2vh, 2rem);
+  }
+  .cc-kiosk-header {
+    gap: 0.75rem;
+  }
+  .cc-kiosk-login {
+    gap: 0.45rem;
+    padding-inline: 0.95rem;
+  }
+  .cc-bio-island {
+    min-height: min(66dvh, 610px);
+    padding: 1.85rem 1.35rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .cc-kiosk-title-row h1 {
+    font-size: 1.55rem;
+  }
+  .cc-kiosk-brand-icon {
+    width: 1.85rem;
+    height: 1.85rem;
+  }
+  .cc-kiosk-login {
+    height: 2.8rem;
+    padding-inline: 0.8rem;
+    font-size: 0.9rem;
+  }
+}
+
 /* Trình hướng dẫn quét tự động (đăng ký khuôn mặt) */
 .cc-enroll {
   display: flex;
