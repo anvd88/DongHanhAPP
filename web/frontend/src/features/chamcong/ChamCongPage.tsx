@@ -13,6 +13,7 @@ import type {
 } from "../../lib/types";
 import { CameraPanel } from "./CameraPanel";
 import { CheckInScanner } from "./CheckInScanner";
+import { EnrollWizard } from "./EnrollWizard";
 import "./chamcong.css";
 
 type Tab = "chamcong" | "dangky" | "khuonmat" | "nhatky";
@@ -37,7 +38,7 @@ export function ChamCongPage() {
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>
             Đang chạy <b>{status.engine}</b> — chỉ để kiểm thử luồng, chưa nhận diện thật. Cắm
-            ViewFaceCore vào <code>Services/FaceEngine.cs</code> để dùng thực tế.
+            SFace vào <code>Services/OpenCvSFaceEngine.cs</code> để dùng thực tế.
           </span>
         </div>
       )}
@@ -81,6 +82,7 @@ function RegisterTab() {
   const { data: users } = useApi<UserAdmin[]>("/api/users/");
   const { data: faces, reload } = useApi<FaceNguoiDung[]>("/api/chamcong/dadangky");
   const [username, setUsername] = useState("");
+  const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -115,43 +117,67 @@ function RegisterTab() {
   };
 
   return (
-    <div className="cc-grid">
-      <div className="space-y-3">
-        <label className="cc-field">
-          <span>Nhân viên</span>
-          <select className="cc-select" value={username} onChange={(e) => setUsername(e.target.value)}>
-            <option value="">— Chọn nhân viên —</option>
-            {users?.map((u) => (
-              <option key={u.id} value={u.username}>
-                {u.fullName || u.username} ({u.username})
-              </option>
-            ))}
-          </select>
-        </label>
-        <CameraPanel onCapture={register} busy={busy} captureLabel="Chụp & lưu mẫu" />
-        {msg && <div className="cc-note">{msg}</div>}
+    <div className="space-y-4">
+      <div className="cc-grid">
+        <div className="space-y-3">
+          <label className="cc-field">
+            <span>Nhân viên</span>
+            <select className="cc-select" value={username} onChange={(e) => setUsername(e.target.value)}>
+              <option value="">— Chọn nhân viên —</option>
+              {users?.map((u) => (
+                <option key={u.id} value={u.username}>
+                  {u.fullName || u.username} ({u.username})
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="cc-tabs">
+            <button className="cc-tab" data-on={mode === "auto"} onClick={() => setMode("auto")} type="button">
+              Tự chụp đúng góc
+            </button>
+            <button className="cc-tab" data-on={mode === "manual"} onClick={() => setMode("manual")} type="button">
+              Chụp thủ công
+            </button>
+          </div>
+        </div>
+
+        <div className="cc-result glass cc-list">
+          <div className="cc-list-title">Đã đăng ký ({faces?.length ?? 0})</div>
+          {faces && faces.length > 0 ? (
+            <ul>
+              {faces.map((f) => (
+                <li key={f.username} className="cc-list-row">
+                  <div>
+                    <div className="cc-list-name">{f.fullName || f.username}</div>
+                    <div className="cc-list-sub">{f.soMau} mẫu</div>
+                  </div>
+                  <button className="cc-icon-btn" onClick={() => remove(f.username)} title="Xóa" type="button">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="cc-result-empty cc-result-empty--sm">Chưa có nhân viên nào.</div>
+          )}
+        </div>
       </div>
 
-      <div className="cc-result glass cc-list">
-        <div className="cc-list-title">Đã đăng ký ({faces?.length ?? 0})</div>
-        {faces && faces.length > 0 ? (
-          <ul>
-            {faces.map((f) => (
-              <li key={f.username} className="cc-list-row">
-                <div>
-                  <div className="cc-list-name">{f.fullName || f.username}</div>
-                  <div className="cc-list-sub">{f.soMau} mẫu</div>
-                </div>
-                <button className="cc-icon-btn" onClick={() => remove(f.username)} title="Xóa" type="button">
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="cc-result-empty cc-result-empty--sm">Chưa có nhân viên nào.</div>
-        )}
-      </div>
+      {mode === "auto" ? (
+        <EnrollWizard username={username} fullName={selected?.fullName ?? ""} onSaved={reload} />
+      ) : (
+        <div className="cc-grid">
+          <div className="space-y-3">
+            <CameraPanel onCapture={register} busy={busy} captureLabel="Chụp & lưu mẫu" />
+            {msg && <div className="cc-note">{msg}</div>}
+          </div>
+          <div className="cc-result glass">
+            <div className="cc-result-empty cc-result-empty--sm">
+              Chọn nhân viên, bật camera rồi bấm “Chụp & lưu mẫu” cho từng góc.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

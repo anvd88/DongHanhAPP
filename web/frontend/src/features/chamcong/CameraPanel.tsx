@@ -11,15 +11,23 @@ export function CameraPanel({
   busy,
   captureLabel = "Chụp & nhận diện",
   auto = false,
+  autoHint,
+  autoBusyLabel = "Đang nhận diện…",
   paused = false,
   intervalMs = 1500,
+  stopSignal = 0,
+  onActiveChange,
 }: {
   onCapture: (image: string) => void;
   busy?: boolean;
   captureLabel?: string;
   auto?: boolean; // tự động chụp theo nhịp khi camera đang bật
+  autoHint?: string; // nội dung hướng dẫn khi đang tự động quét
+  autoBusyLabel?: string;
   paused?: boolean; // tạm dừng tự động chụp (vd: đang hiện kết quả)
   intervalMs?: number;
+  stopSignal?: number; // tăng giá trị để yêu cầu tắt camera từ component cha
+  onActiveChange?: (active: boolean) => void; // báo cho cha biết camera đang bật/tắt
 }) {
   const { videoRef, active, error, start, stop, capture } = useCamera();
 
@@ -33,6 +41,19 @@ export function CameraPanel({
   useEffect(() => {
     onCaptureRef.current = onCapture;
   }, [onCapture]);
+
+  // Báo trạng thái bật/tắt camera ra ngoài (vd: để bật/tắt nút "Bắt đầu quét").
+  const onActiveChangeRef = useRef(onActiveChange);
+  useEffect(() => {
+    onActiveChangeRef.current = onActiveChange;
+  }, [onActiveChange]);
+  useEffect(() => {
+    onActiveChangeRef.current?.(active);
+  }, [active]);
+
+  useEffect(() => {
+    if (stopSignal > 0 && active) stop();
+  }, [stopSignal, active, stop]);
 
   // Tự động chụp: chỉ chạy khi bật auto + camera đang mở + không bận + không tạm dừng.
   useEffect(() => {
@@ -60,11 +81,11 @@ export function CameraPanel({
           <div className="cc-scan-hint">
             {busy ? (
               <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Đang nhận diện…
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> {autoBusyLabel}
               </>
             ) : paused ? null : (
               <>
-                <ScanLine className="h-3.5 w-3.5" /> Tự động quét — mời nhìn vào camera
+                <ScanLine className="h-3.5 w-3.5" /> {autoHint || "Tự động quét — mời nhìn vào camera"}
               </>
             )}
           </div>

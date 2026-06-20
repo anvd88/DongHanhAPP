@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { CheckCircle2, ScanFace, XCircle } from "lucide-react";
 import { api } from "../../lib/api";
 import type { NhanDienResult } from "../../lib/types";
 import { CameraPanel } from "./CameraPanel";
 
+type CheckInPopup = {
+  name: string;
+  loai?: string;
+  occurredAt?: string;
+};
+
 /**
  * Khối quét chấm công dùng chung cho tab "Chấm công" trong app và màn hình kiosk
  * ngoài trang đăng nhập. Tự động chụp + thông báo người vừa được nhận diện (Vào/Ra).
  */
-export function CheckInScanner() {
+export function CheckInScanner({ returnToLoginOnOk = false }: { returnToLoginOnOk?: boolean }) {
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<NhanDienResult | null>(null);
+  const [popup, setPopup] = useState<CheckInPopup | null>(null);
   const [auto, setAuto] = useState(true);
   const [cooldown, setCooldown] = useState(false);
+  const [stopCameraSignal, setStopCameraSignal] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const recognize = useCallback(async (image: string) => {
@@ -22,6 +32,13 @@ export function CheckInScanner() {
       setResult(res);
       clearTimeout(timer.current);
       if (res.matched) {
+        setPopup({
+          name: res.fullName || res.username || "Nhân viên",
+          loai: res.loai,
+          occurredAt: res.occurredAt,
+        });
+        setStopCameraSignal((value) => value + 1);
+
         // Tạm dừng tự động chụp để hiện kết quả + tránh chấm trùng liên tục.
         setCooldown(true);
         timer.current = setTimeout(() => {
@@ -39,16 +56,49 @@ export function CheckInScanner() {
     }
   }, []);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  const popupTime = popup?.occurredAt ? new Date(popup.occurredAt).toLocaleTimeString("vi-VN") : null;
+  const closePopup = () => {
+    setPopup(null);
+    setCooldown(false);
+    setResult(null);
+    if (returnToLoginOnOk) navigate("/login", { replace: true });
+  };
 
   return (
     <div className="cc-grid">
+      {popup && (
+        <div className="cc-checkin-popup-backdrop" role="presentation">
+          <div className="cc-checkin-popup" role="dialog" aria-modal="true" aria-labelledby="cc-checkin-popup-title">
+            <CheckCircle2 className="h-12 w-12" />
+            <div>
+              <div id="cc-checkin-popup-title" className="cc-checkin-popup-title">
+                {popup.name} đã chấm công
+              </div>
+              <div className="cc-checkin-popup-meta">
+                {[popup.loai, popupTime].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            <button className="cc-btn cc-btn-primary" onClick={closePopup} type="button" autoFocus>
+              OK
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-3">
         <CameraPanel
           onCapture={recognize}
           busy={busy}
           auto={auto}
           paused={cooldown}
+          stopSignal={stopCameraSignal}
           captureLabel="Chụp & chấm công"
         />
         <label className="cc-auto-toggle">

@@ -24,11 +24,10 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<TokenService>();
 
-// Bộ máy nhận diện khuôn mặt cho chấm công — SeetaFace6 (nhận diện THẬT).
-// Cần Windows x64 + VC++ 2015–2022 Redistributable. Nếu máy thiếu thư viện gốc, đổi tạm
-// về PlaceholderFaceEngine để chạy thử luồng. Engine dựng lười ở lần gọi /api/chamcong đầu
-// tiên nên dù thiếu thư viện gốc cũng không làm sập toàn bộ API lúc khởi động.
-builder.Services.AddSingleton<IFaceEngine, ViewFaceCoreEngine>();
+// Bộ máy nhận diện khuôn mặt cho chấm công — OpenCV YuNet + SFace ONNX (nhận diện THẬT).
+// Nếu máy thiếu model/thư viện, có thể đổi tạm về PlaceholderFaceEngine để chạy thử luồng.
+// Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
+builder.Services.AddSingleton<IFaceEngine, OpenCvSFaceEngine>();
 
 // Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
 builder.Services.AddSignalR();

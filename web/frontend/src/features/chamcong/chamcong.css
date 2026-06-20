@@ -159,6 +159,52 @@ html[data-theme="dark"] .cc-banner { color: #fbbf24; }
   accent-color: rgb(var(--accent-rgb));
 }
 
+/* Trình hướng dẫn quét tự động (đăng ký khuôn mặt) */
+.cc-enroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  min-height: 200px;
+  text-align: center;
+}
+.cc-enroll-count {
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.cc-enroll-step {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text);
+  max-width: 22ch;
+}
+.cc-enroll-bar {
+  width: 80%;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--glass-border);
+  overflow: hidden;
+}
+.cc-enroll-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 1), rgba(var(--accent-rgb), 0.7));
+  transition: width 0.35s ease;
+}
+.cc-enroll-hint {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.cc-enroll-hint[data-warn="true"] {
+  color: var(--danger);
+}
+
 /* Nút */
 .cc-btn {
   display: inline-flex;
@@ -230,6 +276,73 @@ html[data-theme="dark"] .cc-banner { color: #fbbf24; }
   font-weight: 600;
   color: var(--text-secondary);
   max-width: 28ch;
+}
+
+.cc-checkin-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.36);
+  backdrop-filter: blur(4px);
+}
+
+.cc-checkin-popup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  width: min(380px, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  padding: 1.4rem;
+  border-radius: 18px;
+  color: #166534;
+  background: rgba(240, 253, 244, 0.96);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+  text-align: center;
+  animation: cc-popup-in 0.22s ease-out;
+}
+
+.cc-checkin-popup-title {
+  font-size: 1.15rem;
+  font-weight: 900;
+  color: #14532d;
+}
+
+.cc-checkin-popup-meta {
+  margin-top: 0.1rem;
+  min-height: 1rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #15803d;
+}
+
+.cc-checkin-popup .cc-btn {
+  min-width: 110px;
+  margin-top: 0.2rem;
+}
+
+html[data-theme="dark"] .cc-checkin-popup {
+  color: #bbf7d0;
+  background: rgba(5, 46, 22, 0.92);
+  border-color: rgba(34, 197, 94, 0.38);
+}
+
+html[data-theme="dark"] .cc-checkin-popup-title { color: #dcfce7; }
+html[data-theme="dark"] .cc-checkin-popup-meta { color: #86efac; }
+
+@keyframes cc-popup-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* Huy hiệu Vào/Ra */
