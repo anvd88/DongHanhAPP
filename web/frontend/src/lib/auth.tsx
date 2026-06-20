@@ -31,6 +31,20 @@ function sendHeartbeat() {
   api.post("/api/auth/heartbeat", { sid: sessionId() }).catch(() => {});
 }
 
+function sendOfflineKeepalive() {
+  const token = tokenStore.get();
+  if (!token) return;
+  fetch("/api/auth/logout", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ sid: sessionId() }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,10 +70,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onVisible = () => {
       if (document.visibilityState === "visible") sendHeartbeat();
     };
+    const onPageLeave = () => sendOfflineKeepalive();
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pagehide", onPageLeave);
+    window.addEventListener("beforeunload", onPageLeave);
     return () => {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pagehide", onPageLeave);
+      window.removeEventListener("beforeunload", onPageLeave);
     };
   }, [user]);
 

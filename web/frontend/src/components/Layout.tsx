@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 
 export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const location = useLocation();
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="km-app-shell">
       {/* Sidebar desktop */}
       <div className="hidden lg:block">
         <Sidebar />
@@ -22,9 +24,11 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="km-main-shell">
         <Header onMenu={() => setMobileOpen(true)} />
-        <main className="scroll-thin flex-1 overflow-y-auto px-4 py-5">{children}</main>
+        <main key={location.pathname} className="km-page scroll-thin">
+          {children}
+        </main>
       </div>
     </div>
   );
@@ -33,10 +37,10 @@ export function Layout({ children }: { children: ReactNode }) {
 /** Tiêu đề trang dùng chung. */
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="km-page-header">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-[var(--text)]">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-[var(--text-secondary)]">{subtitle}</p>}
+        <h1>{title}</h1>
+        {subtitle && <p>{subtitle}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>

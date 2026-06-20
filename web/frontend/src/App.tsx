@@ -5,9 +5,11 @@ import { AuthProvider, useAuth } from "./lib/auth";
 import { ThemeProvider } from "./lib/theme";
 import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
+import { KioskPage } from "./pages/KioskPage";
 import { Dashboard } from "./pages/Dashboard";
 import { KeToan } from "./pages/KeToan";
-import { GiaCong } from "./pages/GiaCong";
+import { GiaCongPage } from "./features/giacong/GiaCongPage";
+import { ChamCongPage } from "./features/chamcong/ChamCongPage";
 import { NhanSu } from "./pages/NhanSu";
 import { BaoCao } from "./pages/BaoCao";
 import { SaoLuu } from "./pages/SaoLuu";
@@ -42,12 +44,14 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/kiosk" element={<KioskPage />} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/ketoan" element={<Protected><KeToan /></Protected>} />
             <Route path="/banhang" element={<Protected><KeToan salesOnly /></Protected>} />
-            <Route path="/giacong" element={<Protected><GiaCong /></Protected>} />
+            <Route path="/giacong" element={<Protected><GiaCongPage /></Protected>} />
             <Route path="/baocao" element={<Protected><BaoCao /></Protected>} />
             <Route path="/saoluu" element={<Protected><SaoLuu /></Protected>} />
+            <Route path="/chamcong" element={<Protected><ChamCongPage /></Protected>} />
             <Route path="/nhansu" element={<Protected admin><NhanSu /></Protected>} />
             <Route path="/capnhat" element={<Protected admin><CapNhat /></Protected>} />
 
@@ -57,6 +61,8 @@ export default function App() {
             <Route path="/taisan" element={<Protected><StubPage title="Tài sản cố định" /></Protected>} />
             <Route path="/danhmuc" element={<Protected><StubPage title="Danh mục" /></Protected>} />
             <Route path="/congno" element={<Protected><StubPage title="Công nợ" /></Protected>} />
+            <Route path="/nganhang" element={<Protected><StubPage title="Ngân hàng" /></Protected>} />
+            <Route path="/chiphi" element={<Protected><StubPage title="Chi phí" /></Protected>} />
             <Route path="/caidat" element={<Protected><StubPage title="Cài đặt" /></Protected>} />
             <Route path="/lichhen" element={<Protected><StubPage title="Lịch hẹn" /></Protected>} />
             <Route path="/tichhop" element={<Protected><StubPage title="Tích hợp" /></Protected>} />

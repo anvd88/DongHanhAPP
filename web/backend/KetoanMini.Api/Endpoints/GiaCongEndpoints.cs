@@ -26,9 +26,14 @@ public static class GiaCongEndpoints
                 id BIGINT IDENTITY(1,1) PRIMARY KEY,
                 phieu_id BIGINT NOT NULL REFERENCES gia_cong_phieu(id) ON DELETE CASCADE,
                 loai_dong NVARCHAR(50) NOT NULL DEFAULT N'Nguyên liệu', ma_hang NVARCHAR(50) NOT NULL DEFAULT '',
-                ten_hang NVARCHAR(200) NOT NULL DEFAULT '', don_vi_tinh NVARCHAR(30) NOT NULL DEFAULT '',
+                ten_hang NVARCHAR(200) NOT NULL DEFAULT '', quy_cach NVARCHAR(200) NOT NULL DEFAULT '',
+                don_vi_tinh NVARCHAR(30) NOT NULL DEFAULT '',
                 so_luong DECIMAL(18,2) NOT NULL DEFAULT 0, don_gia_gia_cong DECIMAL(18,2) NOT NULL DEFAULT 0,
                 ghi_chu NVARCHAR(500) NOT NULL DEFAULT '', trang_thai_dong NVARCHAR(50) NOT NULL DEFAULT N'Chờ');").ExecuteNonQueryAsync();
+        // Bổ sung cột quy_cach cho CSDL đã tạo từ trước (idempotent).
+        await conn.Cmd(@"
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name='quy_cach' AND Object_ID=Object_ID('gia_cong_hang_hoa'))
+            ALTER TABLE gia_cong_hang_hoa ADD quy_cach NVARCHAR(200) NOT NULL DEFAULT '';").ExecuteNonQueryAsync();
     }
 
     public static void MapGiaCong(this IEndpointRouteBuilder app)
@@ -89,11 +94,11 @@ public static class GiaCongEndpoints
             }
             if (p is null) return Results.NotFound();
             await using (var r = await conn.Cmd(
-                @"SELECT id, loai_dong, ma_hang, ten_hang, don_vi_tinh, so_luong, don_gia_gia_cong, trang_thai_dong, ghi_chu
+                @"SELECT id, loai_dong, ma_hang, ten_hang, quy_cach, don_vi_tinh, so_luong, don_gia_gia_cong, trang_thai_dong, ghi_chu
                   FROM gia_cong_hang_hoa WHERE phieu_id=@id ORDER BY id").With("@id", id).ExecuteReaderAsync())
                 while (await r.ReadAsync())
                     p.Lines.Add(new GiaCongLineDto(r.Long("id"), r.Str("loai_dong"), r.Str("ma_hang"), r.Str("ten_hang"),
-                        r.Str("don_vi_tinh"), r.Dec("so_luong"), r.Dec("don_gia_gia_cong"), r.Str("trang_thai_dong"), r.Str("ghi_chu")));
+                        r.Str("quy_cach"), r.Str("don_vi_tinh"), r.Dec("so_luong"), r.Dec("don_gia_gia_cong"), r.Str("trang_thai_dong"), r.Str("ghi_chu")));
             return Results.Ok(p);
         });
 
@@ -148,12 +153,13 @@ public static class GiaCongEndpoints
             foreach (var line in req.Lines ?? new())
             {
                 var lc = new SqlCommand(
-                    @"INSERT INTO gia_cong_hang_hoa (phieu_id, loai_dong, ma_hang, ten_hang, don_vi_tinh, so_luong, don_gia_gia_cong, ghi_chu, trang_thai_dong)
-                      VALUES (@p, @ld, @mh, @th, @dv, @sl, @dg, @gc, @ttd)", conn, tx);
+                    @"INSERT INTO gia_cong_hang_hoa (phieu_id, loai_dong, ma_hang, ten_hang, quy_cach, don_vi_tinh, so_luong, don_gia_gia_cong, ghi_chu, trang_thai_dong)
+                      VALUES (@p, @ld, @mh, @th, @qc, @dv, @sl, @dg, @gc, @ttd)", conn, tx);
                 lc.Parameters.AddWithValue("@p", phieuId);
                 lc.Parameters.AddWithValue("@ld", line.LoaiDong ?? "Nguyên liệu");
                 lc.Parameters.AddWithValue("@mh", line.MaHang ?? "");
                 lc.Parameters.AddWithValue("@th", line.TenHang ?? "");
+                lc.Parameters.AddWithValue("@qc", line.QuyCach ?? "");
                 lc.Parameters.AddWithValue("@dv", line.DonViTinh ?? "");
                 lc.Parameters.AddWithValue("@sl", line.SoLuong);
                 lc.Parameters.AddWithValue("@dg", line.DonGiaGiaCong);

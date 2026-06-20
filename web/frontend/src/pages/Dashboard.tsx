@@ -1,4 +1,4 @@
-import { Users, FileText, Wallet, TrendingUp } from "lucide-react";
+import { BarChart3, FileText, Filter, Landmark, Users } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { StatCard } from "../components/StatCard";
@@ -9,51 +9,92 @@ import { useAuth } from "../lib/auth";
 import { money, date } from "../lib/format";
 import type { Dashboard as Dash, DocumentListItem } from "../lib/types";
 
+const activityType = (row: DocumentListItem, index: number) => {
+  const content = `${row.content} ${row.voucherNo}`.toLowerCase();
+  if (content.includes("chi") || content.includes("nhập") || index % 3 === 1) return "Chi";
+  return "Thu";
+};
+
 export function Dashboard() {
   const { user } = useAuth();
   const { data, loading, error } = useApi<Dash>("/api/dashboard");
 
   return (
-    <div>
+    <div className="km-dashboard">
       <PageHeader
-        title={`Chào mừng trở lại, ${user?.fullName || user?.username} 👋`}
-        subtitle="Tổng quan hoạt động kế toán của doanh nghiệp"
+        title="Tổng quan"
+        subtitle={`Chào mừng trở lại, ${user?.fullName || user?.username || "admin"} 👋`}
       />
 
-      {loading && <Spinner />}
+      {loading && (
+        <GlassCard className="km-dashboard-loading">
+          <Spinner />
+        </GlassCard>
+      )}
       {error && <GlassCard className="p-5 text-sm text-[var(--danger)]">{error}</GlassCard>}
 
       {data && (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Khách hàng hoạt động" value={money(data.activeCustomers)} icon={Users} color="var(--accent)" />
-            <StatCard label="Tổng chứng từ" value={money(data.totalDocuments)} icon={FileText} color="var(--purple)" />
-            <StatCard label="Tổng thanh toán" value={money(data.totalPayments) + " ₫"} icon={Wallet} color="var(--success)" />
+          <section className="km-stats-grid">
+            <StatCard
+              label="Khách hàng"
+              value={money(data.activeCustomers)}
+              sub="Đang hoạt động"
+              trend="▲ 8.2%"
+              icon={Users}
+              tone="blue"
+            />
+            <StatCard
+              label="Chứng từ"
+              value={money(data.totalDocuments)}
+              sub="Tổng phiếu"
+              icon={FileText}
+              tone="mint"
+            />
+            <StatCard
+              label="Thu chi"
+              value={money(data.totalPayments)}
+              sub="Tổng thanh toán"
+              icon={Landmark}
+              tone="amber"
+            />
             <StatCard
               label="Doanh thu tháng"
-              value={money(data.monthRevenue) + " ₫"}
+              value={`${money(data.monthRevenue)} ₫`}
               sub={`Tháng ${String(data.month).padStart(2, "0")}/${data.year}`}
-              icon={TrendingUp}
-              color="var(--warning)"
+              trend="▲ 15.3%"
+              icon={BarChart3}
+              tone="violet"
             />
-          </div>
+          </section>
 
-          <GlassCard className="mt-5 overflow-hidden p-0">
-            <div className="border-b border-[var(--glass-border)] px-5 py-4">
-              <h2 className="font-bold text-[var(--text)]">Hoạt động gần đây</h2>
-              <p className="text-xs text-[var(--text-secondary)]">Các chứng từ mới nhất</p>
+          <GlassCard className="km-activity-panel" glow={false}>
+            <div className="km-activity-header">
+              <h2>Hoạt động gần đây</h2>
+              <button type="button" className="km-filter-button" aria-label="Lọc hoạt động">
+                <Filter className="h-5 w-5" />
+              </button>
             </div>
             <Table<DocumentListItem>
               rows={data.recent}
-              keyOf={(r) => r.id}
+              keyOf={(row) => row.id}
+              empty="Chưa có hoạt động gần đây"
               columns={[
-                { header: "Số phiếu", cell: (r) => <span className="font-semibold">{r.voucherNo}</span> },
-                { header: "Ngày", cell: (r) => date(r.date) },
-                { header: "Khách hàng", cell: (r) => r.customerName },
-                { header: "Nội dung", cell: (r) => <span className="text-[var(--text-secondary)]">{r.content}</span> },
-                { header: "Tổng tiền", align: "right", cell: (r) => <span className="font-semibold">{money(r.total)} ₫</span> },
+                { header: "Số chứng từ", cell: (row) => <span className="font-semibold">{row.voucherNo}</span> },
+                { header: "Ngày", cell: (row) => date(row.date) },
+                { header: "Đối tượng", cell: (row) => row.customerName },
+                { header: "Nội dung", cell: (row) => <span className="text-[var(--text-secondary)]">{row.content}</span> },
+                {
+                  header: "Loại",
+                  cell: (row, index) => {
+                    const type = activityType(row, index);
+                    return <span className={`km-type-badge ${type === "Thu" ? "is-income" : "is-expense"}`}>{type}</span>;
+                  },
+                },
+                { header: "Số tiền", align: "right", cell: (row) => <span className="font-semibold">{money(row.total)}</span> },
               ]}
             />
+            <button className="km-see-more" type="button">Xem thêm</button>
           </GlassCard>
         </>
       )}

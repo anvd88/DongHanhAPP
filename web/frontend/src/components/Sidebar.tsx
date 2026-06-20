@@ -77,7 +77,6 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const paintIndicator = useCallback((stretch = 1, direction = 1) => {
     const el = indicatorRef.current;
     if (!el) return;
-
     const state = indicatorState.current;
     el.style.width = `${state.w}px`;
     el.style.height = `${state.h}px`;
@@ -92,10 +91,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       const dt = state.lastTime ? Math.min((time - state.lastTime) / 1000, 0.032) : 0.016;
       state.lastTime = time;
 
-      const stiffness = 86;
-      const damping = 17;
-      const settleDistance = 0.18;
-      const settleVelocity = 4.5;
+      const stiffness = 92;
+      const damping = 18;
       const stepSpring = (current: number, target: number, velocity: number) => {
         const acceleration = (target - current) * stiffness - velocity * damping;
         const nextVelocity = velocity + acceleration * dt;
@@ -120,20 +117,20 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       state.vh = h.velocity;
 
       const direction = state.targetY >= state.y ? 1 : -1;
-      const stretch = 1 + Math.min(Math.abs(state.vy) * 0.00016, 0.055);
+      const stretch = 1 + Math.min(Math.abs(state.vy) * 0.00013, 0.04);
       paintIndicator(stretch, direction);
 
-      const isSettled =
-        Math.abs(state.targetX - state.x) < settleDistance &&
-        Math.abs(state.targetY - state.y) < settleDistance &&
-        Math.abs(state.targetW - state.w) < settleDistance &&
-        Math.abs(state.targetH - state.h) < settleDistance &&
-        Math.abs(state.vx) < settleVelocity &&
-        Math.abs(state.vy) < settleVelocity &&
-        Math.abs(state.vw) < settleVelocity &&
-        Math.abs(state.vh) < settleVelocity;
+      const settled =
+        Math.abs(state.targetX - state.x) < 0.18 &&
+        Math.abs(state.targetY - state.y) < 0.18 &&
+        Math.abs(state.targetW - state.w) < 0.18 &&
+        Math.abs(state.targetH - state.h) < 0.18 &&
+        Math.abs(state.vx) < 4.5 &&
+        Math.abs(state.vy) < 4.5 &&
+        Math.abs(state.vw) < 4.5 &&
+        Math.abs(state.vh) < 4.5;
 
-      if (isSettled) {
+      if (settled) {
         state.x = state.targetX;
         state.y = state.targetY;
         state.w = state.targetW;
@@ -153,6 +150,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     },
     [paintIndicator],
   );
+
   useLayoutEffect(() => {
     animateIndicatorRef.current = animateIndicator;
   }, [animateIndicator]);
@@ -243,35 +241,26 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   );
 
   return (
-    <aside
-      className="scroll-thin flex h-full w-[260px] shrink-0 flex-col overflow-y-auto px-3 py-5 text-[var(--sidebar-text)]"
-      style={{ background: "var(--sidebar-bg)", backdropFilter: "blur(24px)" }}
-    >
-      {/* Logo */}
-      <div className="mb-6 flex items-center gap-3 px-3">
-        <div
-          className="flex h-11 w-11 items-center justify-center rounded-2xl text-lg font-black text-white shadow-lg"
-          style={{ background: "linear-gradient(135deg, var(--accent), var(--purple))" }}
-        >
-          CP
-        </div>
-        <div className="leading-tight">
-          <div className="text-sm font-bold text-white">KetoanMini</div>
-          <div className="text-[11px] text-[var(--sidebar-text)]">Inox Cường Phát</div>
+    <aside className="km-sidebar scroll-thin">
+      <div className="km-sidebar-brand">
+        <div className="km-sidebar-logo">CP</div>
+        <div className="min-w-0 leading-tight">
+          <div className="text-sm font-bold text-white">Công ty TNHH Inox Cường Phát</div>
+          <div className="mt-1 text-[11px] text-[var(--sidebar-text)]">Hệ thống quản lý kế toán</div>
         </div>
       </div>
 
       <nav ref={navRef} className="liquid-sidebar-nav relative flex-1">
         <div ref={indicatorRef} className="liquid-active-indicator" aria-hidden="true" />
-        <div className="relative z-10 space-y-5">
+        <div className="km-sidebar-sections relative z-10">
           {visibleSections.map((section, i) => (
             <div key={i}>
               {section.title && (
-                <div className="mb-2 px-3 text-[10px] font-bold tracking-widest text-[var(--sidebar-text)] opacity-60">
+                <div className="km-sidebar-section-title">
                   {section.title}
                 </div>
               )}
-              <div className="space-y-0.5">
+              <div className="km-sidebar-items">
                 {section.items.map((it) => {
                   const Icon = it.icon;
                   return (
@@ -281,15 +270,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                       to={it.path}
                       onClick={onNavigate}
                       className={({ isActive }) =>
-                        `liquid-sidebar-link group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-300 ${
+                        `liquid-sidebar-link group relative flex items-center gap-2 rounded-[14px] px-2 py-1.5 text-[13px] font-semibold transition-all duration-300 ${
                           isActive
                             ? "is-active text-white"
                             : "hover:bg-white/8 hover:text-white"
                         }`
                       }
                     >
-                      <Icon className="h-[18px] w-[18px] shrink-0" />
-                      <span className="flex-1">{it.label}</span>
+                      <span className="km-sidebar-icon"><Icon className="h-[18px] w-[18px] shrink-0" /></span>
+                      <span className="min-w-0 flex-1 truncate">{it.label}</span>
                       {!it.ready && (
                         <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[9px] font-semibold opacity-70">
                           sắp có
@@ -303,6 +292,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           ))}
         </div>
       </nav>
+
+      <div className="km-sidebar-version">
+        <span />
+        Phiên bản 26.6.5
+      </div>
     </aside>
   );
 }

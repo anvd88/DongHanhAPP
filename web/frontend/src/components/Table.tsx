@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 export interface Column<T> {
   header: string;
-  cell: (row: T) => ReactNode;
+  cell: (row: T, index: number) => ReactNode;
   align?: "left" | "right" | "center";
   className?: string;
 }
@@ -25,11 +25,11 @@ export function Table<T>({
     <div className="scroll-thin overflow-x-auto">
       <table className="w-full border-collapse text-sm">
         <thead>
-          <tr className="border-b border-[var(--glass-border)]">
+          <tr className="km-table-head-row">
             {columns.map((c, i) => (
               <th
                 key={i}
-                className={`whitespace-nowrap px-4 py-3 text-xs font-bold uppercase tracking-wide text-[var(--text-muted)] ${alignCls(c.align)}`}
+                className={`whitespace-nowrap px-3 py-2 text-xs font-bold tracking-wide text-[var(--text-muted)] ${alignCls(c.align)}`}
               >
                 {c.header}
               </th>
@@ -48,13 +48,13 @@ export function Table<T>({
               <tr
                 key={keyOf(row, i)}
                 onClick={() => onRowClick?.(row)}
-                className={`border-b border-[var(--glass-border)]/50 transition-colors hover:bg-[var(--accent-soft)] ${
+                className={`km-table-row ${
                   onRowClick ? "cursor-pointer" : ""
                 }`}
               >
                 {columns.map((c, j) => (
-                  <td key={j} className={`px-4 py-3 text-[var(--text)] ${alignCls(c.align)} ${c.className ?? ""}`}>
-                    {c.cell(row)}
+                  <td key={j} className={`px-3 py-2 text-[var(--text)] ${alignCls(c.align)} ${c.className ?? ""}`}>
+                    {c.cell(row, i)}
                   </td>
                 ))}
               </tr>

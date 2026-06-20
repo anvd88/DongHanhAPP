@@ -32,7 +32,11 @@ public sealed class ChangeWatcher(
             (SELECT COUNT(*) FROM dbo.gia_cong_phieu), '|',
             (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, trang_thai, tien_do, doi_tac))), '0') FROM dbo.gia_cong_phieu), '|',
             (SELECT COUNT(*) FROM dbo.gia_cong_hang_hoa), '|',
-            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(phieu_id, so_luong, don_gia_gia_cong))), '0') FROM dbo.gia_cong_hang_hoa)
+            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(phieu_id, so_luong, don_gia_gia_cong))), '0') FROM dbo.gia_cong_hang_hoa), '|',
+            (SELECT COUNT(*) FROM dbo.cham_cong_face), '|',
+            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, username, full_name, created_at, created_by))), '0') FROM dbo.cham_cong_face), '|',
+            (SELECT COUNT(*) FROM dbo.cham_cong_log), '|',
+            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, username, loai, similarity, occurred_at))), '0') FROM dbo.cham_cong_log)
         ) AS token;";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

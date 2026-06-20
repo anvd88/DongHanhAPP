@@ -14,7 +14,7 @@ internal static class DatabaseConnectionConfig
     private const string EnvironmentVariableName = "KETOANMINI_CONNECTION_STRING";
     private const string RealtimeHubEnvironmentVariableName = "KETOANMINI_REALTIME_HUB_URL";
     private const string DefaultConnectionString = "Server=localhost\\SQLEXPRESS01;Database=KetoanMini;Trusted_Connection=True;Encrypt=False;TrustServerCertificate=True;";
-    private const string DefaultRealtimeHubUrl = "http://localhost:5080/hubs/changes";
+    private const string DefaultRealtimeHubUrl = "https://localhost:5443/hubs/changes";
 
     public static string PrimaryConfigPath => Path.Combine(AppContext.BaseDirectory, "config", "database.json");
     public static string UserConfigPath => Path.Combine(
@@ -117,7 +117,7 @@ internal static class DatabaseConnectionConfig
                 return DefaultRealtimeHubUrl;
             }
 
-            return $"http://{host}:5080/hubs/changes";
+            return $"https://{host}:5443/hubs/changes";
         }
         catch
         {
@@ -158,7 +158,7 @@ internal static class DatabaseConnectionConfig
     {
         if (!value.Contains("://", StringComparison.Ordinal))
         {
-            value = "http://" + value;
+            value = "https://" + value;
         }
 
         value = value.TrimEnd('/');

@@ -3,8 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Endpoints;
+using KetoanMini.Api.Json;
 using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
+using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 
@@ -15,10 +17,18 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 {
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    // Mốc thời gian lưu UTC → luôn xuất kèm 'Z' để client hiển thị đúng giờ địa phương.
+    o.SerializerOptions.Converters.Add(new UtcDateTimeConverter());
 });
 
 builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<TokenService>();
+
+// Bộ máy nhận diện khuôn mặt cho chấm công — SeetaFace6 (nhận diện THẬT).
+// Cần Windows x64 + VC++ 2015–2022 Redistributable. Nếu máy thiếu thư viện gốc, đổi tạm
+// về PlaceholderFaceEngine để chạy thử luồng. Engine dựng lười ở lần gọi /api/chamcong đầu
+// tiên nên dù thiếu thư viện gốc cũng không làm sập toàn bộ API lúc khởi động.
+builder.Services.AddSingleton<IFaceEngine, ViewFaceCoreEngine>();
 
 // Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
 builder.Services.AddSignalR();
@@ -116,6 +126,7 @@ app.MapGet("/api/health", async (Database db) =>
 app.MapAuth();
 app.MapAccounting();
 app.MapGiaCong();
+app.MapChamCong();
 app.MapUsers();
 app.MapReleases();
 
@@ -129,6 +140,10 @@ app.MapFallbackToFile("index.html");
 // Tạo bảng gia công nếu chưa có (best-effort, không chặn khởi động nếu DB tạm thời offline).
 try { await GiaCongEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng gia công lúc khởi động: {Msg}", ex.Message); }
+
+// Tạo bảng chấm công khuôn mặt nếu chưa có (best-effort).
+try { await ChamCongEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng chấm công lúc khởi động: {Msg}", ex.Message); }
 
 // Bảo đảm cột phân loại client cho bảng phiên (để ghi nhận hiện diện web). Thường app desktop
 // đã tạo qua schema, nhưng vẫn ensure ở đây phòng khi backend chạy trước. Best-effort.

@@ -45,7 +45,7 @@ public record SetLockRequest(bool Locked);
 public record ResetPasswordResponse(string Code);
 
 // ----- Gia công -----
-public record GiaCongLineDto(long Id, string LoaiDong, string MaHang, string TenHang, string DonViTinh,
+public record GiaCongLineDto(long Id, string LoaiDong, string MaHang, string TenHang, string QuyCach, string DonViTinh,
     decimal SoLuong, decimal DonGiaGiaCong, string TrangThaiDong, string GhiChu)
 {
     public decimal ThanhTien => SoLuong * DonGiaGiaCong;
@@ -56,6 +56,17 @@ public record GiaCongDetailDto(long Id, string MaPhieu, string LoaiPhieu, string
     DateOnly NgayLap, DateOnly? HanHoanThanh, string TrangThai, int TienDo, int BuocHienTai, string GhiChu, List<GiaCongLineDto> Lines);
 public record SaveGiaCongRequest(string LoaiPhieu, string DoiTac, string NhanVienPhuTrach, DateOnly NgayLap,
     DateOnly? HanHoanThanh, string TrangThai, int TienDo, int BuocHienTai, string GhiChu, List<GiaCongLineDto> Lines);
+
+// ----- Chấm công khuôn mặt -----
+public record FaceEngineStatusDto(string Engine, bool IsReal, double MatchThreshold);
+public record DangKyKhuonMatRequest(string Username, string FullName, string ImageBase64);
+public record FaceNguoiDungDto(string Username, string FullName, int SoMau, DateTime? CreatedAt);
+public record FaceRegistrationLogDto(long Id, string Username, string FullName, DateTime CreatedAt, string CreatedBy);
+public record NhanDienRequest(string ImageBase64);
+public record NhanDienResult(bool Matched, string? Username, string? FullName, double Similarity,
+    string? Loai, DateTime? OccurredAt, string Message);
+public record ChamCongLogDto(long Id, string Username, string FullName, string Loai, double Similarity,
+    DateTime OccurredAt, string GhiChu);
 
 // ----- Releases (Cập nhật) -----
 public record ReleaseDto(long Id, string Version, string ReleaseNotes, bool IsMandatory, bool IsPublished, DateTime PublishedAt, string PublishedBy);
