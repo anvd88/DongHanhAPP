@@ -11,4 +11,21 @@
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.1" />
   </ItemGroup>
 
+  <!-- Chứng chỉ HTTPS LAN: chép theo khi build/publish để Kestrel tìm thấy 'certs/ketoanmini.pfx'. -->
+  <ItemGroup>
+    <None Include="certs\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Nhận diện khuôn mặt thật cho chấm công (SeetaFace6 qua ViewFaceCore). -->
+  <ItemGroup>
+    <PackageReference Include="ViewFaceCore" Version="0.3.7" />
+    <PackageReference Include="ViewFaceCore.runtime.win.x64" Version="6.0.7" />
+    <PackageReference Include="ViewFaceCore.Extension.SkiaSharp" Version="0.3.7" />
+    <PackageReference Include="ViewFaceCore.model.face_detector" Version="6.0.7" />
+    <PackageReference Include="ViewFaceCore.model.face_landmarker_pts5" Version="6.0.7" />
+    <PackageReference Include="ViewFaceCore.model.face_recognizer" Version="6.0.7" />
+    <PackageReference Include="ViewFaceCore.model.fas_first" Version="6.0.7" />
+    <PackageReference Include="ViewFaceCore.model.fas_second" Version="6.0.7" />
+  </ItemGroup>
+
 </Project>

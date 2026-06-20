@@ -1,3 +1,4 @@
+using System.Net.Http;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace KetoanMini;
@@ -24,7 +25,28 @@ internal sealed class RealtimeChangesService : IDisposable
         }
 
         _connection = new HubConnectionBuilder()
-            .WithUrl(_hubUrl)
+            .WithUrl(_hubUrl, options =>
+            {
+                // Hub realtime chạy trên HTTPS nội bộ (chứng chỉ mkcert của LAN). Chấp nhận
+                // chứng chỉ cho RIÊNG kết nối này để khỏi phải cài CA lên từng máy desktop.
+                // Đây chỉ là tín hiệu "có thay đổi", không truyền dữ liệu nhạy cảm.
+                if (_hubUrl.StartsWith("https", StringComparison.OrdinalIgnoreCase))
+                {
+                    options.HttpMessageHandlerFactory = handler =>
+                    {
+                        if (handler is HttpClientHandler h)
+                        {
+                            h.ServerCertificateCustomValidationCallback =
+                                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+                        }
+                        return handler;
+                    };
+                    options.WebSocketConfiguration = ws =>
+                    {
+                        ws.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+                    };
+                }
+            })
             .WithAutomaticReconnect([TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)])
             .Build();
 

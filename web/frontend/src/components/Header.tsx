@@ -1,5 +1,17 @@
-import { useState } from "react";
-import { Search, Moon, Sun, Bell, LogOut, ChevronDown, Menu, UserCog, KeyRound } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Bell,
+  CalendarDays,
+  ChevronDown,
+  Clock3,
+  KeyRound,
+  LogOut,
+  Menu,
+  Moon,
+  Search,
+  Sun,
+  UserCog,
+} from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
 import { initials } from "../lib/format";
@@ -10,73 +22,129 @@ export function Header({ onMenu }: { onMenu: () => void }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [shiftOpen, setShiftOpen] = useState(false);
   const [modal, setModal] = useState<null | "profile" | "password">(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const now = new Date();
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
-    <header className="glass glass-strong relative z-20 mx-4 mt-4 flex items-center gap-3 rounded-2xl px-4 py-3">
-      <button onClick={onMenu} className="rounded-lg p-2 text-[var(--text-secondary)] hover:bg-black/5 dark:hover:bg-white/10 lg:hidden">
+    <header className="km-header">
+      <button
+        onClick={onMenu}
+        className="km-icon-button lg:hidden"
+        aria-label="Mở menu"
+        type="button"
+      >
         <Menu className="h-5 w-5" />
       </button>
 
-      {/* Tìm kiếm */}
-      <div className="relative hidden flex-1 md:block">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-        <input
-          placeholder="Nhập để tìm kiếm…"
-          className="w-full max-w-md rounded-xl border border-[var(--glass-border)] bg-white/40 dark:bg-white/5 py-2 pl-9 pr-3 text-sm outline-none transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
-        />
-      </div>
-      <div className="flex-1 md:hidden" />
-
-      <div className="hidden text-right sm:block">
-        <div className="text-xs font-semibold text-[var(--text-secondary)]">Kỳ kế toán</div>
-        <div className="text-sm font-bold text-[var(--text)]">{String(now.getMonth() + 1).padStart(2, "0")}/{now.getFullYear()}</div>
+      <div className="km-header-company">
+        <div className="text-sm font-bold text-[var(--text)]">Công ty TNHH Inox Cường Phát</div>
+        <div className="mt-1 text-xs font-medium text-[var(--text-secondary)]">Hệ thống kế toán doanh nghiệp</div>
       </div>
 
-      <button onClick={toggle} className="rounded-xl p-2.5 text-[var(--text-secondary)] transition-colors hover:bg-black/5 dark:hover:bg-white/10" title="Đổi giao diện">
-        {theme === "light" ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
-      </button>
+      <label className="km-header-search">
+        <Search className="h-5 w-5 text-[#6d82a6]" aria-hidden="true" />
+        <input ref={searchRef} placeholder="Nhập để tìm kiếm..." aria-label="Nhập để tìm kiếm" />
+        <kbd>Ctrl + K</kbd>
+      </label>
 
-      <button className="relative rounded-xl p-2.5 text-[var(--text-secondary)] transition-colors hover:bg-black/5 dark:hover:bg-white/10">
-        <Bell className="h-5 w-5" />
-      </button>
-
-      {/* Người dùng */}
       <div className="relative">
         <button
-          onClick={() => setMenuOpen((v) => !v)}
-          className="flex items-center gap-2.5 rounded-xl py-1 pl-1 pr-2 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+          type="button"
+          className="km-shift-widget"
+          onClick={() => setShiftOpen((value) => !value)}
+          aria-expanded={shiftOpen}
         >
-          <div
-            className="flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold text-white"
-            style={{ background: "linear-gradient(135deg, var(--accent), var(--purple))" }}
-          >
-            {initials(user?.fullName || user?.username || "?")}
-          </div>
-          <div className="hidden text-left leading-tight sm:block">
-            <div className="text-sm font-semibold text-[var(--text)]">{user?.fullName || user?.username}</div>
-            <div className="text-[11px] text-[var(--text-muted)]">{isAdmin(user) ? "Quản trị viên" : "Nhân viên"}</div>
-          </div>
-          <ChevronDown className="h-4 w-4 text-[var(--text-muted)]" />
+          <span className="flex items-center justify-between gap-4">
+            <span className="text-xs font-semibold">Ca làm việc</span>
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(52,211,153,.9)]" />
+              Đang làm việc
+            </span>
+          </span>
+          <span className="mt-1.5 flex items-center justify-between gap-4">
+            <span className="inline-flex items-center gap-2 text-sm font-bold">
+              <Clock3 className="h-4 w-4" />
+              08:00 - 17:00
+            </span>
+            <ChevronDown className={`h-4 w-4 transition-transform ${shiftOpen ? "rotate-180" : ""}`} />
+          </span>
+        </button>
+        {shiftOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setShiftOpen(false)} />
+            <div className="km-shift-menu">
+              <div className="text-xs font-semibold text-[var(--text-muted)]">Lịch làm việc hôm nay</div>
+              <div className="mt-2 rounded-2xl bg-white/20 p-3 text-sm font-semibold text-[var(--text)]">
+                08:00 - 12:00, 13:00 - 17:00
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="km-period-pill">
+        <CalendarDays className="h-4 w-4" />
+        {String(now.getMonth() + 1).padStart(2, "0")}/{now.getFullYear()}
+      </div>
+
+      <button onClick={toggle} className="km-theme-switch" type="button" aria-label="Đổi giao diện">
+        <Sun className="h-4 w-4" />
+        <span className="km-theme-knob" data-theme={theme} />
+        <Moon className="h-4 w-4" />
+      </button>
+
+      <button className="km-icon-button relative" type="button" aria-label="Thông báo">
+        <Bell className="h-5 w-5" />
+        <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white/80" />
+      </button>
+
+      <div className="relative">
+        <button
+          onClick={() => setMenuOpen((value) => !value)}
+          className="km-avatar-button"
+          type="button"
+          aria-expanded={menuOpen}
+        >
+          <span className="km-avatar">{initials(user?.fullName || user?.username || "?")}</span>
+          <ChevronDown className="h-4 w-4" />
         </button>
 
         {menuOpen && (
           <>
-            <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-            <div className="profile-menu-popover glass glass-strong fade-in z-20 w-56 overflow-hidden rounded-2xl p-1.5">
+            <div
+              className="fixed inset-0 z-10"
+              style={{ background: "rgba(8,12,20,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+              onClick={() => setMenuOpen(false)}
+            />
+            <div className="profile-menu-popover glass glass-strong fade-in z-20 w-60 overflow-hidden rounded-2xl p-1.5">
               <div className="px-3 py-2 text-xs text-[var(--text-muted)]">
                 Đăng nhập với <span className="font-semibold text-[var(--text-secondary)]">{user?.username}</span>
+                <div className="mt-0.5">{isAdmin(user) ? "Quản trị viên" : "Nhân viên"}</div>
               </div>
               <button
                 onClick={() => { setMenuOpen(false); setModal("profile"); }}
                 className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-black/10 dark:hover:bg-white/[0.12]"
+                type="button"
               >
                 <UserCog className="h-4 w-4" /> Sửa hồ sơ
               </button>
               <button
                 onClick={() => { setMenuOpen(false); setModal("password"); }}
                 className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-black/10 dark:hover:bg-white/[0.12]"
+                type="button"
               >
                 <KeyRound className="h-4 w-4" /> Đổi mật khẩu
               </button>
@@ -84,6 +152,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
               <button
                 onClick={logout}
                 className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--danger)] transition-colors hover:bg-red-500/10"
+                type="button"
               >
                 <LogOut className="h-4 w-4" /> Đăng xuất
               </button>

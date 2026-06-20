@@ -88,6 +88,7 @@ export interface GiaCongLine {
   loaiDong: string;
   maHang: string;
   tenHang: string;
+  quyCach: string;
   donViTinh: string;
   soLuong: number;
   donGiaGiaCong: number;
@@ -111,6 +112,43 @@ export interface GiaCongListItem {
 export interface GiaCongDetail extends Omit<GiaCongListItem, "soMatHang" | "tongGiaTri"> {
   ghiChu: string;
   lines: GiaCongLine[];
+}
+
+export interface FaceEngineStatus {
+  engine: string;
+  isReal: boolean;
+  matchThreshold: number;
+}
+export interface FaceNguoiDung {
+  username: string;
+  fullName: string;
+  soMau: number;
+  createdAt?: string;
+}
+export interface FaceRegistrationLog {
+  id: number;
+  username: string;
+  fullName: string;
+  createdAt: string;
+  createdBy: string;
+}
+export interface NhanDienResult {
+  matched: boolean;
+  username?: string;
+  fullName?: string;
+  similarity: number;
+  loai?: string;
+  occurredAt?: string;
+  message: string;
+}
+export interface ChamCongLog {
+  id: number;
+  username: string;
+  fullName: string;
+  loai: string;
+  similarity: number;
+  occurredAt: string;
+  ghiChu: string;
 }
 
 export interface Release {

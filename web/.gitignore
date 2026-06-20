@@ -15,3 +15,9 @@ backend/KetoanMini.Api/wwwroot/
 .env
 .env.*
 !.env.example
+
+# Chứng chỉ HTTPS LAN — chứa khóa bí mật, KHÔNG commit
+backend/KetoanMini.Api/certs/
+*.pfx
+*.p12
+rootCA-key.pem
