@@ -58,10 +58,10 @@ public static class ChamCongEndpoints
     {
         var g = app.MapGroup("/api/chamcong").RequireAuthorization();
 
-        // Cho frontend biết đang chạy engine giả lập hay thật + ngưỡng khớp.
+        // Cho frontend/kiosk biết tên engine + ngưỡng khớp.
         // Ẩn danh: màn hình kiosk (ngoài trang đăng nhập) cần đọc trạng thái này.
         g.MapGet("/trangthai", (IFaceEngine engine) =>
-            Results.Ok(new FaceEngineStatusDto(engine.Name, engine.IsReal, engine.MatchThreshold)))
+            Results.Ok(new FaceEngineStatusDto(engine.Name, engine.MatchThreshold)))
             .AllowAnonymous();
 
         // Danh sách nhân viên đã đăng ký khuôn mặt (gộp theo username).

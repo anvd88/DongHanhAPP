@@ -58,7 +58,7 @@ public record SaveGiaCongRequest(string LoaiPhieu, string DoiTac, string NhanVie
     DateOnly? HanHoanThanh, string TrangThai, int TienDo, int BuocHienTai, string GhiChu, List<GiaCongLineDto> Lines);
 
 // ----- Chấm công khuôn mặt -----
-public record FaceEngineStatusDto(string Engine, bool IsReal, double MatchThreshold);
+public record FaceEngineStatusDto(string Engine, double MatchThreshold);
 public record DangKyKhuonMatRequest(string Username, string FullName, string ImageBase64);
 public record FaceNguoiDungDto(string Username, string FullName, int SoMau, DateTime? CreatedAt);
 public record FaceRegistrationLogDto(long Id, string Username, string FullName, DateTime CreatedAt, string CreatedBy);

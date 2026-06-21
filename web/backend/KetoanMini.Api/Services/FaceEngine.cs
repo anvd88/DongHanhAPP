@@ -9,11 +9,8 @@ namespace KetoanMini.Api.Services;
 /// </summary>
 public interface IFaceEngine
 {
-    /// <summary>Tên engine đang dùng (hiển thị ở /api/chamcong/trangthai để biết đã cắm thật chưa).</summary>
+    /// <summary>Tên engine đang dùng (hiển thị ở /api/chamcong/trangthai).</summary>
     string Name { get; }
-
-    /// <summary>Đã là engine nhận diện THẬT chưa (false = đang chạy bản giả lập).</summary>
-    bool IsReal { get; }
 
     /// <summary>Ngưỡng khớp khuyến nghị: similarity ≥ ngưỡng ⇒ coi là cùng một người.</summary>
     double MatchThreshold { get; }

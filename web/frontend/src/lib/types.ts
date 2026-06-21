@@ -116,7 +116,6 @@ export interface GiaCongDetail extends Omit<GiaCongListItem, "soMatHang" | "tong
 
 export interface FaceEngineStatus {
   engine: string;
-  isReal: boolean;
   matchThreshold: number;
 }
 export interface FaceNguoiDung {
