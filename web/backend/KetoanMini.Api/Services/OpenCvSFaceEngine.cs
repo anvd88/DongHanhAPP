@@ -86,7 +86,6 @@ public sealed class OpenCvSFaceEngine : IFaceEngine, IDisposable
     public string Name => _livenessNet is null
         ? "OpenCV SFace (YuNet + SFace) — chưa có chống giả mạo"
         : "OpenCV SFace (YuNet + SFace + chống giả mạo MiniFASNet)";
-    public bool IsReal => true;
 
     // Ngưỡng cosine khuyến nghị của OpenCV SFace demo là khoảng 0.363.
     // Tăng lên nếu muốn giảm nhận nhầm, giảm xuống nếu camera/ánh sáng yếu.

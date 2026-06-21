@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { AlertTriangle, ScanFace, Trash2, UserPlus } from "lucide-react";
+import { ScanFace, Trash2, UserPlus } from "lucide-react";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import { isAdmin } from "../../lib/types";
 import type {
   ChamCongLog,
-  FaceEngineStatus,
   FaceRegistrationLog,
   FaceNguoiDung,
   UserAdmin,
@@ -23,25 +22,12 @@ export function ChamCongPage() {
   const admin = isAdmin(user);
   const [tab, setTab] = useState<Tab>("chamcong");
 
-  const { data: status } = useApi<FaceEngineStatus>("/api/chamcong/trangthai");
-
   return (
     <div className="cc-root space-y-4 pb-6">
       <div>
         <h1 className="cc-title">Chấm công khuôn mặt</h1>
         <p className="cc-subtitle">Nhận diện nhân viên qua camera để ghi nhận giờ vào / ra</p>
       </div>
-
-      {/* Cảnh báo khi đang chạy engine giả lập (chưa tích hợp nhận diện thật) */}
-      {status && !status.isReal && (
-        <div className="cc-banner">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>
-            Đang chạy <b>{status.engine}</b> — chỉ để kiểm thử luồng, chưa nhận diện thật. Cắm
-            SFace vào <code>Services/OpenCvSFaceEngine.cs</code> để dùng thực tế.
-          </span>
-        </div>
-      )}
 
       <div className="cc-tabs">
         <button className="cc-tab" data-on={tab === "chamcong"} onClick={() => setTab("chamcong")} type="button">
