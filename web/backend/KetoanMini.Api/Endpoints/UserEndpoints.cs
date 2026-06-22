@@ -111,11 +111,145 @@ public static class UserEndpoints
         g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            // Xóa mềm — giống app desktop (is_deleted = 1).
-            var n = await conn.Cmd("UPDATE dbo.app_users SET is_deleted=1, deleted_at=SYSUTCDATETIME(), is_active=0 WHERE id=@id AND is_deleted=0")
-                .With("@id", id).ExecuteNonQueryAsync();
-            if (n > 0) await db.RecordAudit(u.Username(), "Xóa người dùng", "User", id.ToString(), "Xóa mềm tài khoản (web).");
-            return n > 0 ? Results.NoContent() : Results.NotFound();
+            await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+            try
+            {
+                var find = new SqlCommand(
+                    "SELECT TOP 1 username FROM dbo.app_users WITH (UPDLOCK, HOLDLOCK) WHERE id=@id AND is_deleted=0",
+                    conn, tx);
+                find.Parameters.AddWithValue("@id", id);
+
+                var username = Convert.ToString(await find.ExecuteScalarAsync())?.Trim();
+                if (string.IsNullOrWhiteSpace(username))
+                {
+                    await tx.RollbackAsync();
+                    return Results.NotFound();
+                }
+
+                await DeleteUserEverywhere(conn, tx, id, username);
+                await tx.CommitAsync();
+                return Results.NoContent();
+            }
+            catch (SqlException ex)
+            {
+                await tx.RollbackAsync();
+                return Results.Json(new { message = "Loi xoa tai khoan: " + ex.Message }, statusCode: 400);
+            }
         });
+    }
+
+    private static async Task DeleteUserEverywhere(SqlConnection conn, SqlTransaction tx, Guid id, string username)
+    {
+        var cmd = new SqlCommand(
+            @"
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+SET ANSI_PADDING ON;
+SET ANSI_WARNINGS ON;
+SET CONCAT_NULL_YIELDS_NULL ON;
+SET ARITHABORT ON;
+SET NUMERIC_ROUNDABORT OFF;
+
+IF OBJECT_ID(N'dbo.chat_file_offers', N'U') IS NOT NULL
+BEGIN
+    DELETE o
+    FROM dbo.chat_file_offers o
+    WHERE o.sender_username = @username
+       OR o.receiver_username = @username
+       OR o.sender_id = @id
+       OR o.receiver_id = @id
+       OR EXISTS (
+            SELECT 1
+            FROM dbo.chat_messages m
+            WHERE m.id = o.message_id
+              AND (m.sender_username = @username OR m.receiver_username = @username OR m.sender_id = @id OR m.receiver_id = @id)
+       )
+       OR EXISTS (
+            SELECT 1
+            FROM dbo.chat_conversations c
+            WHERE c.id = o.conversation_id
+              AND (c.user_a = @username OR c.user_b = @username OR c.user_a_id = @id OR c.user_b_id = @id)
+       );
+END;
+
+IF OBJECT_ID(N'dbo.chat_messages', N'U') IS NOT NULL
+BEGIN
+    DELETE m
+    FROM dbo.chat_messages m
+    WHERE m.sender_username = @username
+       OR m.receiver_username = @username
+       OR m.sender_id = @id
+       OR m.receiver_id = @id
+       OR EXISTS (
+            SELECT 1
+            FROM dbo.chat_conversations c
+            WHERE c.id = m.conversation_id
+              AND (c.user_a = @username OR c.user_b = @username OR c.user_a_id = @id OR c.user_b_id = @id)
+       );
+END;
+
+IF OBJECT_ID(N'dbo.chat_conversations', N'U') IS NOT NULL
+BEGIN
+    DELETE FROM dbo.chat_conversations
+    WHERE user_a = @username
+       OR user_b = @username
+       OR user_a_id = @id
+       OR user_b_id = @id;
+END;
+
+IF OBJECT_ID(N'dbo.cham_cong_log', N'U') IS NOT NULL
+    DELETE FROM dbo.cham_cong_log WHERE username = @username;
+
+IF OBJECT_ID(N'dbo.cham_cong_face', N'U') IS NOT NULL
+BEGIN
+    DELETE FROM dbo.cham_cong_face WHERE username = @username;
+    UPDATE dbo.cham_cong_face SET created_by = N'' WHERE created_by = @username;
+END;
+
+IF OBJECT_ID(N'dbo.user_sessions', N'U') IS NOT NULL
+    DELETE FROM dbo.user_sessions WHERE username = @username;
+
+IF OBJECT_ID(N'dbo.work_access_requests', N'U') IS NOT NULL
+BEGIN
+    DELETE FROM dbo.work_access_requests WHERE username = @username;
+    UPDATE dbo.work_access_requests SET approved_by = N'' WHERE approved_by = @username;
+END;
+
+IF OBJECT_ID(N'dbo.password_reset_requests', N'U') IS NOT NULL
+BEGIN
+    DELETE FROM dbo.password_reset_requests WHERE username = @username;
+    UPDATE dbo.password_reset_requests SET resolved_by = N'' WHERE resolved_by = @username;
+END;
+
+IF OBJECT_ID(N'dbo.registration_codes', N'U') IS NOT NULL
+BEGIN
+    UPDATE dbo.registration_codes SET created_by = N'' WHERE created_by = @username;
+    UPDATE dbo.registration_codes SET used_by = N'' WHERE used_by = @username;
+END;
+
+IF OBJECT_ID(N'dbo.app_releases', N'U') IS NOT NULL
+    UPDATE dbo.app_releases SET published_by = N'' WHERE published_by = @username;
+
+IF OBJECT_ID(N'dbo.app_settings', N'U') IS NOT NULL
+    UPDATE dbo.app_settings SET updated_by = N'' WHERE updated_by = @username;
+
+UPDATE dbo.app_users SET approved_by = N'' WHERE approved_by = @username;
+
+IF OBJECT_ID(N'dbo.audit_logs', N'U') IS NOT NULL
+BEGIN
+    DELETE FROM dbo.audit_logs
+    WHERE user_id = @id
+       OR username = @username
+       OR (entity = N'User' AND (entity_name = @username OR entity_name = @idText))
+       OR (entity = N'ChamCong' AND entity_name = @username);
+END;
+
+DELETE FROM dbo.app_users WHERE username = @username;",
+            conn, tx);
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@idText", id.ToString());
+        cmd.Parameters.AddWithValue("@username", username);
+
+        await cmd.ExecuteNonQueryAsync();
     }
 }

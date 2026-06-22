@@ -56,7 +56,7 @@ export const NAV: NavSection[] = [
       { key: "chamcong", label: "Chấm công", icon: ScanFace, path: "/chamcong", ready: true },
       { key: "baocao", label: "Báo cáo", icon: BookOpen, path: "/baocao", ready: true },
       { key: "danhmuc", label: "Danh mục", icon: Tags, path: "/danhmuc" },
-      { key: "hethong", label: "Hệ thống", icon: Settings, path: "/caidat" },
+      { key: "hethong", label: "Hệ thống", icon: Settings, path: "/caidat", ready: true },
     ],
   },
 ];
