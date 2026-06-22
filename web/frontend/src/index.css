@@ -956,6 +956,24 @@ body {
   min-width: 190px;
 }
 
+.km-brand-title {
+  display: block;
+  min-width: 205px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.km-sidebar-brand .km-brand-title {
+  width: 166px;
+  min-width: 166px;
+  overflow: hidden;
+}
+
+.km-login-brand-title {
+  display: inline-block;
+  min-width: min(340px, 100%);
+}
+
 .km-header-search {
   display: flex;
   min-width: 220px;

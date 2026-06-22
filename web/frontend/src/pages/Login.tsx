@@ -5,6 +5,7 @@ import { GlassCard } from "../components/Glass";
 import { Button } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
+import { APP_BRAND_NAME } from "../lib/branding";
 
 export function Login() {
   const { login } = useAuth();
@@ -39,7 +40,7 @@ export function Login() {
           >
             CP
           </div>
-          <h1 className="text-2xl font-bold text-[var(--text)]">Công ty TNHH Inox Cường Phát</h1>
+          <h1 className="km-login-brand-title text-2xl font-bold text-[var(--text)]">{APP_BRAND_NAME}</h1>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">Phần mềm kế toán</p>
         </div>
 

@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/types";
+import { APP_BRAND_NAME } from "../lib/branding";
 
 interface IndicatorState {
   x: number;
@@ -245,7 +246,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <div className="km-sidebar-brand">
         <div className="km-sidebar-logo">CP</div>
         <div className="min-w-0 leading-tight">
-          <div className="text-sm font-bold text-white">Công ty TNHH Inox Cường Phát</div>
+          <div className="km-brand-title text-sm font-bold text-white">{APP_BRAND_NAME}</div>
           <div className="mt-1 text-[11px] text-[var(--sidebar-text)]">Hệ thống quản lý kế toán</div>
         </div>
       </div>

@@ -4,6 +4,7 @@ import { startRealtime } from "./lib/realtime";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ThemeProvider } from "./lib/theme";
 import { Layout } from "./components/Layout";
+import { WaterReminderPopup } from "./components/WaterReminderPopup";
 import { Login } from "./pages/Login";
 import { KioskPage } from "./pages/KioskPage";
 import { Dashboard } from "./pages/Dashboard";
@@ -15,6 +16,7 @@ import { BaoCao } from "./pages/BaoCao";
 import { SaoLuu } from "./pages/SaoLuu";
 import { CapNhat } from "./pages/CapNhat";
 import { StubPage } from "./pages/StubPage";
+import { SystemSettings } from "./pages/SystemSettings";
 import { isAdmin } from "./lib/types";
 import { Loader2 } from "lucide-react";
 
@@ -29,7 +31,12 @@ function Protected({ children, admin }: { children: React.ReactNode; admin?: boo
     );
   if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;
   if (admin && !isAdmin(user)) return <Navigate to="/dashboard" replace />;
-  return <Layout>{children}</Layout>;
+  return (
+    <>
+      <Layout>{children}</Layout>
+      <WaterReminderPopup user={user} />
+    </>
+  );
 }
 
 export default function App() {
@@ -63,7 +70,7 @@ export default function App() {
             <Route path="/congno" element={<Protected><StubPage title="Công nợ" /></Protected>} />
             <Route path="/nganhang" element={<Protected><StubPage title="Ngân hàng" /></Protected>} />
             <Route path="/chiphi" element={<Protected><StubPage title="Chi phí" /></Protected>} />
-            <Route path="/caidat" element={<Protected><StubPage title="Cài đặt" /></Protected>} />
+            <Route path="/caidat" element={<Protected><SystemSettings /></Protected>} />
             <Route path="/lichhen" element={<Protected><StubPage title="Lịch hẹn" /></Protected>} />
             <Route path="/tichhop" element={<Protected><StubPage title="Tích hợp" /></Protected>} />
 

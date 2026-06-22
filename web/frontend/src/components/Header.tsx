@@ -16,6 +16,7 @@ import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
 import { initials } from "../lib/format";
 import { isAdmin } from "../lib/types";
+import { APP_BRAND_NAME } from "../lib/branding";
 import { EditProfileModal, ChangePasswordModal } from "./AccountModals";
 
 export function Header({ onMenu }: { onMenu: () => void }) {
@@ -50,7 +51,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
       </button>
 
       <div className="km-header-company">
-        <div className="text-sm font-bold text-[var(--text)]">Công ty TNHH Inox Cường Phát</div>
+        <div className="km-brand-title text-sm font-bold text-[var(--text)]">{APP_BRAND_NAME}</div>
         <div className="mt-1 text-xs font-medium text-[var(--text-secondary)]">Hệ thống kế toán doanh nghiệp</div>
       </div>
 
