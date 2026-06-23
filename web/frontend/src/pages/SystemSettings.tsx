@@ -1,36 +1,118 @@
 import { useEffect, useState } from "react";
-import { Droplet, Power, ShieldCheck } from "lucide-react";
+import { Droplet, Eye, Power, ShieldCheck } from "lucide-react";
 import { GlassCard } from "../components/Glass";
 import { PageHeader } from "../components/Layout";
 import { Badge } from "../components/ui";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../shadcn/tooltip";
 import { useAuth } from "../lib/auth";
 import {
+  ensureEyeDailyLogin,
+  isEyeReminderEnabled,
+  restartEyeDailyLogin,
+  setEyeReminderEnabled,
+  subscribeEyeReminderEnabled,
+} from "../lib/eyeReminderClock";
+import {
+  ensureWaterDailyLogin,
   isWaterReminderEnabled,
+  restartWaterDailyLogin,
   setWaterReminderEnabled,
   subscribeWaterReminderEnabled,
 } from "../lib/waterReminderClock";
 import "./system-settings.css";
 
+const WATER_INTERVAL_MS = 60 * 60 * 1000;
+const EYE_INTERVAL_MS = 20 * 60 * 1000;
+
+function countdownToNextReminder(firstLoginIso: string, intervalMs: number, now: Date) {
+  const firstLoginMs = new Date(firstLoginIso).getTime();
+  if (!Number.isFinite(firstLoginMs)) return 0;
+
+  const elapsedMs = Math.max(0, now.getTime() - firstLoginMs);
+  const nextIndex = Math.floor(elapsedMs / intervalMs) + 1;
+  const nextReminderAt = firstLoginMs + nextIndex * intervalMs;
+  return Math.max(0, nextReminderAt - now.getTime());
+}
+
+function formatHHMMSS(ms: number) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 export function SystemSettings() {
   const { user } = useAuth();
+  const [now, setNow] = useState(() => new Date());
   const [waterEnabled, setWaterEnabled] = useState(() => (user ? isWaterReminderEnabled(user.id) : true));
+  const [eyeEnabled, setEyeEnabled] = useState(() => (user ? isEyeReminderEnabled(user.id) : true));
+
+  const waterCountdown = user && waterEnabled
+    ? formatHHMMSS(countdownToNextReminder(ensureWaterDailyLogin(user.id, now), WATER_INTERVAL_MS, now))
+    : formatHHMMSS(WATER_INTERVAL_MS);
+  const eyeCountdown = user && eyeEnabled
+    ? formatHHMMSS(countdownToNextReminder(ensureEyeDailyLogin(user.id, now), EYE_INTERVAL_MS, now))
+    : formatHHMMSS(EYE_INTERVAL_MS);
 
   useEffect(() => {
     if (!user) return;
 
     setWaterEnabled(isWaterReminderEnabled(user.id));
-    return subscribeWaterReminderEnabled(user.id, () => {
+    setEyeEnabled(isEyeReminderEnabled(user.id));
+
+    const unsubscribeWater = subscribeWaterReminderEnabled(user.id, () => {
       setWaterEnabled(isWaterReminderEnabled(user.id));
     });
+    const unsubscribeEye = subscribeEyeReminderEnabled(user.id, () => {
+      setEyeEnabled(isEyeReminderEnabled(user.id));
+    });
+
+    return () => {
+      unsubscribeWater();
+      unsubscribeEye();
+    };
   }, [user]);
+
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    const intervalId = window.setInterval(tick, 1000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   const toggleWaterReminder = () => {
     if (!user) return;
 
     const next = !waterEnabled;
+    if (next) {
+      const restartedAt = new Date();
+      restartWaterDailyLogin(user.id, restartedAt);
+      setNow(restartedAt);
+    }
     setWaterReminderEnabled(user.id, next);
     setWaterEnabled(next);
+  };
+
+  const toggleEyeReminder = () => {
+    if (!user) return;
+
+    const next = !eyeEnabled;
+    if (next) {
+      const restartedAt = new Date();
+      restartEyeDailyLogin(user.id, restartedAt);
+      setNow(restartedAt);
+    }
+    setEyeReminderEnabled(user.id, next);
+    setEyeEnabled(next);
   };
 
   return (
@@ -63,7 +145,7 @@ export function SystemSettings() {
                       </TooltipTrigger>
                       <TooltipContent side="bottom" align="start" className="system-rules-tooltip">
                         Cài đặt này chỉ điều khiển popup nhắc uống nước trên web. Khi tắt, các lần nhắc tới hạn sẽ không hiện.
-                        Khi bật lại, hệ thống tiếp tục dựa trên mốc đăng nhập đầu tiên của ngày hiện tại.
+                        Khi bật lại, đồng hồ bắt đầu lại từ 01:00:00.
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -76,10 +158,14 @@ export function SystemSettings() {
               type="button"
               role="switch"
               aria-checked={waterEnabled}
+              aria-label={`Bật tắt nhắc uống nước, còn ${waterCountdown} tới lần nhắc tiếp theo`}
               onClick={toggleWaterReminder}
             >
               <span className="water-toggle-icon">
                 <Power className="h-4 w-4" />
+              </span>
+              <span className="reminder-toggle-countdown" aria-hidden="true">
+                {waterCountdown}
               </span>
               <span className="water-toggle-track">
                 <span className="water-toggle-thumb" />
@@ -87,6 +173,57 @@ export function SystemSettings() {
             </button>
           </div>
 
+        </GlassCard>
+
+        <GlassCard className="system-settings-card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 gap-4">
+              <div className="system-settings-icon is-soft">
+                <Eye className="h-7 w-7" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-black text-[var(--text)]">Nhắc bảo vệ mắt 20-20-20</h2>
+                  <Badge color={eyeEnabled ? "success" : "muted"}>
+                    {eyeEnabled ? "Đang bật" : "Đang tắt"}
+                  </Badge>
+                  <TooltipProvider delayDuration={120}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button className="system-rules-hint" type="button" aria-label="Quy tắc 20-20-20">
+                          <ShieldCheck className="h-4 w-4" />
+                          <span>Quy tắc 20-20-20</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" align="start" className="system-rules-tooltip">
+                        Cài đặt này điều khiển popup nhắc bảo vệ mắt trên web. Khi bật, hệ thống nhắc sau mỗi 20 phút
+                        làm việc để bạn nhìn ra xa khoảng 6 mét trong 20 giây. Khi bật lại, đồng hồ bắt đầu lại từ 00:20:00.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </div>
+            </div>
+
+            <button
+              className={`water-toggle eye-toggle ${eyeEnabled ? "is-on" : ""}`}
+              type="button"
+              role="switch"
+              aria-checked={eyeEnabled}
+              aria-label={`Bật tắt nhắc bảo vệ mắt 20-20-20, còn ${eyeCountdown} tới lần nhắc tiếp theo`}
+              onClick={toggleEyeReminder}
+            >
+              <span className="water-toggle-icon">
+                <Power className="h-4 w-4" />
+              </span>
+              <span className="reminder-toggle-countdown" aria-hidden="true">
+                {eyeCountdown}
+              </span>
+              <span className="water-toggle-track">
+                <span className="water-toggle-thumb" />
+              </span>
+            </button>
+          </div>
         </GlassCard>
       </section>
     </div>

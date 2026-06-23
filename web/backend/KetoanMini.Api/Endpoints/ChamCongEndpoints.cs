@@ -64,6 +64,10 @@ public static class ChamCongEndpoints
             Results.Ok(new FaceEngineStatusDto(engine.Name, engine.MatchThreshold)))
             .AllowAnonymous();
 
+        g.MapGet("/rtsp/status", (RtspAttendanceWorker worker) =>
+            Results.Ok(worker.GetStatus()))
+            .RequireAuthorization(p => p.RequireRole("Admin"));
+
         // Danh sách nhân viên đã đăng ký khuôn mặt (gộp theo username).
         g.MapGet("/dadangky", async (Database db) =>
         {
@@ -200,26 +204,12 @@ public static class ChamCongEndpoints
                 return Results.Ok(new NhanDienResult(false, null, null, best, null, null,
                     "Không nhận diện được. Khuôn mặt chưa được đăng ký hoặc ảnh chưa rõ."));
 
-            // Lần chấm gần nhất TRONG NGÀY của nhân viên (loại + thời điểm).
-            string? lastLoai = null;
-            DateTime? lastAt = null;
-            await using (var lr = await conn.Cmd(
-                @"SELECT TOP 1 loai, occurred_at FROM cham_cong_log
-                  WHERE username=@u AND CONVERT(date, occurred_at) = CONVERT(date, SYSUTCDATETIME())
-                  ORDER BY occurred_at DESC").With("@u", bestUser).ExecuteReaderAsync())
-            {
-                if (await lr.ReadAsync()) { lastLoai = lr.Str("loai"); lastAt = lr.Dt("occurred_at"); }
-            }
+            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser);
+            if (!decision.ShouldRecord)
+                return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, decision.Loai, decision.ExistingAt,
+                    decision.Message));
 
-            // Chống chấm trùng: tự động chụp bắn liên tục, nên nếu vừa chấm trong vòng
-            // COOLDOWN giây thì KHÔNG ghi thêm (tránh Vào rồi Ra ngay lập tức).
-            const int cooldownSeconds = 30;
-            if (lastAt is not null && (DateTime.UtcNow - lastAt.Value).TotalSeconds < cooldownSeconds)
-                return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, lastLoai, lastAt,
-                    $"{bestName} đã chấm công {lastLoai} rồi."));
-
-            // Quyết định Vào/Ra theo lần chấm gần nhất trong ngày.
-            var loai = lastLoai == "Vào" ? "Ra" : "Vào";
+            var loai = decision.Loai;
 
             // KHÔNG lưu ảnh vào log: cột anh không hiển thị ở bất kỳ đâu nên chỉ làm phình DB.
             // (Cột vẫn còn trong bảng để tương thích cũ; đơn giản là không ghi nữa → mặc định NULL.)
@@ -238,7 +228,7 @@ public static class ChamCongEndpoints
             catch { /* bỏ qua, chấm công vẫn thành công */ }
 
             return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, loai, DateTime.UtcNow,
-                $"{bestName} đã chấm công {loai}."));
+                decision.Message));
         }).AllowAnonymous();
 
         // Nhật ký chấm công (lọc theo ngày yyyy-MM-dd và/hoặc từ khóa).

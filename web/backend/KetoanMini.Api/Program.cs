@@ -12,6 +12,10 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var ffmpegCaptureOptions = builder.Configuration["KioskCamera:FfmpegCaptureOptions"];
+if (!string.IsNullOrWhiteSpace(ffmpegCaptureOptions))
+    Environment.SetEnvironmentVariable("OPENCV_FFMPEG_CAPTURE_OPTIONS", ffmpegCaptureOptions);
+
 // DateOnly tuần tự hóa dạng "yyyy-MM-dd" để khớp với input date của trình duyệt.
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
@@ -31,6 +35,8 @@ builder.Services.AddSingleton<IFaceEngine, OpenCvSFaceEngine>();
 // Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
 builder.Services.AddSignalR();
 builder.Services.AddHostedService<ChangeWatcher>();
+builder.Services.AddSingleton<RtspAttendanceWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RtspAttendanceWorker>());
 
 var jwt = builder.Configuration.GetSection("Jwt");
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

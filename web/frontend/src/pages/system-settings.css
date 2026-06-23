@@ -127,12 +127,35 @@
 
 .water-toggle-icon {
   display: grid;
+  flex: 0 0 auto;
   place-items: center;
+}
+
+.reminder-toggle-countdown {
+  display: inline-flex;
+  min-width: 74px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(230, 243, 255, 0.14)),
+    rgba(255, 255, 255, 0.12);
+  padding: 6px 9px;
+  color: inherit;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.54);
 }
 
 .water-toggle-track {
   position: relative;
   display: block;
+  flex: 0 0 auto;
   height: 36px;
   width: 68px;
   border-radius: 999px;
@@ -181,4 +204,17 @@
 
 .water-toggle.is-on .water-toggle-thumb {
   transform: translateX(32px);
+}
+
+.eye-toggle.is-on {
+  color: #0f766e;
+}
+
+.eye-toggle.is-on .water-toggle-track {
+  background:
+    radial-gradient(circle at 74% 44%, rgba(255, 255, 255, 0.5), transparent 42%),
+    linear-gradient(135deg, #22d3b6, #0f8fb4 58%, #315eea);
+  box-shadow:
+    0 0 22px rgba(45, 212, 191, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }

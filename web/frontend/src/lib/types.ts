@@ -118,6 +118,22 @@ export interface FaceEngineStatus {
   engine: string;
   matchThreshold: number;
 }
+export interface RtspAttendanceStatus {
+  enabled: boolean;
+  cameraConnected: boolean;
+  mode: string;
+  lastMotionAt?: string;
+  lastScanAt?: string;
+  lastMatchedAt?: string;
+  lastMatchedUser: string;
+  lastMatchedName: string;
+  lastMessage: string;
+  lastFrameAt?: string;
+  lastMotionScore: number;
+  lastSimilarity: number;
+  scanBurstCount: number;
+  enrolledTemplates: number;
+}
 export interface FaceNguoiDung {
   username: string;
   fullName: string;

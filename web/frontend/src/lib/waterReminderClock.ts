@@ -21,6 +21,13 @@ export function ensureWaterDailyLogin(userId: string, date = new Date()) {
   return value;
 }
 
+export function restartWaterDailyLogin(userId: string, date = new Date()) {
+  const key = `${WATER_LOGIN_PREFIX}:${userId}:${waterReminderDayKey(date)}`;
+  const value = date.toISOString();
+  localStorage.setItem(key, value);
+  return value;
+}
+
 export function isWaterReminderEnabled(userId: string) {
   return localStorage.getItem(waterEnabledKey(userId)) !== "false";
 }

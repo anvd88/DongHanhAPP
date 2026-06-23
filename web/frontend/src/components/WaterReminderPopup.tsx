@@ -116,8 +116,9 @@ export function WaterReminderPopup({ user }: { user: User }) {
   const dayKey = waterReminderDayKey(now);
   const firstLoginIso = useMemo(() => ensureWaterDailyLogin(user.id, now), [dayKey, now, user.id]);
   const firstLoginMs = new Date(firstLoginIso).getTime();
-  const reminderIndex = Math.max(0, Math.floor((now.getTime() - firstLoginMs) / HOUR_MS));
-  const reminderId = `${dayKey}:${reminderIndex}`;
+  const reminderIndex = Math.max(1, Math.floor((now.getTime() - firstLoginMs) / HOUR_MS));
+  const scheduleId = `${dayKey}:${firstLoginMs}`;
+  const reminderId = `${scheduleId}:${reminderIndex}`;
   const reminderAt = firstLoginMs + reminderIndex * HOUR_MS;
   const nextReminderAt = firstLoginMs + (reminderIndex + 1) * HOUR_MS;
   const [dayState, setDayState] = useState(() => loadDayState(user.id, dayKey));

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ScanFace, Trash2, UserPlus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Activity, Radio, RefreshCw, ScanFace, Trash2, UserPlus, Wifi, WifiOff } from "lucide-react";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
@@ -8,6 +8,7 @@ import type {
   ChamCongLog,
   FaceRegistrationLog,
   FaceNguoiDung,
+  RtspAttendanceStatus,
   UserAdmin,
 } from "../../lib/types";
 import { CameraPanel } from "./CameraPanel";
@@ -50,7 +51,7 @@ export function ChamCongPage() {
         )}
       </div>
 
-      {tab === "chamcong" && <CheckInTab />}
+      {tab === "chamcong" && <CheckInTab admin={admin} />}
       {tab === "dangky" && admin && <RegisterTab />}
       {tab === "khuonmat" && admin && <FaceDataTab />}
       {tab === "nhatky" && admin && <LogTab />}
@@ -59,8 +60,112 @@ export function ChamCongPage() {
 }
 
 /* ----------------------------- Tab: Chấm công ----------------------------- */
-function CheckInTab() {
-  return <CheckInScanner />;
+function CheckInTab({ admin }: { admin: boolean }) {
+  return (
+    <div className="space-y-4">
+      <CheckInScanner />
+      {admin && <RtspStatusPanel />}
+    </div>
+  );
+}
+
+function RtspStatusPanel() {
+  const { data: status, loading, error, reload } = useApi<RtspAttendanceStatus>("/api/chamcong/rtsp/status");
+
+  useEffect(() => {
+    const id = window.setInterval(() => reload({ silent: true }), 2500);
+    return () => window.clearInterval(id);
+  }, [reload]);
+
+  const tone = !status?.enabled ? "off" : status.cameraConnected ? "on" : "warn";
+  const cameraText = !status?.enabled
+    ? "Đang tắt"
+    : status.cameraConnected
+      ? "Đã kết nối"
+      : "Chưa kết nối";
+  const matchedName = status?.lastMatchedName || status?.lastMatchedUser || "--";
+
+  return (
+    <section className="cc-rtsp glass" aria-live="polite">
+      <div className="cc-rtsp-header">
+        <div className="cc-rtsp-title">
+          <Radio className="h-4 w-4" />
+          <span>RTSP kiosk</span>
+        </div>
+        <div className="cc-rtsp-actions">
+          <span className="cc-rtsp-pill" data-tone={tone}>{loading && !status ? "Đang tải" : status?.mode ?? "Unknown"}</span>
+          <button className="cc-icon-btn cc-rtsp-refresh" onClick={() => reload()} title="Làm mới" type="button">
+            <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="cc-rtsp-message" data-warn="true">{error}</div>
+      ) : (
+        <>
+          <div className="cc-rtsp-grid">
+            <div className="cc-rtsp-item">
+              {status?.cameraConnected ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
+              <div>
+                <span>Camera</span>
+                <strong>{cameraText}</strong>
+              </div>
+            </div>
+            <div className="cc-rtsp-item">
+              <Activity className="h-4 w-4" />
+              <div>
+                <span>Motion</span>
+                <strong>{formatPercent(status?.lastMotionScore)}</strong>
+              </div>
+            </div>
+            <div className="cc-rtsp-item">
+              <ScanFace className="h-4 w-4" />
+              <div>
+                <span>Burst</span>
+                <strong>{status?.scanBurstCount ?? 0} scan</strong>
+              </div>
+            </div>
+            <div className="cc-rtsp-item">
+              <ScanFace className="h-4 w-4" />
+              <div>
+                <span>Mẫu</span>
+                <strong>{status?.enrolledTemplates ?? 0}</strong>
+              </div>
+            </div>
+            <div className="cc-rtsp-item">
+              <span className="cc-rtsp-dot" />
+              <div>
+                <span>Lần scan</span>
+                <strong>{formatTime(status?.lastScanAt)}</strong>
+              </div>
+            </div>
+            <div className="cc-rtsp-item">
+              <span className="cc-rtsp-dot" data-ok="true" />
+              <div>
+                <span>Nhận diện</span>
+                <strong>{matchedName}</strong>
+              </div>
+            </div>
+          </div>
+          <div className="cc-rtsp-message">
+            {status?.lastMessage ?? "Chưa có trạng thái."}
+            {status?.lastSimilarity ? ` Độ khớp ${(status.lastSimilarity * 100).toFixed(1)}%.` : ""}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function formatPercent(value?: number) {
+  if (value === undefined || Number.isNaN(value)) return "--";
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+function formatTime(value?: string) {
+  if (!value) return "--";
+  return new Date(value).toLocaleTimeString("vi-VN");
 }
 
 /* -------------------------- Tab: Đăng ký khuôn mặt -------------------------- */
