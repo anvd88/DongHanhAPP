@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { api, tokenStore } from "./api";
 import type { User } from "./types";
 import { ensureWaterDailyLogin } from "./waterReminderClock";
+import { ensureEyeDailyLogin } from "./eyeReminderClock";
 
 interface AuthCtx {
   user: User | null;
@@ -59,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .get<User>("/api/auth/me")
       .then((currentUser) => {
         ensureWaterDailyLogin(currentUser.id);
+        ensureEyeDailyLogin(currentUser.id);
         setUser(currentUser);
       })
       .catch(() => tokenStore.clear())
@@ -90,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await api.post<{ token: string; user: User }>("/api/auth/login", { username, password });
     tokenStore.set(res.token);
     ensureWaterDailyLogin(res.user.id);
+    ensureEyeDailyLogin(res.user.id);
     setUser(res.user); // kích hoạt heartbeat ngay qua effect ở trên
   };
 

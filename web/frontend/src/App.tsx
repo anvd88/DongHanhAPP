@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "./lib/auth";
 import { ThemeProvider } from "./lib/theme";
 import { Layout } from "./components/Layout";
 import { WaterReminderPopup } from "./components/WaterReminderPopup";
+import { EyeReminderPopup } from "./components/EyeReminderPopup";
 import { Login } from "./pages/Login";
 import { KioskPage } from "./pages/KioskPage";
 import { Dashboard } from "./pages/Dashboard";
@@ -35,6 +36,7 @@ function Protected({ children, admin }: { children: React.ReactNode; admin?: boo
     <>
       <Layout>{children}</Layout>
       <WaterReminderPopup user={user} />
+      <EyeReminderPopup user={user} />
     </>
   );
 }
