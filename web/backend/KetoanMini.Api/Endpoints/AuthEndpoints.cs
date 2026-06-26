@@ -18,7 +18,7 @@ public static class AuthEndpoints
 
             await using var conn = await db.OpenAsync();
             await using var reader = await conn.Cmd(
-                @"SELECT id, username, full_name, role, password_hash, is_active, approval_status, created_at
+                @"SELECT id, username, full_name, email, role, password_hash, is_active, approval_status, created_at
                   FROM dbo.app_users
                   WHERE username = @u AND is_deleted = 0")
                 .With("@u", req.Username.Trim())
@@ -33,7 +33,7 @@ public static class AuthEndpoints
 
             var user = new UserDto(
                 reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
-                reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
+                reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
                 reader.DtNull("created_at"));
 
             if (user.IsPending)
@@ -51,7 +51,7 @@ public static class AuthEndpoints
         {
             await using var conn = await db.OpenAsync();
             await using var reader = await conn.Cmd(
-                @"SELECT id, username, full_name, role, is_active, approval_status, created_at
+                @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
                   FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
                 .With("@u", principal.Username())
                 .ExecuteReaderAsync();
@@ -61,7 +61,7 @@ public static class AuthEndpoints
 
             return Results.Ok(new UserDto(
                 reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
-                reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
+                reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
                 reader.DtNull("created_at")));
         }).RequireAuthorization();
 
@@ -70,25 +70,26 @@ public static class AuthEndpoints
         g.MapPut("/profile", async (UpdateProfileRequest req, ClaimsPrincipal principal, Database db) =>
         {
             var fullName = (req.FullName ?? "").Trim();
+            var email = (req.Email ?? "").Trim();
             if (string.IsNullOrWhiteSpace(fullName))
                 return Results.BadRequest(new { message = "Vui lòng nhập tên hiển thị." });
 
             var username = principal.Username();
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("UPDATE dbo.app_users SET full_name = @fn WHERE username = @u AND is_deleted = 0")
-                .With("@fn", fullName).With("@u", username).ExecuteNonQueryAsync();
+            var n = await conn.Cmd("UPDATE dbo.app_users SET full_name = @fn, email = @em WHERE username = @u AND is_deleted = 0")
+                .With("@fn", fullName).With("@em", email).With("@u", username).ExecuteNonQueryAsync();
             if (n == 0) return Results.Unauthorized();
 
             await db.RecordAudit(username, "Sửa hồ sơ", "User", username, "Đổi tên hiển thị (web).");
 
             await using var reader = await conn.Cmd(
-                @"SELECT id, username, full_name, role, is_active, approval_status, created_at
+                @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
                   FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
                 .With("@u", username).ExecuteReaderAsync();
             if (!await reader.ReadAsync()) return Results.Unauthorized();
             return Results.Ok(new UserDto(
                 reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
-                reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
+                reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
                 reader.DtNull("created_at")));
         }).RequireAuthorization();
 

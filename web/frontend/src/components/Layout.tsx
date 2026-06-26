@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
+import { QuickToolsDrawer } from "./QuickToolsDrawer";
 
 export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -30,6 +31,7 @@ export function Layout({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
+      <QuickToolsDrawer />
     </div>
   );
 }
@@ -42,7 +44,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
         <h1>{title}</h1>
         {subtitle && <p>{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>}
     </div>
   );
 }

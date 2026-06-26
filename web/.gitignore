@@ -15,6 +15,13 @@ backend/KetoanMini.Api/wwwroot/
 .env
 .env.*
 !.env.example
+.codex-logs/
+.codex-build/
+tools/camera-snapshot/runtime/
+tools/camera-snapshot/logs/
+tools/camera-snapshot/latest.jpg
+tools/camera-snapshot/probe-*.jpg
+tools/video-bridge/runtime/
 
 # Chứng chỉ HTTPS LAN — chứa khóa bí mật, KHÔNG commit
 backend/KetoanMini.Api/certs/

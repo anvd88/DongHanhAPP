@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, Radio, RefreshCw, ScanFace, Trash2, UserPlus, Wifi, WifiOff } from "lucide-react";
+import { Activity, Radio, RefreshCw, ScanFace, ToggleLeft, ToggleRight, Trash2, UserPlus, Wifi, WifiOff } from "lucide-react";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
@@ -71,11 +71,44 @@ function CheckInTab({ admin }: { admin: boolean }) {
 
 function RtspStatusPanel() {
   const { data: status, loading, error, reload } = useApi<RtspAttendanceStatus>("/api/chamcong/rtsp/status");
+  const [reconnecting, setReconnecting] = useState(false);
+  const [testToggling, setTestToggling] = useState(false);
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
 
   useEffect(() => {
     const id = window.setInterval(() => reload({ silent: true }), 2500);
     return () => window.clearInterval(id);
   }, [reload]);
+
+  const reconnect = async () => {
+    if (reconnecting) return;
+    setReconnecting(true);
+    setReconnectError(null);
+    try {
+      await api.post("/api/chamcong/rtsp/reconnect");
+      reload();
+    } catch (e) {
+      setReconnectError(e instanceof Error ? e.message : "Không kết nối lại được camera.");
+    } finally {
+      setReconnecting(false);
+    }
+  };
+
+  const testScanEnabled = Boolean(status?.testScanEnabled);
+  const toggleTestScan = async () => {
+    if (testToggling) return;
+    const next = !testScanEnabled;
+    setTestToggling(true);
+    setReconnectError(null);
+    try {
+      await api.post("/api/chamcong/rtsp/test-scan", { enabled: next });
+      reload();
+    } catch (e) {
+      setReconnectError(e instanceof Error ? e.message : "Không đổi được chế độ test scan.");
+    } finally {
+      setTestToggling(false);
+    }
+  };
 
   const tone = !status?.enabled ? "off" : status.cameraConnected ? "on" : "warn";
   const cameraText = !status?.enabled
@@ -90,18 +123,35 @@ function RtspStatusPanel() {
       <div className="cc-rtsp-header">
         <div className="cc-rtsp-title">
           <Radio className="h-4 w-4" />
-          <span>RTSP kiosk</span>
+          <span>RTSP kiosk{status?.source ? ` - ${status.source}` : ""}</span>
         </div>
         <div className="cc-rtsp-actions">
-          <span className="cc-rtsp-pill" data-tone={tone}>{loading && !status ? "Đang tải" : status?.mode ?? "Unknown"}</span>
-          <button className="cc-icon-btn cc-rtsp-refresh" onClick={() => reload()} title="Làm mới" type="button">
-            <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+          <span className="cc-rtsp-pill" data-tone={tone}>{reconnecting ? "Đang kết nối lại" : loading && !status ? "Đang tải" : status?.mode ?? "Không rõ"}</span>
+          <button
+            aria-pressed={testScanEnabled}
+            className="cc-icon-btn cc-rtsp-test"
+            data-on={testScanEnabled}
+            disabled={testToggling}
+            onClick={toggleTestScan}
+            title={testScanEnabled ? "Tắt test scan 3 giây/lần" : "Bật test scan 3 giây/lần"}
+            type="button"
+          >
+            {testScanEnabled ? <ToggleRight className="h-4 w-4" /> : <ToggleLeft className="h-4 w-4" />}
+          </button>
+          <button
+            className="cc-icon-btn cc-rtsp-refresh"
+            disabled={reconnecting}
+            onClick={reconnect}
+            title="Kết nối lại camera"
+            type="button"
+          >
+            <RefreshCw className={loading || reconnecting ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
           </button>
         </div>
       </div>
 
-      {error ? (
-        <div className="cc-rtsp-message" data-warn="true">{error}</div>
+      {error || reconnectError ? (
+        <div className="cc-rtsp-message" data-warn="true">{reconnectError ?? error}</div>
       ) : (
         <>
           <div className="cc-rtsp-grid">
@@ -115,7 +165,7 @@ function RtspStatusPanel() {
             <div className="cc-rtsp-item">
               <Activity className="h-4 w-4" />
               <div>
-                <span>Motion</span>
+                <span>Chuyển động</span>
                 <strong>{formatPercent(status?.lastMotionScore)}</strong>
               </div>
             </div>

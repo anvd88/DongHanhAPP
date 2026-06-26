@@ -35,6 +35,8 @@ builder.Services.AddSingleton<IFaceEngine, OpenCvSFaceEngine>();
 // Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
 builder.Services.AddSignalR();
 builder.Services.AddHostedService<ChangeWatcher>();
+builder.Services.AddSingleton<CameraSnapshotBridgeService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraSnapshotBridgeService>());
 builder.Services.AddSingleton<RtspAttendanceWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RtspAttendanceWorker>());
 
@@ -127,6 +129,8 @@ app.MapGet("/api/health", async (Database db) =>
     catch (Exception ex) { return Results.Json(new { db = "error", detail = ex.Message }, statusCode: 503); }
 });
 
+await EnsureAppUsersEmailColumn(app);
+
 app.MapAuth();
 app.MapAccounting();
 app.MapGiaCong();
@@ -161,3 +165,25 @@ try
 catch (Exception ex) { app.Logger.LogWarning("Không thêm được cột client_kind lúc khởi động: {Msg}", ex.Message); }
 
 app.Run();
+
+static async Task EnsureAppUsersEmailColumn(WebApplication app)
+{
+    try
+    {
+        await using var conn = await app.Services.GetRequiredService<Database>().OpenAsync();
+        await conn.Cmd(@"SET QUOTED_IDENTIFIER ON;
+                         SET ANSI_NULLS ON;
+                         SET ANSI_PADDING ON;
+                         SET ANSI_WARNINGS ON;
+                         SET CONCAT_NULL_YIELDS_NULL ON;
+                         SET ARITHABORT ON;
+                         SET NUMERIC_ROUNDABORT OFF;
+                         IF OBJECT_ID(N'dbo.app_users', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.app_users', N'email') IS NULL
+                         ALTER TABLE dbo.app_users ADD email NVARCHAR(256) NOT NULL DEFAULT N'';")
+            .ExecuteNonQueryAsync();
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning("Không thêm được cột email lúc khởi động: {Msg}", ex.Message);
+    }
+}

@@ -1,50 +1,51 @@
 import { useMemo } from "react";
-import { CheckCircle2, Coins, Hammer, Layers } from "lucide-react";
-import { money, moneyVnd } from "../../lib/format";
+import { ArrowDownToLine, ArrowUpFromLine, Coins, Layers } from "lucide-react";
+import { moneyVnd, num } from "../../lib/format";
 import type { GiaCongListItem } from "../../lib/types";
 import { StatCard } from "./StatCard";
 
 export function StatsRow({ rows }: { rows: GiaCongListItem[] }) {
   const stats = useMemo(() => {
-    const total = rows.length;
-    const dangXuLy = rows.filter((r) => r.trangThai === "Đang xử lý").length;
-    const hoanThanh = rows.filter((r) => r.trangThai === "Hoàn thành").length;
-    const tongGiaTri = rows.reduce((sum, r) => sum + (r.tongGiaTri || 0), 0);
-    return { total, dangXuLy, hoanThanh, tongGiaTri };
+    const phieuXuat = rows.filter((row) => row.loaiPhieu.toLowerCase().includes("xuất")).length;
+    const phieuNhap = rows.filter((row) => row.loaiPhieu.toLowerCase().includes("nhập")).length;
+    const soLuongXuat = rows.reduce((sum, row) => sum + (row.soLuongXuat || 0), 0);
+    const soLuongNhap = rows.reduce((sum, row) => sum + (row.soLuongNhap || 0), 0);
+    const tienGiaCong = rows.reduce((sum, row) => sum + (row.tienGiaCongPhaiTra || 0), 0);
+    return { phieuXuat, phieuNhap, soLuongXuat, soLuongNhap, tienGiaCong };
   }, [rows]);
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard
         index={0}
-        icon={Layers}
-        label="Tổng phiếu gia công"
-        value={money(stats.total)}
-        sub="Toàn bộ phiếu"
+        icon={ArrowUpFromLine}
+        label="Xuất gia công"
+        value={num(stats.soLuongXuat)}
+        sub={`${num(stats.phieuXuat)} phiếu xuất`}
         tone="31, 107, 255"
       />
       <StatCard
         index={1}
-        icon={Hammer}
-        label="Đang xử lý"
-        value={money(stats.dangXuLy)}
-        sub="Phiếu đang chạy"
-        tone="217, 119, 6"
-      />
-      <StatCard
-        index={2}
-        icon={CheckCircle2}
-        label="Hoàn thành"
-        value={money(stats.hoanThanh)}
-        sub="Đã nghiệm thu"
+        icon={ArrowDownToLine}
+        label="Nhập gia công"
+        value={num(stats.soLuongNhap)}
+        sub={`${num(stats.phieuNhap)} phiếu nhập`}
         tone="0, 184, 148"
       />
       <StatCard
-        index={3}
+        index={2}
         icon={Coins}
-        label="Tổng giá trị"
-        value={moneyVnd(stats.tongGiaTri)}
-        sub="Cộng dồn các phiếu"
+        label="Phí gia công"
+        value={moneyVnd(stats.tienGiaCong)}
+        sub="Chỉ tính khi nhập về"
+        tone="217, 119, 6"
+      />
+      <StatCard
+        index={3}
+        icon={Layers}
+        label="Tổng phiếu"
+        value={num(rows.length)}
+        sub="Xuất và nhập"
         tone="124, 70, 255"
       />
     </div>

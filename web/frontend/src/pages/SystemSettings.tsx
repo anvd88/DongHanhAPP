@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
-import { Droplet, Eye, Power, ShieldCheck } from "lucide-react";
+import { Droplet, Eye, FilePlus2, Power, ScanFace, ShieldCheck } from "lucide-react";
 import { GlassCard } from "../components/Glass";
 import { PageHeader } from "../components/Layout";
 import { Badge } from "../components/ui";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../shadcn/tooltip";
+import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { isAdmin, type RtspAttendanceStatus } from "../lib/types";
+import { useApi } from "../lib/useApi";
+import {
+  isKeepCreateVoucherOpenEnabled,
+  setKeepCreateVoucherOpenEnabled,
+  subscribeKeepCreateVoucherOpenEnabled,
+} from "../lib/accountingPreferences";
 import {
   ensureEyeDailyLogin,
   isEyeReminderEnabled,
@@ -45,9 +53,22 @@ function formatHHMMSS(ms: number) {
 
 export function SystemSettings() {
   const { user } = useAuth();
+  const admin = isAdmin(user);
   const [now, setNow] = useState(() => new Date());
   const [waterEnabled, setWaterEnabled] = useState(() => (user ? isWaterReminderEnabled(user.id) : true));
   const [eyeEnabled, setEyeEnabled] = useState(() => (user ? isEyeReminderEnabled(user.id) : true));
+  const [keepCreateVoucherOpen, setKeepCreateVoucherOpen] = useState(() =>
+    user ? isKeepCreateVoucherOpenEnabled(user.id) : false,
+  );
+  const [attendanceToggling, setAttendanceToggling] = useState(false);
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const {
+    data: rtspStatus,
+    loading: rtspLoading,
+    error: rtspError,
+    reload: reloadRtspStatus,
+    setData: setRtspStatus,
+  } = useApi<RtspAttendanceStatus>(admin ? "/api/chamcong/rtsp/status" : null, [admin]);
 
   const waterCountdown = user && waterEnabled
     ? formatHHMMSS(countdownToNextReminder(ensureWaterDailyLogin(user.id, now), WATER_INTERVAL_MS, now))
@@ -55,12 +76,14 @@ export function SystemSettings() {
   const eyeCountdown = user && eyeEnabled
     ? formatHHMMSS(countdownToNextReminder(ensureEyeDailyLogin(user.id, now), EYE_INTERVAL_MS, now))
     : formatHHMMSS(EYE_INTERVAL_MS);
+  const autoAttendanceEnabled = Boolean(rtspStatus?.autoAttendanceEnabled ?? rtspStatus?.enabled);
 
   useEffect(() => {
     if (!user) return;
 
     setWaterEnabled(isWaterReminderEnabled(user.id));
     setEyeEnabled(isEyeReminderEnabled(user.id));
+    setKeepCreateVoucherOpen(isKeepCreateVoucherOpenEnabled(user.id));
 
     const unsubscribeWater = subscribeWaterReminderEnabled(user.id, () => {
       setWaterEnabled(isWaterReminderEnabled(user.id));
@@ -68,10 +91,14 @@ export function SystemSettings() {
     const unsubscribeEye = subscribeEyeReminderEnabled(user.id, () => {
       setEyeEnabled(isEyeReminderEnabled(user.id));
     });
+    const unsubscribeAccounting = subscribeKeepCreateVoucherOpenEnabled(user.id, () => {
+      setKeepCreateVoucherOpen(isKeepCreateVoucherOpenEnabled(user.id));
+    });
 
     return () => {
       unsubscribeWater();
       unsubscribeEye();
+      unsubscribeAccounting();
     };
   }, [user]);
 
@@ -115,6 +142,31 @@ export function SystemSettings() {
     setEyeEnabled(next);
   };
 
+  const toggleKeepCreateVoucherOpen = () => {
+    if (!user) return;
+
+    const next = !keepCreateVoucherOpen;
+    setKeepCreateVoucherOpenEnabled(user.id, next);
+    setKeepCreateVoucherOpen(next);
+  };
+
+  const toggleAutoAttendance = async () => {
+    if (!admin || attendanceToggling || !rtspStatus) return;
+
+    const next = !autoAttendanceEnabled;
+    setAttendanceToggling(true);
+    setAttendanceError(null);
+    try {
+      const res = await api.post<{ status: RtspAttendanceStatus }>("/api/chamcong/rtsp/auto-attendance", { enabled: next });
+      setRtspStatus(res.status);
+      reloadRtspStatus({ silent: true });
+    } catch (e) {
+      setAttendanceError(e instanceof Error ? e.message : "Không đổi được chế độ chấm công tự động.");
+    } finally {
+      setAttendanceToggling(false);
+    }
+  };
+
   return (
     <div className="system-settings-page">
       <PageHeader
@@ -122,7 +174,7 @@ export function SystemSettings() {
         subtitle="Cài đặt thông báo và tuỳ chọn trải nghiệm web"
       />
 
-      <section className="grid gap-4">
+      <section className="system-settings-grid">
         <GlassCard className="system-settings-card p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 gap-4">
@@ -225,6 +277,114 @@ export function SystemSettings() {
             </button>
           </div>
         </GlassCard>
+
+        <GlassCard className="system-settings-card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 gap-4">
+              <div className="system-settings-icon is-accounting">
+                <FilePlus2 className="h-7 w-7" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-black text-[var(--text)]">Giữ form tạo phiếu</h2>
+                  <Badge color={keepCreateVoucherOpen ? "success" : "muted"}>
+                    {keepCreateVoucherOpen ? "Đang bật" : "Đang tắt"}
+                  </Badge>
+                  <TooltipProvider delayDuration={120}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button className="system-rules-hint" type="button" aria-label="Quy tắc tạo phiếu">
+                          <ShieldCheck className="h-4 w-4" />
+                          <span>Tạo phiếu</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" align="start" className="system-rules-tooltip">
+                        Khi bật, sau khi lưu phiếu mới ở trang Kế toán, cửa sổ tạo phiếu không đóng và tự làm mới để nhập phiếu tiếp theo.
+                        Khi tắt, hệ thống đóng cửa sổ sau khi lưu như hiện tại.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </div>
+            </div>
+
+            <button
+              className={`water-toggle accounting-toggle ${keepCreateVoucherOpen ? "is-on" : ""}`}
+              type="button"
+              role="switch"
+              aria-checked={keepCreateVoucherOpen}
+              aria-label={`${keepCreateVoucherOpen ? "Tắt" : "Bật"} giữ form tạo phiếu sau khi lưu`}
+              onClick={toggleKeepCreateVoucherOpen}
+            >
+              <span className="water-toggle-icon">
+                <Power className="h-4 w-4" />
+              </span>
+              <span className="reminder-toggle-countdown" aria-hidden="true">
+                {keepCreateVoucherOpen ? "GIỮ" : "ĐÓNG"}
+              </span>
+              <span className="water-toggle-track">
+                <span className="water-toggle-thumb" />
+              </span>
+            </button>
+          </div>
+        </GlassCard>
+
+        {admin && (
+          <GlassCard className="system-settings-card p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex min-w-0 gap-4">
+                <div className="system-settings-icon is-attendance">
+                  <ScanFace className="h-7 w-7" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-lg font-black text-[var(--text)]">Chấm công tự động</h2>
+                    <Badge color={rtspError || attendanceError ? "warning" : autoAttendanceEnabled ? "success" : "muted"}>
+                      {rtspLoading && !rtspStatus
+                        ? "Đang tải"
+                        : autoAttendanceEnabled
+                          ? "Đang bật"
+                          : "Đang tắt"}
+                    </Badge>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button className="system-rules-hint" type="button" aria-label="Quy tắc camera IP">
+                            <ShieldCheck className="h-4 w-4" />
+                            <span>Camera IP</span>
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" align="start" className="system-rules-tooltip">
+                          Công tắc này điều khiển luồng tự nhận diện và ghi chấm công từ camera IP. Khi tắt, camera vẫn giữ kết nối để admin xem trạng thái và test scan.
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                className={`water-toggle attendance-toggle ${autoAttendanceEnabled ? "is-on" : ""}`}
+                type="button"
+                role="switch"
+                aria-checked={autoAttendanceEnabled}
+                aria-label={`${autoAttendanceEnabled ? "Tắt" : "Bật"} chấm công nhận diện tự động`}
+                disabled={attendanceToggling || rtspLoading || !rtspStatus}
+                onClick={toggleAutoAttendance}
+              >
+                <span className="water-toggle-icon">
+                  <Power className="h-4 w-4" />
+                </span>
+                <span className="reminder-toggle-countdown" aria-hidden="true">
+                  {attendanceToggling ? "..." : autoAttendanceEnabled ? "AUTO" : "OFF"}
+                </span>
+                <span className="water-toggle-track">
+                  <span className="water-toggle-thumb" />
+                </span>
+              </button>
+            </div>
+          </GlassCard>
+        )}
       </section>
     </div>
   );

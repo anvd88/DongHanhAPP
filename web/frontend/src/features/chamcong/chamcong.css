@@ -833,6 +833,14 @@ html[data-theme="dark"] .cc-bio-active-pill {
 .cc-rtsp-refresh {
   color: var(--text-secondary);
 }
+.cc-rtsp-test {
+  color: var(--text-secondary);
+}
+.cc-rtsp-test[data-on="true"] {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.24);
+}
 .cc-rtsp-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

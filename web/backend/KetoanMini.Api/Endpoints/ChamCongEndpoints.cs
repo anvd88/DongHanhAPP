@@ -2,6 +2,7 @@ using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Services;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 
 namespace KetoanMini.Api.Endpoints;
@@ -23,6 +24,7 @@ public static class ChamCongEndpoints
     private const double AdaptiveLearnMinSimilarity = 0.5;
     // Nhãn ở cột created_by để phân biệt mẫu hệ thống TỰ HỌC với mẫu admin đăng ký.
     private const string AutoLearnTag = "(tự học)";
+    private const string AutoAttendanceSettingKey = "KioskCamera.AutoAttendanceEnabled";
 
     public static async Task EnsureTables(Database db)
     {
@@ -52,6 +54,46 @@ public static class ChamCongEndpoints
                 anh NVARCHAR(MAX) NULL,              -- ảnh lúc chấm (base64), tùy chọn
                 occurred_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
                 ghi_chu NVARCHAR(500) NOT NULL DEFAULT '');").ExecuteNonQueryAsync();
+
+        await conn.Cmd(@"
+            IF OBJECT_ID(N'dbo.web_system_settings', N'U') IS NULL
+            CREATE TABLE dbo.web_system_settings (
+                setting_key NVARCHAR(120) NOT NULL PRIMARY KEY,
+                setting_value NVARCHAR(MAX) NOT NULL DEFAULT N'',
+                updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                updated_by NVARCHAR(100) NOT NULL DEFAULT N'');").ExecuteNonQueryAsync();
+    }
+
+    private static async Task SaveSystemSetting(Database db, string key, string value, string updatedBy)
+    {
+        try
+        {
+            await using var conn = await db.OpenAsync();
+            await conn.Cmd(@"
+                IF OBJECT_ID(N'dbo.web_system_settings', N'U') IS NULL
+                CREATE TABLE dbo.web_system_settings (
+                    setting_key NVARCHAR(120) NOT NULL PRIMARY KEY,
+                    setting_value NVARCHAR(MAX) NOT NULL DEFAULT N'',
+                    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                    updated_by NVARCHAR(100) NOT NULL DEFAULT N'');
+
+                MERGE dbo.web_system_settings AS target
+                USING (SELECT @key AS setting_key) AS source
+                ON target.setting_key = source.setting_key
+                WHEN MATCHED THEN
+                    UPDATE SET setting_value = @value, updated_at = SYSUTCDATETIME(), updated_by = @updatedBy
+                WHEN NOT MATCHED THEN
+                    INSERT (setting_key, setting_value, updated_at, updated_by)
+                    VALUES (@key, @value, SYSUTCDATETIME(), @updatedBy);")
+                .With("@key", key)
+                .With("@value", value)
+                .With("@updatedBy", updatedBy)
+                .ExecuteNonQueryAsync();
+        }
+        catch
+        {
+            // Best effort: the runtime switch still applies even if persistence is temporarily unavailable.
+        }
     }
 
     public static void MapChamCong(this IEndpointRouteBuilder app)
@@ -67,6 +109,52 @@ public static class ChamCongEndpoints
         g.MapGet("/rtsp/status", (RtspAttendanceWorker worker) =>
             Results.Ok(worker.GetStatus()))
             .RequireAuthorization(p => p.RequireRole("Admin"));
+
+        g.MapPost("/rtsp/reconnect", async (
+            RtspAttendanceWorker worker,
+            CameraSnapshotBridgeService bridge,
+            CancellationToken ct) =>
+        {
+            worker.RequestReconnect("Dang ket noi lai camera...");
+            await bridge.RestartAsync(ct);
+            return Results.Ok(new { message = "Da gui lenh ket noi lai camera.", status = worker.GetStatus() });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        g.MapPost("/rtsp/test-scan", ([FromBody] RtspTestScanRequest req, RtspAttendanceWorker worker) =>
+        {
+            var status = worker.SetTestScan(req.Enabled);
+            return Results.Ok(new
+            {
+                message = req.Enabled
+                    ? "Da bat che do test scan lien tuc."
+                    : "Da tat che do test scan lien tuc.",
+                status
+            });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        g.MapPost("/rtsp/auto-attendance", async (
+            [FromBody] RtspAutoAttendanceRequest req,
+            RtspAttendanceWorker worker,
+            ClaimsPrincipal u,
+            Database db) =>
+        {
+            var status = worker.SetAutoAttendance(req.Enabled);
+            await SaveSystemSetting(db, AutoAttendanceSettingKey, req.Enabled ? "true" : "false", u.Username());
+            await db.RecordAudit(u.Username(),
+                req.Enabled ? "Bật chấm công tự động" : "Tắt chấm công tự động",
+                "ChamCong",
+                "RTSP",
+                req.Enabled
+                    ? "Admin bật chấm công nhận diện tự động từ camera IP (web)."
+                    : "Admin tắt chấm công nhận diện tự động từ camera IP (web).");
+            return Results.Ok(new
+            {
+                message = req.Enabled
+                    ? "Da bat cham cong nhan dien tu dong."
+                    : "Da tat cham cong nhan dien tu dong.",
+                status
+            });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
 
         // Danh sách nhân viên đã đăng ký khuôn mặt (gộp theo username).
         g.MapGet("/dadangky", async (Database db) =>

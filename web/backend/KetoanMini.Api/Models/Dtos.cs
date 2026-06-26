@@ -4,9 +4,9 @@ namespace KetoanMini.Api.Models;
 public record LoginRequest(string Username, string Password);
 public record LoginResponse(string Token, UserDto User);
 public record HeartbeatRequest(string? Sid);
-public record UpdateProfileRequest(string FullName);
+public record UpdateProfileRequest(string FullName, string Email);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
-public record UserDto(Guid Id, string Username, string FullName, string Role, bool IsActive,
+public record UserDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt)
 {
     public bool IsAdmin => string.Equals(Role, "Admin", StringComparison.OrdinalIgnoreCase);
@@ -19,7 +19,8 @@ public record DashboardDto(int ActiveCustomers, int TotalDocuments, decimal Tota
 public record RecentDocDto(Guid Id, string VoucherNo, DateOnly Date, string CustomerName, string Content, decimal Total);
 
 // ----- Documents -----
-public record DocumentListItemDto(Guid Id, string VoucherNo, DateOnly Date, string CustomerName, string Content, decimal Total);
+public record DocumentListItemDto(Guid Id, string VoucherNo, DateOnly Date, string DocumentType,
+    string CustomerName, string Content, decimal Total, string CreatedBy);
 public record DocumentLineDto(string LineContent, string Spec, decimal Quantity, decimal UnitPrice, string Note)
 {
     public decimal Amount => Quantity * UnitPrice;
@@ -36,30 +37,49 @@ public record AuditDto(DateTime OccurredAt, string Username, string Action, stri
 
 // ----- Customers -----
 public record CustomerDto(Guid Id, string Name, string TaxCode, string Phone, string Address, bool IsActive);
+public record SaveCustomerRequest(string Name, string TaxCode, string Phone, string Address);
+public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal Total, decimal ReceiptTotal,
+    decimal PaymentTotal, decimal SalesTotal, List<DocumentListItemDto> Documents);
 
 // ----- Users (Nhân sự) -----
-public record UserAdminDto(Guid Id, string Username, string FullName, string Role, bool IsActive,
+public record UserAdminDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen);
-public record CreateUserRequest(string Username, string FullName, string Password, string Role);
+public record CreateUserRequest(string Username, string FullName, string Email, string Password, string Role);
 public record SetLockRequest(bool Locked);
 public record ResetPasswordResponse(string Code);
 
 // ----- Gia công -----
 public record GiaCongLineDto(long Id, string LoaiDong, string MaHang, string TenHang, string QuyCach, string DonViTinh,
-    decimal SoLuong, decimal DonGiaGiaCong, string TrangThaiDong, string GhiChu)
+    decimal SoLuong, decimal DonGiaGiaCong, string GhiChu)
 {
     public decimal ThanhTien => SoLuong * DonGiaGiaCong;
 }
 public record GiaCongListItemDto(long Id, string MaPhieu, string LoaiPhieu, string DoiTac, string NhanVienPhuTrach,
-    DateOnly NgayLap, DateOnly? HanHoanThanh, string TrangThai, int TienDo, int BuocHienTai, int SoMatHang, decimal TongGiaTri);
+    DateOnly NgayLap, DateOnly? HanHoanThanh, int SoMatHang,
+    decimal TongGiaTri, decimal SoLuongXuat, decimal SoLuongNhap, decimal SoLuongConTaiCongTy,
+    decimal TienGiaCongPhaiTra);
 public record GiaCongDetailDto(long Id, string MaPhieu, string LoaiPhieu, string DoiTac, string NhanVienPhuTrach,
-    DateOnly NgayLap, DateOnly? HanHoanThanh, string TrangThai, int TienDo, int BuocHienTai, string GhiChu, List<GiaCongLineDto> Lines);
+    DateOnly NgayLap, DateOnly? HanHoanThanh, string GhiChu, List<GiaCongLineDto> Lines);
 public record SaveGiaCongRequest(string LoaiPhieu, string DoiTac, string NhanVienPhuTrach, DateOnly NgayLap,
-    DateOnly? HanHoanThanh, string TrangThai, int TienDo, int BuocHienTai, string GhiChu, List<GiaCongLineDto> Lines);
+    DateOnly? HanHoanThanh, string GhiChu, List<GiaCongLineDto> Lines);
+public record GiaCongReportDto(decimal SoLuongXuat, decimal SoLuongNhap, decimal SoLuongConTaiCongTy,
+    decimal TienGiaCongPhaiTra, List<GiaCongReportPartnerDto> Partners, List<GiaCongReportItemDto> Items);
+public record GiaCongReportPartnerDto(string DoiTac, decimal SoLuongXuat, decimal SoLuongNhap,
+    decimal SoLuongConTaiCongTy, decimal TienGiaCongPhaiTra);
+public record GiaCongReportItemDto(string DoiTac, string TenHang, string QuyCach, string DonViTinh,
+    decimal SoLuongXuat, decimal SoLuongNhap, decimal SoLuongConTaiCongTy, decimal TienGiaCongPhaiTra);
 
 // ----- Chấm công khuôn mặt -----
 public record FaceEngineStatusDto(string Engine, double MatchThreshold);
 public record DangKyKhuonMatRequest(string Username, string FullName, string ImageBase64);
+public sealed class RtspTestScanRequest
+{
+    public bool Enabled { get; set; }
+}
+public sealed class RtspAutoAttendanceRequest
+{
+    public bool Enabled { get; set; }
+}
 public record FaceNguoiDungDto(string Username, string FullName, int SoMau, DateTime? CreatedAt);
 public record FaceRegistrationLogDto(long Id, string Username, string FullName, DateTime CreatedAt, string CreatedBy);
 public record NhanDienRequest(string ImageBase64);

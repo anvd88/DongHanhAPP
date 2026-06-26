@@ -8,12 +8,16 @@ import { WaterReminderPopup } from "./components/WaterReminderPopup";
 import { EyeReminderPopup } from "./components/EyeReminderPopup";
 import { Login } from "./pages/Login";
 import { KioskPage } from "./pages/KioskPage";
+import { FarewellPage } from "./pages/FarewellPage";
+import { TinhToan } from "./pages/TinhToan";
 import { Dashboard } from "./pages/Dashboard";
 import { KeToan } from "./pages/KeToan";
+import { KhachHang } from "./pages/KhachHang";
 import { GiaCongPage } from "./features/giacong/GiaCongPage";
 import { ChamCongPage } from "./features/chamcong/ChamCongPage";
 import { NhanSu } from "./pages/NhanSu";
 import { BaoCao } from "./pages/BaoCao";
+import { CongCu } from "./pages/CongCu";
 import { SaoLuu } from "./pages/SaoLuu";
 import { CapNhat } from "./pages/CapNhat";
 import { StubPage } from "./pages/StubPage";
@@ -41,26 +45,36 @@ function Protected({ children, admin }: { children: React.ReactNode; admin?: boo
   );
 }
 
-export default function App() {
-  useEffect(() => {
-    startRealtime();
-  }, []);
+function RealtimeBoot() {
+  const location = useLocation();
 
+  useEffect(() => {
+    if (location.pathname !== "/tam-biet" && location.pathname !== "/tinh-toan") startRealtime();
+  }, [location.pathname]);
+
+  return null;
+}
+
+export default function App() {
   return (
     <ThemeProvider>
       <div className="liquid-bg"><div className="orb" /></div>
       <BrowserRouter>
+        <RealtimeBoot />
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/kiosk" element={<KioskPage />} />
+            <Route path="/tam-biet" element={<FarewellPage />} />
+            <Route path="/tinh-toan" element={<TinhToan />} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/ketoan" element={<Protected><KeToan /></Protected>} />
-            <Route path="/banhang" element={<Protected><KeToan salesOnly /></Protected>} />
+            <Route path="/khachhang" element={<Protected><KhachHang /></Protected>} />
             <Route path="/giacong" element={<Protected><GiaCongPage /></Protected>} />
             <Route path="/baocao" element={<Protected><BaoCao /></Protected>} />
             <Route path="/saoluu" element={<Protected><SaoLuu /></Protected>} />
             <Route path="/chamcong" element={<Protected><ChamCongPage /></Protected>} />
+            <Route path="/tinhtoan" element={<Protected><CongCu /></Protected>} />
             <Route path="/nhansu" element={<Protected admin><NhanSu /></Protected>} />
             <Route path="/capnhat" element={<Protected admin><CapNhat /></Protected>} />
 

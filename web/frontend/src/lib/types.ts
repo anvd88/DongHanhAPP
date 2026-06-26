@@ -2,6 +2,7 @@ export interface User {
   id: string;
   username: string;
   fullName: string;
+  email: string;
   role: string;
   isActive: boolean;
   approvalStatus: string;
@@ -23,9 +24,11 @@ export interface DocumentListItem {
   id: string;
   voucherNo: string;
   date: string;
+  documentType?: string;
   customerName: string;
   content: string;
   total: number;
+  createdBy?: string;
 }
 
 export interface DocumentLine {
@@ -54,6 +57,16 @@ export interface Customer {
   isActive: boolean;
 }
 
+export interface CustomerReport {
+  customer: Customer;
+  documentCount: number;
+  total: number;
+  receiptTotal: number;
+  paymentTotal: number;
+  salesTotal: number;
+  documents: DocumentListItem[];
+}
+
 export interface Reports {
   totalPayments: number;
   monthRevenue: number;
@@ -75,6 +88,7 @@ export interface UserAdmin {
   id: string;
   username: string;
   fullName: string;
+  email: string;
   role: string;
   isActive: boolean;
   approvalStatus: string;
@@ -92,7 +106,6 @@ export interface GiaCongLine {
   donViTinh: string;
   soLuong: number;
   donGiaGiaCong: number;
-  trangThaiDong: string;
   ghiChu: string;
 }
 export interface GiaCongListItem {
@@ -103,15 +116,46 @@ export interface GiaCongListItem {
   nhanVienPhuTrach: string;
   ngayLap: string;
   hanHoanThanh?: string;
-  trangThai: string;
-  tienDo: number;
-  buocHienTai: number;
   soMatHang: number;
   tongGiaTri: number;
+  soLuongXuat: number;
+  soLuongNhap: number;
+  soLuongConTaiCongTy: number;
+  tienGiaCongPhaiTra: number;
 }
-export interface GiaCongDetail extends Omit<GiaCongListItem, "soMatHang" | "tongGiaTri"> {
+export interface GiaCongDetail {
+  id: number;
+  maPhieu: string;
+  loaiPhieu: string;
+  doiTac: string;
+  nhanVienPhuTrach: string;
+  ngayLap: string;
+  hanHoanThanh?: string;
   ghiChu: string;
   lines: GiaCongLine[];
+}
+
+export interface GiaCongReportPartner {
+  doiTac: string;
+  soLuongXuat: number;
+  soLuongNhap: number;
+  soLuongConTaiCongTy: number;
+  tienGiaCongPhaiTra: number;
+}
+
+export interface GiaCongReportItem extends GiaCongReportPartner {
+  tenHang: string;
+  quyCach: string;
+  donViTinh: string;
+}
+
+export interface GiaCongReport {
+  soLuongXuat: number;
+  soLuongNhap: number;
+  soLuongConTaiCongTy: number;
+  tienGiaCongPhaiTra: number;
+  partners: GiaCongReportPartner[];
+  items: GiaCongReportItem[];
 }
 
 export interface FaceEngineStatus {
@@ -133,6 +177,10 @@ export interface RtspAttendanceStatus {
   lastSimilarity: number;
   scanBurstCount: number;
   enrolledTemplates: number;
+  source?: string;
+  autoAttendanceEnabled?: boolean;
+  testScanEnabled?: boolean;
+  testScanIntervalMs?: number;
 }
 export interface FaceNguoiDung {
   username: string;
