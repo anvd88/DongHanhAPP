@@ -1,9 +1,9 @@
 import {
   Banknote,
-  BarChart3,
   BookOpen,
   Boxes,
   Building2,
+  Calculator,
   CircleDollarSign,
   FileText,
   LayoutDashboard,
@@ -40,13 +40,19 @@ export const NAV: NavSection[] = [
     items: [
       { key: "giacong", label: "Gia công", icon: Building2, path: "/giacong", ready: true },
       { key: "ketoan", label: "Kế toán", icon: FileText, path: "/ketoan", ready: true },
-      { key: "banhang", label: "Bán hàng", icon: BarChart3, path: "/banhang", ready: true },
+      { key: "khachhang", label: "Khách hàng", icon: Users, path: "/khachhang", ready: true },
       { key: "muahang", label: "Mua hàng", icon: ShoppingCart, path: "/muahang" },
       { key: "kho", label: "Kho hàng", icon: ShoppingBag, path: "/kho" },
       { key: "nganhang", label: "Ngân hàng", icon: Banknote, path: "/nganhang" },
       { key: "congno", label: "Công nợ", icon: Wallet, path: "/congno" },
       { key: "taisan", label: "Tài sản cố định", icon: Boxes, path: "/taisan" },
       { key: "chiphi", label: "Chi phí", icon: CircleDollarSign, path: "/chiphi" },
+    ],
+  },
+  {
+    title: "CÔNG CỤ",
+    items: [
+      { key: "congcu", label: "Công cụ", icon: Calculator, path: "/tinhtoan", ready: true },
     ],
   },
   {

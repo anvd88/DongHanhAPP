@@ -1,20 +1,7 @@
-import {
-  useEffect,
-  useState,
-  type CSSProperties,
-  type InputHTMLAttributes,
-  type ReactNode,
-  type SelectHTMLAttributes,
-} from "react";
+import { useEffect, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { motion } from "motion/react";
 import { Loader2, Plus, Trash2, X } from "lucide-react";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "../../shadcn/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "../../shadcn/dialog";
 import { Button } from "../../shadcn/button";
 import { cn } from "../../lib/cn";
 import { useAuth } from "../../lib/auth";
@@ -22,21 +9,24 @@ import { api } from "../../lib/api";
 import { money } from "../../lib/format";
 import type { GiaCongDetail, GiaCongLine } from "../../lib/types";
 
-const LOAI_PHIEU = ["Xuất gia công", "Nhập gia công"];
-const TRANG_THAI = ["Đang xử lý", "Hoàn thành", "Chờ đối tác", "Hủy"];
+export const LOAI_XUAT = "Xuất gia công";
+export const LOAI_NHAP = "Nhập gia công";
+export type LoaiGiaCong = typeof LOAI_XUAT | typeof LOAI_NHAP;
 
-const emptyLine = (): GiaCongLine => ({
+const emptyLine = (loaiDong: LoaiGiaCong): GiaCongLine => ({
   id: 0,
-  loaiDong: "Hàng hóa",
+  loaiDong,
   maHang: "",
   tenHang: "",
   quyCach: "",
   donViTinh: "Kg",
   soLuong: 1,
   donGiaGiaCong: 0,
-  trangThaiDong: "Chờ",
   ghiChu: "",
 });
+
+const isNhap = (loai: string) => loai.toLowerCase().includes("nhập");
+const normalizeLoai = (loai?: string): LoaiGiaCong => (isNhap(loai ?? "") ? LOAI_NHAP : LOAI_XUAT);
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -49,14 +39,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function GlassInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...rest} className={cn("gc-input", className)} />;
-}
-
-function GlassSelect({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select {...rest} className={cn("gc-input", className)}>
-      {children}
-    </select>
-  );
 }
 
 function LineCell({
@@ -87,27 +69,27 @@ export function EditorDialog({
   open,
   id,
   seedId,
+  initialLoaiPhieu,
   onClose,
   onSaved,
 }: {
   open: boolean;
   id: number | "new";
   seedId?: number;
+  initialLoaiPhieu: LoaiGiaCong;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const isEdit = id !== "new";
   const { user } = useAuth();
   const loggedInName = user?.fullName?.trim() || user?.username?.trim() || "";
-  const [loaiPhieu, setLoaiPhieu] = useState(LOAI_PHIEU[0]);
+  const [loaiPhieu, setLoaiPhieu] = useState<LoaiGiaCong>(initialLoaiPhieu);
   const [doiTac, setDoiTac] = useState("");
   const [nhanVien, setNhanVien] = useState("");
   const [ngayLap, setNgayLap] = useState(() => new Date().toISOString().slice(0, 10));
   const [hanHoanThanh, setHanHoanThanh] = useState("");
-  const [trangThai, setTrangThai] = useState(TRANG_THAI[0]);
-  const [tienDo, setTienDo] = useState(0);
   const [ghiChu, setGhiChu] = useState("");
-  const [lines, setLines] = useState<GiaCongLine[]>([emptyLine()]);
+  const [lines, setLines] = useState<GiaCongLine[]>([emptyLine(initialLoaiPhieu)]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -117,43 +99,49 @@ export function EditorDialog({
     const source = isEdit ? (id as number) : seedId;
     setError("");
     if (source === undefined) {
-      setLoaiPhieu(LOAI_PHIEU[0]);
+      setLoaiPhieu(initialLoaiPhieu);
       setDoiTac("");
       setNhanVien(loggedInName);
       setNgayLap(new Date().toISOString().slice(0, 10));
       setHanHoanThanh("");
-      setTrangThai(TRANG_THAI[0]);
-      setTienDo(0);
       setGhiChu("");
-      setLines([emptyLine()]);
+      setLines([emptyLine(initialLoaiPhieu)]);
       return;
     }
+
     setLoadingDetail(true);
     api
       .get<GiaCongDetail>(`/api/giacong/${source}`)
       .then((d) => {
-        setLoaiPhieu(d.loaiPhieu);
+        const nextLoai = normalizeLoai(d.loaiPhieu);
+        setLoaiPhieu(nextLoai);
         setDoiTac(d.doiTac);
         setNhanVien(isEdit ? d.nhanVienPhuTrach : loggedInName);
         setNgayLap(isEdit ? d.ngayLap : new Date().toISOString().slice(0, 10));
         setHanHoanThanh(d.hanHoanThanh ?? "");
-        setTrangThai(isEdit ? d.trangThai : TRANG_THAI[0]);
-        setTienDo(isEdit ? d.tienDo : 0);
         setGhiChu(d.ghiChu);
         setLines(
           d.lines.length
-            ? d.lines.map((l) => ({ ...l, quyCach: l.quyCach ?? "", id: isEdit ? l.id : 0 }))
-            : [emptyLine()],
+            ? d.lines.map((line) => ({
+                ...line,
+                loaiDong: nextLoai,
+                quyCach: line.quyCach ?? "",
+                donGiaGiaCong: isNhap(nextLoai) ? line.donGiaGiaCong : 0,
+                id: isEdit ? line.id : 0,
+              }))
+            : [emptyLine(nextLoai)],
         );
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Lỗi tải phiếu."))
       .finally(() => setLoadingDetail(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, id, seedId, loggedInName]);
+  }, [open, id, seedId, initialLoaiPhieu, loggedInName]);
 
-  const total = lines.reduce((s, l) => s + (l.soLuong || 0) * (l.donGiaGiaCong || 0), 0);
+  const isNhapPhieu = isNhap(loaiPhieu);
+  const total = isNhapPhieu ? lines.reduce((sum, line) => sum + (line.soLuong || 0) * (line.donGiaGiaCong || 0), 0) : 0;
+
   const setLine = (i: number, patch: Partial<GiaCongLine>) =>
-    setLines((arr) => arr.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+    setLines((arr) => arr.map((line, j) => (j === i ? { ...line, ...patch } : line)));
 
   const save = async () => {
     setSaving(true);
@@ -164,12 +152,14 @@ export function EditorDialog({
       nhanVienPhuTrach: isEdit ? nhanVien : loggedInName,
       ngayLap,
       hanHoanThanh: hanHoanThanh || null,
-      trangThai,
-      tienDo: +tienDo,
-      buocHienTai: 1,
       ghiChu,
-      lines,
+      lines: lines.map((line) => ({
+        ...line,
+        loaiDong: loaiPhieu,
+        donGiaGiaCong: isNhapPhieu ? line.donGiaGiaCong : 0,
+      })),
     };
+
     try {
       if (isEdit) await api.put(`/api/giacong/${id}`, body);
       else await api.post("/api/giacong", body);
@@ -187,12 +177,13 @@ export function EditorDialog({
         className="gc-editor-dialog flex max-h-[calc(100vh-34px)] flex-col"
         onPointerDownOutside={(e) => saving && e.preventDefault()}
       >
-        {/* Header */}
         <div className="gc-editor-header flex items-start justify-between gap-4 border-b border-[var(--gc-border)] px-6 py-4">
           <div>
-            <DialogTitle className="gc-editor-title">{isEdit ? "Sửa phiếu gia công" : "Tạo phiếu gia công"}</DialogTitle>
+            <DialogTitle className="gc-editor-title">
+              {isEdit ? `Sửa ${loaiPhieu.toLowerCase()}` : `Tạo ${loaiPhieu.toLowerCase()}`}
+            </DialogTitle>
             <DialogDescription className="gc-editor-description mt-0.5">
-              Nhập thông tin phiếu và danh sách hàng hóa gia công.
+              {isNhapPhieu ? "Nhập hàng gia công về và ghi nhận phí phải trả." : "Xuất hàng đi gia công, không ghi nhận giá tiền."}
             </DialogDescription>
           </div>
           <DialogClose asChild>
@@ -202,7 +193,6 @@ export function EditorDialog({
           </DialogClose>
         </div>
 
-        {/* Body */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -210,57 +200,29 @@ export function EditorDialog({
           className="gc-editor-body gc-scroll flex-1 space-y-4 overflow-auto px-6 py-5"
         >
           <div className="gc-editor-grid grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Loại phiếu">
-              <GlassSelect value={loaiPhieu} onChange={(e) => setLoaiPhieu(e.target.value)}>
-                {LOAI_PHIEU.map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </GlassSelect>
-            </Field>
-            <Field label="Đối tác">
+            <Field label="Đối tác gia công">
               <GlassInput value={doiTac} onChange={(e) => setDoiTac(e.target.value)} placeholder="Tên đối tác" />
+            </Field>
+            <Field label={isNhapPhieu ? "Ngày nhập" : "Ngày xuất"}>
+              <GlassInput type="date" value={ngayLap} onChange={(e) => setNgayLap(e.target.value)} />
             </Field>
             <Field label="Nhân viên phụ trách">
               <GlassInput value={nhanVien} disabled readOnly placeholder="Họ tên" />
             </Field>
-            <Field label="Ngày lập">
-              <GlassInput type="date" value={ngayLap} onChange={(e) => setNgayLap(e.target.value)} />
-            </Field>
-            <Field label="Hạn hoàn thành">
-              <GlassInput type="date" value={hanHoanThanh} onChange={(e) => setHanHoanThanh(e.target.value)} />
-            </Field>
-            <Field label="Trạng thái">
-              <GlassSelect value={trangThai} onChange={(e) => setTrangThai(e.target.value)}>
-                {TRANG_THAI.map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </GlassSelect>
-            </Field>
+            {!isNhapPhieu && (
+              <Field label="Hạn hoàn thành">
+                <GlassInput type="date" value={hanHoanThanh} onChange={(e) => setHanHoanThanh(e.target.value)} />
+              </Field>
+            )}
           </div>
 
-          <div className="gc-editor-progress">
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-sm font-semibold text-[var(--gc-text-soft)]">Tiến độ: {tienDo}%</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={tienDo}
-              onChange={(e) => setTienDo(+e.target.value)}
-              className="gc-range"
-              style={{ "--gc-range": `${tienDo}%` } as CSSProperties}
-            />
-          </div>
-
-          {/* Bảng dòng hàng */}
           <div className="gc-editor-lines">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-bold text-[var(--gc-text)]">Hàng hóa</span>
               <Button
                 variant="soft"
                 size="sm"
-                onClick={() => setLines((a) => [...a, emptyLine()])}
+                onClick={() => setLines((arr) => [...arr, emptyLine(loaiPhieu)])}
                 className="gc-editor-add-line"
               >
                 <Plus className="h-4 w-4" /> Thêm dòng
@@ -274,57 +236,49 @@ export function EditorDialog({
                     <th className="px-2 py-2.5 text-left font-semibold">Quy cách</th>
                     <th className="px-2 py-2.5 text-left font-semibold">ĐVT</th>
                     <th className="px-2 py-2.5 text-right font-semibold">SL</th>
-                    <th className="px-2 py-2.5 text-right font-semibold">Đơn giá GC</th>
-                    <th className="px-2 py-2.5 text-right font-semibold">Thành tiền</th>
+                    {isNhapPhieu && <th className="px-2 py-2.5 text-right font-semibold">Đơn giá GC</th>}
+                    {isNhapPhieu && <th className="px-2 py-2.5 text-right font-semibold">Thành tiền</th>}
                     <th className="w-9" />
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l, i) => (
+                  {lines.map((line, i) => (
                     <tr key={i}>
                       <td className="p-1">
-                        <LineCell
-                          value={l.tenHang}
-                          onChange={(v) => setLine(i, { tenHang: v })}
-                          placeholder="Nhập tên hàng"
-                        />
+                        <LineCell value={line.tenHang} onChange={(v) => setLine(i, { tenHang: v })} placeholder="Nhập tên hàng" />
                       </td>
                       <td className="p-1">
-                        <LineCell
-                          value={l.quyCach}
-                          onChange={(v) => setLine(i, { quyCach: v })}
-                          placeholder="Nhập quy cách"
-                        />
+                        <LineCell value={line.quyCach} onChange={(v) => setLine(i, { quyCach: v })} placeholder="Quy cách" />
                       </td>
                       <td className="p-1">
-                        <LineCell
-                          value={l.donViTinh}
-                          onChange={(v) => setLine(i, { donViTinh: v })}
-                          placeholder="ĐVT"
-                        />
+                        <LineCell value={line.donViTinh} onChange={(v) => setLine(i, { donViTinh: v })} placeholder="ĐVT" />
                       </td>
                       <td className="p-1">
                         <LineCell
                           type="number"
                           align="right"
-                          value={String(l.soLuong)}
+                          value={String(line.soLuong)}
                           onChange={(v) => setLine(i, { soLuong: +v || 0 })}
                         />
                       </td>
-                      <td className="p-1">
-                        <LineCell
-                          type="number"
-                          align="right"
-                          value={String(l.donGiaGiaCong)}
-                          onChange={(v) => setLine(i, { donGiaGiaCong: +v || 0 })}
-                        />
-                      </td>
-                      <td className="whitespace-nowrap px-2 py-1 text-right font-semibold tabular-nums">
-                        {money(l.soLuong * l.donGiaGiaCong)}
-                      </td>
+                      {isNhapPhieu && (
+                        <td className="p-1">
+                          <LineCell
+                            type="number"
+                            align="right"
+                            value={String(line.donGiaGiaCong)}
+                            onChange={(v) => setLine(i, { donGiaGiaCong: +v || 0 })}
+                          />
+                        </td>
+                      )}
+                      {isNhapPhieu && (
+                        <td className="whitespace-nowrap px-2 py-1 text-right font-semibold tabular-nums">
+                          {money(line.soLuong * line.donGiaGiaCong)} ₫
+                        </td>
+                      )}
                       <td className="px-1">
                         <button
-                          onClick={() => setLines((a) => (a.length > 1 ? a.filter((_, j) => j !== i) : a))}
+                          onClick={() => setLines((arr) => (arr.length > 1 ? arr.filter((_, j) => j !== i) : arr))}
                           className="grid h-8 w-8 place-items-center rounded-lg text-[var(--gc-text-muted)] transition-colors hover:bg-rose-500/10 hover:text-rose-500"
                           aria-label="Xóa dòng"
                           type="button"
@@ -335,28 +289,28 @@ export function EditorDialog({
                     </tr>
                   ))}
                 </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={5} className="px-2 py-2.5 text-right text-sm font-bold">
-                      Tổng giá trị
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-2.5 text-right text-base font-black text-[var(--gc-accent)] tabular-nums">
-                      {money(total)} ₫
-                    </td>
-                    <td />
-                  </tr>
-                </tfoot>
+                {isNhapPhieu && (
+                  <tfoot>
+                    <tr>
+                      <td colSpan={5} className="px-2 py-2.5 text-right text-sm font-bold">
+                        Tổng phí gia công
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2.5 text-right text-base font-black text-[var(--gc-accent)] tabular-nums">
+                        {money(total)} ₫
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
           </div>
 
           <Field label="Ghi chú">
-            <GlassInput value={ghiChu} onChange={(e) => setGhiChu(e.target.value)} placeholder="Ghi chú thêm (nếu có)" />
+            <GlassInput value={ghiChu} onChange={(e) => setGhiChu(e.target.value)} placeholder="Ghi chú thêm" />
           </Field>
 
-          {error && (
-            <div className="rounded-xl bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-500">{error}</div>
-          )}
+          {error && <div className="rounded-xl bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-500">{error}</div>}
           {loadingDetail && (
             <div className="flex items-center gap-2 text-sm text-[var(--gc-text-muted)]">
               <Loader2 className="h-4 w-4 animate-spin" /> Đang tải phiếu...
@@ -364,7 +318,6 @@ export function EditorDialog({
           )}
         </motion.div>
 
-        {/* Footer */}
         <div className="gc-editor-footer flex items-center justify-end gap-2.5 border-t border-[var(--gc-border)] px-6 py-4">
           <Button variant="ghost" onClick={onClose} className="gc-editor-cancel">
             Hủy

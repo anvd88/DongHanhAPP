@@ -10,6 +10,7 @@ import type { User } from "../lib/types";
 export function EditProfileModal({ onClose }: { onClose: () => void }) {
   const { user, updateUser } = useAuth();
   const [fullName, setFullName] = useState(user?.fullName ?? "");
+  const [email, setEmail] = useState(user?.email ?? "");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -21,7 +22,8 @@ export function EditProfileModal({ onClose }: { onClose: () => void }) {
     setSaving(true);
     setError("");
     try {
-      const updated = await api.put<User>("/api/auth/profile", { fullName: fullName.trim() });
+      await api.put<User>("/api/auth/profile", { fullName: fullName.trim(), email: email.trim() });
+      const updated = await api.get<User>("/api/auth/me");
       updateUser(updated);
       onClose();
     } catch (e) {
@@ -52,6 +54,14 @@ export function EditProfileModal({ onClose }: { onClose: () => void }) {
             value={fullName}
             autoFocus
             onChange={(e) => setFullName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && save()}
+          />
+        </Field>
+        <Field label="Email">
+          <Input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && save()}
           />
         </Field>

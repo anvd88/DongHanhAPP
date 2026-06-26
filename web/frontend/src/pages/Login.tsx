@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { LogIn, Lock, ScanFace, User } from "lucide-react";
+import { Calculator, LogIn, Lock, ScanFace, User } from "lucide-react";
 import { GlassCard } from "../components/Glass";
 import { Button } from "../components/ui";
 import { useAuth } from "../lib/auth";
@@ -86,6 +86,13 @@ export function Login() {
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
         >
           <ScanFace className="h-4 w-4" /> Chấm công
+        </Link>
+
+        <Link
+          to="/tinh-toan"
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
+        >
+          <Calculator className="h-4 w-4" /> Tính toán
         </Link>
 
         <button

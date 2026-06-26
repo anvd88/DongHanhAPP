@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, KeyRound, LogOut, UserCog } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/types";
 import { APP_BRAND_NAME } from "../lib/branding";
+import { initials } from "../lib/format";
+import { ChangePasswordModal, EditProfileModal } from "./AccountModals";
 
 interface IndicatorState {
   x: number;
@@ -48,9 +51,11 @@ function isNavPathActive(pathname: string, path: string) {
 }
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const location = useLocation();
   const admin = isAdmin(user);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [modal, setModal] = useState<null | "profile" | "password">(null);
   const navRef = useRef<HTMLElement | null>(null);
   const indicatorRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef(new Map<string, HTMLAnchorElement>());
@@ -74,6 +79,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     }
     return undefined;
   }, [location.pathname, visibleSections]);
+
+  const profileName = user?.username || user?.fullName || "Tài khoản";
+  const profileEmail = user?.email?.trim() || "Chưa có email";
 
   const paintIndicator = useCallback((stretch = 1, direction = 1) => {
     const el = indicatorRef.current;
@@ -294,10 +302,48 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </nav>
 
-      <div className="km-sidebar-version">
-        <span />
-        Phiên bản 26.6.5
+      <div className="km-sidebar-profile-wrap">
+        <button
+          type="button"
+          className="km-sidebar-profile-card"
+          onClick={() => setProfileOpen((value) => !value)}
+          aria-expanded={profileOpen}
+        >
+          <span className="km-sidebar-profile-avatar">{initials(profileName)}</span>
+          <span className="km-sidebar-profile-copy">
+            <span className="km-sidebar-profile-name">{profileName}</span>
+            <span className="km-sidebar-profile-email">{profileEmail}</span>
+          </span>
+          <ChevronDown className={`km-sidebar-profile-arrow h-4 w-4 ${profileOpen ? "rotate-180" : ""}`} />
+        </button>
+
+        {profileOpen && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setProfileOpen(false)} />
+            <div className="km-sidebar-profile-menu fade-in">
+              <button
+                type="button"
+                onClick={() => { setProfileOpen(false); setModal("profile"); }}
+              >
+                <UserCog className="h-4 w-4" /> Hồ sơ cá nhân
+              </button>
+              <button
+                type="button"
+                onClick={() => { setProfileOpen(false); setModal("password"); }}
+              >
+                <KeyRound className="h-4 w-4" /> Đổi mật khẩu
+              </button>
+              <div className="km-sidebar-profile-menu-separator" />
+              <button type="button" className="is-danger" onClick={logout}>
+                <LogOut className="h-4 w-4" /> Đăng xuất
+              </button>
+            </div>
+          </>
+        )}
       </div>
+
+      {modal === "profile" && <EditProfileModal onClose={() => setModal(null)} />}
+      {modal === "password" && <ChangePasswordModal onClose={() => setModal(null)} />}
     </aside>
   );
 }

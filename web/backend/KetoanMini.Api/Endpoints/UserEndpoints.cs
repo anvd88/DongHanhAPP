@@ -18,7 +18,7 @@ public static class UserEndpoints
         {
             await using var conn = await db.OpenAsync();
             var where = "WHERE u.is_deleted = 0";
-            if (!string.IsNullOrWhiteSpace(search)) where += " AND (u.username LIKE @s OR u.full_name LIKE @s)";
+            if (!string.IsNullOrWhiteSpace(search)) where += " AND (u.username LIKE @s OR u.full_name LIKE @s OR u.email LIKE @s)";
             where += role switch
             {
                 "Admin" => " AND u.role = N'Admin'",
@@ -30,7 +30,7 @@ public static class UserEndpoints
 
             var list = new List<UserAdminDto>();
             var cmd = conn.Cmd(
-                $@"SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.approval_status, u.created_at,
+                $@"SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active, u.approval_status, u.created_at,
                           CAST(ISNULL(p.is_online, 0) AS bit) AS is_online,
                           p.last_seen
                    FROM dbo.app_users u
@@ -48,7 +48,7 @@ public static class UserEndpoints
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
                 list.Add(new UserAdminDto(r.Guid("id"), r.Str("username"), r.Str("full_name"),
-                    r.Str("role"), r.Bool("is_active"), r.Str("approval_status"), r.DtNull("created_at"),
+                    r.Str("email"), r.Str("role"), r.Bool("is_active"), r.Str("approval_status"), r.DtNull("created_at"),
                     r.Bool("is_online"), r.DtNull("last_seen")));
             return Results.Ok(list);
         });
@@ -66,9 +66,10 @@ public static class UserEndpoints
 
             var id = Guid.NewGuid();
             await conn.Cmd(
-                @"INSERT INTO dbo.app_users (id, username, full_name, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
-                  VALUES (@id, @u, @fn, @role, @ph, 1, N'Approved', SYSUTCDATETIME(), @by, SYSUTCDATETIME())")
+                @"INSERT INTO dbo.app_users (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
+                  VALUES (@id, @u, @fn, @em, @role, @ph, 1, N'Approved', SYSUTCDATETIME(), @by, SYSUTCDATETIME())")
                 .With("@id", id).With("@u", req.Username.Trim()).With("@fn", req.FullName ?? "")
+                .With("@em", req.Email ?? "")
                 .With("@role", req.Role == "Admin" ? "Admin" : "User")
                 .With("@ph", PasswordHasher.Hash(req.Password)).With("@by", u.Username())
                 .ExecuteNonQueryAsync();

@@ -9,6 +9,7 @@ export function Modal({
   children,
   footer,
   wide,
+  solid,
 }: {
   open: boolean;
   onClose: () => void;
@@ -16,6 +17,7 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  solid?: boolean;
 }) {
   if (!open) return null;
   return (
@@ -27,7 +29,9 @@ export function Modal({
       <GlassCard
         strong
         glow={false}
-        className={`fade-in flex max-h-[90vh] w-full flex-col overflow-hidden ${wide ? "max-w-4xl" : "max-w-lg"}`}
+        className={`fade-in flex max-h-[90vh] w-full flex-col overflow-hidden ${
+          solid ? "modal-solid-surface" : ""
+        } ${wide ? "max-w-4xl" : "max-w-lg"}`}
       >
         <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] flex-col">
           <div className="flex items-center justify-between border-b border-[var(--glass-border)] px-6 py-4">

@@ -1,4 +1,3 @@
-import { motion } from "motion/react";
 import { Copy, MoreHorizontal, Pencil, PackageOpen, Trash2 } from "lucide-react";
 import { GlassPanel } from "../../components/glass/GlassPanel";
 import {
@@ -8,35 +7,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../shadcn/dropdown-menu";
-import { money, date } from "../../lib/format";
+import { date, money, num } from "../../lib/format";
 import type { GiaCongListItem } from "../../lib/types";
-import { LoaiBadge, StatusBadge } from "./StatusBadge";
-
-function ProgressBar({ value }: { value: number }) {
-  const pct = Math.max(0, Math.min(100, value));
-  return (
-    <div className="flex items-center gap-2">
-      <div className="gc-progress">
-        <motion.div
-          className="gc-progress-fill"
-          initial={{ width: 0 }}
-          animate={{ width: `${pct}%` }}
-          transition={{ duration: 0.85, ease: [0.16, 1, 0.3, 1] }}
-        />
-      </div>
-      <span className="w-9 text-right text-xs font-semibold text-[var(--gc-text-muted)]">{pct}%</span>
-    </div>
-  );
-}
+import { LoaiBadge } from "./LoaiBadge";
 
 function SkeletonRows() {
   return (
     <>
       {Array.from({ length: 6 }).map((_, i) => (
         <tr key={i}>
-          {Array.from({ length: 9 }).map((_, j) => (
+          {Array.from({ length: 8 }).map((_, j) => (
             <td key={j} className="px-3.5 py-3">
-              <div className="gc-skeleton h-4" style={{ width: j === 3 ? "70%" : j === 8 ? "30%" : "85%" }} />
+              <div className="gc-skeleton h-4" style={{ width: j === 7 ? "35%" : "85%" }} />
             </td>
           ))}
         </tr>
@@ -69,13 +51,12 @@ export function PhieuTable({
           <thead>
             <tr>
               <th>Mã phiếu</th>
+              <th>Ngày</th>
               <th>Đối tác</th>
               <th>Loại</th>
-              <th>Ngày lập</th>
               <th className="text-center">Mặt hàng</th>
-              <th className="text-right">Tổng giá trị</th>
-              <th>Tiến độ</th>
-              <th>Trạng thái</th>
+              <th className="text-right">Số lượng</th>
+              <th className="text-right">Phí gia công</th>
               <th className="w-12 text-right" aria-label="Thao tác" />
             </tr>
           </thead>
@@ -84,63 +65,61 @@ export function PhieuTable({
               <SkeletonRows />
             ) : error ? (
               <tr>
-                <td colSpan={9} className="py-14 text-center text-sm font-semibold text-rose-500">
+                <td colSpan={8} className="py-14 text-center text-sm font-semibold text-rose-500">
                   {error}
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={9}>
+                <td colSpan={8}>
                   <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
                     <PackageOpen className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
                     <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Chưa có phiếu gia công</p>
-                    <p className="text-xs text-[var(--gc-text-muted)]">Thử đổi bộ lọc hoặc tạo phiếu mới.</p>
+                    <p className="text-xs text-[var(--gc-text-muted)]">Tạo phiếu xuất hoặc nhập gia công.</p>
                   </div>
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
-                <tr key={row.id} onClick={() => onOpen(row.id)}>
-                  <td className="font-bold text-[var(--gc-text)]">{row.maPhieu}</td>
-                  <td>{row.doiTac || "—"}</td>
-                  <td>
-                    <LoaiBadge loai={row.loaiPhieu} />
-                  </td>
-                  <td className="whitespace-nowrap text-[var(--gc-text-soft)]">{date(row.ngayLap)}</td>
-                  <td className="text-center tabular-nums">{row.soMatHang}</td>
-                  <td className="whitespace-nowrap text-right font-bold tabular-nums">{money(row.tongGiaTri)} ₫</td>
-                  <td className="min-w-[150px]">
-                    <ProgressBar value={row.tienDo} />
-                  </td>
-                  <td>
-                    <StatusBadge status={row.trangThai} />
-                  </td>
-                  <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          className="gc-icon-btn h-8 w-8"
-                          aria-label={`Thao tác phiếu ${row.maPhieu}`}
-                        >
-                          <MoreHorizontal className="h-4 w-4" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent>
-                        <DropdownMenuItem onSelect={() => onEdit(row.id)}>
-                          <Pencil className="h-4 w-4" /> Sửa phiếu
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => onDuplicate(row.id)}>
-                          <Copy className="h-4 w-4" /> Nhân bản
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem danger onSelect={() => onDelete(row.id)}>
-                          <Trash2 className="h-4 w-4" /> Xóa phiếu
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </td>
-                </tr>
-              ))
+              rows.map((row) => {
+                const isNhap = row.loaiPhieu.toLowerCase().includes("nhập");
+                const soLuong = isNhap ? row.soLuongNhap : row.soLuongXuat;
+                return (
+                  <tr key={row.id} onClick={() => onOpen(row.id)}>
+                    <td className="font-bold text-[var(--gc-text)]">{row.maPhieu}</td>
+                    <td className="whitespace-nowrap text-[var(--gc-text-soft)]">{date(row.ngayLap)}</td>
+                    <td>{row.doiTac || "-"}</td>
+                    <td>
+                      <LoaiBadge loai={row.loaiPhieu} />
+                    </td>
+                    <td className="text-center tabular-nums">{row.soMatHang}</td>
+                    <td className="whitespace-nowrap text-right font-bold tabular-nums">{num(soLuong)}</td>
+                    <td className="whitespace-nowrap text-right font-semibold tabular-nums">
+                      {isNhap ? `${money(row.tienGiaCongPhaiTra)} ₫` : "-"}
+                    </td>
+                    <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="gc-icon-btn h-8 w-8" aria-label={`Thao tác phiếu ${row.maPhieu}`}>
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent>
+                          <DropdownMenuItem onSelect={() => onEdit(row.id)}>
+                            <Pencil className="h-4 w-4" /> Sửa phiếu
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => onDuplicate(row.id)}>
+                            <Copy className="h-4 w-4" /> Nhân bản
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem danger onSelect={() => onDelete(row.id)}>
+                            <Trash2 className="h-4 w-4" /> Xóa phiếu
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

@@ -73,6 +73,7 @@ export function NhanSu() {
             columns={[
               { header: "Tên đăng nhập", cell: (r) => <span className="font-semibold">{r.username}</span> },
               { header: "Họ tên", cell: (r) => r.fullName || "—" },
+              { header: "Email", cell: (r) => r.email || "—" },
               { header: "Vai trò", cell: (r) => <Badge color={r.role === "Admin" ? "purple" : "muted"}>{r.role}</Badge> },
               { header: "Online", cell: (r) => (
                 <div className="inline-flex min-w-[112px] flex-col gap-1">
@@ -129,6 +130,7 @@ function IconBtn({ children, title, color = "accent", onClick }: { children: Rea
 function AddUser({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("User");
   const [error, setError] = useState("");
@@ -137,7 +139,7 @@ function AddUser({ onClose, onSaved }: { onClose: () => void; onSaved: () => voi
   const save = async () => {
     setSaving(true); setError("");
     try {
-      await api.post("/api/users", { username, fullName, password, role });
+      await api.post("/api/users", { username, fullName, email, password, role });
       onSaved();
     } catch (e) { setError(e instanceof Error ? e.message : "Lỗi"); } finally { setSaving(false); }
   };
@@ -148,6 +150,7 @@ function AddUser({ onClose, onSaved }: { onClose: () => void; onSaved: () => voi
       <div className="space-y-4">
         <Field label="Tên đăng nhập *"><Input value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
         <Field label="Họ tên"><Input value={fullName} onChange={(e) => setFullName(e.target.value)} /></Field>
+        <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
         <Field label="Mật khẩu *"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
         <Field label="Vai trò"><Select value={role} onChange={(e) => setRole(e.target.value)} className="w-full"><option value="User">User</option><option value="Admin">Admin</option></Select></Field>
         {error && <div className="rounded-xl bg-red-500/10 px-3 py-2.5 text-sm font-medium text-[var(--danger)]">{error}</div>}

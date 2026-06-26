@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MotionConfig, motion } from "motion/react";
-import { Plus, RefreshCw } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, RefreshCw } from "lucide-react";
 import { TooltipProvider } from "../../shadcn/tooltip";
 import { Button } from "../../shadcn/button";
 import { useApi } from "../../lib/useApi";
@@ -9,17 +9,11 @@ import type { GiaCongListItem } from "../../lib/types";
 import { StatsRow } from "./StatsRow";
 import { Toolbar } from "./Toolbar";
 import { PhieuTable } from "./PhieuTable";
-import { EditorDialog } from "./EditorDialog";
+import { EditorDialog, LOAI_NHAP, LOAI_XUAT, type LoaiGiaCong } from "./EditorDialog";
 import "./giacong.css";
 
 const EASE_IOS = [0.22, 1, 0.36, 1] as const;
 
-/**
- * Chế độ debug (chỉ DEV): cho xem animation đầy đủ dù trình duyệt/OS báo reduced-motion.
- * Bật:  localStorage.setItem("force-full-motion", "true"); location.reload();
- * Tắt:  localStorage.removeItem("force-full-motion"); location.reload();
- * Production luôn tôn trọng prefers-reduced-motion (accessibility).
- */
 const FORCE_FULL_MOTION =
   import.meta.env.DEV &&
   typeof localStorage !== "undefined" &&
@@ -28,29 +22,26 @@ const FORCE_FULL_MOTION =
 export function GiaCongPage() {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [seedId, setSeedId] = useState<number | undefined>(undefined);
+  const [initialLoaiPhieu, setInitialLoaiPhieu] = useState<LoaiGiaCong>(LOAI_XUAT);
   const [refreshing, setRefreshing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { data, loading, error, reload } = useApi<GiaCongListItem[]>("/api/giacong/?filter=all&search=");
   const rows = useMemo(() => data ?? [], [data]);
 
-  // Lọc + tìm kiếm phía client → tab/tìm tức thì, chỉ 1 lần gọi API.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (filter === "xuat" && !r.loaiPhieu.toLowerCase().includes("xuất")) return false;
-      if (filter === "nhap" && !r.loaiPhieu.toLowerCase().includes("nhập")) return false;
-      if (filter === "dangxuly" && r.trangThai !== "Đang xử lý") return false;
-      if (status !== "all" && r.trangThai !== status) return false;
-      if (q && !`${r.maPhieu} ${r.doiTac}`.toLowerCase().includes(q)) return false;
+    return rows.filter((row) => {
+      const loai = row.loaiPhieu.toLowerCase();
+      if (filter === "xuat" && !loai.includes("xuất") && !row.soLuongXuat) return false;
+      if (filter === "nhap" && !loai.includes("nhập") && !row.soLuongNhap) return false;
+      if (q && !`${row.maPhieu} ${row.doiTac}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [rows, filter, search, status]);
+  }, [rows, filter, search]);
 
-  // Ctrl/Cmd + K → focus ô tìm kiếm.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -68,18 +59,23 @@ export function GiaCongPage() {
     window.setTimeout(() => setRefreshing(false), 650);
   };
 
-  const openNew = () => {
+  const openNew = (loai: LoaiGiaCong) => {
+    setInitialLoaiPhieu(loai);
     setSeedId(undefined);
     setEditing("new");
   };
+
   const openEdit = (id: number) => {
     setSeedId(undefined);
     setEditing(id);
   };
+
   const openDuplicate = (id: number) => {
+    setInitialLoaiPhieu(LOAI_XUAT);
     setSeedId(id);
     setEditing("new");
   };
+
   const closeEditor = () => setEditing(null);
 
   const handleDelete = async (id: number) => {
@@ -92,7 +88,6 @@ export function GiaCongPage() {
     <MotionConfig reducedMotion={FORCE_FULL_MOTION ? "never" : "user"}>
       <TooltipProvider delayDuration={200}>
         <div className="gc-root space-y-4 pb-6">
-          {/* Tiêu đề trang */}
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <motion.h1
@@ -109,7 +104,7 @@ export function GiaCongPage() {
                 transition={{ duration: 0.44, delay: 0.08, ease: EASE_IOS }}
                 className="mt-1 text-sm font-semibold text-[var(--gc-text-soft)]"
               >
-                Quản lý phiếu gia công xuất / nhập
+                Theo dõi xuất đi, nhập về và phí gia công phải trả
               </motion.p>
             </div>
             <motion.div
@@ -121,27 +116,19 @@ export function GiaCongPage() {
               <Button variant="ghost" onClick={handleRefresh}>
                 <RefreshCw className={refreshing ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Làm mới
               </Button>
-              <Button onClick={openNew}>
-                <Plus className="h-4 w-4" /> Tạo phiếu
+              <Button variant="soft" onClick={() => openNew(LOAI_XUAT)}>
+                <ArrowUpFromLine className="h-4 w-4" /> Xuất gia công
+              </Button>
+              <Button onClick={() => openNew(LOAI_NHAP)}>
+                <ArrowDownToLine className="h-4 w-4" /> Nhập gia công
               </Button>
             </motion.div>
           </div>
 
-          {/* Thẻ thống kê */}
           <StatsRow rows={rows} />
 
-          {/* Thanh công cụ */}
-          <Toolbar
-            filter={filter}
-            onFilter={setFilter}
-            search={search}
-            onSearch={setSearch}
-            status={status}
-            onStatus={setStatus}
-            searchRef={searchRef}
-          />
+          <Toolbar filter={filter} onFilter={setFilter} search={search} onSearch={setSearch} searchRef={searchRef} />
 
-          {/* Bảng phiếu */}
           <PhieuTable
             rows={filtered}
             loading={loading}
@@ -157,6 +144,7 @@ export function GiaCongPage() {
           open={editing !== null}
           id={editing ?? "new"}
           seedId={seedId}
+          initialLoaiPhieu={initialLoaiPhieu}
           onClose={closeEditor}
           onSaved={() => {
             closeEditor();
