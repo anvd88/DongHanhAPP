@@ -15,6 +15,7 @@ import { KeToan } from "./pages/KeToan";
 import { KhachHang } from "./pages/KhachHang";
 import { GiaCongPage } from "./features/giacong/GiaCongPage";
 import { ChamCongPage } from "./features/chamcong/ChamCongPage";
+import { ChamCongScannerPage } from "./features/chamcong/ChamCongScannerPage";
 import { NhanSu } from "./pages/NhanSu";
 import { BaoCao } from "./pages/BaoCao";
 import { CongCu } from "./pages/CongCu";
@@ -73,7 +74,8 @@ export default function App() {
             <Route path="/giacong" element={<Protected><GiaCongPage /></Protected>} />
             <Route path="/baocao" element={<Protected><BaoCao /></Protected>} />
             <Route path="/saoluu" element={<Protected><SaoLuu /></Protected>} />
-            <Route path="/chamcong" element={<Protected><ChamCongPage /></Protected>} />
+            <Route path="/chamcong" element={<Protected><ChamCongScannerPage /></Protected>} />
+            <Route path="/ql-chamcong" element={<Protected admin><ChamCongPage /></Protected>} />
             <Route path="/tinhtoan" element={<Protected><CongCu /></Protected>} />
             <Route path="/nhansu" element={<Protected admin><NhanSu /></Protected>} />
             <Route path="/capnhat" element={<Protected admin><CapNhat /></Protected>} />

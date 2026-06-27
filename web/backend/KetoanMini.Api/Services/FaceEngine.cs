@@ -18,6 +18,13 @@ public interface IFaceEngine
     /// <summary>Kiểm tra ảnh là người thật (chống giơ ảnh/màn hình). Trả false nếu nghi giả mạo.</summary>
     bool CheckLiveness(byte[] imageBytes);
 
+    /// <summary>Xác suất khuôn mặt là người thật (0..1) cho MỘT khung — để tổng hợp liveness cả loạt chụp.
+    /// Trả 0 nếu không thấy mặt; trả 1 nếu engine không có model chống giả mạo.</summary>
+    double LivenessProbability(byte[] imageBytes);
+
+    /// <summary>Ngưỡng P(real) để coi là người thật (mặc định 0.5).</summary>
+    double LivenessThreshold { get; }
+
     /// <summary>Phát hiện 1 khuôn mặt + trích vector đặc trưng. Trả null nếu KHÔNG thấy mặt.</summary>
     float[]? ExtractEmbedding(byte[] imageBytes);
 
