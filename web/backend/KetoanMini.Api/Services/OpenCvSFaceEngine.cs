@@ -208,26 +208,148 @@ public sealed class OpenCvSFaceEngine : IFaceEngine, IDisposable
         lock (_gate)
         {
             var face = DetectCached(imageBytes, image);
-            if (face is null) return null;
-
-            var eyeMidX = (face.LeftEye.X + face.RightEye.X) / 2.0;
-            var eyeMidY = (face.LeftEye.Y + face.RightEye.Y) / 2.0;
-            var eyeDist = Math.Abs(face.LeftEye.X - face.RightEye.X);
-            if (eyeDist < 1) return null;
-
-            var mouthMidY = (face.LeftMouth.Y + face.RightMouth.Y) / 2.0;
-            var faceVert = mouthMidY - eyeMidY;
-            var yaw = (face.Nose.X - eyeMidX) / eyeDist;
-            var pitch = Math.Abs(faceVert) < 1 ? 0.5 : (face.Nose.Y - eyeMidY) / faceVert;
-            return new FacePose(yaw, pitch);
+            return face is null ? null : PoseFrom(face);
         }
+    }
+
+    /// <summary>Hướng mặt từ 5 landmark — null nếu hai mắt quá sát (suy biến, không tin được).</summary>
+    private static FacePose? PoseFrom(FaceDetection face)
+    {
+        var eyeMidX = (face.LeftEye.X + face.RightEye.X) / 2.0;
+        var eyeMidY = (face.LeftEye.Y + face.RightEye.Y) / 2.0;
+        var eyeDist = Math.Abs(face.LeftEye.X - face.RightEye.X);
+        if (eyeDist < 1) return null;
+
+        var mouthMidY = (face.LeftMouth.Y + face.RightMouth.Y) / 2.0;
+        var faceVert = mouthMidY - eyeMidY;
+        var yaw = (face.Nose.X - eyeMidX) / eyeDist;
+        var pitch = Math.Abs(faceVert) < 1 ? 0.5 : (face.Nose.Y - eyeMidY) / faceVert;
+        return new FacePose(yaw, pitch);
+    }
+
+    public FaceFrameQuality? AssessFrame(byte[] imageBytes)
+    {
+        using var image = Decode(imageBytes);
+        if (image is null) return null;
+
+        lock (_gate)
+        {
+            var face = DetectCached(imageBytes, image);
+            if (face is null)
+                return new FaceFrameQuality(false, 0, 0, 0, 0, 0, default, 0);
+
+            var rect = ClampRect(face.Rect, image.Width, image.Height);
+            var faceRatio = rect.Width * rect.Height / (double)(image.Width * image.Height);
+
+            double sharpness = 0, brightness = 0, glare = 0;
+            if (rect.Width > 8 && rect.Height > 8)
+            {
+                using var roi = new Mat(image, rect);
+                using var gray = new Mat();
+                Cv2.CvtColor(roi, gray, ColorConversionCodes.BGR2GRAY);
+
+                // Độ nét = phương sai Laplacian (ảnh nhòe ⇒ phương sai thấp).
+                using var lap = new Mat();
+                Cv2.Laplacian(gray, lap, MatType.CV_64F);
+                Cv2.MeanStdDev(lap, out _, out var std);
+                sharpness = std.Val0 * std.Val0;
+
+                brightness = gray.Mean().Val0 / 255.0;
+
+                using var glareMask = new Mat();
+                Cv2.Threshold(gray, glareMask, 245, 255, ThresholdTypes.Binary);
+                glare = Cv2.CountNonZero(glareMask) / (double)(gray.Rows * gray.Cols);
+            }
+
+            var pose = PoseFrom(face) ?? default;
+
+            // Chuẩn hóa từng tiêu chí về 0..1 rồi tổng hợp có trọng số.
+            var sharpNorm = Math.Clamp(sharpness / 250.0, 0, 1);              // ~250 = nét rõ
+            var sizeNorm = Math.Clamp(faceRatio / 0.12, 0, 1);               // mặt ~12% ảnh là đủ to
+            var brightScore = 1.0 - Math.Min(1.0, Math.Abs(brightness - 0.52) / 0.45);
+            var frontal = 1.0 - Math.Min(1.0, Math.Abs(pose.Yaw) / 0.30);
+            var glarePenalty = Math.Clamp(glare / 0.08, 0, 1);
+
+            var score = (0.34 * sharpNorm + 0.22 * sizeNorm + 0.16 * brightScore
+                         + 0.18 * frontal + 0.10 * face.Score) * (1.0 - 0.6 * glarePenalty);
+
+            return new FaceFrameQuality(true, Math.Clamp(score, 0, 1),
+                sharpNorm, brightness, glare, faceRatio, pose, face.Score);
+        }
+    }
+
+    /// <summary>Cắt rect thực (số nguyên) của khuôn mặt nằm gọn trong khung ảnh.</summary>
+    private static Rect ClampRect(Rect2d r, int imgW, int imgH)
+    {
+        var x = Math.Clamp((int)Math.Round(r.X), 0, Math.Max(0, imgW - 1));
+        var y = Math.Clamp((int)Math.Round(r.Y), 0, Math.Max(0, imgH - 1));
+        var w = Math.Clamp((int)Math.Round(r.Width), 0, imgW - x);
+        var h = Math.Clamp((int)Math.Round(r.Height), 0, imgH - y);
+        return new Rect(x, y, w, h);
     }
 
     private Mat? Decode(byte[] imageBytes)
     {
         if (imageBytes is null || imageBytes.Length == 0) return null;
         var image = Cv2.ImDecode(imageBytes, ImreadModes.Color);
-        return image.Empty() ? null : image;
+        if (image.Empty()) return null;
+        EnhanceForLowLight(image);   // chuẩn hóa ánh sáng yếu / loá để mọi khâu sau bám mặt tốt hơn
+        return image;
+    }
+
+    // Ngưỡng kích hoạt tăng cường ảnh (đo trên kênh L của LAB, 0..255). Chỉ can thiệp khi ảnh
+    // thực sự tối/loá để ảnh đủ sáng giữ nguyên (bảo toàn hành vi cũ + điểm chống giả mạo).
+    private const double EnhanceDarkMean = 110;     // sáng TB < ngưỡng ⇒ thiếu sáng
+    private const double EnhanceBrightMean = 200;    // sáng TB > ngưỡng ⇒ quá sáng/ngược sáng
+    private const double EnhanceGlareRatio = 0.045;  // tỉ lệ điểm gần bão hòa ⇒ bị loá
+
+    /// <summary>
+    /// Tăng cường ảnh BGR tại chỗ cho điều kiện ánh sáng kém: cân bằng tương phản cục bộ (CLAHE)
+    /// trên kênh sáng L trong không gian LAB, kèm hiệu chỉnh gamma để kéo sáng vùng tối hoặc nén
+    /// vùng loá. Chỉ chạy khi ảnh tối/quá sáng/loá — ảnh tốt được trả về nguyên trạng.
+    /// </summary>
+    private static void EnhanceForLowLight(Mat bgr)
+    {
+        using var lab = new Mat();
+        Cv2.CvtColor(bgr, lab, ColorConversionCodes.BGR2Lab);
+        var ch = Cv2.Split(lab);
+        try
+        {
+            var l = ch[0]; // kênh sáng (8-bit)
+            var mean = l.Mean().Val0;
+
+            using var saturated = new Mat();
+            Cv2.Threshold(l, saturated, 245, 255, ThresholdTypes.Binary);
+            var glare = Cv2.CountNonZero(saturated) / (double)(l.Rows * l.Cols);
+
+            var tooDark = mean < EnhanceDarkMean;
+            var hasGlare = glare > EnhanceGlareRatio || mean > EnhanceBrightMean;
+            if (!tooDark && !hasGlare) return; // đủ tốt → giữ nguyên
+
+            if (hasGlare) ApplyGammaInPlace(l, 1.5);   // nén vùng sáng/loá
+            if (tooDark) ApplyGammaInPlace(l, 0.7);     // kéo sáng vùng tối
+
+            using var clahe = Cv2.CreateCLAHE(2.5, new Size(8, 8));
+            clahe.Apply(l, l);
+
+            using var merged = new Mat();
+            Cv2.Merge(ch, merged);
+            Cv2.CvtColor(merged, bgr, ColorConversionCodes.Lab2BGR);
+        }
+        finally
+        {
+            foreach (var c in ch) c.Dispose();
+        }
+    }
+
+    /// <summary>Hiệu chỉnh gamma tại chỗ trên ảnh xám 8-bit bằng bảng tra (LUT).</summary>
+    private static void ApplyGammaInPlace(Mat gray8u, double gamma)
+    {
+        using var lut = new Mat(1, 256, MatType.CV_8UC1);
+        var idx = lut.GetGenericIndexer<byte>();
+        for (var i = 0; i < 256; i++)
+            idx[0, i] = (byte)Math.Clamp(Math.Pow(i / 255.0, gamma) * 255.0, 0, 255);
+        Cv2.LUT(gray8u, lut, gray8u);
     }
 
     // Dùng lại kết quả detect nếu là CÙNG mảng byte vừa xử lý (so tham chiếu — an toàn, không

@@ -61,9 +61,11 @@ function buildInput(form: ToolForm): CoilCalculationInput {
     steelType: form.steelType,
     customDensityKgM3: 7930,
     massTon: parseNumber(form.massKg) / 1000,
+    lengthInputM: 0,
     innerDiameterMm: parseNumber(form.innerDiameterCm) * 10,
     packingFactor: parseNumber(form.packingFactor),
     baremMode: "table",
+    calcDirection: "mass",
   };
 }
 

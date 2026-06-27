@@ -60,6 +60,12 @@ export const stainlessSteelBaremTable: StainlessSteelBarem[] = thicknessOptions.
 );
 
 export const standardWidthOptions = [
+  { label: "Khổ 300 mm", value: 300 },
+  { label: "Khổ 400 mm", value: 400 },
+  { label: "Khổ 500 mm", value: 500 },
+  { label: "Khổ 600 mm", value: 600 },
+  { label: "Khổ 700 mm", value: 700 },
+  { label: "Khổ 800 mm", value: 800 },
   { label: "Khổ 1.000 mm", value: 1000 },
   { label: "Khổ 1.200 mm", value: 1200 },
   { label: "Khổ 1.500 mm", value: 1500 },
@@ -75,6 +81,8 @@ export const stainlessSteelDensity = {
 export type StainlessSteelType = keyof typeof stainlessSteelDensity | "custom";
 export type BaremMode = "table" | "density";
 export type BaremSource = "table" | "density" | "densityFallback";
+/** Chiều tính: "mass" = nhập khối lượng → ra chiều dài; "length" = nhập chiều dài → ra khối lượng (cân). */
+export type CalcDirection = "mass" | "length";
 
 export interface CoilCalculationInput {
   thicknessMm: number;
@@ -82,9 +90,11 @@ export interface CoilCalculationInput {
   steelType: StainlessSteelType;
   customDensityKgM3: number;
   massTon: number;
+  lengthInputM: number;
   innerDiameterMm: number;
   packingFactor: number;
   baremMode: BaremMode;
+  calcDirection: CalcDirection;
 }
 
 export interface CoilCalculationResult {
@@ -183,13 +193,11 @@ export function resolveSteelDensity(type: StainlessSteelType, customDensityKgM3:
 
 export function calculateStainlessSteelCoil(input: CoilCalculationInput): CoilCalculationResult | null {
   const density = resolveSteelDensity(input.steelType, input.customDensityKgM3);
-  const massKg = input.massTon * 1000;
 
   if (
     input.thicknessMm <= 0 ||
     input.widthMm <= 0 ||
     density.densityKgM3 <= 0 ||
-    input.massTon <= 0 ||
     input.innerDiameterMm <= 0 ||
     input.packingFactor < 0.9 ||
     input.packingFactor > 1
@@ -208,7 +216,20 @@ export function calculateStainlessSteelCoil(input: CoilCalculationInput): CoilCa
     : input.baremMode === "table"
       ? "densityFallback"
       : "density";
-  const lengthM = calculateLengthM(massKg, kgPerMeter);
+
+  // Hai chiều tính: từ khối lượng ra chiều dài, hoặc từ chiều dài ra khối lượng (cân).
+  let massKg: number;
+  let lengthM: number;
+  if (input.calcDirection === "length") {
+    if (input.lengthInputM <= 0) return null;
+    lengthM = input.lengthInputM;
+    massKg = calculateWeightKg(kgPerMeter, lengthM);
+  } else {
+    if (input.massTon <= 0) return null;
+    massKg = input.massTon * 1000;
+    lengthM = calculateLengthM(massKg, kgPerMeter);
+  }
+
   const diameter = calculateCoilDiameter({
     weightKg: massKg,
     widthMm: input.widthMm,
@@ -216,14 +237,18 @@ export function calculateStainlessSteelCoil(input: CoilCalculationInput): CoilCa
     densityKgM3: density.densityKgM3,
     packingFactor: input.packingFactor,
   });
-  const estimatedTurns = diameter.radialBuildMm / input.thicknessMm;
+  // Bề dày phần cuộn đã gồm khe hở (hệ số độ chặt nằm trong công thức đường kính),
+  // nên nhân lại packingFactor để ra số vòng vật lý thực tế (= chiều dài / chu vi trung bình).
+  const estimatedTurns = (diameter.radialBuildMm * input.packingFactor) / input.thicknessMm;
 
   if (
     kgPerMeter <= 0 ||
+    massKg <= 0 ||
     lengthM <= 0 ||
     diameter.outerDiameterMm <= 0 ||
     diameter.radialBuildMm < 0 ||
     !Number.isFinite(kgPerMeter) ||
+    !Number.isFinite(massKg) ||
     !Number.isFinite(lengthM) ||
     !Number.isFinite(diameter.outerDiameterMm) ||
     !Number.isFinite(diameter.radialBuildMm) ||

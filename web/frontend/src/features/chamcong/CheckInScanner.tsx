@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Camera, CheckCircle2, Loader2, ScanFace, XCircle } from "lucide-react";
+import { Camera, CheckCircle2, Loader2, ScanFace } from "lucide-react";
 import { api } from "../../lib/api";
-import type { NhanDienResult } from "../../lib/types";
-import { CameraPanel } from "./CameraPanel";
+import type { ChamCongResult } from "../../lib/types";
 import { useCamera } from "./useCamera";
+import { FaceTrackingOverlay, type Framing } from "./FaceTrackingOverlay";
 
 type CheckInPopup = {
   name: string;
@@ -13,267 +13,238 @@ type CheckInPopup = {
   occurredAt?: string;
 };
 
-type FacePose = {
-  found: boolean;
-  yaw: number;
-  pitch: number;
-};
-
 type CheckInScannerProps = {
   returnToLoginOnOk?: boolean;
+  /** Giao diện kiosk (Liquid Glass, ẩn camera) thay cho thẻ camera trong app. */
   biometricMode?: boolean;
-  /** Tự bắt đầu quét ngay khi gắn (dùng cho kiosk khi đã bấm nút bên ngoài). */
+  /** Tự bắt đầu chấm công ngay khi gắn (dùng cho kiosk khi đã bấm nút bên ngoài). */
   autoStart?: boolean;
 };
 
+type Phase = "idle" | "opening" | "capturing" | "analyzing" | "warning" | "success";
 type FaceScanAnimationStatus = "idle" | "starting" | "scanning" | "success" | "error";
 
-const BIOMETRIC_YAW_FRONTAL = 0.14;
-const BIOMETRIC_PITCH_MIN = 0.25;
-const BIOMETRIC_PITCH_MAX = 0.82;
+// Số khung chụp mỗi lượt và khoảng cách giữa các khung (≈ 1.2s) — đủ để có vài khung nét, chính diện.
+const BURST_COUNT = 10;
+const BURST_GAP_MS = 110;
 const START_SCAN_ANIMATION_MS = 460;
+// Thông báo chung cho mọi pha xử lý — KHÔNG lộ cơ chế bên trong (chụp loạt, chọn ảnh tốt nhất…).
+const PROCESSING_HINT = "Đang chấm công…";
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 /**
- * Khối quét chấm công dùng chung cho tab "Chấm công" trong app và màn hình kiosk
- * ngoài trang đăng nhập. Kiosk có thể dùng giao diện quét khuôn mặt ẩn camera.
+ * Chấm công bằng khuôn mặt theo luồng "chụp loạt → chọn ảnh tốt nhất → phân tích → ghi nhật ký".
+ * KHÔNG quét trực tiếp liên tục: mỗi lượt chụp một loạt khung, server tự chọn khung tốt nhất,
+ * báo trực tiếp nếu sai tư thế / thiếu sáng, rồi nhận diện. Dùng chung cho tab "Chấm công" và kiosk.
  */
 export function CheckInScanner({ returnToLoginOnOk = false, biometricMode = false, autoStart = false }: CheckInScannerProps) {
   return biometricMode ? (
-    <BiometricCheckInScanner autoStart={autoStart} />
+    <BiometricCheckInScanner autoStart={autoStart} returnToLoginOnOk={returnToLoginOnOk} />
   ) : (
-    <ClassicCheckInScanner returnToLoginOnOk={returnToLoginOnOk} />
+    <PanelCheckInScanner returnToLoginOnOk={returnToLoginOnOk} />
   );
 }
-function ClassicCheckInScanner({ returnToLoginOnOk }: Pick<CheckInScannerProps, "returnToLoginOnOk">) {
-  const navigate = useNavigate();
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<NhanDienResult | null>(null);
-  const [popup, setPopup] = useState<CheckInPopup | null>(null);
-  const [auto, setAuto] = useState(true);
-  const [cooldown, setCooldown] = useState(false);
-  const [stopCameraSignal, setStopCameraSignal] = useState(0);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const recognize = useCallback(async (image: string) => {
-    setBusy(true);
+/**
+ * Hook lõi: quản lý camera + một lượt chấm công (mở camera → chụp loạt → POST /cham → kết quả).
+ * Tách khỏi giao diện để dùng lại cho cả thẻ camera trong app lẫn kiosk Liquid Glass.
+ */
+function useBurstCheckIn() {
+  const { videoRef, active, error, start, stop, captureBurst } = useCamera();
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [hint, setHint] = useState("Sẵn sàng chấm công");
+  const [result, setResult] = useState<ChamCongResult | null>(null);
+  const runningRef = useRef(false);
+
+  const run = useCallback(async () => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    setResult(null);
     try {
-      const res = await api.post<NhanDienResult>("/api/chamcong/nhandien", { imageBase64: image });
-      setResult(res);
-      clearTimeout(timer.current);
-      if (res.matched) {
-        setPopup({
-          name: res.fullName || res.username || "Nhân viên",
-          loai: res.loai,
-          occurredAt: res.occurredAt,
-        });
-        setStopCameraSignal((value) => value + 1);
+      if (!active) {
+        setPhase("opening");
+        setHint(PROCESSING_HINT);
+        await start();
+        await wait(START_SCAN_ANIMATION_MS); // chờ camera tự phơi sáng ổn định
+      }
 
-        setCooldown(true);
-        timer.current = setTimeout(() => {
-          setCooldown(false);
-          setResult(null);
-        }, 4000);
+      setPhase("capturing");
+      setHint(PROCESSING_HINT);
+      const frames = await captureBurst(BURST_COUNT, BURST_GAP_MS);
+      if (frames.length === 0) {
+        setPhase("warning");
+        setHint("Chưa chấm công được. Vui lòng thử lại.");
+        setResult(null);
+        return;
+      }
+
+      setPhase("analyzing");
+      setHint(PROCESSING_HINT);
+      const res = await api.post<ChamCongResult>("/api/chamcong/cham", { images: frames });
+      setResult(res);
+
+      if (res.matched && res.status === "ok") {
+        setPhase("success");
+        setHint(`${res.fullName || res.username || "Nhân viên"} đã chấm công`);
+        stop();
       } else {
-        timer.current = setTimeout(() => setResult(null), 2500);
+        setPhase("warning");
+        setHint(res.guidance || res.message);
       }
     } catch (e) {
-      setResult({ matched: false, similarity: 0, message: e instanceof Error ? e.message : "Lỗi nhận diện." });
+      setPhase("warning");
+      setHint(e instanceof Error ? e.message : "Lỗi chấm công. Vui lòng thử lại.");
+      setResult(null);
     } finally {
-      setBusy(false);
+      runningRef.current = false;
     }
+  }, [active, start, stop, captureBurst]);
+
+  const reset = useCallback(() => {
+    setResult(null);
+    setPhase("idle");
+    setHint("Sẵn sàng chấm công");
   }, []);
 
-  useEffect(
-    () => () => {
-      clearTimeout(timer.current);
-    },
-    [],
-  );
+  const busy = phase === "opening" || phase === "capturing" || phase === "analyzing";
+
+  return { videoRef, active, error, phase, hint, result, busy, run, stop, reset };
+}
+
+/* --------------------------- Thẻ camera trong app --------------------------- */
+function PanelCheckInScanner({ returnToLoginOnOk }: Pick<CheckInScannerProps, "returnToLoginOnOk">) {
+  const navigate = useNavigate();
+  const { videoRef, active, error, phase, hint, result, busy, run, stop } = useBurstCheckIn();
+  const [popup, setPopup] = useState<CheckInPopup | null>(null);
+  const [framing, setFraming] = useState<Framing | null>(null);
+
+  useEffect(() => {
+    if (phase === "success" && result?.matched) {
+      setPopup({
+        name: result.fullName || result.username || "Nhân viên",
+        loai: result.loai,
+        occurredAt: result.occurredAt,
+      });
+    }
+  }, [phase, result]);
 
   const closePopup = () => {
     setPopup(null);
-    setCooldown(false);
-    setResult(null);
     if (returnToLoginOnOk) navigate("/login", { replace: true });
   };
 
+  // Gợi ý dưới camera: khi đang xử lý hiện thông báo trung tính; khi rảnh hiện hướng dẫn căn khung.
+  const showFramingHint = active && !busy && phase !== "success" && framing != null && framing.state !== "good";
+
   return (
-    <div className="cc-grid">
+    <div className="cc-grid cc-checkin-grid">
       <CheckInSuccessPopup popup={popup} onOk={closePopup} />
 
-      <div className="space-y-3">
-        <CameraPanel
-          onCapture={recognize}
-          busy={busy}
-          auto={auto}
-          paused={cooldown}
-          stopSignal={stopCameraSignal}
-          captureLabel="Chụp & chấm công"
-        />
-        <label className="cc-auto-toggle">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-          Tự động chụp khi có người trước camera
-        </label>
+      <div className="cc-camera glass">
+        <div className="cc-video-wrap">
+          <video ref={videoRef} playsInline muted className="cc-video" data-active={active} />
+          {!active && (
+            <div className="cc-video-empty">
+              <Camera className="h-8 w-8" />
+              <span>Camera đang tắt</span>
+            </div>
+          )}
+          {active && <FaceTrackingOverlay videoRef={videoRef} active={active} onFraming={setFraming} />}
+          {busy ? (
+            <div className="cc-scan-hint">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> {hint}
+            </div>
+          ) : showFramingHint ? (
+            <div className="cc-scan-hint" data-warn="true">
+              {framing!.hint}
+            </div>
+          ) : null}
+        </div>
+
+        {error && <div className="cc-error">{error}</div>}
+
+        <div className="cc-camera-actions">
+          <button className="cc-btn cc-btn-primary" onClick={run} disabled={busy} type="button">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanFace className="h-4 w-4" />}{" "}
+            {busy ? PROCESSING_HINT : active ? "Chấm công" : "Bật camera & chấm công"}
+          </button>
+          {active && (
+            <button className="cc-btn" onClick={stop} disabled={busy} type="button">
+              Tắt camera
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="cc-result glass">
-        {!result ? (
-          <div className="cc-result-empty">
-            <ScanFace className="h-10 w-10" />
-            <p>
-              {auto
-                ? "Bật camera — hệ thống tự nhận diện khi bạn nhìn vào."
-                : "Bật camera và bấm “Chụp & chấm công”."}
-            </p>
-          </div>
-        ) : result.matched ? (
-          <div className="cc-result-ok">
-            <CheckCircle2 className="h-12 w-12" />
-            <div className="cc-result-name">{result.fullName || result.username}</div>
-            <div className="cc-result-badge" data-loai={result.loai}>{result.loai}</div>
-            <div className="cc-result-meta">Độ khớp {(result.similarity * 100).toFixed(1)}%</div>
-          </div>
-        ) : (
-          <div className="cc-result-fail">
-            <XCircle className="h-12 w-12" />
-            <p>{result.message}</p>
-          </div>
-        )}
+        <PanelResult phase={phase} hint={hint} result={result} />
       </div>
     </div>
   );
 }
 
-function BiometricCheckInScanner({ autoStart = false }: { autoStart?: boolean }) {
-  const { videoRef, active, error, start, stop, capture } = useCamera();
-  const [phase, setPhase] = useState<"idle" | "opening" | "scanning" | "checking" | "warning" | "success">("idle");
-  const [hint, setHint] = useState("Sẵn sàng ghi nhận công");
-  const [lastCheckIn, setLastCheckIn] = useState<CheckInPopup | null>(null);
-  const busyRef = useRef(false);
-  const demoTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const demoMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demoFaceScan") === "1";
+function PanelResult({ phase, hint, result }: { phase: Phase; hint: string; result: ChamCongResult | null }) {
+  if (phase === "success" && result?.matched) {
+    return (
+      <div className="cc-result-ok">
+        <CheckCircle2 className="h-12 w-12" />
+        <div className="cc-result-name">{result.fullName || result.username}</div>
+        {result.loai && <div className="cc-result-badge" data-loai={result.loai}>{result.loai}</div>}
+        <div className="cc-result-meta">Độ khớp {(result.similarity * 100).toFixed(1)}%</div>
+      </div>
+    );
+  }
 
-  const scan = useCallback(async () => {
-    if (demoMode || busyRef.current || lastCheckIn) return;
+  if (phase === "warning") {
+    return (
+      <div className="cc-result-fail" data-tone={result?.status === "posture" || result?.status === "lowquality" ? "warn" : undefined}>
+        <ScanFace className="h-12 w-12" />
+        <div className="cc-result-name cc-result-name--sm">{result?.message ?? "Chưa chấm công được"}</div>
+        {result?.guidance && <p>{result.guidance}</p>}
+        {!result?.guidance && <p>{hint}</p>}
+      </div>
+    );
+  }
 
-    const image = capture();
-    if (!image) {
-      if (active || phase === "scanning" || phase === "checking") {
-        if (phase !== "warning") {
-          setPhase("scanning");
-          setHint("Đang chờ camera ổn định...");
-        }
-      } else {
-        setPhase("idle");
-        setHint("Bấm bắt đầu để mở camera");
-      }
-      return;
-    }
+  if (phase === "opening" || phase === "capturing" || phase === "analyzing") {
+    return (
+      <div className="cc-result-empty">
+        <Loader2 className="h-10 w-10 animate-spin" />
+        <p>{hint}</p>
+      </div>
+    );
+  }
 
-    busyRef.current = true;
+  return (
+    <div className="cc-result-empty">
+      <ScanFace className="h-10 w-10" />
+      <p>Bấm “Chấm công” — hệ thống chụp một loạt ảnh, chọn ảnh rõ nhất rồi nhận diện.</p>
+    </div>
+  );
+}
 
-    try {
-      const pose = await api.post<FacePose>("/api/chamcong/huongmat", { imageBase64: image });
-      if (!pose.found) {
-        setPhase("warning");
-        setHint("Đưa khuôn mặt vào vùng quét");
-        return;
-      }
-      if (Math.abs(pose.yaw) > BIOMETRIC_YAW_FRONTAL) {
-        setPhase("warning");
-        setHint("Nhìn thẳng vào vùng quét");
-        return;
-      }
-      if (pose.pitch < BIOMETRIC_PITCH_MIN) {
-        setPhase("warning");
-        setHint("Hạ mặt xuống một chút");
-        return;
-      }
-      if (pose.pitch > BIOMETRIC_PITCH_MAX) {
-        setPhase("warning");
-        setHint("Ngước mặt lên một chút");
-        return;
-      }
-
-      setPhase("scanning");
-      setHint("Đang nhận diện...");
-      const res = await api.post<NhanDienResult>("/api/chamcong/nhandien", { imageBase64: image });
-      if (!res.matched) {
-        setPhase("warning");
-        setHint(res.message || "Chưa nhận diện được. Vui lòng thử lại.");
-        return;
-      }
-
-      const name = res.fullName || res.username || "Nhân viên";
-      setPhase("success");
-      setHint(`${name} đã chấm công`);
-      setLastCheckIn({
-        name,
-        loai: res.loai,
-        occurredAt: res.occurredAt,
-      });
-      stop();
-    } catch (e) {
-      setPhase("warning");
-      setHint(e instanceof Error ? e.message : "Không nhận diện được. Vui lòng thử lại.");
-    } finally {
-      busyRef.current = false;
-    }
-  }, [active, capture, demoMode, lastCheckIn, phase, stop]);
-
-  const begin = async () => {
-    clearTimeout(demoTimer.current);
-    setLastCheckIn(null);
-    busyRef.current = false;
-    setPhase("opening");
-    setHint("Đang chuẩn bị quét...");
-    if (demoMode) {
-      demoTimer.current = setTimeout(() => {
-        setPhase("scanning");
-        setHint("Đang chạy thử hoạt ảnh quét...");
-        demoTimer.current = setTimeout(() => {
-          setPhase("success");
-          setHint("Nguyễn Văn A đã chấm công");
-          setLastCheckIn({
-            name: "Nguyễn Văn A",
-            loai: "Demo",
-            occurredAt: new Date().toISOString(),
-          });
-        }, 1700);
-      }, START_SCAN_ANIMATION_MS);
-      return;
-    }
-    await Promise.all([start(), wait(START_SCAN_ANIMATION_MS)]);
-    setPhase("scanning");
-    setHint("Nhìn thẳng vào vùng quét");
-  };
+/* ----------------------------- Kiosk Liquid Glass ----------------------------- */
+function BiometricCheckInScanner({
+  autoStart = false,
+  returnToLoginOnOk = false,
+}: Pick<CheckInScannerProps, "autoStart" | "returnToLoginOnOk">) {
+  const navigate = useNavigate();
+  const { videoRef, active, error, phase, hint, result, busy, run } = useBurstCheckIn();
 
   const autoStartedRef = useRef(false);
   useEffect(() => {
     if (autoStart && !autoStartedRef.current) {
       autoStartedRef.current = true;
-      void begin();
+      void run();
     }
-    // begin được tạo mới mỗi render; chỉ chạy 1 lần khi gắn nên không đưa vào deps.
+    // run đổi mỗi render; chỉ chạy 1 lần khi gắn nên không đưa vào deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart]);
 
-  useEffect(() => {
-    if (!active || lastCheckIn || phase === "success") return;
-    const id = window.setInterval(scan, 900);
-    return () => window.clearInterval(id);
-  }, [active, phase, lastCheckIn, scan]);
+  const success = phase === "success" && result?.matched;
+  const successName = result?.fullName || result?.username || "Nhân viên";
+  const successTime = result?.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null;
 
-  useEffect(
-    () => () => {
-      clearTimeout(demoTimer.current);
-      busyRef.current = false;
-    },
-    [],
-  );
-
-  const lastCheckInTime = lastCheckIn?.occurredAt ? new Date(lastCheckIn.occurredAt).toLocaleTimeString("vi-VN") : null;
   const scanStatus: FaceScanAnimationStatus =
     phase === "success"
       ? "success"
@@ -281,10 +252,11 @@ function BiometricCheckInScanner({ autoStart = false }: { autoStart?: boolean })
         ? "error"
         : phase === "opening"
           ? "starting"
-          : phase === "scanning" || phase === "checking" || active
+          : busy || active
             ? "scanning"
             : "idle";
-  const scanRunning = active || phase === "opening" || phase === "scanning" || phase === "checking";
+
+  const islandPhase = phase === "warning" ? "warning" : phase === "success" ? "success" : busy ? "scanning" : "idle";
 
   return (
     <div className="cc-bio-shell">
@@ -292,29 +264,23 @@ function BiometricCheckInScanner({ autoStart = false }: { autoStart?: boolean })
 
       <motion.div
         className="cc-bio-island"
-        data-phase={phase}
-        animate={{
-          scale: phase === "success" ? 0.985 : 1,
-        }}
+        data-phase={islandPhase}
+        animate={{ scale: success ? 0.985 : 1 }}
         transition={{ type: "spring", stiffness: 260, damping: 24 }}
       >
         <FaceScanAnimation status={scanStatus} />
 
         <div className="cc-bio-copy">
-          <div className="cc-bio-title">
-            {phase === "success" ? "Chấm công thành công" : "Chấm công khuôn mặt"}
-          </div>
-          {phase === "success" && lastCheckIn ? (
+          <div className="cc-bio-title">{success ? "Chấm công thành công" : "Chấm công khuôn mặt"}</div>
+          {success ? (
             <motion.div
               className="cc-bio-success"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.24, ease: "easeOut", delay: 0.08 }}
             >
-              <div className="cc-bio-success-name">{lastCheckIn.name} đã chấm công</div>
-              <div className="cc-bio-success-meta">
-                {[lastCheckIn.loai, lastCheckInTime].filter(Boolean).join(" · ")}
-              </div>
+              <div className="cc-bio-success-name">{successName} đã chấm công</div>
+              <div className="cc-bio-success-meta">{[result?.loai, successTime].filter(Boolean).join(" · ")}</div>
             </motion.div>
           ) : (
             <div className="cc-bio-hint" data-warn={phase === "warning"}>
@@ -323,20 +289,27 @@ function BiometricCheckInScanner({ autoStart = false }: { autoStart?: boolean })
           )}
         </div>
 
-        {phase !== "success" && !scanRunning && (
-          <button className="cc-bio-start" onClick={begin} type="button">
-            <Camera className="h-4 w-4" /> Bắt đầu quét
+        {!success && !busy && (
+          <button className="cc-bio-start" onClick={run} type="button">
+            <Camera className="h-4 w-4" /> {phase === "warning" ? "Thử lại" : "Bắt đầu chấm công"}
           </button>
         )}
-        {phase !== "success" && scanRunning && (
+        {!success && busy && (
           <div className="cc-bio-active-pill">
-            <Loader2 className="h-4 w-4 animate-spin" /> Đang quét
+            <Loader2 className="h-4 w-4 animate-spin" /> {PROCESSING_HINT}
           </div>
         )}
-        {phase === "success" && (
-          <button className="cc-bio-start cc-bio-start--secondary" onClick={begin} type="button">
-            <Camera className="h-4 w-4" /> Quét tiếp
-          </button>
+        {success && (
+          <div className="cc-bio-success-actions">
+            <button className="cc-bio-start cc-bio-start--secondary" onClick={run} type="button">
+              <Camera className="h-4 w-4" /> Chấm tiếp
+            </button>
+            {returnToLoginOnOk && (
+              <button className="cc-bio-start" onClick={() => navigate("/login", { replace: true })} type="button">
+                Xong
+              </button>
+            )}
+          </div>
         )}
       </motion.div>
 
