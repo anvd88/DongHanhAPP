@@ -10,23 +10,21 @@ import { isAdmin, type RtspAttendanceStatus } from "../lib/types";
 import { useApi } from "../lib/useApi";
 import {
   isKeepCreateVoucherOpenEnabled,
-  setKeepCreateVoucherOpenEnabled,
   subscribeKeepCreateVoucherOpenEnabled,
 } from "../lib/accountingPreferences";
 import {
   ensureEyeDailyLogin,
   isEyeReminderEnabled,
   restartEyeDailyLogin,
-  setEyeReminderEnabled,
   subscribeEyeReminderEnabled,
 } from "../lib/eyeReminderClock";
 import {
   ensureWaterDailyLogin,
   isWaterReminderEnabled,
   restartWaterDailyLogin,
-  setWaterReminderEnabled,
   subscribeWaterReminderEnabled,
 } from "../lib/waterReminderClock";
+import { loadUserPreferences, saveUserPreferencesPatch } from "../lib/userPreferences";
 import "./system-settings.css";
 
 const WATER_INTERVAL_MS = 60 * 60 * 1000;
@@ -60,6 +58,7 @@ export function SystemSettings() {
   const [keepCreateVoucherOpen, setKeepCreateVoucherOpen] = useState(() =>
     user ? isKeepCreateVoucherOpenEnabled(user.id) : false,
   );
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
   const [attendanceToggling, setAttendanceToggling] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const {
@@ -84,6 +83,11 @@ export function SystemSettings() {
     setWaterEnabled(isWaterReminderEnabled(user.id));
     setEyeEnabled(isEyeReminderEnabled(user.id));
     setKeepCreateVoucherOpen(isKeepCreateVoucherOpenEnabled(user.id));
+    setPreferenceError(null);
+
+    loadUserPreferences(user.id).catch(() => {
+      setPreferenceError("Không tải được tuỳ chọn đã lưu theo tài khoản.");
+    });
 
     const unsubscribeWater = subscribeWaterReminderEnabled(user.id, () => {
       setWaterEnabled(isWaterReminderEnabled(user.id));
@@ -116,7 +120,7 @@ export function SystemSettings() {
     };
   }, []);
 
-  const toggleWaterReminder = () => {
+  const toggleWaterReminder = async () => {
     if (!user) return;
 
     const next = !waterEnabled;
@@ -125,11 +129,17 @@ export function SystemSettings() {
       restartWaterDailyLogin(user.id, restartedAt);
       setNow(restartedAt);
     }
-    setWaterReminderEnabled(user.id, next);
     setWaterEnabled(next);
+    setPreferenceError(null);
+    try {
+      await saveUserPreferencesPatch(user.id, { waterReminderEnabled: next });
+    } catch {
+      setWaterEnabled(!next);
+      setPreferenceError("Không lưu được tuỳ chọn nhắc uống nước theo tài khoản.");
+    }
   };
 
-  const toggleEyeReminder = () => {
+  const toggleEyeReminder = async () => {
     if (!user) return;
 
     const next = !eyeEnabled;
@@ -138,16 +148,28 @@ export function SystemSettings() {
       restartEyeDailyLogin(user.id, restartedAt);
       setNow(restartedAt);
     }
-    setEyeReminderEnabled(user.id, next);
     setEyeEnabled(next);
+    setPreferenceError(null);
+    try {
+      await saveUserPreferencesPatch(user.id, { eyeReminderEnabled: next });
+    } catch {
+      setEyeEnabled(!next);
+      setPreferenceError("Không lưu được tuỳ chọn nhắc bảo vệ mắt theo tài khoản.");
+    }
   };
 
-  const toggleKeepCreateVoucherOpen = () => {
+  const toggleKeepCreateVoucherOpen = async () => {
     if (!user) return;
 
     const next = !keepCreateVoucherOpen;
-    setKeepCreateVoucherOpenEnabled(user.id, next);
     setKeepCreateVoucherOpen(next);
+    setPreferenceError(null);
+    try {
+      await saveUserPreferencesPatch(user.id, { keepCreateVoucherOpen: next });
+    } catch {
+      setKeepCreateVoucherOpen(!next);
+      setPreferenceError("Không lưu được tuỳ chọn giữ form tạo phiếu theo tài khoản.");
+    }
   };
 
   const toggleAutoAttendance = async () => {
@@ -173,6 +195,12 @@ export function SystemSettings() {
         title="Hệ thống"
         subtitle="Cài đặt thông báo và tuỳ chọn trải nghiệm web"
       />
+
+      {preferenceError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
+          {preferenceError}
+        </div>
+      )}
 
       <section className="system-settings-grid">
         <GlassCard className="system-settings-card p-5">

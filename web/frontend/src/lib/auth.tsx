@@ -3,6 +3,7 @@ import { api, tokenStore } from "./api";
 import type { User } from "./types";
 import { ensureWaterDailyLogin } from "./waterReminderClock";
 import { ensureEyeDailyLogin } from "./eyeReminderClock";
+import { loadUserPreferences } from "./userPreferences";
 
 interface AuthCtx {
   user: User | null;
@@ -61,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((currentUser) => {
         ensureWaterDailyLogin(currentUser.id);
         ensureEyeDailyLogin(currentUser.id);
+        loadUserPreferences(currentUser.id).catch(() => {});
         setUser(currentUser);
       })
       .catch(() => tokenStore.clear())
@@ -93,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokenStore.set(res.token);
     ensureWaterDailyLogin(res.user.id);
     ensureEyeDailyLogin(res.user.id);
+    loadUserPreferences(res.user.id).catch(() => {});
     setUser(res.user); // kích hoạt heartbeat ngay qua effect ở trên
   };
 

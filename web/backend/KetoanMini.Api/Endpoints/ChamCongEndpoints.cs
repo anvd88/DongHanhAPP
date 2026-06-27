@@ -335,19 +335,22 @@ public static class ChamCongEndpoints
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
 
-            // 1) Chọn khung tốt nhất trong loạt (chỉ những khung có khuôn mặt).
-            byte[]? bestBytes = null;
-            FaceFrameQuality best = default;
+            // 1) Lấy mọi khung CÓ MẶT, xếp theo chất lượng giảm dần (nét, đủ sáng, mặt to & chính diện).
+            var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
             foreach (var img in req.Images)
             {
                 if (!TryDecodeImage(img, out var bytes)) continue;
                 if (engine.AssessFrame(bytes) is not { FaceFound: true } q) continue;
-                if (bestBytes is null || q.Score > best.Score) { best = q; bestBytes = bytes; }
+                candidates.Add((bytes, q));
             }
 
-            if (bestBytes is null)
+            if (candidates.Count == 0)
                 return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, 0,
                     "Không thấy khuôn mặt trong ảnh.", "Đưa khuôn mặt vào giữa khung hình rồi chấm lại."));
+
+            candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
+            var bestBytes = candidates[0].Bytes;
+            var best = candidates[0].Q;
 
             // 2) Cổng tư thế — báo trực tiếp, KHÔNG ghi nhật ký nếu sai.
             var posture = CheckPosture(best.Pose);
@@ -361,8 +364,17 @@ public static class ChamCongEndpoints
                     "Ảnh chưa đủ rõ (thiếu sáng, loá hoặc bị nhòe).",
                     "Tìm nơi đủ sáng, giữ máy ổn định và nhìn thẳng rồi chấm lại."));
 
-            // 4) Chống giả mạo + trích đặc trưng trên đúng khung tốt nhất.
-            if (!engine.CheckLiveness(bestBytes))
+            // 4) Chống giả mạo: chấm liveness trên VÀI khung tốt nhất của loạt, qua nếu CÓ khung đạt.
+            // Model 1 ảnh tĩnh dao động mạnh ngay với người thật (cùng mặt lúc 0.99 lúc 0.11), nên xét
+            // 1 khung dễ từ chối nhầm. Ảnh/màn hình giả thì thấp ở MỌI khung → vẫn bị chặn.
+            const int livenessFramesToCheck = 5;
+            double bestLive = 0;
+            foreach (var c in candidates.Take(livenessFramesToCheck))
+            {
+                bestLive = Math.Max(bestLive, engine.LivenessProbability(c.Bytes));
+                if (bestLive >= engine.LivenessThreshold) break; // đã có khung đạt → dừng sớm
+            }
+            if (bestLive < engine.LivenessThreshold)
                 return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
                     "Nghi ngờ giả mạo (không phải người thật).", "Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình."));
 

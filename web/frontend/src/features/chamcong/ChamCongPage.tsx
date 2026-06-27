@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import { Activity, Radio, RefreshCw, ScanFace, ToggleLeft, ToggleRight, Trash2, UserPlus, Wifi, WifiOff } from "lucide-react";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
-import { useAuth } from "../../lib/auth";
-import { isAdmin } from "../../lib/types";
 import type {
   ChamCongLog,
   FaceRegistrationLog,
@@ -12,59 +10,42 @@ import type {
   UserAdmin,
 } from "../../lib/types";
 import { CameraPanel } from "./CameraPanel";
-import { CheckInScanner } from "./CheckInScanner";
 import { EnrollWizard } from "./EnrollWizard";
 import "./chamcong.css";
 
-type Tab = "chamcong" | "dangky" | "khuonmat" | "nhatky";
+type Tab = "dangky" | "khuonmat" | "nhatky";
 
+/**
+ * Trang quản lý chấm công (admin): đăng ký khuôn mặt, dữ liệu sinh trắc, nhật ký và trạng thái
+ * camera RTSP. Giao diện chấm công cho nhân viên nằm ở trang riêng /chamcong.
+ */
 export function ChamCongPage() {
-  const { user } = useAuth();
-  const admin = isAdmin(user);
-  const [tab, setTab] = useState<Tab>("chamcong");
+  const [tab, setTab] = useState<Tab>("dangky");
 
   return (
     <div className="cc-root space-y-4 pb-6">
       <div>
-        <h1 className="cc-title">Chấm công khuôn mặt</h1>
-        <p className="cc-subtitle">Nhận diện nhân viên qua camera để ghi nhận giờ vào / ra</p>
+        <h1 className="cc-title">Quản lý chấm công</h1>
+        <p className="cc-subtitle">Đăng ký khuôn mặt, dữ liệu sinh trắc và nhật ký chấm công</p>
       </div>
+
+      <RtspStatusPanel />
 
       <div className="cc-tabs">
-        <button className="cc-tab" data-on={tab === "chamcong"} onClick={() => setTab("chamcong")} type="button">
-          <ScanFace className="h-4 w-4" /> Chấm công
+        <button className="cc-tab" data-on={tab === "dangky"} onClick={() => setTab("dangky")} type="button">
+          <UserPlus className="h-4 w-4" /> Đăng ký khuôn mặt
         </button>
-        {admin && (
-          <button className="cc-tab" data-on={tab === "dangky"} onClick={() => setTab("dangky")} type="button">
-            <UserPlus className="h-4 w-4" /> Đăng ký khuôn mặt
-          </button>
-        )}
-        {admin && (
-          <button className="cc-tab" data-on={tab === "khuonmat"} onClick={() => setTab("khuonmat")} type="button">
-            Dữ liệu khuôn mặt
-          </button>
-        )}
-        {admin && (
-          <button className="cc-tab" data-on={tab === "nhatky"} onClick={() => setTab("nhatky")} type="button">
-            Nhật ký chấm công
-          </button>
-        )}
+        <button className="cc-tab" data-on={tab === "khuonmat"} onClick={() => setTab("khuonmat")} type="button">
+          Dữ liệu khuôn mặt
+        </button>
+        <button className="cc-tab" data-on={tab === "nhatky"} onClick={() => setTab("nhatky")} type="button">
+          Nhật ký chấm công
+        </button>
       </div>
 
-      {tab === "chamcong" && <CheckInTab admin={admin} />}
-      {tab === "dangky" && admin && <RegisterTab />}
-      {tab === "khuonmat" && admin && <FaceDataTab />}
-      {tab === "nhatky" && admin && <LogTab />}
-    </div>
-  );
-}
-
-/* ----------------------------- Tab: Chấm công ----------------------------- */
-function CheckInTab({ admin }: { admin: boolean }) {
-  return (
-    <div className="space-y-4">
-      <CheckInScanner />
-      {admin && <RtspStatusPanel />}
+      {tab === "dangky" && <RegisterTab />}
+      {tab === "khuonmat" && <FaceDataTab />}
+      {tab === "nhatky" && <LogTab />}
     </div>
   );
 }

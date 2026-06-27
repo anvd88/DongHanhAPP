@@ -69,6 +69,7 @@ app.UseDefaultFiles();
 // static files mặc định sẽ trả 404; .wasm map sẵn cho chắc để FaceDetector nạp được.
 var staticContentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
 staticContentTypes.Mappings[".tflite"] = "application/octet-stream";
+staticContentTypes.Mappings[".task"] = "application/octet-stream"; // model FaceLandmarker (chống giả mạo chớp mắt)
 staticContentTypes.Mappings[".wasm"] = "application/wasm";
 app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = staticContentTypes });
 
@@ -142,6 +143,7 @@ app.MapGiaCong();
 app.MapChamCong();
 app.MapUsers();
 app.MapReleases();
+app.MapPreferences();
 
 // Hub tín hiệu real-time (web + desktop kết nối tới đây).
 app.MapHub<ChangesHub>("/hubs/changes");
@@ -168,6 +170,9 @@ try
         .ExecuteNonQueryAsync();
 }
 catch (Exception ex) { app.Logger.LogWarning("Không thêm được cột client_kind lúc khởi động: {Msg}", ex.Message); }
+
+try { await PreferenceEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tuy chon nguoi dung luc khoi dong: {Msg}", ex.Message); }
 
 app.Run();
 

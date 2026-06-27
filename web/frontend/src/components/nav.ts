@@ -5,6 +5,7 @@ import {
   Building2,
   Calculator,
   CircleDollarSign,
+  ClipboardList,
   FileText,
   LayoutDashboard,
   ScanFace,
@@ -60,6 +61,7 @@ export const NAV: NavSection[] = [
     items: [
       { key: "nhansu", label: "Nhân sự", icon: Users, path: "/nhansu", adminOnly: true, ready: true },
       { key: "chamcong", label: "Chấm công", icon: ScanFace, path: "/chamcong", ready: true },
+      { key: "chamcong-ql", label: "Quản lý chấm công", icon: ClipboardList, path: "/ql-chamcong", adminOnly: true, ready: true },
       { key: "baocao", label: "Báo cáo", icon: BookOpen, path: "/baocao", ready: true },
       { key: "danhmuc", label: "Danh mục", icon: Tags, path: "/danhmuc" },
       { key: "hethong", label: "Hệ thống", icon: Settings, path: "/caidat", ready: true },

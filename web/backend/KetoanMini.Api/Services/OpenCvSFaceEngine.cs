@@ -91,17 +91,26 @@ public sealed class OpenCvSFaceEngine : IFaceEngine, IDisposable
     // Tăng lên nếu muốn giảm nhận nhầm, giảm xuống nếu camera/ánh sáng yếu.
     public double MatchThreshold => 0.363;
 
-    public bool CheckLiveness(byte[] imageBytes)
+    public double LivenessThreshold => LivenessRealThreshold;
+
+    public bool CheckLiveness(byte[] imageBytes) => LivenessProbability(imageBytes) >= LivenessRealThreshold;
+
+    /// <summary>
+    /// Xác suất khuôn mặt là NGƯỜI THẬT (0..1) cho MỘT khung. Trả 0 nếu không thấy mặt; trả 1
+    /// nếu thiếu model PAD (chỉ cần có mặt). Dùng để tổng hợp liveness trên nhiều khung của loạt
+    /// chụp — model 1 ảnh tĩnh dao động mạnh nên xét cả loạt giúp tránh từ chối nhầm người thật.
+    /// </summary>
+    public double LivenessProbability(byte[] imageBytes)
     {
         using var image = Decode(imageBytes);
-        if (image is null) return false;
+        if (image is null) return 0;
 
         lock (_gate)
         {
             var face = DetectCached(imageBytes, image);
-            if (face is null) return false;          // không thấy mặt → coi như không qua
-            if (_livenessNet is null) return true;   // thiếu model PAD → chỉ xác nhận có mặt
-            return LivenessScore(image, face) >= LivenessRealThreshold;
+            if (face is null) return 0;          // không thấy mặt → coi như không qua
+            if (_livenessNet is null) return 1;  // thiếu model PAD → chỉ xác nhận có mặt
+            return LivenessScore(image, face);
         }
     }
 

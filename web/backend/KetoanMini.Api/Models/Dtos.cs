@@ -6,6 +6,8 @@ public record LoginResponse(string Token, UserDto User);
 public record HeartbeatRequest(string? Sid);
 public record UpdateProfileRequest(string FullName, string Email);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record UserPreferencesDto(bool WaterReminderEnabled, bool EyeReminderEnabled, bool KeepCreateVoucherOpen);
+public record UserPreferencePatchRequest(bool? WaterReminderEnabled, bool? EyeReminderEnabled, bool? KeepCreateVoucherOpen);
 public record UserDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt)
 {
