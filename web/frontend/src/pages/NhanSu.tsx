@@ -4,7 +4,7 @@ import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { Table } from "../components/Table";
 import { Modal } from "../components/Modal";
-import { Button, Input, Select, Field, Spinner, Badge } from "../components/ui";
+import { Button, Input, Select, Field, Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
 import { date, dateTime } from "../lib/format";
@@ -61,12 +61,11 @@ export function NhanSu() {
       </GlassCard>
 
       <GlassCard className="overflow-hidden p-0">
-        {loading ? (
-          <Spinner />
-        ) : error ? (
+        {error ? (
           <div className="p-5 text-sm text-[var(--danger)]">{error}</div>
         ) : (
           <Table<UserAdmin>
+            loading={loading}
             rows={data ?? []}
             keyOf={(r) => r.id}
             empty="Không có người dùng"

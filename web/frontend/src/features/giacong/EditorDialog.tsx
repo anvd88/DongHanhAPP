@@ -7,6 +7,7 @@ import { cn } from "../../lib/cn";
 import { useAuth } from "../../lib/auth";
 import { api } from "../../lib/api";
 import { money } from "../../lib/format";
+import { DatePicker } from "../../components/DateField";
 import type { GiaCongDetail, GiaCongLine } from "../../lib/types";
 
 export const LOAI_XUAT = "Xuất gia công";
@@ -204,14 +205,14 @@ export function EditorDialog({
               <GlassInput value={doiTac} onChange={(e) => setDoiTac(e.target.value)} placeholder="Tên đối tác" />
             </Field>
             <Field label={isNhapPhieu ? "Ngày nhập" : "Ngày xuất"}>
-              <GlassInput type="date" value={ngayLap} onChange={(e) => setNgayLap(e.target.value)} />
+              <DatePicker value={ngayLap} onChange={setNgayLap} ariaLabel={isNhapPhieu ? "Ngày nhập" : "Ngày xuất"} />
             </Field>
             <Field label="Nhân viên phụ trách">
               <GlassInput value={nhanVien} disabled readOnly placeholder="Họ tên" />
             </Field>
             {!isNhapPhieu && (
               <Field label="Hạn hoàn thành">
-                <GlassInput type="date" value={hanHoanThanh} onChange={(e) => setHanHoanThanh(e.target.value)} />
+                <DatePicker value={hanHoanThanh} onChange={setHanHoanThanh} clearable ariaLabel="Hạn hoàn thành" />
               </Field>
             )}
           </div>

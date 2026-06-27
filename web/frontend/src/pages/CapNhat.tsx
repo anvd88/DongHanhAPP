@@ -1,7 +1,7 @@
 import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { Table } from "../components/Table";
-import { Spinner, Badge } from "../components/ui";
+import { Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { dateTime } from "../lib/format";
 import type { Release } from "../lib/types";
@@ -13,12 +13,11 @@ export function CapNhat() {
     <div>
       <PageHeader title="Cập nhật phiên bản" subtitle="Lịch sử phát hành ứng dụng" />
       <GlassCard className="overflow-hidden p-0">
-        {loading ? (
-          <Spinner />
-        ) : error ? (
+        {error ? (
           <div className="p-5 text-sm text-[var(--danger)]">{error}</div>
         ) : (
           <Table<Release>
+            loading={loading}
             rows={data ?? []}
             keyOf={(r) => r.id}
             empty="Chưa có bản phát hành"

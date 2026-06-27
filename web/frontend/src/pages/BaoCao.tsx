@@ -4,7 +4,7 @@ import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { StatCard } from "../components/StatCard";
 import { Table } from "../components/Table";
-import { Spinner } from "../components/ui";
+import { DatePicker } from "../components/DateField";
 import { useApi } from "../lib/useApi";
 import { money, num } from "../lib/format";
 import type { GiaCongReport, Reports } from "../lib/types";
@@ -31,15 +31,14 @@ export function BaoCao() {
   return (
     <div>
       <PageHeader title="Báo cáo" subtitle="Tổng hợp doanh thu, chứng từ và tồn gia công" />
-      {loading && <Spinner />}
       {error && <GlassCard className="p-5 text-sm text-[var(--danger)]">{error}</GlassCard>}
-      {data && (
+      {!error && (
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Tổng thu chi" value={vnd(data.totalPayments)} icon={Wallet} color="var(--success)" />
-            <StatCard label="Doanh thu tháng này" value={vnd(data.monthRevenue)} icon={TrendingUp} color="var(--warning)" />
-            <StatCard label="Tổng chứng từ" value={money(data.totalDocuments)} icon={FileText} color="var(--purple)" />
-            <StatCard label="Khách hàng" value={money(data.activeCustomers)} icon={Users} color="var(--accent)" />
+            <StatCard loading={loading} label="Tổng thu chi" value={vnd(data?.totalPayments ?? 0)} icon={Wallet} color="var(--success)" />
+            <StatCard loading={loading} label="Doanh thu tháng này" value={vnd(data?.monthRevenue ?? 0)} icon={TrendingUp} color="var(--warning)" />
+            <StatCard loading={loading} label="Tổng chứng từ" value={money(data?.totalDocuments ?? 0)} icon={FileText} color="var(--purple)" />
+            <StatCard loading={loading} label="Khách hàng" value={money(data?.activeCustomers ?? 0)} icon={Users} color="var(--accent)" />
           </div>
 
           <GlassCard className="mt-5 overflow-hidden p-0">
@@ -48,7 +47,8 @@ export function BaoCao() {
               <p className="text-xs text-[var(--text-secondary)]">12 tháng gần nhất</p>
             </div>
             <Table
-              rows={data.monthly}
+              loading={loading}
+              rows={data?.monthly ?? []}
               keyOf={(r) => `${r.year}-${r.month}`}
               empty="Chưa có dữ liệu"
               columns={[
@@ -72,36 +72,25 @@ export function BaoCao() {
               className="w-full rounded-xl border border-[var(--glass-border)] bg-white/45 px-3 py-2 text-sm font-semibold text-[var(--text)] outline-none transition focus:border-[var(--accent)] dark:bg-white/5"
             />
           </div>
-          <div>
+          <div className="w-[190px]">
             <label className="mb-1 block text-xs font-bold text-[var(--text-secondary)]">Từ ngày</label>
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="rounded-xl border border-[var(--glass-border)] bg-white/45 px-3 py-2 text-sm font-semibold text-[var(--text)] outline-none transition focus:border-[var(--accent)] dark:bg-white/5"
-            />
+            <DatePicker value={fromDate} onChange={setFromDate} placeholder="Tất cả" clearable ariaLabel="Từ ngày" />
           </div>
-          <div>
+          <div className="w-[190px]">
             <label className="mb-1 block text-xs font-bold text-[var(--text-secondary)]">Đến ngày</label>
-            <input
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="rounded-xl border border-[var(--glass-border)] bg-white/45 px-3 py-2 text-sm font-semibold text-[var(--text)] outline-none transition focus:border-[var(--accent)] dark:bg-white/5"
-            />
+            <DatePicker value={toDate} onChange={setToDate} placeholder="Tất cả" clearable ariaLabel="Đến ngày" />
           </div>
         </div>
       </GlassCard>
 
-      {giaCongLoading && <Spinner />}
       {giaCongError && <GlassCard className="mt-4 p-5 text-sm text-[var(--danger)]">{giaCongError}</GlassCard>}
-      {giaCong && (
+      {!giaCongError && (
         <>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Đã xuất gia công" value={num(giaCong.soLuongXuat)} icon={ArrowUpFromLine} tone="blue" />
-            <StatCard label="Đã nhập về" value={num(giaCong.soLuongNhap)} icon={ArrowDownToLine} tone="mint" />
-            <StatCard label="Còn lại sau nhập" value={num(giaCong.soLuongConTaiCongTy)} icon={PackageCheck} tone="amber" />
-            <StatCard label="Phí gia công phải trả" value={vnd(giaCong.tienGiaCongPhaiTra)} icon={Wallet} tone="violet" />
+            <StatCard loading={giaCongLoading} label="Đã xuất gia công" value={num(giaCong?.soLuongXuat ?? 0)} icon={ArrowUpFromLine} tone="blue" />
+            <StatCard loading={giaCongLoading} label="Đã nhập về" value={num(giaCong?.soLuongNhap ?? 0)} icon={ArrowDownToLine} tone="mint" />
+            <StatCard loading={giaCongLoading} label="Còn lại sau nhập" value={num(giaCong?.soLuongConTaiCongTy ?? 0)} icon={PackageCheck} tone="amber" />
+            <StatCard loading={giaCongLoading} label="Phí gia công phải trả" value={vnd(giaCong?.tienGiaCongPhaiTra ?? 0)} icon={Wallet} tone="violet" />
           </div>
 
           <GlassCard className="mt-5 overflow-hidden p-0">
@@ -109,7 +98,8 @@ export function BaoCao() {
               <h2 className="font-bold text-[var(--text)]">Gia công theo đối tác</h2>
             </div>
             <Table
-              rows={giaCong.partners}
+              loading={giaCongLoading}
+              rows={giaCong?.partners ?? []}
               keyOf={(r) => r.doiTac}
               empty="Chưa có dữ liệu gia công"
               columns={[
@@ -127,7 +117,8 @@ export function BaoCao() {
               <h2 className="font-bold text-[var(--text)]">Gia công theo mặt hàng</h2>
             </div>
             <Table
-              rows={giaCong.items}
+              loading={giaCongLoading}
+              rows={giaCong?.items ?? []}
               keyOf={(r, i) => `${r.doiTac}-${r.tenHang}-${r.quyCach}-${i}`}
               empty="Chưa có dữ liệu mặt hàng"
               columns={[

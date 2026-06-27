@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 import { Loader2 } from "lucide-react";
 
 type Variant = "primary" | "ghost" | "danger" | "soft";
@@ -11,7 +11,7 @@ export function Button({
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; loading?: boolean }) {
   const styles: Record<Variant, string> = {
-    primary: "text-white shadow-lg shadow-[rgba(var(--accent-rgb),0.35)] hover:brightness-110",
+    primary: "shadow-lg shadow-[rgba(var(--accent-rgb),0.28)] hover:brightness-110",
     soft: "text-[var(--accent)] hover:bg-[var(--accent-soft)]",
     ghost: "text-[var(--text-secondary)] hover:bg-black/5 dark:hover:bg-white/10",
     danger: "text-white bg-[var(--danger)] hover:brightness-110 shadow-lg shadow-red-500/30",
@@ -20,7 +20,13 @@ export function Button({
     <button
       {...rest}
       disabled={rest.disabled || loading}
-      style={variant === "primary" ? { background: "var(--accent)" } : variant === "soft" ? { background: "var(--accent-soft)" } : undefined}
+      style={
+        variant === "primary"
+          ? { background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", border: "1px solid var(--btn-primary-border)" }
+          : variant === "soft"
+            ? { background: "var(--accent-soft)" }
+            : undefined
+      }
       className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none ${styles[variant]} ${className}`}
     >
       {loading && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -80,6 +86,11 @@ export function Spinner() {
       <Loader2 className="h-6 w-6 animate-spin" />
     </div>
   );
+}
+
+/** Khối skeleton dùng chung (đặt width/height qua className hoặc style). */
+export function Skeleton({ className = "", style }: { className?: string; style?: CSSProperties }) {
+  return <span className={`km-skeleton ${className}`} style={style} aria-hidden="true" />;
 }
 
 export function EmptyState({ icon, title, hint }: { icon?: ReactNode; title: string; hint?: string }) {

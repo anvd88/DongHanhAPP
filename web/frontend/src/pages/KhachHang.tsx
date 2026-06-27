@@ -320,11 +320,15 @@ export function KhachHang() {
                       </td>
                     </tr>
                   ) : reportLoading ? (
-                    <tr>
-                      <td colSpan={6} className="py-14 text-center text-sm font-semibold text-[var(--gc-text-soft)]">
-                        <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" /> Đang tải báo cáo...
-                      </td>
-                    </tr>
+                    Array.from({ length: 6 }).map((_, i) => (
+                      <tr key={i}>
+                        {Array.from({ length: 6 }).map((__, col) => (
+                          <td key={col} className="px-3.5 py-3">
+                            <div className="gc-skeleton h-4" style={{ width: col === 4 ? "44%" : "80%" }} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))
                   ) : reportError ? (
                     <tr>
                       <td colSpan={6} className="py-14 text-center text-sm font-semibold text-rose-500">
