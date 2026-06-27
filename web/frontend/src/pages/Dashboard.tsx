@@ -3,7 +3,6 @@ import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { StatCard } from "../components/StatCard";
 import { Table } from "../components/Table";
-import { Spinner } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { useAuth } from "../lib/auth";
 import { money, date } from "../lib/format";
@@ -26,42 +25,41 @@ export function Dashboard() {
         subtitle={`Chào mừng trở lại, ${user?.fullName || user?.username || "admin"} 👋`}
       />
 
-      {loading && (
-        <GlassCard className="km-dashboard-loading">
-          <Spinner />
-        </GlassCard>
-      )}
       {error && <GlassCard className="p-5 text-sm text-[var(--danger)]">{error}</GlassCard>}
 
-      {data && (
+      {!error && (
         <>
           <section className="km-stats-grid">
             <StatCard
+              loading={loading}
               label="Khách hàng"
-              value={money(data.activeCustomers)}
+              value={money(data?.activeCustomers ?? 0)}
               sub="Đang hoạt động"
               trend="▲ 8.2%"
               icon={Users}
               tone="blue"
             />
             <StatCard
+              loading={loading}
               label="Chứng từ"
-              value={money(data.totalDocuments)}
+              value={money(data?.totalDocuments ?? 0)}
               sub="Tổng phiếu"
               icon={FileText}
               tone="mint"
             />
             <StatCard
+              loading={loading}
               label="Thu chi"
-              value={money(data.totalPayments)}
+              value={money(data?.totalPayments ?? 0)}
               sub="Tổng thanh toán"
               icon={Landmark}
               tone="amber"
             />
             <StatCard
+              loading={loading}
               label="Doanh thu tháng"
-              value={`${money(data.monthRevenue)} ₫`}
-              sub={`Tháng ${String(data.month).padStart(2, "0")}/${data.year}`}
+              value={`${money(data?.monthRevenue ?? 0)} ₫`}
+              sub={data ? `Tháng ${String(data.month).padStart(2, "0")}/${data.year}` : "Đang tải"}
               trend="▲ 15.3%"
               icon={BarChart3}
               tone="violet"
@@ -76,7 +74,8 @@ export function Dashboard() {
               </button>
             </div>
             <Table<DocumentListItem>
-              rows={data.recent}
+              loading={loading}
+              rows={data?.recent ?? []}
               keyOf={(row) => row.id}
               empty="Chưa có hoạt động gần đây"
               columns={[

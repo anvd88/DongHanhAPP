@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { MotionConfig, motion } from "motion/react";
-import { CalendarDays, CircleDollarSign, Download, FileText, Loader2, Pencil, Printer, Search, Trash2, Wallet } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, CalendarDays, CircleDollarSign, Download, FileText, FilterX, Loader2, Pencil, Printer, Search, Trash2, TriangleAlert, Wallet, X } from "lucide-react";
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { LiquidTabs, type LiquidTab } from "../components/glass/LiquidTabs";
 import { Button as GlassButton } from "../shadcn/button";
-import { Input } from "../components/ui";
+import { Modal } from "../components/Modal";
+import { MonthPicker } from "../components/DateField";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -58,6 +59,16 @@ const badgeTone = (row: DocumentListItem) => {
   if (kind === "receipt") return "0, 184, 148";
   if (kind === "payment") return "217, 119, 6";
   return "88, 112, 152";
+};
+
+type SortKey = "voucherNo" | "date" | "customerName" | "total";
+type SortState = { key: SortKey; dir: "asc" | "desc" };
+
+const compareRows = (a: DocumentListItem, b: DocumentListItem, key: SortKey) => {
+  if (key === "total") return (a.total || 0) - (b.total || 0);
+  const av = String((key === "customerName" ? a.customerName : a[key]) ?? "");
+  const bv = String((key === "customerName" ? b.customerName : b[key]) ?? "");
+  return av.localeCompare(bv, "vi", { numeric: true, sensitivity: "base" });
 };
 
 function SkeletonRows() {
@@ -461,8 +472,11 @@ export function KeToan() {
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState("all");
   const [month, setMonth] = useState(currentMonth);
+  const [sort, setSort] = useState<SortState>({ key: "date", dir: "desc" });
   const [initialKind, setInitialKind] = useState<DocumentKind>("document");
   const [editing, setEditing] = useState<string | null | "new">(null);
+  const [deleting, setDeleting] = useState<DocumentListItem | null>(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
   const [printingId, setPrintingId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [keepCreateOpen, setKeepCreateOpen] = useState(() =>
@@ -475,11 +489,11 @@ export function KeToan() {
     [data, month]
   );
 
+  // Thống kê bám theo tháng đang chọn để 4 thẻ luôn nhất quán với bảng.
   const stats = useMemo(() => {
-    const source = data ?? [];
-    const receipts = source.filter((row) => inferDocumentKind(row) === "receipt");
-    const payments = source.filter((row) => inferDocumentKind(row) === "payment");
-    const documents = source.filter((row) => inferDocumentKind(row) === "document");
+    const receipts = monthRows.filter((row) => inferDocumentKind(row) === "receipt");
+    const payments = monthRows.filter((row) => inferDocumentKind(row) === "payment");
+    const documents = monthRows.filter((row) => inferDocumentKind(row) === "document");
     const monthTotal = monthRows.reduce((sum, row) => sum + (row.total || 0), 0);
     return {
       receiptCount: receipts.length,
@@ -489,24 +503,41 @@ export function KeToan() {
       documentCount: documents.length,
       monthTotal,
     };
-  }, [data, monthRows]);
+  }, [monthRows]);
 
-  const rows = useMemo(
-    () =>
-      monthRows.filter((d) => {
-        const q = search.trim().toLowerCase();
-        if (kindFilter !== "all" && inferDocumentKind(d) !== kindFilter) return false;
-        return (
-          !q ||
-          d.voucherNo.toLowerCase().includes(q) ||
-          documentTypeText(d).toLowerCase().includes(q) ||
-          d.customerName.toLowerCase().includes(q) ||
-          d.content.toLowerCase().includes(q) ||
-          (d.createdBy ?? "").toLowerCase().includes(q)
-        );
-      }),
-    [kindFilter, monthRows, search]
-  );
+  const rows = useMemo(() => {
+    const filtered = monthRows.filter((d) => {
+      const q = search.trim().toLowerCase();
+      if (kindFilter !== "all" && inferDocumentKind(d) !== kindFilter) return false;
+      return (
+        !q ||
+        d.voucherNo.toLowerCase().includes(q) ||
+        documentTypeText(d).toLowerCase().includes(q) ||
+        d.customerName.toLowerCase().includes(q) ||
+        d.content.toLowerCase().includes(q) ||
+        (d.createdBy ?? "").toLowerCase().includes(q)
+      );
+    });
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return filtered.sort((a, b) => compareRows(a, b, sort.key) * dir);
+  }, [kindFilter, monthRows, search, sort]);
+
+  const visibleTotal = useMemo(() => rows.reduce((sum, row) => sum + (row.total || 0), 0), [rows]);
+  const hasActiveFilters = search.trim() !== "" || kindFilter !== "all";
+  const hasAnyData = (data?.length ?? 0) > 0;
+  const periodLabel = month ? `Tháng ${monthLabel(month)}` : "Tất cả các tháng";
+
+  const clearFilters = () => {
+    setSearch("");
+    setKindFilter("all");
+  };
+
+  const toggleSort = (key: SortKey) =>
+    setSort((current) =>
+      current.key === key
+        ? { key, dir: current.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: key === "date" || key === "total" ? "desc" : "asc" },
+    );
 
   useEffect(() => {
     if (!user) {
@@ -536,11 +567,18 @@ export function KeToan() {
     setEditing("new");
   };
 
-  const remove = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm("Xóa phiếu này?")) return;
-    await api.del(`/api/documents/${id}`);
-    reload();
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    setDeletingBusy(true);
+    try {
+      await api.del(`/api/documents/${deleting.id}`);
+      setDeleting(null);
+      reload({ silent: true });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Lỗi xóa phiếu.");
+    } finally {
+      setDeletingBusy(false);
+    }
   };
 
   const loadPrintableDocument = async (row: DocumentListItem): Promise<PrintableDocument> => {
@@ -652,7 +690,7 @@ export function KeToan() {
             icon={CircleDollarSign}
             label="Phiếu thu"
             value={`${money(stats.receiptTotal)} ₫`}
-            sub={`${money(stats.receiptCount)} phiếu thu`}
+            sub={`${money(stats.receiptCount)} phiếu · ${periodLabel}`}
             tone="0, 184, 148"
           />
           <StatCard
@@ -660,7 +698,7 @@ export function KeToan() {
             icon={Wallet}
             label="Phiếu chi"
             value={`${money(stats.paymentTotal)} ₫`}
-            sub={`${money(stats.paymentCount)} phiếu chi`}
+            sub={`${money(stats.paymentCount)} phiếu · ${periodLabel}`}
             tone="217, 119, 6"
           />
           <StatCard
@@ -668,15 +706,15 @@ export function KeToan() {
             icon={FileText}
             label="Phiếu xuất kho"
             value={money(stats.documentCount)}
-            sub="Bán hàng"
+            sub={`Bán hàng · ${periodLabel}`}
             tone="31, 107, 255"
           />
           <StatCard
             index={3}
             icon={CalendarDays}
-            label="Tổng tháng"
+            label="Tổng cộng"
             value={`${money(stats.monthTotal)} ₫`}
-            sub={`Tháng ${monthLabel(month)}`}
+            sub={periodLabel}
             tone="124, 70, 255"
           />
         </div>
@@ -684,34 +722,58 @@ export function KeToan() {
         <GlassPanel className="flex flex-wrap items-center gap-3 rounded-[20px] p-3">
           <LiquidTabs tabs={ACCOUNTING_TABS} value={kindFilter} onChange={setKindFilter} />
 
-          <div className="ml-auto grid flex-1 grid-cols-1 items-center gap-2.5 md:grid-cols-[minmax(240px,1fr)_220px_auto]">
-            <GlassCapsule className="gc-search min-w-[220px] px-4">
+          <div className="ml-auto grid flex-1 grid-cols-1 items-center gap-2.5 md:grid-cols-[minmax(220px,1fr)_180px_auto]">
+            <GlassCapsule className="gc-search min-w-[200px] px-4">
               <Search className="mr-2.5 h-[18px] w-[18px] shrink-0 text-[var(--gc-text-muted)]" aria-hidden="true" />
               <input
                 ref={searchRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setSearch("")}
                 placeholder="Tìm số phiếu, khách hàng, nội dung..."
                 aria-label="Tìm số phiếu, khách hàng, nội dung"
               />
-              <kbd className="ml-2 hidden rounded-md border border-[var(--gc-border)] bg-white/30 px-1.5 py-0.5 text-[0.68rem] font-bold text-[var(--gc-text-muted)] sm:block dark:bg-white/5">
-                Ctrl K
-              </kbd>
+              {search ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("");
+                    searchRef.current?.focus();
+                  }}
+                  className="ml-1.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[var(--gc-text-muted)] transition-colors hover:bg-black/10 hover:text-[var(--gc-text)] dark:hover:bg-white/10"
+                  aria-label="Xóa từ khóa tìm kiếm"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : (
+                <kbd className="ml-2 hidden rounded-md border border-[var(--gc-border)] bg-white/30 px-1.5 py-0.5 text-[0.68rem] font-bold text-[var(--gc-text-muted)] sm:block dark:bg-white/5">
+                  Ctrl K
+                </kbd>
+              )}
             </GlassCapsule>
 
-            <GlassCapsule className="gc-search px-4">
-              <CalendarDays className="mr-2.5 h-[18px] w-[18px] shrink-0 text-[var(--gc-text-muted)]" aria-hidden="true" />
-              <Input
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-                className="border-0 bg-transparent p-0 shadow-none focus:ring-0 dark:bg-transparent"
-                aria-label="Tháng xuất Excel"
-              />
-            </GlassCapsule>
+            <MonthPicker value={month} onChange={setMonth} ariaLabel="Lọc theo tháng" placeholder="Tất cả các tháng" />
 
-            <div className="whitespace-nowrap rounded-xl border border-[var(--gc-border)] bg-white/20 px-3 py-2 text-sm font-bold text-[var(--gc-text-soft)] dark:bg-white/5">
-              {rows.length} phiếu · {monthRows.length} phiếu tháng {monthLabel(month)}
+            <div className="flex items-center gap-2">
+              <div className="whitespace-nowrap rounded-xl border border-[var(--gc-border)] bg-white/20 px-3 py-2 text-sm font-bold text-[var(--gc-text-soft)] dark:bg-white/5">
+                {hasActiveFilters ? (
+                  <>
+                    {rows.length}<span className="text-[var(--gc-text-muted)]">/{monthRows.length}</span> phiếu
+                  </>
+                ) : (
+                  <>{monthRows.length} phiếu · {periodLabel}</>
+                )}
+              </div>
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="gc-icon-btn inline-flex h-[38px] items-center gap-1.5 whitespace-nowrap px-3 text-sm font-bold text-[var(--gc-text-soft)]"
+                  aria-label="Xóa bộ lọc tìm kiếm và loại phiếu"
+                >
+                  <FilterX className="h-4 w-4" /> Xóa lọc
+                </button>
+              )}
             </div>
           </div>
         </GlassPanel>
@@ -721,12 +783,12 @@ export function KeToan() {
             <table className="gc-table">
               <thead>
                 <tr>
-                  <th>Số phiếu</th>
-                  <th>Ngày</th>
+                  <SortHeader label="Số phiếu" sortKey="voucherNo" sort={sort} onSort={toggleSort} />
+                  <SortHeader label="Ngày" sortKey="date" sort={sort} onSort={toggleSort} />
                   <th>Loại phiếu</th>
-                  <th>Khách hàng</th>
+                  <SortHeader label="Khách hàng" sortKey="customerName" sort={sort} onSort={toggleSort} />
                   <th>Nội dung</th>
-                  <th className="text-right">Tổng tiền</th>
+                  <SortHeader label="Tổng tiền" sortKey="total" sort={sort} onSort={toggleSort} align="right" />
                   <th>Người lập</th>
                   <th className="w-28 text-right">Thao tác</th>
                 </tr>
@@ -743,10 +805,30 @@ export function KeToan() {
                 ) : rows.length === 0 ? (
                   <tr>
                     <td colSpan={8}>
-                      <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-                        <FileText className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
-                        <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Chưa có phiếu kế toán</p>
-                        <p className="text-xs text-[var(--gc-text-muted)]">Tạo phiếu thu, phiếu chi hoặc phiếu xuất kho bán hàng.</p>
+                      <div className="flex flex-col items-center justify-center gap-2.5 py-16 text-center">
+                        {hasActiveFilters || hasAnyData ? (
+                          <>
+                            <Search className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
+                            <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Không tìm thấy phiếu phù hợp</p>
+                            <p className="text-xs text-[var(--gc-text-muted)]">Thử đổi từ khóa, loại phiếu hoặc tháng đang lọc.</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                clearFilters();
+                                setMonth("");
+                              }}
+                              className="gc-icon-btn mt-1 inline-flex h-9 items-center gap-1.5 px-3.5 text-sm font-bold text-[var(--gc-text-soft)]"
+                            >
+                              <FilterX className="h-4 w-4" /> Xóa toàn bộ bộ lọc
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <FileText className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
+                            <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Chưa có phiếu kế toán</p>
+                            <p className="text-xs text-[var(--gc-text-muted)]">Tạo phiếu thu, phiếu chi hoặc phiếu xuất kho bán hàng.</p>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -793,7 +875,7 @@ export function KeToan() {
                             type="button"
                             title="Xóa phiếu"
                             aria-label={`Xóa phiếu ${row.voucherNo}`}
-                            onClick={(e) => remove(row.id, e)}
+                            onClick={() => setDeleting(row)}
                             className="gc-icon-btn h-8 w-8 text-rose-500 hover:text-rose-600"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -804,6 +886,19 @@ export function KeToan() {
                   ))
                 )}
               </tbody>
+              {!loading && !error && rows.length > 0 && (
+                <tfoot>
+                  <tr className="gc-foot">
+                    <td colSpan={5} className="text-right font-bold text-[var(--gc-text-soft)]">
+                      Tổng cộng · {rows.length} phiếu
+                    </td>
+                    <td className="whitespace-nowrap text-right font-black tabular-nums text-[var(--gc-text)]">
+                      {money(visibleTotal)} ₫
+                    </td>
+                    <td colSpan={2} />
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </GlassPanel>
@@ -830,7 +925,78 @@ export function KeToan() {
             }}
           />
         )}
+
+        {deleting && (
+          <Modal
+            open
+            solid
+            title="Xóa phiếu kế toán"
+            onClose={() => {
+              if (!deletingBusy) setDeleting(null);
+            }}
+            footer={
+              <>
+                <GlassButton variant="ghost" onClick={() => setDeleting(null)} disabled={deletingBusy}>
+                  Hủy
+                </GlassButton>
+                <GlassButton variant="danger" onClick={confirmDelete} disabled={deletingBusy}>
+                  {deletingBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  Xóa phiếu
+                </GlassButton>
+              </>
+            }
+          >
+            <div className="flex gap-3.5">
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-red-500/12 text-rose-500">
+                <TriangleAlert className="h-6 w-6" />
+              </div>
+              <div className="space-y-2 text-sm">
+                <p className="text-[var(--text)]">
+                  Bạn có chắc muốn xóa phiếu{" "}
+                  <span className="font-bold">{documentTypeText(deleting).toLowerCase()}</span>{" "}
+                  <span className="font-bold">{deleting.voucherNo}</span>?
+                </p>
+                <div className="rounded-xl border border-[var(--glass-border)] bg-white/30 px-3 py-2.5 text-[var(--text-secondary)] dark:bg-white/5">
+                  <div>Khách hàng: <span className="font-semibold text-[var(--text)]">{deleting.customerName || "Khách lẻ"}</span></div>
+                  <div>Ngày: <span className="font-semibold text-[var(--text)]">{date(deleting.date)}</span></div>
+                  <div>Tổng tiền: <span className="font-semibold text-[var(--text)]">{money(deleting.total)} ₫</span></div>
+                </div>
+                <p className="text-xs font-semibold text-rose-500">Hành động này không thể hoàn tác.</p>
+              </div>
+            </div>
+          </Modal>
+        )}
       </div>
     </MotionConfig>
+  );
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: SortState;
+  onSort: (key: SortKey) => void;
+  align?: "right";
+}) {
+  const active = sort.key === sortKey;
+  const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <th className={align === "right" ? "text-right" : undefined}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`gc-sort ${align === "right" ? "ml-auto flex-row-reverse" : ""} ${active ? "is-active" : ""}`}
+        aria-label={`Sắp xếp theo ${label}`}
+      >
+        <span>{label}</span>
+        <Icon className="h-3.5 w-3.5 shrink-0" />
+      </button>
+    </th>
   );
 }

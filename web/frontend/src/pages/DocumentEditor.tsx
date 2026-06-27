@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Printer, Trash2 } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { Button, Field, Input, Select } from "../components/ui";
+import { DatePicker } from "../components/DateField";
 import { api } from "../lib/api";
 import {
   createVoucherNo,
@@ -263,7 +264,7 @@ export function DocumentEditor({
             <Input value={voucherNo} onChange={(e) => setVoucherNo(e.target.value)} placeholder={isWarehouseSale ? "VD: XK260625-0930" : "VD: PT260625-0930"} />
           </Field>
           <Field label="Ngày lập">
-            <Input type="date" value={docDate} onChange={(e) => setDocDate(e.target.value)} />
+            <DatePicker value={docDate} onChange={setDocDate} ariaLabel="Ngày lập" />
           </Field>
           <Field label={isWarehouseSale ? "Bên mua hàng" : "Khách hàng"}>
             <Input

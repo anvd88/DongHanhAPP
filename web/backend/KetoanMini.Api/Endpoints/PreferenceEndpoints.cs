@@ -14,7 +14,7 @@ public static class PreferenceEndpoints
     {
         var g = app.MapGroup("/api/preferences").RequireAuthorization();
 
-        g.MapGet("", async (ClaimsPrincipal principal, Database db, CancellationToken ct) =>
+        g.MapGet("/", async (ClaimsPrincipal principal, Database db, CancellationToken ct) =>
         {
             var userId = principal.UserId();
             if (userId is null) return Results.Unauthorized();
@@ -23,7 +23,7 @@ public static class PreferenceEndpoints
             return Results.Ok(ToDto(values));
         });
 
-        g.MapPut("", async (UserPreferencePatchRequest req, ClaimsPrincipal principal, Database db, CancellationToken ct) =>
+        g.MapPut("/", async (UserPreferencePatchRequest req, ClaimsPrincipal principal, Database db, CancellationToken ct) =>
         {
             var userId = principal.UserId();
             if (userId is null) return Results.Unauthorized();

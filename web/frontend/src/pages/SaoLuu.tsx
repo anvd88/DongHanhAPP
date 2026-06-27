@@ -1,7 +1,7 @@
 import { PageHeader } from "../components/Layout";
 import { GlassCard } from "../components/Glass";
 import { Table } from "../components/Table";
-import { Spinner, Badge } from "../components/ui";
+import { Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { dateTime } from "../lib/format";
 import type { AuditEntry } from "../lib/types";
@@ -17,12 +17,11 @@ export function SaoLuu() {
           <h2 className="font-bold text-[var(--text)]">Nhật ký hoạt động</h2>
           <p className="text-xs text-[var(--text-secondary)]">200 hoạt động gần nhất</p>
         </div>
-        {loading ? (
-          <Spinner />
-        ) : error ? (
+        {error ? (
           <div className="p-5 text-sm text-[var(--danger)]">{error}</div>
         ) : (
           <Table<AuditEntry>
+            loading={loading}
             rows={data ?? []}
             keyOf={(_, i) => i}
             empty="Chưa có nhật ký"

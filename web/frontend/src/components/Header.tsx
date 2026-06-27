@@ -88,7 +88,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
             <div className="fixed inset-0 z-10" onClick={() => setShiftOpen(false)} />
             <div className="km-shift-menu">
               <div className="text-xs font-semibold text-[var(--text-muted)]">Lịch làm việc hôm nay</div>
-              <div className="mt-2 rounded-2xl bg-white/20 p-3 text-sm font-semibold text-[var(--text)]">
+              <div className="mt-2 rounded-2xl bg-white/20 p-3 text-sm font-semibold text-[var(--text)] dark:bg-white/[0.06]">
                 08:00 - 12:00, 13:00 - 17:00
               </div>
             </div>

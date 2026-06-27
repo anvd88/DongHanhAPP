@@ -13,12 +13,16 @@ export function Table<T>({
   keyOf,
   onRowClick,
   empty,
+  loading,
+  skeletonRows = 6,
 }: {
   columns: Column<T>[];
   rows: T[];
   keyOf: (row: T, i: number) => string | number;
   onRowClick?: (row: T) => void;
   empty?: ReactNode;
+  loading?: boolean;
+  skeletonRows?: number;
 }) {
   const alignCls = (a?: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left");
   return (
@@ -37,7 +41,20 @@ export function Table<T>({
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 ? (
+          {loading ? (
+            Array.from({ length: skeletonRows }).map((_, i) => (
+              <tr key={`sk-${i}`} className="km-table-row">
+                {columns.map((c, j) => (
+                  <td key={j} className={`px-3 py-2 ${alignCls(c.align)}`}>
+                    <span
+                      className={`km-skeleton h-4 ${c.align === "right" ? "ml-auto" : c.align === "center" ? "mx-auto" : ""}`}
+                      style={{ width: c.align === "right" || c.align === "center" ? "48%" : "82%" }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))
+          ) : rows.length === 0 ? (
             <tr>
               <td colSpan={columns.length} className="py-12 text-center text-sm text-[var(--text-muted)]">
                 {empty ?? "Chưa có dữ liệu"}
