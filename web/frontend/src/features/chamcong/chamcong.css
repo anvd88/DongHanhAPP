@@ -53,6 +53,57 @@
   .cc-grid { grid-template-columns: 1fr; }
 }
 
+/* Bố cục tab Chấm công: ưu tiên ô camera TO hơn ô kết quả. */
+.cc-checkin-grid {
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+}
+.cc-checkin-grid .cc-camera-actions .cc-btn-primary {
+  flex: 1;
+  height: 48px;
+  font-size: 0.95rem;
+}
+
+/* Mobile / màn hình hẹp: camera dạng dọc lấp gần hết khung nhìn, nút bấm to dễ chạm. */
+@media (max-width: 860px) {
+  .cc-checkin-grid {
+    grid-template-columns: 1fr;
+    gap: 0.85rem;
+  }
+  .cc-checkin-grid .cc-camera {
+    padding: 0.6rem;
+  }
+  .cc-checkin-grid .cc-video-wrap {
+    aspect-ratio: 3 / 4;
+    max-height: 64vh;
+    margin-inline: auto;
+  }
+  .cc-checkin-grid .cc-camera-actions {
+    flex-direction: row;
+    gap: 0.6rem;
+  }
+  .cc-checkin-grid .cc-camera-actions .cc-btn {
+    flex: 1;
+    height: 54px;
+    font-size: 1rem;
+    border-radius: 14px;
+  }
+  .cc-checkin-grid .cc-result {
+    min-height: 0;
+    padding: 0.9rem;
+  }
+  .cc-checkin-grid .cc-result-empty {
+    min-height: 96px;
+  }
+}
+
+/* Điện thoại nhỏ: tận dụng tối đa chiều cao cho camera. */
+@media (max-width: 520px) {
+  .cc-checkin-grid .cc-video-wrap {
+    aspect-ratio: 3 / 4;
+    max-height: 68vh;
+  }
+}
+
 /* Camera */
 .cc-camera {
   padding: 0.9rem;
@@ -92,6 +143,29 @@
   border-radius: 50%;
   pointer-events: none;
 }
+/* Khung bám theo khuôn mặt (MediaPipe phát hiện ở client). */
+.cc-face-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.cc-face-box {
+  position: absolute;
+  border: 2.5px solid #fbbf24;
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 0 18px rgba(251, 191, 36, 0.45);
+  /* Bám mượt theo mặt giữa các khung phát hiện. */
+  transition: left 80ms linear, top 80ms linear, width 80ms linear, height 80ms linear, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.cc-face-box[data-ok="true"] {
+  border-color: #22c55e;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 0 20px rgba(34, 197, 94, 0.55);
+}
 .cc-error {
   margin-top: 0.6rem;
   font-size: 0.8rem;
@@ -121,6 +195,9 @@
   color: #fff;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(6px);
+}
+.cc-scan-hint[data-warn="true"] {
+  background: rgba(180, 83, 9, 0.78);
 }
 .cc-auto-toggle {
   display: flex;
@@ -776,6 +853,32 @@ html[data-theme="dark"] .cc-bio-active-pill {
   font-weight: 600;
   color: var(--text-secondary);
   max-width: 28ch;
+}
+.cc-result-name--sm {
+  font-size: 1.02rem;
+  max-width: 30ch;
+}
+/* Cảnh báo "mềm" (sai tư thế / ảnh chưa rõ): hổ phách thay vì đỏ. */
+.cc-result-fail[data-tone="warn"] {
+  color: #b45309;
+}
+html[data-theme="dark"] .cc-result-fail[data-tone="warn"] {
+  color: #fbbf24;
+}
+
+/* Kiosk: cụm nút sau khi chấm công thành công */
+.cc-bio-success-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  width: min(100%, 31rem);
+}
+.cc-bio-success-actions .cc-bio-start {
+  width: auto;
+  flex: 1 1 12rem;
+  min-width: 11rem;
 }
 
 /* RTSP kiosk status */

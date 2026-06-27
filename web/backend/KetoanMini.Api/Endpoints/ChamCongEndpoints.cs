@@ -26,6 +26,14 @@ public static class ChamCongEndpoints
     private const string AutoLearnTag = "(tự học)";
     private const string AutoAttendanceSettingKey = "KioskCamera.AutoAttendanceEnabled";
 
+    // Cổng tư thế cho chấm công loạt ảnh: lệch quá ngưỡng ⇒ báo trực tiếp, KHÔNG ghi nhật ký.
+    // Khớp ngưỡng phía kiosk cũ (yaw chính diện, pitch trong khoảng nhìn thẳng).
+    private const double PostureYawMax = 0.16;
+    private const double PosturePitchMin = 0.25;
+    private const double PosturePitchMax = 0.82;
+    // Điểm chất lượng tối thiểu của khung tốt nhất; thấp hơn ⇒ yêu cầu chụp lại (mờ/tối/loá).
+    private const double MinFrameQuality = 0.28;
+
     public static async Task EnsureTables(Database db)
     {
         await using var conn = await db.OpenAsync();
@@ -219,7 +227,7 @@ public static class ChamCongEndpoints
             return Results.Ok(new { message = "Đã lưu mẫu khuôn mặt." });
         }).RequireAuthorization(p => p.RequireRole("Admin"));
 
-        // Ước lượng hướng mặt. Kiosk dùng để nhắc người dùng nhìn thẳng trước khi nhận diện.
+        // Ước lượng hướng mặt — trình đăng ký khuôn mặt (EnrollWizard) dùng để hướng dẫn từng tư thế.
         g.MapPost("/huongmat", (NhanDienRequest req, IFaceEngine engine) =>
         {
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
@@ -319,6 +327,94 @@ public static class ChamCongEndpoints
                 decision.Message));
         }).AllowAnonymous();
 
+        // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
+        // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
+        // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine) =>
+        {
+            if (req?.Images is null || req.Images.Count == 0)
+                return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
+
+            // 1) Chọn khung tốt nhất trong loạt (chỉ những khung có khuôn mặt).
+            byte[]? bestBytes = null;
+            FaceFrameQuality best = default;
+            foreach (var img in req.Images)
+            {
+                if (!TryDecodeImage(img, out var bytes)) continue;
+                if (engine.AssessFrame(bytes) is not { FaceFound: true } q) continue;
+                if (bestBytes is null || q.Score > best.Score) { best = q; bestBytes = bytes; }
+            }
+
+            if (bestBytes is null)
+                return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, 0,
+                    "Không thấy khuôn mặt trong ảnh.", "Đưa khuôn mặt vào giữa khung hình rồi chấm lại."));
+
+            // 2) Cổng tư thế — báo trực tiếp, KHÔNG ghi nhật ký nếu sai.
+            var posture = CheckPosture(best.Pose);
+            if (posture is not null)
+                return Results.Ok(new ChamCongResult("posture", false, null, null, 0, null, null, best.Score,
+                    "Sai tư thế chấm công.", posture));
+
+            // 3) Chất lượng quá thấp (mờ/thiếu sáng/loá) → yêu cầu chụp lại.
+            if (best.Score < MinFrameQuality)
+                return Results.Ok(new ChamCongResult("lowquality", false, null, null, 0, null, null, best.Score,
+                    "Ảnh chưa đủ rõ (thiếu sáng, loá hoặc bị nhòe).",
+                    "Tìm nơi đủ sáng, giữ máy ổn định và nhìn thẳng rồi chấm lại."));
+
+            // 4) Chống giả mạo + trích đặc trưng trên đúng khung tốt nhất.
+            if (!engine.CheckLiveness(bestBytes))
+                return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
+                    "Nghi ngờ giả mạo (không phải người thật).", "Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình."));
+
+            var probe = engine.ExtractEmbedding(bestBytes);
+            if (probe is null)
+                return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, best.Score,
+                    "Không trích được đặc trưng khuôn mặt.", "Nhìn thẳng vào camera rồi chấm lại."));
+
+            await using var conn = await db.OpenAsync();
+
+            // 5) So khớp toàn bộ mẫu đã đăng ký.
+            string? bestUser = null, bestName = null;
+            double bestSim = 0;
+            await using (var r = await conn.Cmd(
+                "SELECT username, full_name, embedding FROM cham_cong_face").ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync())
+                {
+                    var emb = EmbeddingCodec.FromBytes((byte[])r["embedding"]);
+                    var sim = engine.Compare(probe, emb);
+                    if (sim > bestSim) { bestSim = sim; bestUser = r.Str("username"); bestName = r.Str("full_name"); }
+                }
+            }
+
+            if (bestUser is null || bestSim < engine.MatchThreshold)
+                return Results.Ok(new ChamCongResult("unknown", false, null, null, bestSim, null, null, best.Score,
+                    "Không nhận diện được. Khuôn mặt chưa đăng ký hoặc ảnh chưa rõ.", null));
+
+            // 6) Quyết định Vào/Ra + ghi nhật ký.
+            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser);
+            if (!decision.ShouldRecord)
+                return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, decision.Loai,
+                    decision.ExistingAt, best.Score, decision.Message, null));
+
+            var loai = decision.Loai;
+            await conn.Cmd(
+                @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at)
+                  VALUES (@u, @fn, @loai, @sim, SYSUTCDATETIME())")
+                .With("@u", bestUser).With("@fn", bestName ?? "")
+                .With("@loai", loai).With("@sim", bestSim)
+                .ExecuteNonQueryAsync();
+
+            await db.RecordAudit(bestUser, $"Chấm công {loai}", "ChamCong", bestUser,
+                $"Độ khớp {bestSim:0.000}, chất lượng ảnh {best.Score:0.00} (web).");
+
+            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, bestSim); }
+            catch { /* tự học là phụ trợ, lỗi không được làm hỏng chấm công */ }
+
+            return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, loai,
+                DateTime.UtcNow, best.Score, decision.Message, null));
+        }).AllowAnonymous();
+
         // Nhật ký chấm công (lọc theo ngày yyyy-MM-dd và/hoặc từ khóa).
         g.MapGet("/log", async (Database db, string? date, string? search) =>
         {
@@ -386,6 +482,21 @@ public static class ChamCongEndpoints
             .With("@emb", EmbeddingCodec.ToBytes(embedding))
             .With("@auto", AutoLearnTag)
             .ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Kiểm tra tư thế khuôn mặt. Trả null nếu hợp lệ (nhìn thẳng), ngược lại trả câu hướng dẫn
+    /// cụ thể để báo trực tiếp cho người dùng. Pitch nhỏ = đang ngước lên, lớn = đang cúi xuống.
+    /// </summary>
+    private static string? CheckPosture(FacePose pose)
+    {
+        if (Math.Abs(pose.Yaw) > PostureYawMax)
+            return "Nhìn thẳng vào camera, đừng quay mặt sang bên.";
+        if (pose.Pitch < PosturePitchMin)
+            return "Hạ mặt xuống một chút và nhìn thẳng vào camera.";
+        if (pose.Pitch > PosturePitchMax)
+            return "Ngẩng mặt lên một chút và nhìn thẳng vào camera.";
+        return null;
     }
 
     /// <summary>Giải mã ảnh base64 (chấp nhận cả tiền tố data URL "data:image/...;base64,").</summary>

@@ -9,7 +9,6 @@ import {
   RefreshCcw,
   Ruler,
   Scale,
-  Weight,
 } from "lucide-react";
 import { APP_BRAND_NAME } from "../lib/branding";
 import {
@@ -19,6 +18,7 @@ import {
   stainlessSteelDensity,
   thicknessOptions,
   type BaremMode,
+  type CalcDirection,
   type CoilCalculationInput,
   type CoilCalculationResult,
   type StainlessSteelType,
@@ -32,14 +32,16 @@ interface FormState {
   steelType: StainlessSteelType;
   customDensityKgM3: string;
   massTon: string;
+  lengthM: string;
   innerDiameterMm: string;
   packingFactor: string;
   baremMode: BaremMode;
+  calcDirection: CalcDirection;
 }
 
 type FieldKey = keyof Pick<
   FormState,
-  "thicknessMm" | "widthMm" | "customDensityKgM3" | "massTon" | "innerDiameterMm" | "packingFactor"
+  "thicknessMm" | "widthMm" | "customDensityKgM3" | "massTon" | "lengthM" | "innerDiameterMm" | "packingFactor"
 >;
 
 type FieldErrors = Partial<Record<FieldKey, string>>;
@@ -50,9 +52,11 @@ const defaultForm: FormState = {
   steelType: "inox304",
   customDensityKgM3: "7930",
   massTon: "1000",
+  lengthM: "100",
   innerDiameterMm: "500",
   packingFactor: "1",
   baremMode: "table",
+  calcDirection: "mass",
 };
 
 const decimalFormatter = new Intl.NumberFormat("vi-VN", {
@@ -99,9 +103,11 @@ function buildInput(form: FormState): CoilCalculationInput {
     steelType: form.steelType,
     customDensityKgM3: parseNumber(form.customDensityKgM3),
     massTon: parseNumber(form.massTon) / 1000,
+    lengthInputM: parseNumber(form.lengthM),
     innerDiameterMm: parseNumber(form.innerDiameterMm),
     packingFactor: parseNumber(form.packingFactor),
     baremMode: form.baremMode,
+    calcDirection: form.calcDirection,
   };
 }
 
@@ -117,7 +123,11 @@ function validateForm(form: FormState): FieldErrors {
     errors.widthMm = "Khổ rộng cuộn phải lớn hơn 0 mm.";
   }
 
-  if (!Number.isFinite(input.massTon) || input.massTon <= 0) {
+  if (form.calcDirection === "length") {
+    if (!Number.isFinite(input.lengthInputM) || input.lengthInputM <= 0) {
+      errors.lengthM = "Chiều dài cuộn phải lớn hơn 0 m.";
+    }
+  } else if (!Number.isFinite(input.massTon) || input.massTon <= 0) {
     errors.massTon = "Khối lượng cần san phải lớn hơn 0 kg.";
   }
 
@@ -156,7 +166,7 @@ function createCopyText(form: FormState, result: CoilCalculationResult): string 
     `Chủng loại: ${result.steelLabel}`,
     `Độ dày tấm: ${formatOptional(parseNumber(form.thicknessMm), oneDecimalFormatter)} mm`,
     `Khổ rộng: ${formatOptional(parseNumber(form.widthMm), integerFormatter)} mm`,
-    `Khối lượng: ${formatOptional(parseNumber(form.massTon), decimalFormatter)} kg`,
+    `Khối lượng: ${formatOptional(result.massKg, decimalFormatter)} kg`,
     `Đường kính lõi: ${formatCmFromMm(parseNumber(form.innerDiameterMm))} (${formatMm(parseNumber(form.innerDiameterMm))})`,
     `Hệ số độ chặt: ${formatOptional(parseNumber(form.packingFactor), decimalFormatter)}`,
     "",
@@ -272,6 +282,16 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
     setCopied(false);
   };
 
+  const setDirection = (value: CalcDirection) => {
+    setForm((current) => ({ ...current, calcDirection: value }));
+    setCopied(false);
+  };
+
+  const setBaremMode = (value: BaremMode) => {
+    setForm((current) => ({ ...current, baremMode: value }));
+    setCopied(false);
+  };
+
   const handleCalculate = () => {
     resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -291,6 +311,166 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2200);
   };
+
+  if (embedded) {
+    return (
+      <main className="calc-mini">
+        <form className="calc-panel calc-mini-form" onSubmit={(event) => event.preventDefault()}>
+          <div className="calc-mode-tabs" role="group" aria-label="Chiều tính">
+            <button
+              type="button"
+              className={form.calcDirection === "mass" ? "is-active" : ""}
+              onClick={() => setDirection("mass")}
+            >
+              Từ khối lượng
+            </button>
+            <button
+              type="button"
+              className={form.calcDirection === "length" ? "is-active" : ""}
+              onClick={() => setDirection("length")}
+            >
+              Từ chiều dài
+            </button>
+          </div>
+
+          <div className="calc-mini-fields">
+            <Field label="Độ dày inox" unit="mm" error={errors.thicknessMm}>
+              <input
+                list="thickness-options-mini"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.1"
+                value={form.thicknessMm}
+                onChange={updateField("thicknessMm")}
+                className="calc-input"
+              />
+              <datalist id="thickness-options-mini">
+                {thicknessOptions.map((value) => (
+                  <option key={value} value={value} />
+                ))}
+              </datalist>
+            </Field>
+
+            <Field label="Khổ rộng cuộn" unit="mm" error={errors.widthMm}>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="0"
+                step="1"
+                value={form.widthMm}
+                onChange={updateField("widthMm")}
+                className="calc-input"
+              />
+              <div className="calc-quick-row">
+                {standardWidthOptions.map((option) => (
+                  <button key={option.value} type="button" onClick={() => setWidth(option.value)}>
+                    {option.value}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="Chủng loại inox">
+              <select value={form.steelType} onChange={updateField("steelType")} className="calc-input">
+                {Object.entries(stainlessSteelDensity).map(([key, item]) => (
+                  <option key={key} value={key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            {form.calcDirection === "length" ? (
+              <Field label="Chiều dài cuộn" unit="m" error={errors.lengthM}>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  value={form.lengthM}
+                  onChange={updateField("lengthM")}
+                  className="calc-input"
+                />
+              </Field>
+            ) : (
+              <Field label="Khối lượng cần san" unit="kg" error={errors.massTon}>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  step="1"
+                  value={form.massTon}
+                  onChange={updateField("massTon")}
+                  className="calc-input"
+                />
+              </Field>
+            )}
+
+            <Field label="Đường kính lõi trong" unit="cm" error={errors.innerDiameterMm}>
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.1"
+                value={formatInputCmFromMm(form.innerDiameterMm)}
+                onChange={updateCmField("innerDiameterMm")}
+                className="calc-input"
+              />
+            </Field>
+          </div>
+
+          <div className="calc-mini-actions">
+            <button type="button" className="calc-secondary-button" onClick={handleReset}>
+              <RefreshCcw className="h-4 w-4" />
+              Đặt lại
+            </button>
+            <button type="button" className="calc-secondary-button" onClick={handleCopy} disabled={!result}>
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? "Đã sao chép" : "Sao chép"}
+            </button>
+          </div>
+        </form>
+
+        {result ? (
+          <div className="calc-mini-results">
+            <ResultCard
+              featured
+              icon={<Ruler className="h-5 w-5" />}
+              label="Bề dày phần cuộn"
+              value={formatCmFromMm(result.radialBuildMm)}
+              sub={formatMm(result.radialBuildMm)}
+            />
+            <ResultCard
+              featured
+              icon={<Gauge className="h-5 w-5" />}
+              label="Đường kính ngoài"
+              value={formatCmFromMm(result.outerDiameterMm)}
+              sub={formatMm(result.outerDiameterMm)}
+            />
+            {form.calcDirection === "length" ? (
+              <ResultCard
+                icon={<Scale className="h-5 w-5" />}
+                label="Khối lượng"
+                value={`${decimalFormatter.format(result.massKg)} kg`}
+                sub={`${decimalFormatter.format(result.massKg / 1000)} tấn`}
+              />
+            ) : (
+              <ResultCard
+                icon={<Ruler className="h-5 w-5" />}
+                label="Chiều dài inox"
+                value={`${decimalFormatter.format(result.lengthM)} m`}
+              />
+            )}
+          </div>
+        ) : (
+          <div className="calc-empty-state">
+            Nhập đầy đủ thông số hợp lệ để xem kết quả.
+          </div>
+        )}
+      </main>
+    );
+  }
 
   return (
     <main className={embedded ? "calc-embedded-page" : "calc-public-page scroll-thin"}>
@@ -321,8 +501,8 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
           </span>
           <h1>Tính kích thước cuộn inox</h1>
           <p>
-            Nhập độ dày, khổ rộng, khối lượng và lõi cuộn để xem ngay đường kính ngoài, bề dày phần cuộn theo cm,
-            chiều dài inox và số vòng ước tính.
+            Nhập độ dày, khổ rộng và lõi cuộn, rồi chọn tính theo khối lượng để ra chiều dài — hoặc đảo lại,
+            nhập chiều dài để tính ra cân. Xem ngay bề dày phần cuộn theo cm và số vòng ước tính.
           </p>
         </div>
         <div className="calc-hero-stats">
@@ -334,25 +514,45 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
 
       <section className="calc-grid">
         <form ref={formRef} className="calc-panel calc-form-panel" onSubmit={(event) => event.preventDefault()}>
-          <div className="calc-section-title">
-            <Scale className="h-5 w-5" />
-            Thông số đầu vào
+          <div className="calc-form-head">
+            <div className="calc-section-title">
+              <Scale className="h-5 w-5" />
+              Thông số đầu vào
+            </div>
+            <div className="calc-barem-switch" role="group" aria-label="Chế độ tính barem">
+              <button
+                type="button"
+                title="Barem theo bảng thực tế"
+                className={form.baremMode === "table" ? "is-active" : ""}
+                onClick={() => setBaremMode("table")}
+              >
+                Thực tế
+              </button>
+              <button
+                type="button"
+                title="Tính theo khối lượng riêng"
+                className={form.baremMode === "density" ? "is-active" : ""}
+                onClick={() => setBaremMode("density")}
+              >
+                KL riêng
+              </button>
+            </div>
           </div>
 
-          <div className="calc-mode-tabs" role="group" aria-label="Chế độ tính barem">
+          <div className="calc-mode-tabs" role="group" aria-label="Chiều tính">
             <button
               type="button"
-              className={form.baremMode === "table" ? "is-active" : ""}
-              onClick={() => setForm((current) => ({ ...current, baremMode: "table" }))}
+              className={form.calcDirection === "mass" ? "is-active" : ""}
+              onClick={() => setDirection("mass")}
             >
-              Barem thực tế
+              Từ khối lượng → chiều dài
             </button>
             <button
               type="button"
-              className={form.baremMode === "density" ? "is-active" : ""}
-              onClick={() => setForm((current) => ({ ...current, baremMode: "density" }))}
+              className={form.calcDirection === "length" ? "is-active" : ""}
+              onClick={() => setDirection("length")}
             >
-              Theo khối lượng riêng
+              Từ chiều dài → cân
             </button>
           </div>
 
@@ -419,16 +619,31 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
               </Field>
             )}
 
-            <Field label="Khối lượng cần san" unit="kg" error={errors.massTon}>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value={form.massTon}
-                onChange={updateField("massTon")}
-                className="calc-input"
-              />
-            </Field>
+            {form.calcDirection === "length" ? (
+              <Field label="Chiều dài cuộn" unit="m" error={errors.lengthM}>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  value={form.lengthM}
+                  onChange={updateField("lengthM")}
+                  className="calc-input"
+                />
+              </Field>
+            ) : (
+              <Field label="Khối lượng cần san" unit="kg" error={errors.massTon}>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  step="1"
+                  value={form.massTon}
+                  onChange={updateField("massTon")}
+                  className="calc-input"
+                />
+              </Field>
+            )}
 
             <Field label="Đường kính lõi trong" unit="cm" error={errors.innerDiameterMm}>
               <input
@@ -503,34 +718,24 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
                     value={formatCmFromMm(result.radialBuildMm)}
                     sub={formatMm(result.radialBuildMm)}
                   />
-                  <ResultCard
-                    featured
-                    icon={<Gauge className="h-5 w-5" />}
-                    label="Đường kính ngoài"
-                    value={formatCmFromMm(result.outerDiameterMm)}
-                    sub={formatMm(result.outerDiameterMm)}
-                  />
-                  <ResultCard
-                    icon={<Scale className="h-5 w-5" />}
-                    label="Barem"
-                    value={`${decimalFormatter.format(result.kgPerMeter)} kg/m`}
-                    sub={getBaremSourceLabel(result)}
-                  />
-                  <ResultCard
-                    icon={<Ruler className="h-5 w-5" />}
-                    label="Chiều dài inox"
-                    value={`${decimalFormatter.format(result.lengthM)} m`}
-                  />
+                  {form.calcDirection === "length" ? (
+                    <ResultCard
+                      icon={<Scale className="h-5 w-5" />}
+                      label="Khối lượng"
+                      value={`${decimalFormatter.format(result.massKg)} kg`}
+                      sub={`${decimalFormatter.format(result.massKg / 1000)} tấn`}
+                    />
+                  ) : (
+                    <ResultCard
+                      icon={<Ruler className="h-5 w-5" />}
+                      label="Chiều dài inox"
+                      value={`${decimalFormatter.format(result.lengthM)} m`}
+                    />
+                  )}
                   <ResultCard
                     icon={<RefreshCcw className="h-5 w-5" />}
                     label="Số vòng ước tính"
                     value={`${integerFormatter.format(Math.round(result.estimatedTurns))} vòng`}
-                  />
-                  <ResultCard
-                    icon={<Weight className="h-5 w-5" />}
-                    label="Khối lượng riêng"
-                    value={`${densityFormatter.format(result.densityKgM3)} kg/m³`}
-                    sub={`Hệ số độ chặt ${decimalFormatter.format(input.packingFactor)}`}
                   />
                 </div>
               </>

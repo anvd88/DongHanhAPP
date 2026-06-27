@@ -214,6 +214,28 @@ export interface ChamCongLog {
   ghiChu: string;
 }
 
+export type ChamCongStatus =
+  | "ok"
+  | "posture"
+  | "lowquality"
+  | "noface"
+  | "spoof"
+  | "unknown";
+
+/** Kết quả chấm công theo loạt ảnh (server tự chọn khung tốt nhất). */
+export interface ChamCongResult {
+  status: ChamCongStatus;
+  matched: boolean;
+  username?: string;
+  fullName?: string;
+  similarity: number;
+  loai?: string;
+  occurredAt?: string;
+  quality: number;
+  message: string;
+  guidance?: string;
+}
+
 export interface Release {
   id: number;
   version: string;

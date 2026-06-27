@@ -30,10 +30,32 @@ public interface IFaceEngine
     /// Pitch nhỏ hơn = ngước lên, lớn hơn = cúi xuống. Là TỈ LỆ tương đối theo hình học, không phải độ.
     /// </summary>
     FacePose? EstimatePose(byte[] imageBytes);
+
+    /// <summary>
+    /// Đánh giá chất lượng MỘT khung hình để chọn "ảnh tốt nhất" trong loạt chụp chấm công:
+    /// đo độ nét, độ sáng, độ loá, kích cỡ &amp; hướng mặt rồi tổng hợp thành điểm 0..1.
+    /// Trả null nếu ảnh hỏng; trả <see cref="FaceFrameQuality.FaceFound"/> = false nếu không thấy mặt.
+    /// KHÔNG trích vector/chống giả mạo (nhẹ) — chỉ để xếp hạng khung, khâu nặng chạy 1 lần trên khung tốt nhất.
+    /// </summary>
+    FaceFrameQuality? AssessFrame(byte[] imageBytes);
 }
 
 /// <summary>Hướng mặt tương đối (tỉ lệ hình học từ 5 điểm landmark, không phải độ).</summary>
 public readonly record struct FacePose(double Yaw, double Pitch);
+
+/// <summary>
+/// Chất lượng một khung hình khuôn mặt. Mọi chỉ số (trừ <see cref="Score"/>) là giá trị thô để
+/// chẩn đoán/tinh chỉnh; <see cref="Score"/> là điểm tổng hợp 0..1 dùng để chọn khung tốt nhất.
+/// </summary>
+public readonly record struct FaceFrameQuality(
+    bool FaceFound,
+    double Score,
+    double Sharpness,    // độ nét (phương sai Laplacian đã chuẩn hóa 0..1)
+    double Brightness,   // độ sáng vùng mặt 0..1
+    double GlareRatio,   // tỉ lệ điểm gần bão hòa (loá) trong vùng mặt 0..1
+    double FaceRatio,    // diện tích mặt / diện tích ảnh
+    FacePose Pose,
+    double DetectScore); // độ tin cậy phát hiện 0..1
 
 /// <summary>Chuyển vector đặc trưng ↔ byte[] để lưu cột VARBINARY trong SQL Server.</summary>
 public static class EmbeddingCodec

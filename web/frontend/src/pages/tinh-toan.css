@@ -268,6 +268,43 @@
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.75), 0 10px 22px -18px rgba(15, 23, 42, 0.48);
 }
 
+/* Hàng tiêu đề form: tiêu đề bên trái, công tắc barem gọn ở góc phải. */
+.calc-form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.calc-barem-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 3px;
+  border-radius: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.56);
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+  padding: 3px;
+}
+
+.calc-barem-switch button {
+  min-height: 30px;
+  border-radius: 9px;
+  color: var(--text-secondary);
+  padding: 0 11px;
+  font-size: 0.76rem;
+  font-weight: 850;
+  white-space: nowrap;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.calc-barem-switch button.is-active {
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.75), 0 8px 18px -16px rgba(15, 23, 42, 0.5);
+}
+
 .calc-fields-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -454,6 +491,56 @@
   line-height: 1.5;
 }
 
+/* Compact layout used when embedded in the tools page */
+.calc-mini {
+  display: grid;
+  gap: 14px;
+}
+
+.calc-mini-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.calc-mini-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.calc-mini-results {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.calc-mini .calc-empty-state {
+  margin-top: 0;
+}
+
+@media (max-width: 680px) {
+  .calc-mini {
+    gap: 12px;
+  }
+
+  .calc-mini-fields,
+  .calc-mini-results {
+    grid-template-columns: 1fr;
+  }
+
+  /* Nút thao tác: chia đôi full-width, vùng chạm lớn dễ bấm một tay */
+  .calc-mini-actions {
+    gap: 8px;
+  }
+
+  .calc-mini-actions .calc-secondary-button {
+    flex: 1 1 calc(50% - 4px);
+    min-height: 48px;
+  }
+}
+
 html[data-theme="dark"] .calc-public-header,
 html[data-theme="dark"] .calc-hero > div,
 html[data-theme="dark"] .calc-panel {
@@ -473,11 +560,17 @@ html[data-theme="dark"] .calc-theme-button,
 html[data-theme="dark"] .calc-login-link,
 html[data-theme="dark"] .calc-secondary-button,
 html[data-theme="dark"] .calc-mode-tabs,
+html[data-theme="dark"] .calc-barem-switch,
 html[data-theme="dark"] .calc-result-card,
 html[data-theme="dark"] .calc-empty-state {
   border-color: rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
   color: rgba(232, 240, 252, 0.9);
+}
+
+html[data-theme="dark"] .calc-barem-switch button.is-active {
+  background: rgba(255, 255, 255, 0.13);
+  color: rgba(248, 252, 255, 0.96);
 }
 
 html[data-theme="dark"] .calc-input {

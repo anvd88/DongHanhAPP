@@ -65,7 +65,12 @@ var app = builder.Build();
 
 // Phục vụ frontend đã build (wwwroot) — gộp chung 1 cổng với API.
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// Khai báo MIME cho tài nguyên nhận diện mặt phía client (MediaPipe): .tflite là kiểu lạ nên
+// static files mặc định sẽ trả 404; .wasm map sẵn cho chắc để FaceDetector nạp được.
+var staticContentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+staticContentTypes.Mappings[".tflite"] = "application/octet-stream";
+staticContentTypes.Mappings[".wasm"] = "application/wasm";
+app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = staticContentTypes });
 
 app.UseCors();
 app.UseAuthentication();

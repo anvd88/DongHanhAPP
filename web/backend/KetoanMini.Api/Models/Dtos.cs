@@ -86,6 +86,17 @@ public record NhanDienRequest(string ImageBase64);
 public record FacePoseDto(bool Found, double Yaw, double Pitch);
 public record NhanDienResult(bool Matched, string? Username, string? FullName, double Similarity,
     string? Loai, DateTime? OccurredAt, string Message);
+
+/// <summary>Loạt ảnh chụp liên tiếp; server tự chọn khung tốt nhất để phân tích.</summary>
+public record ChamCongBurstRequest(List<string> Images);
+
+/// <summary>
+/// Kết quả chấm công theo loạt ảnh. <see cref="Status"/>:
+/// ok | posture (sai tư thế) | lowquality | noface | spoof | unknown.
+/// <see cref="Guidance"/> là hướng dẫn sửa tư thế/điều kiện chụp (nếu có).
+/// </summary>
+public record ChamCongResult(string Status, bool Matched, string? Username, string? FullName,
+    double Similarity, string? Loai, DateTime? OccurredAt, double Quality, string Message, string? Guidance);
 public record ChamCongLogDto(long Id, string Username, string FullName, string Loai, double Similarity,
     DateTime OccurredAt, string GhiChu);
 
