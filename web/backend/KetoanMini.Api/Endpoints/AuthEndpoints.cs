@@ -2,6 +2,7 @@ using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
+using Microsoft.Data.SqlClient;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -42,6 +43,7 @@ public static class AuthEndpoints
                 return Results.Json(new { message = "Tài khoản đã bị khóa. Liên hệ quản trị viên." }, statusCode: 403);
 
             await reader.CloseAsync();
+            user = user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id), Verified = await LoadVerified(conn, user.Username, user.Role) };
             await db.RecordAudit(user.Username, "Đăng nhập web", "Auth", user.Username, "Đăng nhập phiên bản web.");
 
             return Results.Ok(new LoginResponse(tokens.CreateToken(user), user));
@@ -50,19 +52,9 @@ public static class AuthEndpoints
         g.MapGet("/me", async (ClaimsPrincipal principal, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            await using var reader = await conn.Cmd(
-                @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
-                  FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
-                .With("@u", principal.Username())
-                .ExecuteReaderAsync();
-
-            if (!await reader.ReadAsync())
-                return Results.Unauthorized();
-
-            return Results.Ok(new UserDto(
-                reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
-                reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
-                reader.DtNull("created_at")));
+            var user = await ReadUserByUsername(conn, principal.Username());
+            if (user is null) return Results.Unauthorized();
+            return Results.Ok(user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id) });
         }).RequireAuthorization();
 
         // Sửa hồ sơ của chính mình (web): đổi tên hiển thị. (Ảnh đại diện trên desktop lưu cục bộ
@@ -82,15 +74,55 @@ public static class AuthEndpoints
 
             await db.RecordAudit(username, "Sửa hồ sơ", "User", username, "Đổi tên hiển thị (web).");
 
-            await using var reader = await conn.Cmd(
-                @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
-                  FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
-                .With("@u", username).ExecuteReaderAsync();
-            if (!await reader.ReadAsync()) return Results.Unauthorized();
-            return Results.Ok(new UserDto(
-                reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
-                reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
-                reader.DtNull("created_at")));
+            var updated = await ReadUserByUsername(conn, username);
+            if (updated is null) return Results.Unauthorized();
+            return Results.Ok(updated with { AvatarUrl = await LoadAvatarUrl(conn, updated.Id) });
+        }).RequireAuthorization();
+
+        // Lưu ảnh đại diện cho bản web (data URL ảnh đã thu nhỏ/nén ở client). Lưu trong bảng
+        // web-only dbo.web_user_avatars để KHÔNG đụng schema dùng chung với app desktop.
+        g.MapPut("/avatar", async (UpdateAvatarRequest req, ClaimsPrincipal principal, Database db) =>
+        {
+            var dataUrl = (req.ImageDataUrl ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(dataUrl) || !dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
+            if (dataUrl.Length > 1_500_000)
+                return Results.BadRequest(new { message = "Ảnh quá lớn. Vui lòng chọn ảnh khác." });
+
+            var username = principal.Username();
+            await using var conn = await db.OpenAsync();
+            var user = await ReadUserByUsername(conn, username);
+            if (user is null) return Results.Unauthorized();
+
+            await EnsureAvatarTableOn(conn);
+            await conn.Cmd(@"
+                MERGE dbo.web_user_avatars AS target
+                USING (SELECT @id AS user_id) AS source
+                ON target.user_id = source.user_id
+                WHEN MATCHED THEN
+                    UPDATE SET image_data_url = @v, updated_at = SYSUTCDATETIME()
+                WHEN NOT MATCHED THEN
+                    INSERT (user_id, image_data_url, updated_at) VALUES (@id, @v, SYSUTCDATETIME());")
+                .With("@id", user.Id).With("@v", dataUrl).ExecuteNonQueryAsync();
+
+            await db.RecordAudit(username, "Cập nhật ảnh đại diện", "User", username, "Đổi ảnh đại diện (web).");
+            return Results.Ok(user with { AvatarUrl = dataUrl });
+        }).RequireAuthorization();
+
+        // Xóa ảnh đại diện → quay lại hiển thị chữ cái đầu.
+        g.MapDelete("/avatar", async (ClaimsPrincipal principal, Database db) =>
+        {
+            var username = principal.Username();
+            await using var conn = await db.OpenAsync();
+            var user = await ReadUserByUsername(conn, username);
+            if (user is null) return Results.Unauthorized();
+
+            await conn.Cmd(@"IF OBJECT_ID(N'dbo.web_user_avatars', N'U') IS NOT NULL
+                             DELETE FROM dbo.web_user_avatars WHERE user_id = @id")
+                .With("@id", user.Id).ExecuteNonQueryAsync();
+
+            await db.RecordAudit(username, "Xóa ảnh đại diện", "User", username, "Xóa ảnh đại diện (web).");
+            return Results.Ok(user with { AvatarUrl = (string?)null });
         }).RequireAuthorization();
 
         // Đổi mật khẩu của chính mình (web): xác minh mật khẩu hiện tại rồi đặt mật khẩu mới.
@@ -162,5 +194,74 @@ public static class AuthEndpoints
     {
         var value = string.IsNullOrWhiteSpace(sid) ? "web:" + username : sid.Trim();
         return value.Length > 64 ? value[..64] : value;
+    }
+
+    private static async Task<UserDto?> ReadUserByUsername(SqlConnection conn, string username)
+    {
+        await using var reader = await conn.Cmd(
+            @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
+              FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
+            .With("@u", username).ExecuteReaderAsync();
+        if (!await reader.ReadAsync()) return null;
+        var dto = new UserDto(
+            reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
+            reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
+            reader.DtNull("created_at"));
+        await reader.CloseAsync();
+        return dto with { Verified = await LoadVerified(conn, dto.Username, dto.Role) };
+    }
+
+    // Tích xanh: Admin luôn có; tài khoản thường thì tra bảng web_verified_users (web-only).
+    private static async Task<bool> LoadVerified(SqlConnection conn, string username, string role)
+    {
+        if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            var r = await conn.Cmd(
+                @"IF OBJECT_ID(N'dbo.web_verified_users', N'U') IS NOT NULL
+                  SELECT 1 FROM dbo.web_verified_users WHERE username = @u")
+                .With("@u", username).ExecuteScalarAsync();
+            return r is not null and not DBNull;
+        }
+        catch { return false; }
+    }
+
+    // Đọc data URL ảnh đại diện (web) của một người dùng; null nếu chưa có (hoặc bảng chưa tồn tại).
+    private static async Task<string?> LoadAvatarUrl(SqlConnection conn, Guid userId)
+    {
+        try
+        {
+            await using var reader = await conn.Cmd(
+                @"IF OBJECT_ID(N'dbo.web_user_avatars', N'U') IS NOT NULL
+                  SELECT image_data_url FROM dbo.web_user_avatars WHERE user_id = @id")
+                .With("@id", userId).ExecuteReaderAsync();
+            if (await reader.ReadAsync() && !reader.IsDBNull(0))
+            {
+                var value = reader.GetString(0);
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+        catch { /* ảnh đại diện là phụ — không để lỗi chặn đăng nhập/hồ sơ */ }
+        return null;
+    }
+
+    /// <summary>Tạo bảng ảnh đại diện web-only nếu chưa có (gọi best-effort lúc khởi động).</summary>
+    public static async Task EnsureAvatarTable(Database db, CancellationToken ct = default)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        await EnsureAvatarTableOn(conn, ct);
+    }
+
+    private static async Task EnsureAvatarTableOn(SqlConnection conn, CancellationToken ct = default)
+    {
+        await conn.Cmd(@"
+            IF OBJECT_ID(N'dbo.web_user_avatars', N'U') IS NULL
+            CREATE TABLE dbo.web_user_avatars (
+                user_id UNIQUEIDENTIFIER NOT NULL,
+                image_data_url NVARCHAR(MAX) NOT NULL,
+                updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                CONSTRAINT PK_web_user_avatars PRIMARY KEY (user_id)
+            );")
+            .ExecuteNonQueryAsync(ct);
     }
 }

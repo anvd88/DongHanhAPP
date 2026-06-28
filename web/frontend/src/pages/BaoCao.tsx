@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, FileText, PackageCheck, TrendingUp, Users, Wallet } from "lucide-react";
 import { PageHeader } from "../components/Layout";
-import { GlassCard } from "../components/Glass";
+import { GlassPanel } from "../components/glass/GlassPanel";
 import { StatCard } from "../components/StatCard";
 import { Table } from "../components/Table";
 import { DatePicker } from "../components/DateField";
@@ -29,9 +29,9 @@ export function BaoCao() {
   const { data: giaCong, loading: giaCongLoading, error: giaCongError } = useApi<GiaCongReport>(giaCongPath);
 
   return (
-    <div>
+    <div className="gc-root">
       <PageHeader title="Báo cáo" subtitle="Tổng hợp doanh thu, chứng từ và tồn gia công" />
-      {error && <GlassCard className="p-5 text-sm text-[var(--danger)]">{error}</GlassCard>}
+      {error && <GlassPanel className="p-5 text-sm text-[var(--danger)]">{error}</GlassPanel>}
       {!error && (
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -41,7 +41,7 @@ export function BaoCao() {
             <StatCard loading={loading} label="Khách hàng" value={money(data?.activeCustomers ?? 0)} icon={Users} color="var(--accent)" />
           </div>
 
-          <GlassCard className="mt-5 overflow-hidden p-0">
+          <GlassPanel strong className="mt-5 overflow-hidden rounded-[20px]">
             <div className="border-b border-[var(--glass-border)] px-5 py-4">
               <h2 className="font-bold text-[var(--text)]">Tổng hợp theo tháng</h2>
               <p className="text-xs text-[var(--text-secondary)]">12 tháng gần nhất</p>
@@ -57,11 +57,11 @@ export function BaoCao() {
                 { header: "Tổng tiền", align: "right", cell: (r) => <span className="font-semibold accent-text">{vnd(r.total)}</span> },
               ]}
             />
-          </GlassCard>
+          </GlassPanel>
         </>
       )}
 
-      <GlassCard className="mt-5 p-4">
+      <GlassPanel className="mt-5 p-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-[220px] flex-1">
             <label className="mb-1 block text-xs font-bold text-[var(--text-secondary)]">Đối tác gia công</label>
@@ -81,9 +81,9 @@ export function BaoCao() {
             <DatePicker value={toDate} onChange={setToDate} placeholder="Tất cả" clearable ariaLabel="Đến ngày" />
           </div>
         </div>
-      </GlassCard>
+      </GlassPanel>
 
-      {giaCongError && <GlassCard className="mt-4 p-5 text-sm text-[var(--danger)]">{giaCongError}</GlassCard>}
+      {giaCongError && <GlassPanel className="mt-4 p-5 text-sm text-[var(--danger)]">{giaCongError}</GlassPanel>}
       {!giaCongError && (
         <>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -93,7 +93,7 @@ export function BaoCao() {
             <StatCard loading={giaCongLoading} label="Phí gia công phải trả" value={vnd(giaCong?.tienGiaCongPhaiTra ?? 0)} icon={Wallet} tone="violet" />
           </div>
 
-          <GlassCard className="mt-5 overflow-hidden p-0">
+          <GlassPanel strong className="mt-5 overflow-hidden rounded-[20px]">
             <div className="border-b border-[var(--glass-border)] px-5 py-4">
               <h2 className="font-bold text-[var(--text)]">Gia công theo đối tác</h2>
             </div>
@@ -110,9 +110,9 @@ export function BaoCao() {
                 { header: "Phí gia công", align: "right", cell: (r) => vnd(r.tienGiaCongPhaiTra) },
               ]}
             />
-          </GlassCard>
+          </GlassPanel>
 
-          <GlassCard className="mt-5 overflow-hidden p-0">
+          <GlassPanel strong className="mt-5 overflow-hidden rounded-[20px]">
             <div className="border-b border-[var(--glass-border)] px-5 py-4">
               <h2 className="font-bold text-[var(--text)]">Gia công theo mặt hàng</h2>
             </div>
@@ -132,7 +132,7 @@ export function BaoCao() {
                 { header: "Phí gia công", align: "right", cell: (r) => vnd(r.tienGiaCongPhaiTra) },
               ]}
             />
-          </GlassCard>
+          </GlassPanel>
         </>
       )}
     </div>

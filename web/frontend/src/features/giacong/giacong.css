@@ -98,6 +98,29 @@ html[data-theme="dark"] .gc-panel::before {
   display: none;
 }
 
+/* Form "Sửa hồ sơ" + "Chỉnh ảnh đại diện": ở chế độ sáng tăng độ đục + tông trắng
+   để chữ rõ, nền sạch hơn (áp dụng cho cả bề mặt gc-panel lẫn .glass). */
+html:not([data-theme="dark"]) .profile-modal-strong {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.8)),
+    rgba(255, 255, 255, 0.94) !important;
+}
+html:not([data-theme="dark"]) .profile-modal-strong::before {
+  opacity: 0.7;
+}
+
+/* Khung nhập trong form sửa hồ sơ ở chế độ sáng: nền trắng + viền đậm hơn
+   để nổi rõ trên nền form đã được làm trắng (mặc định viền kính gần như vô hình). */
+html:not([data-theme="dark"]) .profile-modal-strong input:not([type="range"]),
+html:not([data-theme="dark"]) .profile-modal-strong select {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.22);
+}
+html:not([data-theme="dark"]) .profile-modal-strong input:not([type="range"]):focus,
+html:not([data-theme="dark"]) .profile-modal-strong select:focus {
+  border-color: var(--accent);
+}
+
 /* ---------- Thẻ thống kê (kính + ánh sáng bám chuột) ---------- */
 .gc-card {
   --mouse-x: 50%;

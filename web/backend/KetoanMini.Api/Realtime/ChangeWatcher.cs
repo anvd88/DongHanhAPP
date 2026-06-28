@@ -36,7 +36,9 @@ public sealed class ChangeWatcher(
             (SELECT COUNT(*) FROM dbo.cham_cong_face), '|',
             (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, username, full_name, created_at, created_by))), '0') FROM dbo.cham_cong_face), '|',
             (SELECT COUNT(*) FROM dbo.cham_cong_log), '|',
-            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, username, loai, similarity, occurred_at))), '0') FROM dbo.cham_cong_log)
+            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, username, loai, similarity, occurred_at))), '0') FROM dbo.cham_cong_log), '|',
+            (SELECT ISNULL(COUNT(*), 0) FROM dbo.web_chat_messages), '|',
+            (SELECT ISNULL(CONVERT(VARCHAR(20), CHECKSUM_AGG(CHECKSUM(id, conversation_id, sender_username, created_at, edited_at, is_removed))), '0') FROM dbo.web_chat_messages)
         ) AS token;";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

@@ -5,6 +5,7 @@ import {
   Building2,
   Calculator,
   CircleDollarSign,
+  MessageCircle,
   ClipboardList,
   FileText,
   LayoutDashboard,
@@ -54,6 +55,7 @@ export const NAV: NavSection[] = [
     title: "CÔNG CỤ",
     items: [
       { key: "congcu", label: "Công cụ", icon: Calculator, path: "/tinhtoan", ready: true },
+      { key: "chats", label: "Trò chuyện", icon: MessageCircle, path: "/chats", ready: true },
     ],
   },
   {

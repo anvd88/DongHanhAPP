@@ -1,5 +1,5 @@
 import { PageHeader } from "../components/Layout";
-import { GlassCard } from "../components/Glass";
+import { GlassPanel } from "../components/glass/GlassPanel";
 import { Table } from "../components/Table";
 import { Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
@@ -10,9 +10,9 @@ export function CapNhat() {
   const { data, loading, error } = useApi<Release[]>("/api/releases/");
 
   return (
-    <div>
+    <div className="gc-root">
       <PageHeader title="Cập nhật phiên bản" subtitle="Lịch sử phát hành ứng dụng" />
-      <GlassCard className="overflow-hidden p-0">
+      <GlassPanel strong className="overflow-hidden rounded-[20px]">
         {error ? (
           <div className="p-5 text-sm text-[var(--danger)]">{error}</div>
         ) : (
@@ -31,7 +31,7 @@ export function CapNhat() {
             ]}
           />
         )}
-      </GlassCard>
+      </GlassPanel>
     </div>
   );
 }

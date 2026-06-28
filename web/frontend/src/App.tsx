@@ -19,6 +19,7 @@ import { ChamCongScannerPage } from "./features/chamcong/ChamCongScannerPage";
 import { NhanSu } from "./pages/NhanSu";
 import { BaoCao } from "./pages/BaoCao";
 import { CongCu } from "./pages/CongCu";
+import { Chats } from "./pages/Chats";
 import { SaoLuu } from "./pages/SaoLuu";
 import { CapNhat } from "./pages/CapNhat";
 import { StubPage } from "./pages/StubPage";
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="/chamcong" element={<Protected><ChamCongScannerPage /></Protected>} />
             <Route path="/ql-chamcong" element={<Protected admin><ChamCongPage /></Protected>} />
             <Route path="/tinhtoan" element={<Protected><CongCu /></Protected>} />
+            <Route path="/chats" element={<Protected><Chats /></Protected>} />
             <Route path="/nhansu" element={<Protected admin><NhanSu /></Protected>} />
             <Route path="/capnhat" element={<Protected admin><CapNhat /></Protected>} />
 

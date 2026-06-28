@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import "../features/giacong/giacong.css";
 
 export interface Column<T> {
   header: string;
@@ -24,17 +25,14 @@ export function Table<T>({
   loading?: boolean;
   skeletonRows?: number;
 }) {
-  const alignCls = (a?: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left");
+  const alignCls = (a?: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "");
   return (
-    <div className="scroll-thin overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
+    <div className="gc-scroll overflow-auto">
+      <table className="gc-table">
         <thead>
-          <tr className="km-table-head-row">
+          <tr>
             {columns.map((c, i) => (
-              <th
-                key={i}
-                className={`whitespace-nowrap px-3 py-2 text-xs font-bold tracking-wide text-[var(--text-muted)] ${alignCls(c.align)}`}
-              >
+              <th key={i} className={alignCls(c.align)}>
                 {c.header}
               </th>
             ))}
@@ -43,20 +41,20 @@ export function Table<T>({
         <tbody>
           {loading ? (
             Array.from({ length: skeletonRows }).map((_, i) => (
-              <tr key={`sk-${i}`} className="km-table-row">
+              <tr key={`sk-${i}`} style={{ cursor: "default" }}>
                 {columns.map((c, j) => (
-                  <td key={j} className={`px-3 py-2 ${alignCls(c.align)}`}>
+                  <td key={j} className={alignCls(c.align)}>
                     <span
-                      className={`km-skeleton h-4 ${c.align === "right" ? "ml-auto" : c.align === "center" ? "mx-auto" : ""}`}
-                      style={{ width: c.align === "right" || c.align === "center" ? "48%" : "82%" }}
+                      className={`gc-skeleton h-4 ${c.align === "right" ? "ml-auto" : c.align === "center" ? "mx-auto" : ""}`}
+                      style={{ display: "block", width: c.align === "right" || c.align === "center" ? "48%" : "82%" }}
                     />
                   </td>
                 ))}
               </tr>
             ))
           ) : rows.length === 0 ? (
-            <tr>
-              <td colSpan={columns.length} className="py-12 text-center text-sm text-[var(--text-muted)]">
+            <tr style={{ cursor: "default" }}>
+              <td colSpan={columns.length} className="py-12 text-center text-sm text-[var(--gc-text-muted)]">
                 {empty ?? "Chưa có dữ liệu"}
               </td>
             </tr>
@@ -65,12 +63,10 @@ export function Table<T>({
               <tr
                 key={keyOf(row, i)}
                 onClick={() => onRowClick?.(row)}
-                className={`km-table-row ${
-                  onRowClick ? "cursor-pointer" : ""
-                }`}
+                style={{ cursor: onRowClick ? "pointer" : "default" }}
               >
                 {columns.map((c, j) => (
-                  <td key={j} className={`px-3 py-2 text-[var(--text)] ${alignCls(c.align)} ${c.className ?? ""}`}>
+                  <td key={j} className={`${alignCls(c.align)} ${c.className ?? ""}`}>
                     {c.cell(row, i)}
                   </td>
                 ))}
