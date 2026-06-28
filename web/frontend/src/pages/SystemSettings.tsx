@@ -190,7 +190,7 @@ export function SystemSettings() {
   };
 
   return (
-    <div className="system-settings-page">
+    <div className="system-settings-page gc-root">
       <PageHeader
         title="Hệ thống"
         subtitle="Cài đặt thông báo và tuỳ chọn trải nghiệm web"

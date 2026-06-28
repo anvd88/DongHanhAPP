@@ -19,7 +19,7 @@ export function Dashboard() {
   const { data, loading, error } = useApi<Dash>("/api/dashboard");
 
   return (
-    <div className="km-dashboard">
+    <div className="km-dashboard gc-root">
       <PageHeader
         title="Tổng quan"
         subtitle={`Chào mừng trở lại, ${user?.fullName || user?.username || "admin"} 👋`}

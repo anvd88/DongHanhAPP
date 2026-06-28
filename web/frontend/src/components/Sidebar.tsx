@@ -309,7 +309,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           onClick={() => setProfileOpen((value) => !value)}
           aria-expanded={profileOpen}
         >
-          <span className="km-sidebar-profile-avatar">{initials(profileName)}</span>
+          <span className="km-sidebar-profile-avatar overflow-hidden">
+            {user?.avatarUrl ? (
+              <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              initials(profileName)
+            )}
+          </span>
           <span className="km-sidebar-profile-copy">
             <span className="km-sidebar-profile-name">{profileName}</span>
             <span className="km-sidebar-profile-email">{profileEmail}</span>

@@ -32,8 +32,10 @@ public static class UserEndpoints
             var cmd = conn.Cmd(
                 $@"SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active, u.approval_status, u.created_at,
                           CAST(ISNULL(p.is_online, 0) AS bit) AS is_online,
-                          p.last_seen
+                          p.last_seen,
+                          CAST(CASE WHEN u.role = N'Admin' OR vu.username IS NOT NULL THEN 1 ELSE 0 END AS bit) AS verified
                    FROM dbo.app_users u
+                   LEFT JOIN dbo.web_verified_users vu ON vu.username = u.username
                    OUTER APPLY (
                        SELECT
                            MAX(CASE WHEN us.is_active = 1 AND us.last_seen >= DATEADD(SECOND, -90, SYSDATETIME()) THEN 1 ELSE 0 END) AS is_online,
@@ -49,7 +51,7 @@ public static class UserEndpoints
             while (await r.ReadAsync())
                 list.Add(new UserAdminDto(r.Guid("id"), r.Str("username"), r.Str("full_name"),
                     r.Str("email"), r.Str("role"), r.Bool("is_active"), r.Str("approval_status"), r.DtNull("created_at"),
-                    r.Bool("is_online"), r.DtNull("last_seen")));
+                    r.Bool("is_online"), r.DtNull("last_seen"), r.Bool("verified")));
             return Results.Ok(list);
         });
 
@@ -95,6 +97,31 @@ public static class UserEndpoints
                 .With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
             if (n > 0) await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", id.ToString(), "(web)");
             return n > 0 ? Results.NoContent() : Results.NotFound();
+        });
+
+        // Cấp / thu hồi "tích xanh" thủ công cho một tài khoản. Tài khoản Admin luôn có tích xanh
+        // (không cần ghi bảng); bảng web_verified_users chỉ lưu các tài khoản thường được nâng cấp.
+        g.MapPost("/{id:guid}/verify", async (Guid id, SetVerifiedRequest req, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var username = Convert.ToString(await conn.Cmd(
+                "SELECT TOP 1 username FROM dbo.app_users WHERE id = @id AND is_deleted = 0")
+                .With("@id", id).ExecuteScalarAsync())?.Trim();
+            if (string.IsNullOrWhiteSpace(username)) return Results.NotFound();
+
+            await ChatEndpoints.EnsureTables(db);
+            if (req.Verified)
+                await conn.Cmd(
+                    @"IF NOT EXISTS (SELECT 1 FROM dbo.web_verified_users WHERE username = @u)
+                      INSERT INTO dbo.web_verified_users (username, granted_by, granted_at)
+                      VALUES (@u, @by, SYSUTCDATETIME())")
+                    .With("@u", username).With("@by", u.Username()).ExecuteNonQueryAsync();
+            else
+                await conn.Cmd("DELETE FROM dbo.web_verified_users WHERE username = @u")
+                    .With("@u", username).ExecuteNonQueryAsync();
+
+            await db.RecordAudit(u.Username(), req.Verified ? "Cấp tích xanh" : "Thu hồi tích xanh", "User", username, "(web)");
+            return Results.NoContent();
         });
 
         g.MapPost("/{id:guid}/reset-password", async (Guid id, ClaimsPrincipal u, Database db) =>
@@ -151,52 +178,29 @@ SET CONCAT_NULL_YIELDS_NULL ON;
 SET ARITHABORT ON;
 SET NUMERIC_ROUNDABORT OFF;
 
-IF OBJECT_ID(N'dbo.chat_file_offers', N'U') IS NOT NULL
+-- Trò chuyện (web): xóa tin nhắn & thành viên của người dùng, rồi dọn các cuộc hội thoại
+-- không còn thành viên nào. (LAN chat cũ của app desktop đã bỏ khỏi backend web.)
+IF OBJECT_ID(N'dbo.web_chat_messages', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.web_chat_members', N'U') IS NOT NULL
 BEGIN
-    DELETE o
-    FROM dbo.chat_file_offers o
-    WHERE o.sender_username = @username
-       OR o.receiver_username = @username
-       OR o.sender_id = @id
-       OR o.receiver_id = @id
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.chat_messages m
-            WHERE m.id = o.message_id
-              AND (m.sender_username = @username OR m.receiver_username = @username OR m.sender_id = @id OR m.receiver_id = @id)
-       )
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.chat_conversations c
-            WHERE c.id = o.conversation_id
-              AND (c.user_a = @username OR c.user_b = @username OR c.user_a_id = @id OR c.user_b_id = @id)
-       );
+    DELETE msg
+    FROM dbo.web_chat_messages msg
+    INNER JOIN dbo.web_chat_conversations c ON c.id = msg.conversation_id
+    WHERE c.is_group = 0
+      AND EXISTS (SELECT 1 FROM dbo.web_chat_members mm WHERE mm.conversation_id = c.id AND mm.username = @username);
+
+    DELETE FROM dbo.web_chat_messages WHERE sender_username = @username;
 END;
 
-IF OBJECT_ID(N'dbo.chat_messages', N'U') IS NOT NULL
-BEGIN
-    DELETE m
-    FROM dbo.chat_messages m
-    WHERE m.sender_username = @username
-       OR m.receiver_username = @username
-       OR m.sender_id = @id
-       OR m.receiver_id = @id
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.chat_conversations c
-            WHERE c.id = m.conversation_id
-              AND (c.user_a = @username OR c.user_b = @username OR c.user_a_id = @id OR c.user_b_id = @id)
-       );
-END;
+IF OBJECT_ID(N'dbo.web_chat_members', N'U') IS NOT NULL
+    DELETE FROM dbo.web_chat_members WHERE username = @username;
 
-IF OBJECT_ID(N'dbo.chat_conversations', N'U') IS NOT NULL
-BEGIN
-    DELETE FROM dbo.chat_conversations
-    WHERE user_a = @username
-       OR user_b = @username
-       OR user_a_id = @id
-       OR user_b_id = @id;
-END;
+IF OBJECT_ID(N'dbo.web_chat_conversations', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.web_chat_members', N'U') IS NOT NULL
+    DELETE c
+    FROM dbo.web_chat_conversations c
+    WHERE NOT EXISTS (SELECT 1 FROM dbo.web_chat_members mm WHERE mm.conversation_id = c.id);
+
+IF OBJECT_ID(N'dbo.web_verified_users', N'U') IS NOT NULL
+    DELETE FROM dbo.web_verified_users WHERE username = @username;
 
 IF OBJECT_ID(N'dbo.cham_cong_log', N'U') IS NOT NULL
     DELETE FROM dbo.cham_cong_log WHERE username = @username;

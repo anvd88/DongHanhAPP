@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, UserPlus, Wifi, WifiOff } from "lucide-react";
+import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, UserPlus, Wifi, WifiOff, BadgeCheck } from "lucide-react";
 import { PageHeader } from "../components/Layout";
-import { GlassCard } from "../components/Glass";
+import { GlassPanel } from "../components/glass/GlassPanel";
 import { Table } from "../components/Table";
 import { Modal } from "../components/Modal";
+import { VerifiedBadge } from "../components/VerifiedBadge";
 import { Button, Input, Select, Field, Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
@@ -43,14 +44,14 @@ export function NhanSu() {
   };
 
   return (
-    <div>
+    <div className="gc-root">
       <PageHeader
         title="Quản lý người dùng"
         subtitle="Quản lý tài khoản và thông tin người dùng trong hệ thống"
         actions={<Button onClick={() => setAdding(true)}><UserPlus className="h-4 w-4" /> Thêm người dùng</Button>}
       />
 
-      <GlassCard className="mb-4 flex flex-wrap items-center gap-3 p-3">
+      <GlassPanel className="mb-4 flex flex-wrap items-center gap-3 rounded-[20px] p-3">
         <div className="relative max-w-xs flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm theo tên đăng nhập hoặc họ tên…" className="pl-9" />
@@ -58,9 +59,9 @@ export function NhanSu() {
         <Select value={role} onChange={(e) => setRole(e.target.value)}>
           {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
         </Select>
-      </GlassCard>
+      </GlassPanel>
 
-      <GlassCard className="overflow-hidden p-0">
+      <GlassPanel strong className="overflow-hidden rounded-[20px]">
         {error ? (
           <div className="p-5 text-sm text-[var(--danger)]">{error}</div>
         ) : (
@@ -71,7 +72,12 @@ export function NhanSu() {
             empty="Không có người dùng"
             columns={[
               { header: "Tên đăng nhập", cell: (r) => <span className="font-semibold">{r.username}</span> },
-              { header: "Họ tên", cell: (r) => r.fullName || "—" },
+              { header: "Họ tên", cell: (r) => (
+                <span className="inline-flex items-center gap-1.5">
+                  {r.fullName || "—"}
+                  {r.verified && <VerifiedBadge size={15} />}
+                </span>
+              ) },
               { header: "Email", cell: (r) => r.email || "—" },
               { header: "Vai trò", cell: (r) => <Badge color={r.role === "Admin" ? "purple" : "muted"}>{r.role}</Badge> },
               { header: "Online", cell: (r) => (
@@ -93,6 +99,13 @@ export function NhanSu() {
                   {r.approvalStatus === "Pending" && (
                     <IconBtn title="Phê duyệt" color="success" onClick={() => act(() => api.post(`/api/users/${r.id}/approve`))}><Check className="h-4 w-4" /></IconBtn>
                   )}
+                  {r.role === "Admin" ? (
+                    <IconBtn title="Admin luôn có tích xanh" color="accent" onClick={() => {}}><BadgeCheck className="h-4 w-4 text-[#1d9bf0]" /></IconBtn>
+                  ) : r.verified ? (
+                    <IconBtn title="Thu hồi tích xanh" color="accent" onClick={() => act(() => api.post(`/api/users/${r.id}/verify`, { verified: false }))}><BadgeCheck className="h-4 w-4 text-[#1d9bf0]" /></IconBtn>
+                  ) : (
+                    <IconBtn title="Cấp tích xanh" onClick={() => act(() => api.post(`/api/users/${r.id}/verify`, { verified: true }))}><BadgeCheck className="h-4 w-4" /></IconBtn>
+                  )}
                   <IconBtn title="Đặt lại mật khẩu" onClick={() => resetPw(r)}><KeyRound className="h-4 w-4" /></IconBtn>
                   {r.isActive ? (
                     <IconBtn title="Khóa" color="warning" onClick={() => act(() => api.post(`/api/users/${r.id}/lock`, { locked: true }))}><Lock className="h-4 w-4" /></IconBtn>
@@ -105,7 +118,7 @@ export function NhanSu() {
             ]}
           />
         )}
-      </GlassCard>
+      </GlassPanel>
 
       {adding && <AddUser onClose={() => setAdding(false)} onSaved={() => { setAdding(false); reload({ silent: true }); }} />}
     </div>

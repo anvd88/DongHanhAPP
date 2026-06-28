@@ -17,6 +17,7 @@ import { useTheme } from "../lib/theme";
 import { initials } from "../lib/format";
 import { isAdmin } from "../lib/types";
 import { APP_BRAND_NAME } from "../lib/branding";
+import { VerifiedBadge } from "./VerifiedBadge";
 import { EditProfileModal, ChangePasswordModal } from "./AccountModals";
 
 export function Header({ onMenu }: { onMenu: () => void }) {
@@ -119,7 +120,13 @@ export function Header({ onMenu }: { onMenu: () => void }) {
           type="button"
           aria-expanded={menuOpen}
         >
-          <span className="km-avatar">{initials(user?.fullName || user?.username || "?")}</span>
+          <span className="km-avatar overflow-hidden">
+            {user?.avatarUrl ? (
+              <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              initials(user?.fullName || user?.username || "?")
+            )}
+          </span>
           <ChevronDown className="h-4 w-4" />
         </button>
 
@@ -132,7 +139,10 @@ export function Header({ onMenu }: { onMenu: () => void }) {
             />
             <div className="profile-menu-popover glass glass-strong fade-in z-20 w-60 overflow-hidden rounded-2xl p-1.5">
               <div className="px-3 py-2 text-xs text-[var(--text-muted)]">
-                Đăng nhập với <span className="font-semibold text-[var(--text-secondary)]">{user?.username}</span>
+                <div className="inline-flex items-center gap-1 font-semibold text-[var(--text-secondary)]">
+                  {user?.fullName || user?.username}
+                  {user?.verified && <VerifiedBadge size={14} />}
+                </div>
                 <div className="mt-0.5">{isAdmin(user) ? "Quản trị viên" : "Nhân viên"}</div>
               </div>
               <button

@@ -1,5 +1,5 @@
 import { PageHeader } from "../components/Layout";
-import { GlassCard } from "../components/Glass";
+import { GlassPanel } from "../components/glass/GlassPanel";
 import { Table } from "../components/Table";
 import { Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
@@ -10,10 +10,10 @@ export function SaoLuu() {
   const { data, loading, error } = useApi<AuditEntry[]>("/api/audit?take=200");
 
   return (
-    <div>
+    <div className="gc-root">
       <PageHeader title="Sao lưu & Nhật ký" subtitle="Nhật ký hoạt động hệ thống" />
-      <GlassCard className="overflow-hidden p-0">
-        <div className="border-b border-[var(--glass-border)] px-5 py-4">
+      <GlassPanel strong className="overflow-hidden rounded-[20px]">
+        <div className="border-b border-[var(--gc-border)] px-5 py-4">
           <h2 className="font-bold text-[var(--text)]">Nhật ký hoạt động</h2>
           <p className="text-xs text-[var(--text-secondary)]">200 hoạt động gần nhất</p>
         </div>
@@ -34,7 +34,7 @@ export function SaoLuu() {
             ]}
           />
         )}
-      </GlassCard>
+      </GlassPanel>
     </div>
   );
 }

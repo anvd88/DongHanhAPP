@@ -7,6 +7,10 @@ export interface User {
   isActive: boolean;
   approvalStatus: string;
   createdAt?: string;
+  /** Ảnh đại diện (data URL) lưu riêng cho bản web; rỗng/null → hiển thị chữ cái đầu. */
+  avatarUrl?: string | null;
+  /** Tích xanh (giống Facebook): Admin luôn có, hoặc được admin cấp thủ công. */
+  verified?: boolean;
 }
 export const isAdmin = (u?: User | null) => u?.role?.toLowerCase() === "admin";
 
@@ -95,6 +99,42 @@ export interface UserAdmin {
   createdAt?: string;
   isOnline: boolean;
   lastSeen?: string;
+  verified: boolean;
+}
+
+// ----- Chat (Trò chuyện) -----
+export interface ChatContact {
+  username: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  isOnline: boolean;
+  verified: boolean;
+  role: string;
+}
+export interface ChatConversation {
+  id: string;
+  isGroup: boolean;
+  title: string;
+  username?: string | null;
+  avatarUrl?: string | null;
+  isOnline: boolean;
+  verified: boolean;
+  preview: string;
+  lastAt?: string | null;
+  unread: number;
+  /** Thời điểm hoạt động cuối của người kia (UTC); null nếu chưa từng online. */
+  lastSeen?: string | null;
+}
+export interface ChatMessage {
+  id: number;
+  senderUsername: string;
+  senderName: string;
+  mine: boolean;
+  body: string;
+  createdAt: string;
+  editedAt?: string | null;
+  removed: boolean;
+  forwarded: boolean;
 }
 
 export interface GiaCongLine {

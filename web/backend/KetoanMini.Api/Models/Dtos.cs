@@ -5,6 +5,7 @@ public record LoginRequest(string Username, string Password);
 public record LoginResponse(string Token, UserDto User);
 public record HeartbeatRequest(string? Sid);
 public record UpdateProfileRequest(string FullName, string Email);
+public record UpdateAvatarRequest(string ImageDataUrl);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record UserPreferencesDto(bool WaterReminderEnabled, bool EyeReminderEnabled, bool KeepCreateVoucherOpen);
 public record UserPreferencePatchRequest(bool? WaterReminderEnabled, bool? EyeReminderEnabled, bool? KeepCreateVoucherOpen);
@@ -13,6 +14,12 @@ public record UserDto(Guid Id, string Username, string FullName, string Email, s
 {
     public bool IsAdmin => string.Equals(Role, "Admin", StringComparison.OrdinalIgnoreCase);
     public bool IsPending => string.Equals(ApprovalStatus, "Pending", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Ảnh đại diện (data URL) lưu riêng cho bản web; null nếu chưa đặt → hiển thị chữ cái đầu.</summary>
+    public string? AvatarUrl { get; init; }
+
+    /// <summary>Tích xanh (giống Facebook): Admin luôn có, hoặc được admin cấp thủ công.</summary>
+    public bool Verified { get; init; }
 }
 
 // ----- Dashboard -----
@@ -45,10 +52,20 @@ public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal
 
 // ----- Users (Nhân sự) -----
 public record UserAdminDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
-    string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen);
+    string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen, bool Verified);
 public record CreateUserRequest(string Username, string FullName, string Email, string Password, string Role);
 public record SetLockRequest(bool Locked);
+public record SetVerifiedRequest(bool Verified);
 public record ResetPasswordResponse(string Code);
+
+// ----- Chat (Trò chuyện, web-only) -----
+public record ChatContactDto(string Username, string DisplayName, string? AvatarUrl, bool IsOnline, bool Verified, string Role);
+public record ChatConversationDto(Guid Id, bool IsGroup, string Title, string? Username, string? AvatarUrl,
+    bool IsOnline, bool Verified, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen);
+public record ChatMessageDto(long Id, string SenderUsername, string SenderName, bool Mine, string Body, DateTime CreatedAt,
+    DateTime? EditedAt, bool Removed, bool Forwarded);
+public record SendMessageRequest(string Body, bool Forwarded = false);
+public record EditMessageRequest(string Body);
 
 // ----- Gia công -----
 public record GiaCongLineDto(long Id, string LoaiDong, string MaHang, string TenHang, string QuyCach, string DonViTinh,

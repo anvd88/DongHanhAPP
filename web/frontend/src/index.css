@@ -82,7 +82,7 @@ html, body, #root {
 }
 
 body {
-  font-family: "Segoe UI", system-ui, -apple-system, "Roboto", "Helvetica Neue", sans-serif;
+  font-family: "Be Vietnam Pro", "Segoe UI", system-ui, -apple-system, "Roboto", "Helvetica Neue", sans-serif;
   color: var(--text);
   background: var(--bg);
   overflow: hidden;
@@ -275,6 +275,10 @@ html[data-theme="dark"] .modal-solid-surface thead {
 .accent-text { color: var(--accent); }
 .fade-in { animation: fadeIn 0.4s ease both; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* Nút mở hồ sơ trên header chat: hover nhẹ ở sáng, KHÔNG phát sáng accent ở tối */
+.chat-id-trigger:hover { background: var(--accent-soft); }
+html[data-theme="dark"] .chat-id-trigger:hover { background: rgba(148, 163, 184, 0.12); }
 
 input, select, textarea, button { font-family: inherit; }
 ::placeholder { color: var(--text-muted); }
@@ -1410,15 +1414,16 @@ body {
 
 .km-page-header h1 {
   color: var(--text);
-  font-size: clamp(1.3rem, 1.7vw, 1.6rem);
+  font-size: clamp(1.4rem, 1.7vw, 1.65rem);
   font-weight: 900;
-  line-height: 1.05;
+  line-height: 1.04;
+  letter-spacing: -0.01em;
 }
 
 .km-page-header p {
-  margin-top: 3px;
-  color: #305080;
-  font-size: 0.85rem;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
   font-weight: 600;
 }
 

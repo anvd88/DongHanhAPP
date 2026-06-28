@@ -144,6 +144,7 @@ app.MapChamCong();
 app.MapUsers();
 app.MapReleases();
 app.MapPreferences();
+app.MapChat();
 
 // Hub tín hiệu real-time (web + desktop kết nối tới đây).
 app.MapHub<ChangesHub>("/hubs/changes");
@@ -173,6 +174,12 @@ catch (Exception ex) { app.Logger.LogWarning("Không thêm được cột client
 
 try { await PreferenceEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tuy chon nguoi dung luc khoi dong: {Msg}", ex.Message); }
+
+try { await AuthEndpoints.EnsureAvatarTable(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang anh dai dien luc khoi dong: {Msg}", ex.Message); }
+
+try { await ChatEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tro chuyen luc khoi dong: {Msg}", ex.Message); }
 
 app.Run();
 
