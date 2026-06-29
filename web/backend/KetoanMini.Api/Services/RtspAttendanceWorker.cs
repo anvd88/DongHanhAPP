@@ -2,7 +2,7 @@ using KetoanMini.Api.Data;
 using KetoanMini.Api.Endpoints;
 using KetoanMini.Api.Realtime;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 using OpenCvSharp;
 
 namespace KetoanMini.Api.Services;
@@ -728,9 +728,10 @@ public sealed class RtspAttendanceWorker(
         {
             await using var conn = await db.OpenAsync(ct);
             var value = await conn.Cmd(
-                @"SELECT TOP 1 setting_value
-                  FROM dbo.web_system_settings
-                  WHERE setting_key = @key")
+                @"SELECT setting_value
+                  FROM web_system_settings
+                  WHERE setting_key = @key
+                  LIMIT 1")
                 .With("@key", AutoAttendanceSettingKey)
                 .ExecuteScalarAsync(ct);
             return ParseBoolSetting(value, defaultValue);
@@ -1003,7 +1004,7 @@ public sealed class RtspAttendanceWorker(
     }
 
     private async Task<IReadOnlyList<FaceTemplate>> LoadTemplatesCached(
-        SqlConnection conn,
+        NpgsqlConnection conn,
         TimeSpan refreshInterval,
         CancellationToken ct)
     {
@@ -1025,13 +1026,13 @@ public sealed class RtspAttendanceWorker(
         return templates;
     }
 
-    private static async Task<List<FaceTemplate>> LoadTemplates(SqlConnection conn, CancellationToken ct)
+    private static async Task<List<FaceTemplate>> LoadTemplates(NpgsqlConnection conn, CancellationToken ct)
     {
         var templates = new List<FaceTemplate>();
         await using var reader = await conn.Cmd(
             @"SELECT f.username, f.full_name, f.embedding
-              FROM dbo.cham_cong_face f
-              JOIN dbo.app_users u ON u.username = f.username AND u.is_deleted = 0 AND u.is_active = 1
+              FROM cham_cong_face f
+              JOIN app_users u ON u.username = f.username AND u.is_deleted = FALSE AND u.is_active = TRUE
               ORDER BY f.username, f.id")
             .ExecuteReaderAsync(ct);
 
@@ -1054,7 +1055,7 @@ public sealed class RtspAttendanceWorker(
     }
 
     private async Task<AttendanceDecision> RecordAttendance(
-        SqlConnection conn,
+        NpgsqlConnection conn,
         FaceTemplate template,
         double similarity,
         CancellationToken ct)
@@ -1064,8 +1065,8 @@ public sealed class RtspAttendanceWorker(
             return decision;
 
         await conn.Cmd(
-            @"INSERT INTO dbo.cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
-              VALUES (@u, @fn, @loai, @sim, SYSUTCDATETIME(), N'RTSP kiosk')")
+            @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
+              VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP, 'RTSP kiosk')")
             .With("@u", template.Username)
             .With("@fn", template.FullName)
             .With("@loai", decision.Loai)

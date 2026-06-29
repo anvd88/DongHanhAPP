@@ -64,7 +64,7 @@ public readonly record struct FaceFrameQuality(
     FacePose Pose,
     double DetectScore); // độ tin cậy phát hiện 0..1
 
-/// <summary>Chuyển vector đặc trưng ↔ byte[] để lưu cột VARBINARY trong SQL Server.</summary>
+/// <summary>Chuyển vector đặc trưng ↔ byte[] để lưu cột bytea trong PostgreSQL.</summary>
 public static class EmbeddingCodec
 {
     public static byte[] ToBytes(float[] v)

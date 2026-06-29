@@ -3,7 +3,7 @@ using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -39,37 +39,38 @@ public static class ChamCongEndpoints
         await using var conn = await db.OpenAsync();
 
         // Mẫu khuôn mặt đã đăng ký (mỗi nhân viên có thể nhiều dòng = nhiều góc chụp).
-        await conn.Cmd(@"
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='cham_cong_face' AND xtype='U')
-            CREATE TABLE cham_cong_face (
-                id BIGINT IDENTITY(1,1) PRIMARY KEY,
-                username NVARCHAR(100) NOT NULL,
-                full_name NVARCHAR(200) NOT NULL DEFAULT '',
-                embedding VARBINARY(MAX) NOT NULL,
-                anh NVARCHAR(MAX) NULL,              -- ảnh đăng ký (base64), tùy chọn
-                created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                created_by NVARCHAR(100) NOT NULL DEFAULT '');").ExecuteNonQueryAsync();
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS cham_cong_face (
+                id bigserial PRIMARY KEY,
+                username varchar(100) NOT NULL,
+                full_name varchar(200) NOT NULL DEFAULT '',
+                embedding bytea NOT NULL,
+                anh text NULL,
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_by varchar(100) NOT NULL DEFAULT ''
+            );
 
-        // Nhật ký chấm công.
-        await conn.Cmd(@"
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='cham_cong_log' AND xtype='U')
-            CREATE TABLE cham_cong_log (
-                id BIGINT IDENTITY(1,1) PRIMARY KEY,
-                username NVARCHAR(100) NOT NULL,
-                full_name NVARCHAR(200) NOT NULL DEFAULT '',
-                loai NVARCHAR(10) NOT NULL,          -- N'Vào' / N'Ra'
-                similarity FLOAT NOT NULL DEFAULT 0,
-                anh NVARCHAR(MAX) NULL,              -- ảnh lúc chấm (base64), tùy chọn
-                occurred_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                ghi_chu NVARCHAR(500) NOT NULL DEFAULT '');").ExecuteNonQueryAsync();
+            CREATE TABLE IF NOT EXISTS cham_cong_log (
+                id bigserial PRIMARY KEY,
+                username varchar(100) NOT NULL,
+                full_name varchar(200) NOT NULL DEFAULT '',
+                loai varchar(10) NOT NULL,
+                similarity double precision NOT NULL DEFAULT 0,
+                anh text NULL,
+                occurred_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ghi_chu varchar(500) NOT NULL DEFAULT ''
+            );
 
-        await conn.Cmd(@"
-            IF OBJECT_ID(N'dbo.web_system_settings', N'U') IS NULL
-            CREATE TABLE dbo.web_system_settings (
-                setting_key NVARCHAR(120) NOT NULL PRIMARY KEY,
-                setting_value NVARCHAR(MAX) NOT NULL DEFAULT N'',
-                updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                updated_by NVARCHAR(100) NOT NULL DEFAULT N'');").ExecuteNonQueryAsync();
+            CREATE TABLE IF NOT EXISTS web_system_settings (
+                setting_key varchar(120) NOT NULL PRIMARY KEY,
+                setting_value text NOT NULL DEFAULT '',
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_by varchar(100) NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_cham_cong_face_username ON cham_cong_face (username, created_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_cham_cong_log_username_time ON cham_cong_log (username, occurred_at DESC);
+            """).ExecuteNonQueryAsync();
     }
 
     private static async Task SaveSystemSetting(Database db, string key, string value, string updatedBy)
@@ -78,21 +79,19 @@ public static class ChamCongEndpoints
         {
             await using var conn = await db.OpenAsync();
             await conn.Cmd(@"
-                IF OBJECT_ID(N'dbo.web_system_settings', N'U') IS NULL
-                CREATE TABLE dbo.web_system_settings (
-                    setting_key NVARCHAR(120) NOT NULL PRIMARY KEY,
-                    setting_value NVARCHAR(MAX) NOT NULL DEFAULT N'',
-                    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                    updated_by NVARCHAR(100) NOT NULL DEFAULT N'');
+                CREATE TABLE IF NOT EXISTS web_system_settings (
+                    setting_key varchar(120) NOT NULL PRIMARY KEY,
+                    setting_value text NOT NULL DEFAULT '',
+                    updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_by varchar(100) NOT NULL DEFAULT ''
+                );
 
-                MERGE dbo.web_system_settings AS target
-                USING (SELECT @key AS setting_key) AS source
-                ON target.setting_key = source.setting_key
-                WHEN MATCHED THEN
-                    UPDATE SET setting_value = @value, updated_at = SYSUTCDATETIME(), updated_by = @updatedBy
-                WHEN NOT MATCHED THEN
-                    INSERT (setting_key, setting_value, updated_at, updated_by)
-                    VALUES (@key, @value, SYSUTCDATETIME(), @updatedBy);")
+                INSERT INTO web_system_settings (setting_key, setting_value, updated_at, updated_by)
+                VALUES (@key, @value, CURRENT_TIMESTAMP, @updatedBy)
+                ON CONFLICT (setting_key) DO UPDATE SET
+                    setting_value = EXCLUDED.setting_value,
+                    updated_at = EXCLUDED.updated_at,
+                    updated_by = EXCLUDED.updated_by;")
                 .With("@key", key)
                 .With("@value", value)
                 .With("@updatedBy", updatedBy)
@@ -186,9 +185,9 @@ public static class ChamCongEndpoints
             if (!string.IsNullOrWhiteSpace(search)) where += " AND (username LIKE @s OR full_name LIKE @s OR created_by LIKE @s)";
 
             var cmd = conn.Cmd(
-                $@"SELECT TOP 500 id, username, full_name, created_at, created_by
+                $@"SELECT id, username, full_name, created_at, created_by
                    FROM cham_cong_face {where}
-                   ORDER BY created_at DESC, id DESC");
+                   ORDER BY created_at DESC, id DESC LIMIT 500");
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
 
             var list = new List<FaceRegistrationLogDto>();
@@ -215,7 +214,7 @@ public static class ChamCongEndpoints
             await using var conn = await db.OpenAsync();
             await conn.Cmd(
                 @"INSERT INTO cham_cong_face (username, full_name, embedding, anh, created_at, created_by)
-                  VALUES (@u, @fn, @emb, @anh, SYSUTCDATETIME(), @by)")
+                  VALUES (@u, @fn, @emb, @anh, CURRENT_TIMESTAMP, @by)")
                 .With("@u", req.Username.Trim())
                 .With("@fn", req.FullName ?? "")
                 .With("@emb", EmbeddingCodec.ToBytes(emb))
@@ -251,7 +250,7 @@ public static class ChamCongEndpoints
         {
             await using var conn = await db.OpenAsync();
             var owner = "";
-            await using (var r = await conn.Cmd("SELECT TOP 1 username FROM cham_cong_face WHERE id=@id")
+            await using (var r = await conn.Cmd("SELECT username FROM cham_cong_face WHERE id=@id LIMIT 1")
                 .With("@id", id).ExecuteReaderAsync())
             {
                 if (await r.ReadAsync()) owner = r.Str("username");
@@ -311,7 +310,7 @@ public static class ChamCongEndpoints
             // (Cột vẫn còn trong bảng để tương thích cũ; đơn giản là không ghi nữa → mặc định NULL.)
             await conn.Cmd(
                 @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at)
-                  VALUES (@u, @fn, @loai, @sim, SYSUTCDATETIME())")
+                  VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP)")
                 .With("@u", bestUser).With("@fn", bestName ?? "")
                 .With("@loai", loai).With("@sim", best)
                 .ExecuteNonQueryAsync();
@@ -412,7 +411,7 @@ public static class ChamCongEndpoints
             var loai = decision.Loai;
             await conn.Cmd(
                 @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at)
-                  VALUES (@u, @fn, @loai, @sim, SYSUTCDATETIME())")
+                  VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP)")
                 .With("@u", bestUser).With("@fn", bestName ?? "")
                 .With("@loai", loai).With("@sim", bestSim)
                 .ExecuteNonQueryAsync();
@@ -432,12 +431,12 @@ public static class ChamCongEndpoints
         {
             await using var conn = await db.OpenAsync();
             var where = "WHERE 1=1";
-            if (!string.IsNullOrWhiteSpace(date)) where += " AND CONVERT(date, occurred_at) = @d";
+            if (!string.IsNullOrWhiteSpace(date)) where += " AND occurred_at::date = @d::date";
             if (!string.IsNullOrWhiteSpace(search)) where += " AND (username LIKE @s OR full_name LIKE @s)";
 
             var cmd = conn.Cmd(
-                $@"SELECT TOP 500 id, username, full_name, loai, similarity, occurred_at, ghi_chu
-                   FROM cham_cong_log {where} ORDER BY occurred_at DESC");
+                $@"SELECT id, username, full_name, loai, similarity, occurred_at, ghi_chu
+                   FROM cham_cong_log {where} ORDER BY occurred_at DESC LIMIT 500");
             if (!string.IsNullOrWhiteSpace(date)) cmd.With("@d", date);
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
 
@@ -459,15 +458,16 @@ public static class ChamCongEndpoints
     /// khi đã đủ 5 mẫu thì chỉ thay mẫu TỰ HỌC cũ nhất (cuốn chiếu để bám diện mạo hiện tại).
     /// </summary>
     private static async Task TryAdaptiveLearnAsync(
-        SqlConnection conn, string username, string fullName, float[] embedding, double similarity)
+        NpgsqlConnection conn, string username, string fullName, float[] embedding, double similarity)
     {
         if (similarity < AdaptiveLearnMinSimilarity) return;
 
         // Mỗi người chỉ học tối đa 1 mẫu/ngày.
         var learnedToday = await conn.Cmd(
-            @"SELECT TOP 1 1 FROM cham_cong_face
+            @"SELECT 1 FROM cham_cong_face
               WHERE username=@u AND created_by=@auto
-                AND CONVERT(date, created_at) = CONVERT(date, SYSUTCDATETIME())")
+                AND created_at::date = CURRENT_DATE
+              LIMIT 1")
             .With("@u", username).With("@auto", AutoLearnTag).ExecuteScalarAsync();
         if (learnedToday is not null and not DBNull) return;
 
@@ -479,8 +479,8 @@ public static class ChamCongEndpoints
         {
             // Hết chỗ → thay mẫu TỰ HỌC cũ nhất. Nếu cả 5 đều là mẫu admin thì thôi (không học).
             var oldestAuto = await conn.Cmd(
-                @"SELECT TOP 1 id FROM cham_cong_face
-                  WHERE username=@u AND created_by=@auto ORDER BY created_at ASC, id ASC")
+                @"SELECT id FROM cham_cong_face
+                  WHERE username=@u AND created_by=@auto ORDER BY created_at ASC, id ASC LIMIT 1")
                 .With("@u", username).With("@auto", AutoLearnTag).ExecuteScalarAsync();
             if (oldestAuto is null or DBNull) return;
             await conn.Cmd("DELETE FROM cham_cong_face WHERE id=@id")
@@ -489,7 +489,7 @@ public static class ChamCongEndpoints
 
         await conn.Cmd(
             @"INSERT INTO cham_cong_face (username, full_name, embedding, anh, created_at, created_by)
-              VALUES (@u, @fn, @emb, NULL, SYSUTCDATETIME(), @auto)")
+              VALUES (@u, @fn, @emb, NULL, CURRENT_TIMESTAMP, @auto)")
             .With("@u", username).With("@fn", fullName)
             .With("@emb", EmbeddingCodec.ToBytes(embedding))
             .With("@auto", AutoLearnTag)

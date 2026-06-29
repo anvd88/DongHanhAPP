@@ -9,6 +9,7 @@ using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,6 +35,8 @@ builder.Services.AddSingleton<IFaceEngine, OpenCvSFaceEngine>();
 
 // Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
 builder.Services.AddSignalR();
+// Định danh kết nối hub theo username để phát tín hiệu chat đúng thành viên (Clients.Users).
+builder.Services.AddSingleton<Microsoft.AspNetCore.SignalR.IUserIdProvider, NameUserIdProvider>();
 builder.Services.AddHostedService<ChangeWatcher>();
 builder.Services.AddSingleton<CameraSnapshotBridgeService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraSnapshotBridgeService>());
@@ -53,6 +56,21 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = jwt["Issuer"],
             ValidAudience = jwt["Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!)),
+        };
+        // WebSocket không gửi header Authorization được → SignalR truyền token qua query "access_token".
+        // Đọc token đó cho riêng đường hub /hubs để định danh kết nối (chat nhắm đúng người).
+        o.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = ctx =>
+            {
+                var accessToken = ctx.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken) &&
+                    ctx.HttpContext.Request.Path.StartsWithSegments("/hubs"))
+                {
+                    ctx.Token = accessToken;
+                }
+                return Task.CompletedTask;
+            },
         };
     });
 builder.Services.AddAuthorization();
@@ -94,7 +112,7 @@ app.Use(async (ctx, next) =>
                 var db = ctx.RequestServices.GetRequiredService<Database>();
                 await using var conn = await db.OpenAsync(ctx.RequestAborted);
                 var active = await conn.Cmd(
-                    "SELECT TOP 1 is_active FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
+                    "SELECT is_active FROM app_users WHERE username = @u AND is_deleted = FALSE LIMIT 1")
                     .With("@u", username)
                     .ExecuteScalarAsync(ctx.RequestAborted);
                 // NULL/không có dòng sống (đã xóa) hoặc is_active = 0 → coi như bị khóa.
@@ -121,10 +139,10 @@ app.Use(async (ctx, next) =>
 app.Use(async (ctx, next) =>
 {
     try { await next(); }
-    catch (Microsoft.Data.SqlClient.SqlException ex)
+    catch (NpgsqlException ex)
     {
         ctx.Response.StatusCode = 503;
-        await ctx.Response.WriteAsJsonAsync(new { message = "Không kết nối được cơ sở dữ liệu SQL Server.", detail = ex.Message });
+        await ctx.Response.WriteAsJsonAsync(new { message = "Khong ket noi duoc co so du lieu PostgreSQL.", detail = ex.Message });
     }
 });
 
@@ -135,7 +153,8 @@ app.MapGet("/api/health", async (Database db) =>
     catch (Exception ex) { return Results.Json(new { db = "error", detail = ex.Message }, statusCode: 503); }
 });
 
-await EnsureAppUsersEmailColumn(app);
+try { await PostgresSchema.EnsureAsync(app.Services.GetRequiredService<Database>(), app.Configuration, app.Logger); }
+catch (Exception ex) { app.Logger.LogWarning("Khong khoi tao duoc schema PostgreSQL luc khoi dong: {Msg}", ex.Message); }
 
 app.MapAuth();
 app.MapAccounting();
@@ -161,17 +180,6 @@ catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng gia c
 try { await ChamCongEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng chấm công lúc khởi động: {Msg}", ex.Message); }
 
-// Bảo đảm cột phân loại client cho bảng phiên (để ghi nhận hiện diện web). Thường app desktop
-// đã tạo qua schema, nhưng vẫn ensure ở đây phòng khi backend chạy trước. Best-effort.
-try
-{
-    await using var conn = await app.Services.GetRequiredService<Database>().OpenAsync();
-    await conn.Cmd(@"IF OBJECT_ID(N'dbo.user_sessions', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.user_sessions', N'client_kind') IS NULL
-                     ALTER TABLE dbo.user_sessions ADD client_kind NVARCHAR(20) NOT NULL CONSTRAINT DF_user_sessions_client_kind DEFAULT N'Desktop';")
-        .ExecuteNonQueryAsync();
-}
-catch (Exception ex) { app.Logger.LogWarning("Không thêm được cột client_kind lúc khởi động: {Msg}", ex.Message); }
-
 try { await PreferenceEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tuy chon nguoi dung luc khoi dong: {Msg}", ex.Message); }
 
@@ -182,25 +190,3 @@ try { await ChatEndpoints.EnsureTables(app.Services.GetRequiredService<Database>
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tro chuyen luc khoi dong: {Msg}", ex.Message); }
 
 app.Run();
-
-static async Task EnsureAppUsersEmailColumn(WebApplication app)
-{
-    try
-    {
-        await using var conn = await app.Services.GetRequiredService<Database>().OpenAsync();
-        await conn.Cmd(@"SET QUOTED_IDENTIFIER ON;
-                         SET ANSI_NULLS ON;
-                         SET ANSI_PADDING ON;
-                         SET ANSI_WARNINGS ON;
-                         SET CONCAT_NULL_YIELDS_NULL ON;
-                         SET ARITHABORT ON;
-                         SET NUMERIC_ROUNDABORT OFF;
-                         IF OBJECT_ID(N'dbo.app_users', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.app_users', N'email') IS NULL
-                         ALTER TABLE dbo.app_users ADD email NVARCHAR(256) NOT NULL DEFAULT N'';")
-            .ExecuteNonQueryAsync();
-    }
-    catch (Exception ex)
-    {
-        app.Logger.LogWarning("Không thêm được cột email lúc khởi động: {Msg}", ex.Message);
-    }
-}

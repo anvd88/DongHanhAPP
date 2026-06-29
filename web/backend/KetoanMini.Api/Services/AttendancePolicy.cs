@@ -1,5 +1,5 @@
 using KetoanMini.Api.Data;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Services;
 
@@ -18,7 +18,7 @@ public static class AttendancePolicy
     private static readonly TimeZoneInfo VietnamTimeZone = LoadVietnamTimeZone();
 
     public static async Task<AttendanceDecision> DecideAsync(
-        SqlConnection conn,
+        NpgsqlConnection conn,
         string username,
         string displayName,
         CancellationToken ct = default)
@@ -33,7 +33,7 @@ public static class AttendancePolicy
         DateTime? checkInAt = null;
         DateTime? checkOutAt = null;
         await using (var reader = await conn.Cmd(
-            @"SELECT loai, occurred_at FROM dbo.cham_cong_log
+            @"SELECT loai, occurred_at FROM cham_cong_log
               WHERE username=@u AND occurred_at >= @startUtc AND occurred_at < @endUtc
               ORDER BY occurred_at ASC")
             .With("@u", username)

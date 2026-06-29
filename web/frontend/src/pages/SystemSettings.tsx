@@ -1,12 +1,25 @@
 import { useEffect, useState } from "react";
-import { Droplet, Eye, FilePlus2, Power, ScanFace, ShieldCheck } from "lucide-react";
+import {
+  Database,
+  Droplet,
+  Eye,
+  FilePlus2,
+  HardDrive,
+  MessageSquare,
+  Power,
+  RefreshCw,
+  ScanFace,
+  Settings2,
+  ShieldCheck,
+  Users2,
+} from "lucide-react";
 import { GlassCard } from "../components/Glass";
 import { PageHeader } from "../components/Layout";
 import { Badge } from "../components/ui";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../shadcn/tooltip";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { isAdmin, type RtspAttendanceStatus } from "../lib/types";
+import { isAdmin, type ChatDbUsage, type RtspAttendanceStatus } from "../lib/types";
 import { useApi } from "../lib/useApi";
 import {
   isKeepCreateVoucherOpenEnabled,
@@ -52,6 +65,7 @@ function formatHHMMSS(ms: number) {
 export function SystemSettings() {
   const { user } = useAuth();
   const admin = isAdmin(user);
+  const [tab, setTab] = useState<"settings" | "db">("settings");
   const [now, setNow] = useState(() => new Date());
   const [waterEnabled, setWaterEnabled] = useState(() => (user ? isWaterReminderEnabled(user.id) : true));
   const [eyeEnabled, setEyeEnabled] = useState(() => (user ? isEyeReminderEnabled(user.id) : true));
@@ -196,6 +210,39 @@ export function SystemSettings() {
         subtitle="Cài đặt thông báo và tuỳ chọn trải nghiệm web"
       />
 
+      {/* Thanh trượt 2 phần (chỉ admin): Hệ thống ↔ Cơ sở dữ liệu. */}
+      {admin && (
+        <div className="system-segment" data-active={tab === "db" ? "db" : "settings"} role="tablist">
+          <span className="system-segment-thumb" aria-hidden="true" />
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "settings"}
+            data-on={tab === "settings"}
+            className="system-segment-btn"
+            onClick={() => setTab("settings")}
+          >
+            <Settings2 className="h-4 w-4" />
+            Hệ thống
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "db"}
+            data-on={tab === "db"}
+            className="system-segment-btn"
+            onClick={() => setTab("db")}
+          >
+            <Database className="h-4 w-4" />
+            Cơ sở dữ liệu
+          </button>
+        </div>
+      )}
+
+      {admin && tab === "db" ? (
+        <ChatDbUsagePanel />
+      ) : (
+      <>
       {preferenceError && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
           {preferenceError}
@@ -414,6 +461,134 @@ export function SystemSettings() {
           </GlassCard>
         )}
       </section>
+      </>
+      )}
     </div>
+  );
+}
+
+/** Định dạng KB → đơn vị đọc được (KB/MB/GB). */
+function fmtSize(kb: number): string {
+  if (!kb || kb < 0) return "0 KB";
+  if (kb < 1024) return `${kb.toLocaleString("vi-VN")} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toLocaleString("vi-VN", { maximumFractionDigits: 1 })} MB`;
+  return `${(mb / 1024).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} GB`;
+}
+
+/** Tab "Cơ sở dữ liệu": dung lượng mục Trò chuyện trong DB (admin). */
+function ChatDbUsagePanel() {
+  const { data, loading, error, reload } = useApi<ChatDbUsage>("/api/chat/db-usage");
+
+  const ratio =
+    data && data.databaseTotalKb > 0
+      ? Math.min(100, (data.totalKb / data.databaseTotalKb) * 100)
+      : 0;
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-[var(--text-secondary)]">
+          Dung lượng dữ liệu mục Trò chuyện đang chiếm trong cơ sở dữ liệu.
+        </p>
+        <button
+          type="button"
+          onClick={() => reload()}
+          className="inline-flex items-center gap-2 rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg-strong)] px-3.5 py-1.5 text-xs font-bold text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          Làm mới
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
+          Không tải được dung lượng DB: {error}
+        </div>
+      )}
+
+      <div className="system-db-grid">
+        <GlassCard className="system-settings-card system-db-span2 p-5">
+          <div className="flex items-start gap-4">
+            <div className="system-settings-icon">
+              <HardDrive className="h-7 w-7" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="db-stat">
+                <span className="db-stat-label">Tổng dung lượng mục Trò chuyện</span>
+                <span className="db-stat-value">{data ? fmtSize(data.totalKb) : "—"}</span>
+                <span className="db-stat-sub">
+                  Dữ liệu {data ? fmtSize(data.dataKb) : "—"} · Chỉ mục {data ? fmtSize(data.indexKb) : "—"}
+                </span>
+              </div>
+              {data && data.databaseTotalKb > 0 && (
+                <div className="mt-4">
+                  <div className="mb-1.5 flex items-center justify-between text-xs font-semibold text-[var(--text-secondary)]">
+                    <span>Tỉ lệ trong toàn DB</span>
+                    <span>
+                      {ratio.toLocaleString("vi-VN", { maximumFractionDigits: 2 })}% · tổng {fmtSize(data.databaseTotalKb)}
+                    </span>
+                  </div>
+                  <div className="db-bar">
+                    <span className="db-bar-fill" style={{ width: `${Math.max(ratio, 0.5)}%` }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="system-settings-card p-5">
+          <div className="db-stat">
+            <span className="db-stat-label inline-flex items-center gap-1.5">
+              <MessageSquare className="h-4 w-4" /> Số tin nhắn
+            </span>
+            <span className="db-stat-value">{data ? data.messageCount.toLocaleString("vi-VN") : "—"}</span>
+            <span className="db-stat-sub inline-flex items-center gap-1.5">
+              <Users2 className="h-3.5 w-3.5" />
+              {data ? data.conversationCount.toLocaleString("vi-VN") : "—"} cuộc trò chuyện
+            </span>
+          </div>
+        </GlassCard>
+      </div>
+
+      <GlassCard className="system-settings-card p-5">
+        <h2 className="mb-3 text-base font-black text-[var(--text)]">Chi tiết theo bảng</h2>
+        <div className="overflow-x-auto">
+          <table className="db-table">
+            <thead>
+              <tr>
+                <th>Bảng</th>
+                <th className="db-num">Số dòng</th>
+                <th className="db-num">Dữ liệu</th>
+                <th className="db-num">Chỉ mục</th>
+                <th className="db-num">Tổng</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.tables ?? []).map((t) => (
+                <tr key={t.table}>
+                  <td>
+                    <span className="font-semibold">{t.label}</span>
+                    <span className="ml-2 text-xs text-[var(--text-muted)]">{t.table}</span>
+                  </td>
+                  <td className="db-num">{t.rows.toLocaleString("vi-VN")}</td>
+                  <td className="db-num">{fmtSize(t.dataKb)}</td>
+                  <td className="db-num">{fmtSize(t.indexKb)}</td>
+                  <td className="db-num font-bold">{fmtSize(t.totalKb)}</td>
+                </tr>
+              ))}
+              {!loading && (data?.tables?.length ?? 0) === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-[var(--text-muted)]">
+                    Chưa có dữ liệu.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </GlassCard>
+    </section>
   );
 }

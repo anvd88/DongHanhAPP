@@ -137,6 +137,26 @@ export interface ChatMessage {
   forwarded: boolean;
 }
 
+// Dung lượng DB mục Trò chuyện (admin xem trong trang Hệ thống). Đơn vị KB.
+export interface ChatTableUsage {
+  table: string;
+  label: string;
+  rows: number;
+  dataKb: number;
+  indexKb: number;
+  totalKb: number;
+}
+export interface ChatDbUsage {
+  totalKb: number;
+  dataKb: number;
+  indexKb: number;
+  messageCount: number;
+  conversationCount: number;
+  memberCount: number;
+  databaseTotalKb: number;
+  tables: ChatTableUsage[];
+}
+
 export interface GiaCongLine {
   id: number;
   loaiDong: string;

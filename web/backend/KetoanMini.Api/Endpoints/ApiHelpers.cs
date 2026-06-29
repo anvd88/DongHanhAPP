@@ -1,6 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -18,8 +18,8 @@ public static class ApiHelpers
         try
         {
             await using var conn = await db.OpenAsync();
-            await conn.Cmd(@"INSERT INTO dbo.audit_logs (occurred_at, username, action, entity, entity_name, details)
-                             VALUES (SYSUTCDATETIME(), @u, @a, @e, @en, @d)")
+            await conn.Cmd(@"INSERT INTO audit_logs (occurred_at, username, action, entity, entity_name, details)
+                             VALUES (CURRENT_TIMESTAMP, @u, @a, @e, @en, @d)")
                 .With("@u", username).With("@a", action).With("@e", entity)
                 .With("@en", entityName).With("@d", details)
                 .ExecuteNonQueryAsync();

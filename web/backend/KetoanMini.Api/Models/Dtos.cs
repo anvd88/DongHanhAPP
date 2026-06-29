@@ -67,6 +67,11 @@ public record ChatMessageDto(long Id, string SenderUsername, string SenderName, 
 public record SendMessageRequest(string Body, bool Forwarded = false);
 public record EditMessageRequest(string Body);
 
+// Dung lượng DB của mục Trò chuyện (admin xem trong trang Hệ thống).
+public record ChatTableUsageDto(string Table, string Label, long Rows, long DataKb, long IndexKb, long TotalKb);
+public record ChatDbUsageDto(long TotalKb, long DataKb, long IndexKb, long MessageCount, long ConversationCount,
+    long MemberCount, long DatabaseTotalKb, IReadOnlyList<ChatTableUsageDto> Tables);
+
 // ----- Gia công -----
 public record GiaCongLineDto(long Id, string LoaiDong, string MaHang, string TenHang, string QuyCach, string DonViTinh,
     decimal SoLuong, decimal DonGiaGiaCong, string GhiChu)

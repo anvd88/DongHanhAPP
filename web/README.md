@@ -1,7 +1,7 @@
 # KetoanMini Web
 
 Phiên bản web của ứng dụng kế toán **KetoanMini** (bản desktop là .NET 8 WPF), giao diện
-**Liquid Glass**, **dùng chung CSDL SQL Server** với bản desktop (không đổi schema).
+**Liquid Glass**, backend dùng **PostgreSQL**.
 
 > Nhánh: `web-version` · Độc lập với app WPF trong `src/KetoanMini`.
 
@@ -11,7 +11,7 @@ Phiên bản web của ứng dụng kế toán **KetoanMini** (bản desktop là
 
 | Tầng | Công nghệ | Ghi chú |
 |------|-----------|---------|
-| **Backend** | ASP.NET Core 8 Minimal API (C#) | REST + JWT. Kết nối SQL Server hiện có qua `Microsoft.Data.SqlClient`. |
+| **Backend** | ASP.NET Core 8 Minimal API (C#) | REST + JWT. Kết nối PostgreSQL qua `Npgsql`. |
 | **Frontend** | React 19 + TypeScript + Vite | SPA. |
 | Giao diện | Tailwind CSS v4 + hệ "Liquid Glass" tự xây | Nền gradient động, thẻ kính mờ, **glow bám theo chuột** (tái hiện `LiquidGlassBorder` của bản desktop). |
 | Xác thực mật khẩu | PBKDF2-SHA256 (port nguyên văn) | Xác thực được mọi mật khẩu đã lưu trong DB → **đăng nhập bằng tài khoản hiện có**. |
@@ -27,7 +27,7 @@ web/
 │   ├── Data/Database.cs      Helper ADO.NET
 │   ├── Security/             PasswordHasher (PBKDF2) + TokenService (JWT)
 │   ├── Models/Dtos.cs
-│   └── appsettings.json      ← chuỗi kết nối SQL Server + khóa JWT
+│   └── appsettings.json      ← chuỗi kết nối PostgreSQL + khóa JWT
 └── frontend/                 React + Vite
     └── src/
         ├── components/       Glass, Sidebar, Header, Layout, Table, Modal, StatCard, ui
@@ -37,7 +37,10 @@ web/
 
 ## 3. Chạy (dev)
 
-Cần: .NET 8 SDK, Node 18+. Hai cửa sổ terminal:
+Cần: .NET 8 SDK, Node 18+, PostgreSQL. Hai cửa sổ terminal:
+
+Đảm bảo PostgreSQL đang chạy ở `localhost:5432`. Mặc định backend dùng `postgres/postgres`,
+tự tạo database `ketoanmini`, schema và admin đầu tiên nếu user này có quyền tạo DB/schema.
 
 ```bash
 # 1) Backend  → http://localhost:5239
@@ -50,7 +53,7 @@ npm install      # lần đầu
 npm run dev
 ```
 
-Mở http://localhost:5173 và đăng nhập bằng **tài khoản hiện có trong hệ thống** (vd: `admin`).
+Mở http://localhost:5173 và đăng nhập bằng tài khoản trong PostgreSQL. DB mới sẽ seed admin mặc định `admin` / `admin123`.
 
 ## 3b. Chạy & public qua LAN (1 cổng duy nhất)
 
@@ -97,6 +100,6 @@ Máy chủ hiện tại: IP LAN `192.168.1.88` → các máy khác mở **http:/
 
 ## 6. Bảo mật cần làm trước khi lên production
 
-- `appsettings.json` đang chứa chuỗi kết nối + khóa JWT mẫu → chuyển sang biến môi trường / user-secrets,
+- `appsettings.json` đang chứa chuỗi kết nối PostgreSQL + khóa JWT mẫu → chuyển sang biến môi trường / user-secrets,
   **đổi khóa JWT** thành chuỗi ngẫu nhiên ≥ 32 ký tự.
 - Bật HTTPS và giới hạn CORS theo domain thật.
