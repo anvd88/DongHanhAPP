@@ -125,6 +125,7 @@ public static class ChatEndpoints
                     r.DtNull("edited_at"), removed, r.Bool("is_forwarded")));
             }
             await r.CloseAsync();
+            await AttachReactions(conn, id, me, list);
             await MarkRead(conn, id, me);
             return Results.Ok(list);
         });
@@ -188,6 +189,46 @@ public static class ChatEndpoints
             return Results.NoContent();
         });
 
+        // Thả / đổi / bỏ biểu cảm (cảm xúc) cho một tin nhắn. Mỗi người chỉ giữ MỘT biểu cảm
+        // trên một tin: bấm lại đúng biểu cảm đang chọn → bỏ; bấm biểu cảm khác → đổi sang biểu cảm mới.
+        g.MapPost("/conversations/{id:guid}/messages/{msgId:long}/react", async (Guid id, long msgId, ReactRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
+        {
+            var me = principal.Username();
+            var emoji = (req?.Emoji ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(emoji) || emoji.Length > 16)
+                return Results.BadRequest(new { message = "Biểu cảm không hợp lệ." });
+
+            await using var conn = await db.OpenAsync();
+            if (!await IsMember(conn, id, me)) return Results.Forbid();
+
+            // Tin nhắn phải thuộc cuộc trò chuyện này và chưa bị gỡ.
+            var ok = await conn.Cmd(
+                "SELECT COUNT(*) FROM web_chat_messages WHERE id = @mid AND conversation_id = @cid AND is_removed = FALSE")
+                .With("@mid", msgId).With("@cid", id).ExecuteScalarAsync();
+            if (Convert.ToInt32(ok) == 0) return Results.NotFound(new { message = "Không tìm thấy tin nhắn." });
+
+            var existing = await conn.Cmd(
+                "SELECT emoji FROM web_chat_reactions WHERE message_id = @mid AND username = @me")
+                .With("@mid", msgId).With("@me", me).ExecuteScalarAsync() as string;
+            if (string.Equals(existing, emoji, StringComparison.Ordinal))
+            {
+                await conn.Cmd("DELETE FROM web_chat_reactions WHERE message_id = @mid AND username = @me")
+                    .With("@mid", msgId).With("@me", me).ExecuteNonQueryAsync();
+            }
+            else
+            {
+                await conn.Cmd(
+                    @"INSERT INTO web_chat_reactions (message_id, username, emoji, created_at)
+                      VALUES (@mid, @me, @emoji, CURRENT_TIMESTAMP)
+                      ON CONFLICT (message_id, username)
+                      DO UPDATE SET emoji = EXCLUDED.emoji, created_at = CURRENT_TIMESTAMP")
+                    .With("@mid", msgId).With("@me", me).With("@emoji", emoji).ExecuteNonQueryAsync();
+            }
+
+            await NotifyChat(hub, conn, id);
+            return Results.NoContent();
+        });
+
         // Đánh dấu đã đọc (khi mở cuộc trò chuyện).
         g.MapPost("/conversations/{id:guid}/read", async (Guid id, ClaimsPrincipal principal, Database db) =>
         {
@@ -213,6 +254,7 @@ public static class ChatEndpoints
         ("web_chat_messages", "Tin nhắn"),
         ("web_chat_conversations", "Cuộc trò chuyện"),
         ("web_chat_members", "Thành viên"),
+        ("web_chat_reactions", "Biểu cảm"),
         ("web_verified_users", "Tài khoản tích xanh"),
     ];
 
@@ -224,6 +266,7 @@ public static class ChatEndpoints
                   SELECT 'web_chat_messages'::text AS table_name, COUNT(*)::bigint AS row_count FROM web_chat_messages
                   UNION ALL SELECT 'web_chat_conversations', COUNT(*)::bigint FROM web_chat_conversations
                   UNION ALL SELECT 'web_chat_members', COUNT(*)::bigint FROM web_chat_members
+                  UNION ALL SELECT 'web_chat_reactions', COUNT(*)::bigint FROM web_chat_reactions
                   UNION ALL SELECT 'web_verified_users', COUNT(*)::bigint FROM web_verified_users
               )
               SELECT table_name,
@@ -287,6 +330,35 @@ public static class ChatEndpoints
             "SELECT COUNT(*) FROM web_chat_members WHERE conversation_id = @cid AND username = @u")
             .With("@cid", conversationId).With("@u", username).ExecuteScalarAsync();
         return Convert.ToInt32(n) > 0;
+    }
+
+    /// <summary>Gắn danh sách biểu cảm (gộp theo emoji) cho từng tin nhắn đã đọc của cuộc trò chuyện.</summary>
+    private static async Task AttachReactions(NpgsqlConnection conn, Guid conversationId, string me, List<ChatMessageDto> messages)
+    {
+        if (messages.Count == 0) return;
+
+        var byMessage = new Dictionary<long, List<ChatReactionDto>>();
+        await using (var r = await conn.Cmd(
+            @"SELECT rx.message_id, rx.emoji, COUNT(*) AS cnt, BOOL_OR(rx.username = @me) AS mine
+              FROM web_chat_reactions rx
+              JOIN web_chat_messages m ON m.id = rx.message_id
+              WHERE m.conversation_id = @cid
+              GROUP BY rx.message_id, rx.emoji
+              ORDER BY rx.message_id, MIN(rx.created_at)")
+            .With("@cid", conversationId).With("@me", me).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+            {
+                var mid = r.Long("message_id");
+                if (!byMessage.TryGetValue(mid, out var l)) { l = new List<ChatReactionDto>(); byMessage[mid] = l; }
+                l.Add(new ChatReactionDto(r.Str("emoji"), (int)r.Long("cnt"), r.Bool("mine")));
+            }
+        }
+        if (byMessage.Count == 0) return;
+
+        for (var i = 0; i < messages.Count; i++)
+            if (byMessage.TryGetValue(messages[i].Id, out var rl))
+                messages[i] = messages[i] with { Reactions = rl };
     }
 
     private static async Task MarkRead(NpgsqlConnection conn, Guid conversationId, string username)
@@ -444,8 +516,17 @@ public static class ChatEndpoints
                 granted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS web_chat_reactions (
+                message_id bigint NOT NULL,
+                username varchar(128) NOT NULL,
+                emoji varchar(16) NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT pk_web_chat_reactions PRIMARY KEY (message_id, username)
+            );
+
             CREATE INDEX IF NOT EXISTS ix_web_chat_messages_conv ON web_chat_messages (conversation_id, created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS ix_web_chat_members_user ON web_chat_members (username, conversation_id, last_read_at);
+            CREATE INDEX IF NOT EXISTS ix_web_chat_reactions_msg ON web_chat_reactions (message_id);
             """)
             .ExecuteNonQueryAsync(ct);
     }
