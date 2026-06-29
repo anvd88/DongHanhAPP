@@ -1,51 +1,117 @@
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Data;
 
-/// <summary>
-/// Lớp truy cập SQL Server dùng chung — kết nối tới đúng database KetoanMini
-/// mà app desktop đang dùng (không đổi schema).
-/// </summary>
-public sealed class Database(IConfiguration config)
+/// <summary>Shared PostgreSQL access layer backed by an Npgsql pooled data source.</summary>
+public sealed class Database : IAsyncDisposable
 {
-    private readonly string _connectionString =
-        config.GetConnectionString("KetoanMini")
-        ?? throw new InvalidOperationException("Thiếu ConnectionStrings:KetoanMini trong appsettings.json");
+    private readonly string _connectionString;
+    private readonly NpgsqlDataSource _dataSource;
 
-    public SqlConnection Open()
+    public Database(IConfiguration config)
     {
-        var conn = new SqlConnection(_connectionString);
-        conn.Open();
-        return conn;
+        _connectionString = config.GetConnectionString("KetoanMini")
+            ?? throw new InvalidOperationException("Thieu ConnectionStrings:KetoanMini trong appsettings.json");
+        _dataSource = NpgsqlDataSource.Create(_connectionString);
     }
 
-    public async Task<SqlConnection> OpenAsync(CancellationToken ct = default)
+    public NpgsqlConnection Open() => _dataSource.OpenConnection();
+
+    public async Task<NpgsqlConnection> OpenAsync(CancellationToken ct = default)
+        => await _dataSource.OpenConnectionAsync(ct);
+
+    public async Task EnsureDatabaseExistsAsync(CancellationToken ct = default)
     {
-        var conn = new SqlConnection(_connectionString);
+        var builder = new NpgsqlConnectionStringBuilder(_connectionString);
+        var databaseName = builder.Database;
+        if (string.IsNullOrWhiteSpace(databaseName))
+            return;
+
+        builder.Database = "postgres";
+        await using var conn = new NpgsqlConnection(builder.ConnectionString);
         await conn.OpenAsync(ct);
-        return conn;
+
+        var exists = await conn.Cmd("SELECT 1 FROM pg_database WHERE datname = @name")
+            .With("@name", databaseName)
+            .ExecuteScalarAsync(ct);
+        if (exists is not null and not DBNull)
+            return;
+
+        await conn.Cmd($"CREATE DATABASE {QuoteIdentifier(databaseName)}")
+            .ExecuteNonQueryAsync(ct);
     }
+
+    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+
+    private static string QuoteIdentifier(string value)
+        => "\"" + value.Replace("\"", "\"\"") + "\"";
 }
 
 public static class SqlExtensions
 {
-    public static SqlCommand Cmd(this SqlConnection conn, string sql)
+    public static NpgsqlCommand Cmd(this NpgsqlConnection conn, string sql)
         => new(sql, conn);
 
-    public static SqlCommand With(this SqlCommand cmd, string name, object? value)
+    public static NpgsqlCommand With(this NpgsqlCommand cmd, string name, object? value)
     {
         cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
         return cmd;
     }
 
-    public static string Str(this SqlDataReader r, int i) => r.IsDBNull(i) ? string.Empty : r.GetString(i);
-    public static string Str(this SqlDataReader r, string col) => r.Str(r.GetOrdinal(col));
-    public static decimal Dec(this SqlDataReader r, string col) { var i = r.GetOrdinal(col); return r.IsDBNull(i) ? 0m : r.GetDecimal(i); }
-    public static int Int(this SqlDataReader r, string col) { var i = r.GetOrdinal(col); return r.IsDBNull(i) ? 0 : r.GetInt32(i); }
-    public static long Long(this SqlDataReader r, string col) { var i = r.GetOrdinal(col); return r.IsDBNull(i) ? 0 : r.GetInt64(i); }
-    public static bool Bool(this SqlDataReader r, string col) { var i = r.GetOrdinal(col); return !r.IsDBNull(i) && r.GetBoolean(i); }
-    public static Guid Guid(this SqlDataReader r, string col) => r.GetGuid(r.GetOrdinal(col));
-    public static DateTime Dt(this SqlDataReader r, string col) { var i = r.GetOrdinal(col); return r.IsDBNull(i) ? default : r.GetDateTime(i); }
-    public static DateTime? DtNull(this SqlDataReader r, string col) { var i = r.GetOrdinal(col); return r.IsDBNull(i) ? null : r.GetDateTime(i); }
-    public static DateOnly DateOnly(this SqlDataReader r, string col) { var i = r.GetOrdinal(col); return System.DateOnly.FromDateTime(r.GetDateTime(i)); }
+    public static string Str(this NpgsqlDataReader r, int i)
+        => r.IsDBNull(i) ? string.Empty : Convert.ToString(r.GetValue(i)) ?? string.Empty;
+
+    public static string Str(this NpgsqlDataReader r, string col) => r.Str(r.GetOrdinal(col));
+
+    public static decimal Dec(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        return r.IsDBNull(i) ? 0m : Convert.ToDecimal(r.GetValue(i));
+    }
+
+    public static int Int(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        return r.IsDBNull(i) ? 0 : Convert.ToInt32(r.GetValue(i));
+    }
+
+    public static long Long(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        return r.IsDBNull(i) ? 0 : Convert.ToInt64(r.GetValue(i));
+    }
+
+    public static bool Bool(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        return !r.IsDBNull(i) && Convert.ToBoolean(r.GetValue(i));
+    }
+
+    public static Guid Guid(this NpgsqlDataReader r, string col) => r.GetGuid(r.GetOrdinal(col));
+
+    public static DateTime Dt(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        return r.IsDBNull(i) ? default : r.GetDateTime(i);
+    }
+
+    public static DateTime? DtNull(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        return r.IsDBNull(i) ? null : r.GetDateTime(i);
+    }
+
+    public static DateOnly DateOnly(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        if (r.IsDBNull(i)) return default;
+
+        var value = r.GetValue(i);
+        return value switch
+        {
+            System.DateOnly d => d,
+            DateTime dt => System.DateOnly.FromDateTime(dt),
+            _ => System.DateOnly.FromDateTime(Convert.ToDateTime(value))
+        };
+    }
 }

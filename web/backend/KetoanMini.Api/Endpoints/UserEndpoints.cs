@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -17,33 +17,33 @@ public static class UserEndpoints
         g.MapGet("/", async (Database db, string? search, string? role) =>
         {
             await using var conn = await db.OpenAsync();
-            var where = "WHERE u.is_deleted = 0";
-            if (!string.IsNullOrWhiteSpace(search)) where += " AND (u.username LIKE @s OR u.full_name LIKE @s OR u.email LIKE @s)";
+            var where = "WHERE u.is_deleted = FALSE";
+            if (!string.IsNullOrWhiteSpace(search)) where += " AND (u.username ILIKE @s OR u.full_name ILIKE @s OR u.email ILIKE @s)";
             where += role switch
             {
-                "Admin" => " AND u.role = N'Admin'",
-                "User" => " AND u.role = N'User'",
-                "Pending" => " AND u.approval_status = N'Pending'",
-                "Locked" => " AND u.is_active = 0",
+                "Admin" => " AND u.role = 'Admin'",
+                "User" => " AND u.role = 'User'",
+                "Pending" => " AND u.approval_status = 'Pending'",
+                "Locked" => " AND u.is_active = FALSE",
                 _ => ""
             };
 
             var list = new List<UserAdminDto>();
             var cmd = conn.Cmd(
                 $@"SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active, u.approval_status, u.created_at,
-                          CAST(ISNULL(p.is_online, 0) AS bit) AS is_online,
+                          COALESCE(p.is_online, FALSE) AS is_online,
                           p.last_seen,
-                          CAST(CASE WHEN u.role = N'Admin' OR vu.username IS NOT NULL THEN 1 ELSE 0 END AS bit) AS verified
-                   FROM dbo.app_users u
-                   LEFT JOIN dbo.web_verified_users vu ON vu.username = u.username
-                   OUTER APPLY (
+                          (u.role = 'Admin' OR vu.username IS NOT NULL) AS verified
+                   FROM app_users u
+                   LEFT JOIN web_verified_users vu ON vu.username = u.username
+                   LEFT JOIN LATERAL (
                        SELECT
-                           MAX(CASE WHEN us.is_active = 1 AND us.last_seen >= DATEADD(SECOND, -90, SYSDATETIME()) THEN 1 ELSE 0 END) AS is_online,
+                           BOOL_OR(us.is_active = TRUE AND us.last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds') AS is_online,
                            MAX(us.last_seen) AS last_seen
-                       FROM dbo.user_sessions us
+                       FROM user_sessions us
                        WHERE us.username = u.username
-                         AND (us.last_seen >= CONVERT(date, SYSDATETIME()) OR us.is_active = 1)
-                   ) p
+                         AND (us.last_seen >= CURRENT_DATE OR us.is_active = TRUE)
+                   ) p ON TRUE
                    {where}
                    ORDER BY u.created_at DESC");
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
@@ -61,15 +61,15 @@ public static class UserEndpoints
                 return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mật khẩu." });
 
             await using var conn = await db.OpenAsync();
-            var exists = await conn.Cmd("SELECT COUNT(*) FROM dbo.app_users WHERE username=@u AND is_deleted=0")
+            var exists = await conn.Cmd("SELECT COUNT(*) FROM app_users WHERE username=@u AND is_deleted=FALSE")
                 .With("@u", req.Username.Trim()).ExecuteScalarAsync();
             if (Convert.ToInt32(exists) > 0)
                 return Results.Conflict(new { message = "Tên đăng nhập đã tồn tại." });
 
             var id = Guid.NewGuid();
             await conn.Cmd(
-                @"INSERT INTO dbo.app_users (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
-                  VALUES (@id, @u, @fn, @em, @role, @ph, 1, N'Approved', SYSUTCDATETIME(), @by, SYSUTCDATETIME())")
+                @"INSERT INTO app_users (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
+                  VALUES (@id, @u, @fn, @em, @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, @by, CURRENT_TIMESTAMP)")
                 .With("@id", id).With("@u", req.Username.Trim()).With("@fn", req.FullName ?? "")
                 .With("@em", req.Email ?? "")
                 .With("@role", req.Role == "Admin" ? "Admin" : "User")
@@ -84,8 +84,8 @@ public static class UserEndpoints
         {
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd(
-                @"UPDATE dbo.app_users SET approval_status=N'Approved', is_active=1, approved_at=SYSUTCDATETIME(), approved_by=@by
-                  WHERE id=@id AND is_deleted=0").With("@id", id).With("@by", u.Username()).ExecuteNonQueryAsync();
+                @"UPDATE app_users SET approval_status='Approved', is_active=TRUE, approved_at=CURRENT_TIMESTAMP, approved_by=@by
+                  WHERE id=@id AND is_deleted=FALSE").With("@id", id).With("@by", u.Username()).ExecuteNonQueryAsync();
             if (n > 0) await db.RecordAudit(u.Username(), "Phê duyệt người dùng", "User", id.ToString(), "Phê duyệt tài khoản (web).");
             return n > 0 ? Results.NoContent() : Results.NotFound();
         });
@@ -93,7 +93,7 @@ public static class UserEndpoints
         g.MapPost("/{id:guid}/lock", async (Guid id, SetLockRequest req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("UPDATE dbo.app_users SET is_active=@active WHERE id=@id AND is_deleted=0")
+            var n = await conn.Cmd("UPDATE app_users SET is_active=@active WHERE id=@id AND is_deleted=FALSE")
                 .With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
             if (n > 0) await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", id.ToString(), "(web)");
             return n > 0 ? Results.NoContent() : Results.NotFound();
@@ -105,19 +105,21 @@ public static class UserEndpoints
         {
             await using var conn = await db.OpenAsync();
             var username = Convert.ToString(await conn.Cmd(
-                "SELECT TOP 1 username FROM dbo.app_users WHERE id = @id AND is_deleted = 0")
+                "SELECT username FROM app_users WHERE id = @id AND is_deleted = FALSE LIMIT 1")
                 .With("@id", id).ExecuteScalarAsync())?.Trim();
             if (string.IsNullOrWhiteSpace(username)) return Results.NotFound();
 
             await ChatEndpoints.EnsureTables(db);
             if (req.Verified)
                 await conn.Cmd(
-                    @"IF NOT EXISTS (SELECT 1 FROM dbo.web_verified_users WHERE username = @u)
-                      INSERT INTO dbo.web_verified_users (username, granted_by, granted_at)
-                      VALUES (@u, @by, SYSUTCDATETIME())")
+                    @"INSERT INTO web_verified_users (username, granted_by, granted_at)
+                      VALUES (@u, @by, CURRENT_TIMESTAMP)
+                      ON CONFLICT (username) DO UPDATE SET
+                          granted_by = EXCLUDED.granted_by,
+                          granted_at = EXCLUDED.granted_at")
                     .With("@u", username).With("@by", u.Username()).ExecuteNonQueryAsync();
             else
-                await conn.Cmd("DELETE FROM dbo.web_verified_users WHERE username = @u")
+                await conn.Cmd("DELETE FROM web_verified_users WHERE username = @u")
                     .With("@u", username).ExecuteNonQueryAsync();
 
             await db.RecordAudit(u.Username(), req.Verified ? "Cấp tích xanh" : "Thu hồi tích xanh", "User", username, "(web)");
@@ -129,7 +131,7 @@ public static class UserEndpoints
             // Tạo mật khẩu tạm ngẫu nhiên, đặt lại cho người dùng và trả về cho admin (giống CodeDisplayWpfWindow).
             var temp = RandomNumberGenerator.GetHexString(8).ToUpperInvariant();
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("UPDATE dbo.app_users SET password_hash=@ph WHERE id=@id AND is_deleted=0")
+            var n = await conn.Cmd("UPDATE app_users SET password_hash=@ph WHERE id=@id AND is_deleted=FALSE")
                 .With("@ph", PasswordHasher.Hash(temp)).With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await db.RecordAudit(u.Username(), "Đặt lại mật khẩu", "User", id.ToString(), "Admin đặt lại mật khẩu (web).");
@@ -139,11 +141,11 @@ public static class UserEndpoints
         g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+            await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync();
             try
             {
-                var find = new SqlCommand(
-                    "SELECT TOP 1 username FROM dbo.app_users WITH (UPDLOCK, HOLDLOCK) WHERE id=@id AND is_deleted=0",
+                var find = new NpgsqlCommand(
+                    "SELECT username FROM app_users WHERE id=@id AND is_deleted=FALSE FOR UPDATE LIMIT 1",
                     conn, tx);
                 find.Parameters.AddWithValue("@id", id);
 
@@ -158,7 +160,7 @@ public static class UserEndpoints
                 await tx.CommitAsync();
                 return Results.NoContent();
             }
-            catch (SqlException ex)
+            catch (NpgsqlException ex)
             {
                 await tx.RollbackAsync();
                 return Results.Json(new { message = "Loi xoa tai khoan: " + ex.Message }, statusCode: 400);
@@ -166,90 +168,43 @@ public static class UserEndpoints
         });
     }
 
-    private static async Task DeleteUserEverywhere(SqlConnection conn, SqlTransaction tx, Guid id, string username)
+    private static async Task DeleteUserEverywhere(NpgsqlConnection conn, NpgsqlTransaction tx, Guid id, string username)
     {
-        var cmd = new SqlCommand(
+        var cmd = new NpgsqlCommand(
             @"
-SET QUOTED_IDENTIFIER ON;
-SET ANSI_NULLS ON;
-SET ANSI_PADDING ON;
-SET ANSI_WARNINGS ON;
-SET CONCAT_NULL_YIELDS_NULL ON;
-SET ARITHABORT ON;
-SET NUMERIC_ROUNDABORT OFF;
+DELETE FROM web_chat_messages msg
+USING web_chat_conversations c
+WHERE c.id = msg.conversation_id
+  AND c.is_group = FALSE
+  AND EXISTS (SELECT 1 FROM web_chat_members mm WHERE mm.conversation_id = c.id AND mm.username = @username);
 
--- Trò chuyện (web): xóa tin nhắn & thành viên của người dùng, rồi dọn các cuộc hội thoại
--- không còn thành viên nào. (LAN chat cũ của app desktop đã bỏ khỏi backend web.)
-IF OBJECT_ID(N'dbo.web_chat_messages', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.web_chat_members', N'U') IS NOT NULL
-BEGIN
-    DELETE msg
-    FROM dbo.web_chat_messages msg
-    INNER JOIN dbo.web_chat_conversations c ON c.id = msg.conversation_id
-    WHERE c.is_group = 0
-      AND EXISTS (SELECT 1 FROM dbo.web_chat_members mm WHERE mm.conversation_id = c.id AND mm.username = @username);
+DELETE FROM web_chat_messages WHERE sender_username = @username;
+DELETE FROM web_chat_members WHERE username = @username;
+DELETE FROM web_chat_conversations c
+WHERE NOT EXISTS (SELECT 1 FROM web_chat_members mm WHERE mm.conversation_id = c.id);
 
-    DELETE FROM dbo.web_chat_messages WHERE sender_username = @username;
-END;
+DELETE FROM web_verified_users WHERE username = @username;
+DELETE FROM cham_cong_log WHERE username = @username;
+DELETE FROM cham_cong_face WHERE username = @username;
+UPDATE cham_cong_face SET created_by = '' WHERE created_by = @username;
+DELETE FROM user_sessions WHERE username = @username;
+DELETE FROM work_access_requests WHERE username = @username;
+UPDATE work_access_requests SET approved_by = '' WHERE approved_by = @username;
+DELETE FROM password_reset_requests WHERE username = @username;
+UPDATE password_reset_requests SET resolved_by = '' WHERE resolved_by = @username;
+UPDATE registration_codes SET created_by = '' WHERE created_by = @username;
+UPDATE registration_codes SET used_by = '' WHERE used_by = @username;
+UPDATE app_releases SET published_by = '' WHERE published_by = @username;
+UPDATE app_settings SET updated_by = '' WHERE updated_by = @username;
+UPDATE app_users SET approved_by = '' WHERE approved_by = @username;
 
-IF OBJECT_ID(N'dbo.web_chat_members', N'U') IS NOT NULL
-    DELETE FROM dbo.web_chat_members WHERE username = @username;
+DELETE FROM audit_logs
+WHERE user_id = @id
+   OR username = @username
+   OR (entity = 'User' AND (entity_name = @username OR entity_name = @idText))
+   OR (entity = 'ChamCong' AND entity_name = @username);
 
-IF OBJECT_ID(N'dbo.web_chat_conversations', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.web_chat_members', N'U') IS NOT NULL
-    DELETE c
-    FROM dbo.web_chat_conversations c
-    WHERE NOT EXISTS (SELECT 1 FROM dbo.web_chat_members mm WHERE mm.conversation_id = c.id);
-
-IF OBJECT_ID(N'dbo.web_verified_users', N'U') IS NOT NULL
-    DELETE FROM dbo.web_verified_users WHERE username = @username;
-
-IF OBJECT_ID(N'dbo.cham_cong_log', N'U') IS NOT NULL
-    DELETE FROM dbo.cham_cong_log WHERE username = @username;
-
-IF OBJECT_ID(N'dbo.cham_cong_face', N'U') IS NOT NULL
-BEGIN
-    DELETE FROM dbo.cham_cong_face WHERE username = @username;
-    UPDATE dbo.cham_cong_face SET created_by = N'' WHERE created_by = @username;
-END;
-
-IF OBJECT_ID(N'dbo.user_sessions', N'U') IS NOT NULL
-    DELETE FROM dbo.user_sessions WHERE username = @username;
-
-IF OBJECT_ID(N'dbo.work_access_requests', N'U') IS NOT NULL
-BEGIN
-    DELETE FROM dbo.work_access_requests WHERE username = @username;
-    UPDATE dbo.work_access_requests SET approved_by = N'' WHERE approved_by = @username;
-END;
-
-IF OBJECT_ID(N'dbo.password_reset_requests', N'U') IS NOT NULL
-BEGIN
-    DELETE FROM dbo.password_reset_requests WHERE username = @username;
-    UPDATE dbo.password_reset_requests SET resolved_by = N'' WHERE resolved_by = @username;
-END;
-
-IF OBJECT_ID(N'dbo.registration_codes', N'U') IS NOT NULL
-BEGIN
-    UPDATE dbo.registration_codes SET created_by = N'' WHERE created_by = @username;
-    UPDATE dbo.registration_codes SET used_by = N'' WHERE used_by = @username;
-END;
-
-IF OBJECT_ID(N'dbo.app_releases', N'U') IS NOT NULL
-    UPDATE dbo.app_releases SET published_by = N'' WHERE published_by = @username;
-
-IF OBJECT_ID(N'dbo.app_settings', N'U') IS NOT NULL
-    UPDATE dbo.app_settings SET updated_by = N'' WHERE updated_by = @username;
-
-UPDATE dbo.app_users SET approved_by = N'' WHERE approved_by = @username;
-
-IF OBJECT_ID(N'dbo.audit_logs', N'U') IS NOT NULL
-BEGIN
-    DELETE FROM dbo.audit_logs
-    WHERE user_id = @id
-       OR username = @username
-       OR (entity = N'User' AND (entity_name = @username OR entity_name = @idText))
-       OR (entity = N'ChamCong' AND entity_name = @username);
-END;
-
-DELETE FROM dbo.app_users WHERE username = @username;",
+DELETE FROM app_users WHERE username = @username;",
             conn, tx);
         cmd.Parameters.AddWithValue("@id", id);
         cmd.Parameters.AddWithValue("@idText", id.ToString());

@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 namespace KetoanMini.Api.Json;
 
 /// <summary>
-/// Toàn bộ mốc thời gian trong hệ thống được lưu dạng UTC (SYSUTCDATETIME / DateTime.UtcNow).
+/// Toàn bộ mốc thời gian trong hệ thống được lưu dạng UTC (PostgreSQL CURRENT_TIMESTAMP / DateTime.UtcNow).
 /// Khi đọc từ SQL, DateTime có Kind = Unspecified nên System.Text.Json KHÔNG gắn 'Z' →
 /// trình duyệt hiểu nhầm là giờ địa phương và hiển thị sai (lệch đúng số giờ múi giờ).
 ///

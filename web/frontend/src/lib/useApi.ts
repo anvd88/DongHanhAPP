@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { subscribeRealtime } from "./realtime";
+import { subscribeRealtime, type RealtimeScope } from "./realtime";
 
 type ReloadOptions = {
   silent?: boolean;
 };
+
+/** Phạm vi realtime mà một path GET quan tâm — để chỉ refetch khi thật sự liên quan. */
+function scopesForPath(path: string): RealtimeScope[] {
+  if (path.startsWith("/api/chat/conversations/") && path.endsWith("/messages")) return ["chat"];
+  if (path.startsWith("/api/chat/conversations") || path.startsWith("/api/chat/contacts"))
+    return ["chat", "presence"];
+  // Mọi path nghiệp vụ khác: phản ứng với thay đổi dữ liệu & hiện diện, KHÔNG bị chat làm phiền.
+  return ["data", "presence"];
+}
 
 /** Hook fetch GET đơn giản với trạng thái loading/error + refetch. */
 export function useApi<T>(path: string | null, deps: unknown[] = []) {
@@ -43,14 +52,14 @@ export function useApi<T>(path: string | null, deps: unknown[] = []) {
 
   useEffect(() => reload(), [reload]);
 
-  // Tự làm mới khi backend phát tín hiệu "changed" (gộp nhiều tín hiệu trong 250ms).
+  // Tự làm mới khi backend phát tín hiệu "changed" trong phạm vi liên quan (gộp trong 250ms).
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
     if (!path) return;
     const unsub = subscribeRealtime(() => {
       clearTimeout(timer.current);
       timer.current = setTimeout(() => reload({ silent: true }), 250);
-    });
+    }, scopesForPath(path));
     return () => {
       unsub();
       clearTimeout(timer.current);

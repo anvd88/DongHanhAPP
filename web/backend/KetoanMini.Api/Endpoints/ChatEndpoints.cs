@@ -1,23 +1,25 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
-using Microsoft.Data.SqlClient;
+using KetoanMini.Api.Realtime;
+using Microsoft.AspNetCore.SignalR;
+using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
 
 /// <summary>
 /// Trò chuyện (web-only). Dùng lại hệ tài khoản sẵn có: danh bạ và tên hiển thị lấy từ
-/// dbo.app_users (full_name), ảnh đại diện từ dbo.web_user_avatars, trạng thái online từ
-/// dbo.user_sessions. Dữ liệu chat lưu trong bảng riêng tiền tố web_chat_* để KHÔNG đụng
+/// app_users (full_name), ảnh đại diện từ web_user_avatars, trạng thái online từ
+/// user_sessions. Dữ liệu chat lưu trong bảng riêng tiền tố web_chat_* để KHÔNG đụng
 /// schema dùng chung với app desktop (LAN chat cũ đã bỏ).
-/// "Tích xanh": tài khoản Admin luôn có, hoặc được admin cấp thủ công (dbo.web_verified_users).
+/// "Tích xanh": tài khoản Admin luôn có, hoặc được admin cấp thủ công (web_verified_users).
 /// </summary>
 public static class ChatEndpoints
 {
     // Biểu thức tính "tích xanh" cho một người dùng (cần JOIN bí danh app_users là `au`
-    // và LEFT JOIN dbo.web_verified_users là `vu`).
+    // và LEFT JOIN web_verified_users là `vu`).
     private const string VerifiedExpr =
-        "CAST(CASE WHEN au.role = N'Admin' OR vu.username IS NOT NULL THEN 1 ELSE 0 END AS bit)";
+        "(au.role = 'Admin' OR vu.username IS NOT NULL)";
 
     public static void MapChat(this IEndpointRouteBuilder app)
     {
@@ -29,24 +31,24 @@ public static class ChatEndpoints
             var me = principal.Username();
             await using var conn = await db.OpenAsync();
 
-            var where = "WHERE au.is_deleted = 0 AND au.is_active = 1 AND au.approval_status = N'Approved' AND au.username <> @me";
+            var where = "WHERE au.is_deleted = FALSE AND au.is_active = TRUE AND au.approval_status = 'Approved' AND au.username <> @me";
             if (!string.IsNullOrWhiteSpace(search))
-                where += " AND (au.username LIKE @s OR au.full_name LIKE @s)";
+                where += " AND (au.username ILIKE @s OR au.full_name ILIKE @s)";
 
             var cmd = conn.Cmd(
                 $@"SELECT au.username, au.full_name, au.role,
                           {VerifiedExpr} AS verified,
                           av.image_data_url AS avatar,
-                          CAST(ISNULL(pres.is_online, 0) AS bit) AS is_online
-                   FROM dbo.app_users au
-                   LEFT JOIN dbo.web_verified_users vu ON vu.username = au.username
-                   OUTER APPLY (
-                       SELECT TOP 1 wa.image_data_url FROM dbo.web_user_avatars wa WHERE wa.user_id = au.id
-                   ) av
-                   OUTER APPLY (
-                       SELECT MAX(CASE WHEN us.is_active = 1 AND us.last_seen >= DATEADD(SECOND, -90, SYSDATETIME()) THEN 1 ELSE 0 END) AS is_online
-                       FROM dbo.user_sessions us WHERE us.username = au.username
-                   ) pres
+                          COALESCE(pres.is_online, FALSE) AS is_online
+                   FROM app_users au
+                   LEFT JOIN web_verified_users vu ON vu.username = au.username
+                   LEFT JOIN LATERAL (
+                       SELECT wa.image_data_url FROM web_user_avatars wa WHERE wa.user_id = au.id LIMIT 1
+                   ) av ON TRUE
+                   LEFT JOIN LATERAL (
+                       SELECT BOOL_OR(us.is_active = TRUE AND us.last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds') AS is_online
+                       FROM user_sessions us WHERE us.username = au.username
+                   ) pres ON TRUE
                    {where}
                    ORDER BY pres.is_online DESC, au.full_name, au.username")
                 .With("@me", me);
@@ -84,7 +86,7 @@ public static class ChatEndpoints
 
             await using var conn = await db.OpenAsync();
             var exists = await conn.Cmd(
-                "SELECT COUNT(*) FROM dbo.app_users WHERE username = @u AND is_deleted = 0 AND is_active = 1")
+                "SELECT COUNT(*) FROM app_users WHERE username = @u AND is_deleted = FALSE AND is_active = TRUE")
                 .With("@u", other).ExecuteScalarAsync();
             if (Convert.ToInt32(exists) == 0)
                 return Results.NotFound(new { message = "Không tìm thấy người dùng." });
@@ -104,8 +106,8 @@ public static class ChatEndpoints
             await using var r = await conn.Cmd(
                 @"SELECT m.id, m.sender_username, au.full_name AS sender_name, m.body, m.created_at,
                          m.edited_at, m.is_removed, m.is_forwarded
-                  FROM dbo.web_chat_messages m
-                  LEFT JOIN dbo.app_users au ON au.username = m.sender_username AND au.is_deleted = 0
+                  FROM web_chat_messages m
+                  LEFT JOIN app_users au ON au.username = m.sender_username AND au.is_deleted = FALSE
                   WHERE m.conversation_id = @cid
                   ORDER BY m.created_at ASC, m.id ASC")
                 .With("@cid", id).ExecuteReaderAsync();
@@ -126,7 +128,7 @@ public static class ChatEndpoints
         });
 
         // Gửi tin nhắn.
-        g.MapPost("/conversations/{id:guid}/messages", async (Guid id, SendMessageRequest req, ClaimsPrincipal principal, Database db) =>
+        g.MapPost("/conversations/{id:guid}/messages", async (Guid id, SendMessageRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
         {
             var me = principal.Username();
             var body = (req?.Body ?? "").Trim();
@@ -139,18 +141,19 @@ public static class ChatEndpoints
 
             var forwarded = req?.Forwarded ?? false;
             var newId = Convert.ToInt64(await conn.Cmd(
-                @"INSERT INTO dbo.web_chat_messages (conversation_id, sender_username, body, is_forwarded, created_at)
-                  VALUES (@cid, @me, @body, @fwd, SYSUTCDATETIME());
-                  SELECT CAST(SCOPE_IDENTITY() AS BIGINT);")
+                @"INSERT INTO web_chat_messages (conversation_id, sender_username, body, is_forwarded, created_at)
+                  VALUES (@cid, @me, @body, @fwd, CURRENT_TIMESTAMP)
+                  RETURNING id;")
                 .With("@cid", id).With("@me", me).With("@body", body).With("@fwd", forwarded).ExecuteScalarAsync());
 
             await MarkRead(conn, id, me);
+            await NotifyChat(hub, conn, id);
 
             return Results.Ok(new ChatMessageDto(newId, me, me, true, body, DateTime.UtcNow, null, false, forwarded));
         });
 
         // Chỉnh sửa tin nhắn (chỉ người gửi, chưa bị gỡ).
-        g.MapPut("/conversations/{id:guid}/messages/{msgId:long}", async (Guid id, long msgId, EditMessageRequest req, ClaimsPrincipal principal, Database db) =>
+        g.MapPut("/conversations/{id:guid}/messages/{msgId:long}", async (Guid id, long msgId, EditMessageRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
         {
             var me = principal.Username();
             var body = (req?.Body ?? "").Trim();
@@ -160,24 +163,26 @@ public static class ChatEndpoints
 
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd(
-                @"UPDATE dbo.web_chat_messages SET body = @body, edited_at = SYSUTCDATETIME()
-                  WHERE id = @mid AND conversation_id = @cid AND sender_username = @me AND is_removed = 0")
+                @"UPDATE web_chat_messages SET body = @body, edited_at = CURRENT_TIMESTAMP
+                  WHERE id = @mid AND conversation_id = @cid AND sender_username = @me AND is_removed = FALSE")
                 .With("@body", body).With("@mid", msgId).With("@cid", id).With("@me", me).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound(new { message = "Không sửa được tin nhắn này." });
+            await NotifyChat(hub, conn, id);
             return Results.NoContent();
         });
 
         // Gỡ tin nhắn (chỉ người gửi) — giữ lại dòng làm placeholder "Tin nhắn đã được gỡ",
         // nhưng XÓA RỖNG nội dung (body) khỏi DB để không lưu văn bản → tránh phình DB.
-        g.MapDelete("/conversations/{id:guid}/messages/{msgId:long}", async (Guid id, long msgId, ClaimsPrincipal principal, Database db) =>
+        g.MapDelete("/conversations/{id:guid}/messages/{msgId:long}", async (Guid id, long msgId, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
         {
             var me = principal.Username();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd(
-                @"UPDATE dbo.web_chat_messages SET is_removed = 1, body = N'', edited_at = SYSUTCDATETIME()
-                  WHERE id = @mid AND conversation_id = @cid AND sender_username = @me AND is_removed = 0")
+                @"UPDATE web_chat_messages SET is_removed = TRUE, body = '', edited_at = CURRENT_TIMESTAMP
+                  WHERE id = @mid AND conversation_id = @cid AND sender_username = @me AND is_removed = FALSE")
                 .With("@mid", msgId).With("@cid", id).With("@me", me).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound(new { message = "Không gỡ được tin nhắn này." });
+            await NotifyChat(hub, conn, id);
             return Results.NoContent();
         });
 
@@ -190,48 +195,129 @@ public static class ChatEndpoints
             await MarkRead(conn, id, me);
             return Results.NoContent();
         });
+
+        // Dung lượng DB của mục Trò chuyện (chỉ admin) — phục vụ trang Hệ thống → tab Cơ sở dữ liệu.
+        g.MapGet("/db-usage", async (ClaimsPrincipal principal, Database db) =>
+        {
+            if (!principal.IsAdmin()) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            var usage = await ReadChatDbUsage(conn);
+            return Results.Ok(usage);
+        });
+    }
+
+    private static readonly (string Table, string Label)[] ChatTables =
+    [
+        ("web_chat_messages", "Tin nhắn"),
+        ("web_chat_conversations", "Cuộc trò chuyện"),
+        ("web_chat_members", "Thành viên"),
+        ("web_verified_users", "Tài khoản tích xanh"),
+    ];
+
+    private static async Task<ChatDbUsageDto> ReadChatDbUsage(NpgsqlConnection conn)
+    {
+        var sizes = new Dictionary<string, (long rows, long dataKb, long indexKb)>(StringComparer.OrdinalIgnoreCase);
+        await using (var r = await conn.Cmd(
+            @"WITH table_rows AS (
+                  SELECT 'web_chat_messages'::text AS table_name, COUNT(*)::bigint AS row_count FROM web_chat_messages
+                  UNION ALL SELECT 'web_chat_conversations', COUNT(*)::bigint FROM web_chat_conversations
+                  UNION ALL SELECT 'web_chat_members', COUNT(*)::bigint FROM web_chat_members
+                  UNION ALL SELECT 'web_verified_users', COUNT(*)::bigint FROM web_verified_users
+              )
+              SELECT table_name,
+                     row_count,
+                     -- pg_table_size = heap + TOAST + FSM/VM. Nội dung 'body' (text dài) nằm trong
+                     -- TOAST nên PHẢI dùng pg_table_size; pg_relation_size sẽ tính thiếu phần này.
+                     (pg_table_size(format('%I', table_name)::regclass) / 1024)::bigint AS data_kb,
+                     (pg_indexes_size(format('%I', table_name)::regclass) / 1024)::bigint AS index_kb
+              FROM table_rows").ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+                sizes[r.Str("table_name")] = (r.Long("row_count"), r.Long("data_kb"), r.Long("index_kb"));
+        }
+
+        var tables = new List<ChatTableUsageDto>();
+        long totalData = 0, totalIndex = 0;
+        foreach (var (table, label) in ChatTables)
+        {
+            var s = sizes.TryGetValue(table, out var v) ? v : (0L, 0L, 0L);
+            totalData += s.Item2;
+            totalIndex += s.Item3;
+            tables.Add(new ChatTableUsageDto(table, label, s.Item1, s.Item2, s.Item3, s.Item2 + s.Item3));
+        }
+
+        // Tổng dung lượng cả database (để hiển thị tỉ lệ phần chat chiếm).
+        long dbTotalKb = 0;
+        try
+        {
+            dbTotalKb = Convert.ToInt64(await conn.Cmd(
+                "SELECT (pg_database_size(current_database()) / 1024)::bigint")
+                .ExecuteScalarAsync() ?? 0L);
+        }
+        catch { /* thiếu quyền VIEW DATABASE STATE → bỏ qua, để 0 */ }
+
+        long Rows(string t) => sizes.TryGetValue(t, out var v) ? v.rows : 0;
+        return new ChatDbUsageDto(
+            totalData + totalIndex, totalData, totalIndex,
+            Rows("web_chat_messages"), Rows("web_chat_conversations"), Rows("web_chat_members"),
+            dbTotalKb, tables);
+    }
+
+    /// <summary>Phát tín hiệu "chat" CHỈ tới các thành viên của cuộc trò chuyện (không broadcast cả 100 máy).</summary>
+    private static async Task NotifyChat(IHubContext<ChangesHub> hub, NpgsqlConnection conn, Guid conversationId)
+    {
+        var members = new List<string>();
+        await using (var r = await conn.Cmd(
+            "SELECT username FROM web_chat_members WHERE conversation_id = @cid")
+            .With("@cid", conversationId).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync()) members.Add(r.GetString(0));
+        }
+        if (members.Count == 0) return;
+        await hub.Clients.Users(members).SendAsync("changed", "chat", conversationId.ToString());
     }
 
     private static string? NullIfEmpty(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
 
-    private static async Task<bool> IsMember(SqlConnection conn, Guid conversationId, string username)
+    private static async Task<bool> IsMember(NpgsqlConnection conn, Guid conversationId, string username)
     {
         var n = await conn.Cmd(
-            "SELECT COUNT(*) FROM dbo.web_chat_members WHERE conversation_id = @cid AND username = @u")
+            "SELECT COUNT(*) FROM web_chat_members WHERE conversation_id = @cid AND username = @u")
             .With("@cid", conversationId).With("@u", username).ExecuteScalarAsync();
         return Convert.ToInt32(n) > 0;
     }
 
-    private static async Task MarkRead(SqlConnection conn, Guid conversationId, string username)
+    private static async Task MarkRead(NpgsqlConnection conn, Guid conversationId, string username)
     {
         await conn.Cmd(
-            "UPDATE dbo.web_chat_members SET last_read_at = SYSUTCDATETIME() WHERE conversation_id = @cid AND username = @u")
+            "UPDATE web_chat_members SET last_read_at = CURRENT_TIMESTAMP WHERE conversation_id = @cid AND username = @u")
             .With("@cid", conversationId).With("@u", username).ExecuteNonQueryAsync();
     }
 
-    private static async Task<Guid> GetOrCreateDirect(SqlConnection conn, string me, string other)
+    private static async Task<Guid> GetOrCreateDirect(NpgsqlConnection conn, string me, string other)
     {
         var found = await conn.Cmd(
-            @"SELECT TOP 1 c.id
-              FROM dbo.web_chat_conversations c
-              WHERE c.is_group = 0
-                AND EXISTS (SELECT 1 FROM dbo.web_chat_members m WHERE m.conversation_id = c.id AND m.username = @me)
-                AND EXISTS (SELECT 1 FROM dbo.web_chat_members m WHERE m.conversation_id = c.id AND m.username = @other)
-                AND (SELECT COUNT(*) FROM dbo.web_chat_members m WHERE m.conversation_id = c.id) = 2")
+            @"SELECT c.id
+              FROM web_chat_conversations c
+              WHERE c.is_group = FALSE
+                AND EXISTS (SELECT 1 FROM web_chat_members m WHERE m.conversation_id = c.id AND m.username = @me)
+                AND EXISTS (SELECT 1 FROM web_chat_members m WHERE m.conversation_id = c.id AND m.username = @other)
+                AND (SELECT COUNT(*) FROM web_chat_members m WHERE m.conversation_id = c.id) = 2
+              LIMIT 1")
             .With("@me", me).With("@other", other).ExecuteScalarAsync();
         if (found is Guid g) return g;
 
         var id = Guid.NewGuid();
         await conn.Cmd(
-            @"INSERT INTO dbo.web_chat_conversations (id, is_group, title, created_by, created_at)
-              VALUES (@id, 0, N'', @me, SYSUTCDATETIME());
-              INSERT INTO dbo.web_chat_members (conversation_id, username, joined_at)
-              VALUES (@id, @me, SYSUTCDATETIME()), (@id, @other, SYSUTCDATETIME());")
+            @"INSERT INTO web_chat_conversations (id, is_group, title, created_by, created_at)
+              VALUES (@id, FALSE, '', @me, CURRENT_TIMESTAMP);
+              INSERT INTO web_chat_members (conversation_id, username, joined_at)
+              VALUES (@id, @me, CURRENT_TIMESTAMP), (@id, @other, CURRENT_TIMESTAMP);")
             .With("@id", id).With("@me", me).With("@other", other).ExecuteNonQueryAsync();
         return id;
     }
 
-    private static async Task<List<ChatConversationDto>> ReadConversations(SqlConnection conn, string me, Guid? onlyId)
+    private static async Task<List<ChatConversationDto>> ReadConversations(NpgsqlConnection conn, string me, Guid? onlyId)
     {
         var list = new List<ChatConversationDto>();
         var cmd = conn.Cmd(
@@ -240,38 +326,39 @@ public static class ChatEndpoints
                       au.full_name AS other_full_name,
                       {VerifiedExpr} AS other_verified,
                       oav.image_data_url AS other_avatar,
-                      CAST(ISNULL(pres.is_online, 0) AS bit) AS other_online,
+                      COALESCE(pres.is_online, FALSE) AS other_online,
                       pres.last_seen_utc AS other_last_seen,
                       lm.body AS last_body, lm.sender_username AS last_sender, lm.created_at AS last_at,
-                      CAST(ISNULL(lm.is_removed, 0) AS bit) AS last_removed,
-                      ISNULL(unr.cnt, 0) AS unread
-               FROM dbo.web_chat_members me
-               JOIN dbo.web_chat_conversations c ON c.id = me.conversation_id
-               OUTER APPLY (
-                   SELECT TOP 1 m2.username FROM dbo.web_chat_members m2
+                      COALESCE(lm.is_removed, FALSE) AS last_removed,
+                      COALESCE(unr.cnt, 0) AS unread
+               FROM web_chat_members me
+               JOIN web_chat_conversations c ON c.id = me.conversation_id
+               LEFT JOIN LATERAL (
+                   SELECT m2.username FROM web_chat_members m2
                    WHERE m2.conversation_id = c.id AND m2.username <> @me ORDER BY m2.joined_at
-               ) o
-               LEFT JOIN dbo.app_users au ON au.username = o.username AND au.is_deleted = 0
-               LEFT JOIN dbo.web_verified_users vu ON vu.username = o.username
-               OUTER APPLY (
-                   SELECT TOP 1 wa.image_data_url FROM dbo.web_user_avatars wa WHERE wa.user_id = au.id
-               ) oav
-               OUTER APPLY (
-                   SELECT MAX(CASE WHEN us.is_active = 1 AND us.last_seen >= DATEADD(SECOND, -90, SYSDATETIME()) THEN 1 ELSE 0 END) AS is_online,
-                          -- last_seen lưu theo giờ local của server → quy đổi sang UTC để client tính đúng độ trễ.
-                          DATEADD(SECOND, DATEDIFF(SECOND, SYSDATETIME(), SYSUTCDATETIME()), MAX(us.last_seen)) AS last_seen_utc
-                   FROM dbo.user_sessions us WHERE us.username = o.username
-               ) pres
-               OUTER APPLY (
-                   SELECT TOP 1 mm.body, mm.sender_username, mm.created_at, mm.is_removed
-                   FROM dbo.web_chat_messages mm WHERE mm.conversation_id = c.id
+                   LIMIT 1
+               ) o ON TRUE
+               LEFT JOIN app_users au ON au.username = o.username AND au.is_deleted = FALSE
+               LEFT JOIN web_verified_users vu ON vu.username = o.username
+               LEFT JOIN LATERAL (
+                   SELECT wa.image_data_url FROM web_user_avatars wa WHERE wa.user_id = au.id LIMIT 1
+               ) oav ON TRUE
+               LEFT JOIN LATERAL (
+                   SELECT BOOL_OR(us.is_active = TRUE AND us.last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds') AS is_online,
+                          MAX(us.last_seen) AS last_seen_utc
+                   FROM user_sessions us WHERE us.username = o.username
+               ) pres ON TRUE
+               LEFT JOIN LATERAL (
+                   SELECT mm.body, mm.sender_username, mm.created_at, mm.is_removed
+                   FROM web_chat_messages mm WHERE mm.conversation_id = c.id
                    ORDER BY mm.created_at DESC, mm.id DESC
-               ) lm
-               OUTER APPLY (
-                   SELECT COUNT(*) AS cnt FROM dbo.web_chat_messages mm
-                   WHERE mm.conversation_id = c.id AND mm.sender_username <> @me AND mm.is_removed = 0
+                   LIMIT 1
+               ) lm ON TRUE
+               LEFT JOIN LATERAL (
+                   SELECT COUNT(*) AS cnt FROM web_chat_messages mm
+                   WHERE mm.conversation_id = c.id AND mm.sender_username <> @me AND mm.is_removed = FALSE
                      AND (me.last_read_at IS NULL OR mm.created_at > me.last_read_at)
-               ) unr
+               ) unr ON TRUE
                WHERE me.username = @me {(onlyId is null ? "" : "AND c.id = @only")}
                ORDER BY lm.created_at DESC")
             .With("@me", me);
@@ -315,53 +402,47 @@ public static class ChatEndpoints
     public static async Task EnsureTables(Database db, CancellationToken ct = default)
     {
         await using var conn = await db.OpenAsync(ct);
-        await conn.Cmd(@"
-            IF OBJECT_ID(N'dbo.web_chat_conversations', N'U') IS NULL
-            CREATE TABLE dbo.web_chat_conversations (
-                id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_web_chat_conversations PRIMARY KEY,
-                is_group BIT NOT NULL CONSTRAINT DF_web_chat_conv_group DEFAULT 0,
-                title NVARCHAR(200) NOT NULL CONSTRAINT DF_web_chat_conv_title DEFAULT N'',
-                created_by NVARCHAR(128) NOT NULL CONSTRAINT DF_web_chat_conv_by DEFAULT N'',
-                created_at DATETIME2 NOT NULL CONSTRAINT DF_web_chat_conv_at DEFAULT SYSUTCDATETIME()
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS web_chat_conversations (
+                id uuid NOT NULL PRIMARY KEY,
+                is_group boolean NOT NULL DEFAULT FALSE,
+                title varchar(200) NOT NULL DEFAULT '',
+                created_by varchar(128) NOT NULL DEFAULT '',
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
-            IF OBJECT_ID(N'dbo.web_chat_members', N'U') IS NULL
-            CREATE TABLE dbo.web_chat_members (
-                conversation_id UNIQUEIDENTIFIER NOT NULL,
-                username NVARCHAR(128) NOT NULL,
-                last_read_at DATETIME2 NULL,
-                joined_at DATETIME2 NOT NULL CONSTRAINT DF_web_chat_mem_at DEFAULT SYSUTCDATETIME(),
-                CONSTRAINT PK_web_chat_members PRIMARY KEY (conversation_id, username)
+            CREATE TABLE IF NOT EXISTS web_chat_members (
+                conversation_id uuid NOT NULL,
+                username varchar(128) NOT NULL,
+                last_read_at timestamptz NULL,
+                joined_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT pk_web_chat_members PRIMARY KEY (conversation_id, username)
             );
 
-            IF OBJECT_ID(N'dbo.web_chat_messages', N'U') IS NULL
-            CREATE TABLE dbo.web_chat_messages (
-                id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_web_chat_messages PRIMARY KEY,
-                conversation_id UNIQUEIDENTIFIER NOT NULL,
-                sender_username NVARCHAR(128) NOT NULL,
-                body NVARCHAR(MAX) NOT NULL,
-                edited_at DATETIME2 NULL,
-                is_removed BIT NOT NULL CONSTRAINT DF_web_chat_msg_removed DEFAULT 0,
-                is_forwarded BIT NOT NULL CONSTRAINT DF_web_chat_msg_fwd DEFAULT 0,
-                created_at DATETIME2 NOT NULL CONSTRAINT DF_web_chat_msg_at DEFAULT SYSUTCDATETIME()
+            CREATE TABLE IF NOT EXISTS web_chat_messages (
+                id bigserial NOT NULL PRIMARY KEY,
+                conversation_id uuid NOT NULL,
+                sender_username varchar(128) NOT NULL,
+                body text NOT NULL,
+                edited_at timestamptz NULL,
+                is_removed boolean NOT NULL DEFAULT FALSE,
+                is_forwarded boolean NOT NULL DEFAULT FALSE,
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_web_chat_messages_conv' AND object_id = OBJECT_ID(N'dbo.web_chat_messages'))
-                CREATE INDEX IX_web_chat_messages_conv ON dbo.web_chat_messages (conversation_id, created_at);
 
-            -- Bổ sung cột cho bảng đã tồn tại (chỉnh sửa / gỡ / chuyển tiếp).
-            IF COL_LENGTH(N'dbo.web_chat_messages', 'edited_at') IS NULL
-                ALTER TABLE dbo.web_chat_messages ADD edited_at DATETIME2 NULL;
-            IF COL_LENGTH(N'dbo.web_chat_messages', 'is_removed') IS NULL
-                ALTER TABLE dbo.web_chat_messages ADD is_removed BIT NOT NULL CONSTRAINT DF_web_chat_msg_removed DEFAULT 0;
-            IF COL_LENGTH(N'dbo.web_chat_messages', 'is_forwarded') IS NULL
-                ALTER TABLE dbo.web_chat_messages ADD is_forwarded BIT NOT NULL CONSTRAINT DF_web_chat_msg_fwd DEFAULT 0;
+            ALTER TABLE web_chat_messages ADD COLUMN IF NOT EXISTS edited_at timestamptz NULL;
+            ALTER TABLE web_chat_messages ADD COLUMN IF NOT EXISTS is_removed boolean NOT NULL DEFAULT FALSE;
+            ALTER TABLE web_chat_messages ADD COLUMN IF NOT EXISTS is_forwarded boolean NOT NULL DEFAULT FALSE;
 
-            IF OBJECT_ID(N'dbo.web_verified_users', N'U') IS NULL
-            CREATE TABLE dbo.web_verified_users (
-                username NVARCHAR(128) NOT NULL CONSTRAINT PK_web_verified_users PRIMARY KEY,
-                granted_by NVARCHAR(128) NOT NULL CONSTRAINT DF_web_verified_by DEFAULT N'',
-                granted_at DATETIME2 NOT NULL CONSTRAINT DF_web_verified_at DEFAULT SYSUTCDATETIME()
-            );")
+            CREATE TABLE IF NOT EXISTS web_verified_users (
+                username varchar(128) NOT NULL PRIMARY KEY,
+                granted_by varchar(128) NOT NULL DEFAULT '',
+                granted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_web_chat_messages_conv ON web_chat_messages (conversation_id, created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS ix_web_chat_members_user ON web_chat_members (username, conversation_id, last_read_at);
+            """)
             .ExecuteNonQueryAsync(ct);
     }
 }

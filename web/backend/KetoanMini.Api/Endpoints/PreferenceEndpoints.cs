@@ -36,14 +36,11 @@ public static class PreferenceEndpoints
                 if (value is null) return;
 
                 await conn.Cmd(@"
-                    MERGE dbo.web_user_preferences AS target
-                    USING (SELECT @userId AS user_id, @key AS preference_key) AS source
-                    ON target.user_id = source.user_id AND target.preference_key = source.preference_key
-                    WHEN MATCHED THEN
-                        UPDATE SET preference_value = @value, updated_at = SYSUTCDATETIME()
-                    WHEN NOT MATCHED THEN
-                        INSERT (user_id, preference_key, preference_value, updated_at)
-                        VALUES (@userId, @key, @value, SYSUTCDATETIME());")
+                    INSERT INTO web_user_preferences (user_id, preference_key, preference_value, updated_at)
+                    VALUES (@userId, @key, @value, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, preference_key) DO UPDATE SET
+                        preference_value = EXCLUDED.preference_value,
+                        updated_at = EXCLUDED.updated_at;")
                     .With("@userId", userId.Value)
                     .With("@key", key)
                     .With("@value", value.Value ? "true" : "false")
@@ -62,15 +59,15 @@ public static class PreferenceEndpoints
     public static async Task EnsureTables(Database db, CancellationToken ct = default)
     {
         await using var conn = await db.OpenAsync(ct);
-        await conn.Cmd(@"
-            IF OBJECT_ID(N'dbo.web_user_preferences', N'U') IS NULL
-            CREATE TABLE dbo.web_user_preferences (
-                user_id UNIQUEIDENTIFIER NOT NULL,
-                preference_key NVARCHAR(120) NOT NULL,
-                preference_value NVARCHAR(MAX) NOT NULL DEFAULT N'',
-                updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                CONSTRAINT PK_web_user_preferences PRIMARY KEY (user_id, preference_key)
-            );")
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS web_user_preferences (
+                user_id uuid NOT NULL,
+                preference_key varchar(120) NOT NULL,
+                preference_value text NOT NULL DEFAULT '',
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT pk_web_user_preferences PRIMARY KEY (user_id, preference_key)
+            );
+            """)
             .ExecuteNonQueryAsync(ct);
     }
 
@@ -82,7 +79,7 @@ public static class PreferenceEndpoints
         await using var conn = await db.OpenAsync(ct);
         await using var reader = await conn.Cmd(@"
             SELECT preference_key, preference_value
-            FROM dbo.web_user_preferences
+            FROM web_user_preferences
             WHERE user_id = @userId
               AND preference_key IN (@water, @eye, @keepCreate);")
             .With("@userId", userId)

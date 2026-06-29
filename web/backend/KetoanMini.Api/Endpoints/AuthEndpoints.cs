@@ -2,7 +2,7 @@ using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -20,8 +20,8 @@ public static class AuthEndpoints
             await using var conn = await db.OpenAsync();
             await using var reader = await conn.Cmd(
                 @"SELECT id, username, full_name, email, role, password_hash, is_active, approval_status, created_at
-                  FROM dbo.app_users
-                  WHERE username = @u AND is_deleted = 0")
+                  FROM app_users
+                  WHERE username = @u AND is_deleted = FALSE")
                 .With("@u", req.Username.Trim())
                 .ExecuteReaderAsync();
 
@@ -68,7 +68,7 @@ public static class AuthEndpoints
 
             var username = principal.Username();
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("UPDATE dbo.app_users SET full_name = @fn, email = @em WHERE username = @u AND is_deleted = 0")
+            var n = await conn.Cmd("UPDATE app_users SET full_name = @fn, email = @em WHERE username = @u AND is_deleted = FALSE")
                 .With("@fn", fullName).With("@em", email).With("@u", username).ExecuteNonQueryAsync();
             if (n == 0) return Results.Unauthorized();
 
@@ -80,7 +80,7 @@ public static class AuthEndpoints
         }).RequireAuthorization();
 
         // Lưu ảnh đại diện cho bản web (data URL ảnh đã thu nhỏ/nén ở client). Lưu trong bảng
-        // web-only dbo.web_user_avatars để KHÔNG đụng schema dùng chung với app desktop.
+        // web-only web_user_avatars để KHÔNG đụng schema dùng chung với app desktop.
         g.MapPut("/avatar", async (UpdateAvatarRequest req, ClaimsPrincipal principal, Database db) =>
         {
             var dataUrl = (req.ImageDataUrl ?? "").Trim();
@@ -96,13 +96,11 @@ public static class AuthEndpoints
 
             await EnsureAvatarTableOn(conn);
             await conn.Cmd(@"
-                MERGE dbo.web_user_avatars AS target
-                USING (SELECT @id AS user_id) AS source
-                ON target.user_id = source.user_id
-                WHEN MATCHED THEN
-                    UPDATE SET image_data_url = @v, updated_at = SYSUTCDATETIME()
-                WHEN NOT MATCHED THEN
-                    INSERT (user_id, image_data_url, updated_at) VALUES (@id, @v, SYSUTCDATETIME());")
+                INSERT INTO web_user_avatars (user_id, image_data_url, updated_at)
+                VALUES (@id, @v, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    image_data_url = EXCLUDED.image_data_url,
+                    updated_at = EXCLUDED.updated_at;")
                 .With("@id", user.Id).With("@v", dataUrl).ExecuteNonQueryAsync();
 
             await db.RecordAudit(username, "Cập nhật ảnh đại diện", "User", username, "Đổi ảnh đại diện (web).");
@@ -117,8 +115,8 @@ public static class AuthEndpoints
             var user = await ReadUserByUsername(conn, username);
             if (user is null) return Results.Unauthorized();
 
-            await conn.Cmd(@"IF OBJECT_ID(N'dbo.web_user_avatars', N'U') IS NOT NULL
-                             DELETE FROM dbo.web_user_avatars WHERE user_id = @id")
+            await EnsureAvatarTableOn(conn);
+            await conn.Cmd("DELETE FROM web_user_avatars WHERE user_id = @id")
                 .With("@id", user.Id).ExecuteNonQueryAsync();
 
             await db.RecordAudit(username, "Xóa ảnh đại diện", "User", username, "Xóa ảnh đại diện (web).");
@@ -135,14 +133,14 @@ public static class AuthEndpoints
             var username = principal.Username();
             await using var conn = await db.OpenAsync();
             var hash = Convert.ToString(await conn.Cmd(
-                "SELECT TOP 1 password_hash FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
+                "SELECT password_hash FROM app_users WHERE username = @u AND is_deleted = FALSE LIMIT 1")
                 .With("@u", username).ExecuteScalarAsync()) ?? "";
             if (string.IsNullOrEmpty(hash)) return Results.Unauthorized();
 
             if (!PasswordHasher.Verify(req.CurrentPassword ?? "", hash))
                 return Results.Json(new { message = "Mật khẩu hiện tại không đúng." }, statusCode: 400);
 
-            await conn.Cmd("UPDATE dbo.app_users SET password_hash = @ph WHERE username = @u AND is_deleted = 0")
+            await conn.Cmd("UPDATE app_users SET password_hash = @ph WHERE username = @u AND is_deleted = FALSE")
                 .With("@ph", PasswordHasher.Hash(newPass)).With("@u", username).ExecuteNonQueryAsync();
             await db.RecordAudit(username, "Đổi mật khẩu", "User", username, "Đổi mật khẩu (web).");
             return Results.NoContent();
@@ -152,8 +150,7 @@ public static class AuthEndpoints
         // thấy người dùng "đang online". Mỗi trình duyệt gửi một sid ổn định (lưu localStorage).
         // Phiên này là 'Web' nên KHÔNG bị single-login của desktop kết thúc và cũng không kết
         // thúc phiên desktop. (Nếu tài khoản bị khóa, middleware ở Program.cs đã chặn bằng 401.)
-        // Dùng SYSDATETIME() (giờ local của server) — KHÔNG dùng SYSUTCDATETIME() — vì app desktop
-        // ghi/so sánh last_seen theo giờ local (DateTime.Now); lệch UTC sẽ làm web không bao giờ "online".
+        // Dùng CURRENT_TIMESTAMP để PostgreSQL ghi cùng chuẩn thời gian cho started_at/last_seen.
         g.MapPost("/heartbeat", async (HeartbeatRequest req, ClaimsPrincipal principal, Database db) =>
         {
             var username = principal.Username();
@@ -162,14 +159,22 @@ public static class AuthEndpoints
 
             await using var conn = await db.OpenAsync();
             await conn.Cmd(
-                @"UPDATE dbo.user_sessions
-                     SET last_seen = SYSDATETIME(), is_active = 1, username = @u, ended_at = NULL, end_reason = N'',
-                         started_at = CASE WHEN is_active = 0 OR last_seen < DATEADD(SECOND, -90, SYSDATETIME())
-                                           THEN SYSDATETIME() ELSE started_at END
-                   WHERE session_token = @t AND client_kind = N'Web';
-                  IF @@ROWCOUNT = 0
-                     INSERT INTO dbo.user_sessions (session_token, username, machine_name, started_at, last_seen, is_active, client_kind)
-                     VALUES (@t, @u, N'Web', SYSDATETIME(), SYSDATETIME(), 1, N'Web');")
+                @"INSERT INTO user_sessions (session_token, username, machine_name, started_at, last_seen, is_active, client_kind)
+                  VALUES (@t, @u, 'Web', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, 'Web')
+                  ON CONFLICT (session_token) DO UPDATE SET
+                      username = EXCLUDED.username,
+                      machine_name = 'Web',
+                      last_seen = CURRENT_TIMESTAMP,
+                      is_active = TRUE,
+                      ended_at = NULL,
+                      end_reason = '',
+                      client_kind = 'Web',
+                      started_at = CASE
+                          WHEN user_sessions.is_active = FALSE
+                            OR user_sessions.last_seen < CURRENT_TIMESTAMP - INTERVAL '90 seconds'
+                          THEN CURRENT_TIMESTAMP
+                          ELSE user_sessions.started_at
+                      END;")
                 .With("@u", username).With("@t", sid)
                 .ExecuteNonQueryAsync();
             return Results.NoContent();
@@ -181,26 +186,26 @@ public static class AuthEndpoints
             var sid = WebSessionId(req?.Sid, principal.Username());
             await using var conn = await db.OpenAsync();
             await conn.Cmd(
-                @"UPDATE dbo.user_sessions
-                     SET is_active = 0, ended_at = SYSDATETIME(), end_reason = N'Đăng xuất (web)'
-                   WHERE session_token = @t AND client_kind = N'Web';")
+                @"UPDATE user_sessions
+                     SET is_active = FALSE, ended_at = CURRENT_TIMESTAMP, end_reason = 'Đăng xuất (web)'
+                   WHERE session_token = @t AND client_kind = 'Web';")
                 .With("@t", sid).ExecuteNonQueryAsync();
             return Results.NoContent();
         }).RequireAuthorization();
     }
 
-    // session_token là NVARCHAR(64); dùng sid của trình duyệt, fallback theo username nếu thiếu.
+    // session_token là varchar(64); dùng sid của trình duyệt, fallback theo username nếu thiếu.
     private static string WebSessionId(string? sid, string username)
     {
         var value = string.IsNullOrWhiteSpace(sid) ? "web:" + username : sid.Trim();
         return value.Length > 64 ? value[..64] : value;
     }
 
-    private static async Task<UserDto?> ReadUserByUsername(SqlConnection conn, string username)
+    private static async Task<UserDto?> ReadUserByUsername(NpgsqlConnection conn, string username)
     {
         await using var reader = await conn.Cmd(
             @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
-              FROM dbo.app_users WHERE username = @u AND is_deleted = 0")
+              FROM app_users WHERE username = @u AND is_deleted = FALSE")
             .With("@u", username).ExecuteReaderAsync();
         if (!await reader.ReadAsync()) return null;
         var dto = new UserDto(
@@ -212,14 +217,13 @@ public static class AuthEndpoints
     }
 
     // Tích xanh: Admin luôn có; tài khoản thường thì tra bảng web_verified_users (web-only).
-    private static async Task<bool> LoadVerified(SqlConnection conn, string username, string role)
+    private static async Task<bool> LoadVerified(NpgsqlConnection conn, string username, string role)
     {
         if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase)) return true;
         try
         {
             var r = await conn.Cmd(
-                @"IF OBJECT_ID(N'dbo.web_verified_users', N'U') IS NOT NULL
-                  SELECT 1 FROM dbo.web_verified_users WHERE username = @u")
+                "SELECT 1 FROM web_verified_users WHERE username = @u LIMIT 1")
                 .With("@u", username).ExecuteScalarAsync();
             return r is not null and not DBNull;
         }
@@ -227,13 +231,12 @@ public static class AuthEndpoints
     }
 
     // Đọc data URL ảnh đại diện (web) của một người dùng; null nếu chưa có (hoặc bảng chưa tồn tại).
-    private static async Task<string?> LoadAvatarUrl(SqlConnection conn, Guid userId)
+    private static async Task<string?> LoadAvatarUrl(NpgsqlConnection conn, Guid userId)
     {
         try
         {
             await using var reader = await conn.Cmd(
-                @"IF OBJECT_ID(N'dbo.web_user_avatars', N'U') IS NOT NULL
-                  SELECT image_data_url FROM dbo.web_user_avatars WHERE user_id = @id")
+                "SELECT image_data_url FROM web_user_avatars WHERE user_id = @id")
                 .With("@id", userId).ExecuteReaderAsync();
             if (await reader.ReadAsync() && !reader.IsDBNull(0))
             {
@@ -252,16 +255,15 @@ public static class AuthEndpoints
         await EnsureAvatarTableOn(conn, ct);
     }
 
-    private static async Task EnsureAvatarTableOn(SqlConnection conn, CancellationToken ct = default)
+    private static async Task EnsureAvatarTableOn(NpgsqlConnection conn, CancellationToken ct = default)
     {
-        await conn.Cmd(@"
-            IF OBJECT_ID(N'dbo.web_user_avatars', N'U') IS NULL
-            CREATE TABLE dbo.web_user_avatars (
-                user_id UNIQUEIDENTIFIER NOT NULL,
-                image_data_url NVARCHAR(MAX) NOT NULL,
-                updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                CONSTRAINT PK_web_user_avatars PRIMARY KEY (user_id)
-            );")
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS web_user_avatars (
+                user_id uuid NOT NULL PRIMARY KEY,
+                image_data_url text NOT NULL,
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
             .ExecuteNonQueryAsync(ct);
     }
 }

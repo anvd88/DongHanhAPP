@@ -1,7 +1,7 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -15,51 +15,60 @@ public static class GiaCongEndpoints
             p.id AS phieu_id, p.doi_tac, h.ten_hang, h.quy_cach, h.don_vi_tinh,
             h.so_luong, h.don_gia_gia_cong,
             CASE
-                WHEN h.loai_dong LIKE N'%Nhập%' OR p.loai_phieu LIKE N'%Nhập%' THEN N'Nhap'
-                WHEN h.loai_dong LIKE N'%Xuất%' OR p.loai_phieu LIKE N'%Xuất%' THEN N'Xuat'
-                ELSE N''
+                WHEN h.loai_dong LIKE '%Nhập%' OR p.loai_phieu LIKE '%Nhập%' THEN 'Nhap'
+                WHEN h.loai_dong LIKE '%Xuất%' OR p.loai_phieu LIKE '%Xuất%' THEN 'Xuat'
+                ELSE ''
             END AS loai
         FROM gia_cong_phieu p
         JOIN gia_cong_hang_hoa h ON h.phieu_id = p.id
-        WHERE p.loai_phieu LIKE N'%Xuất%' OR p.loai_phieu LIKE N'%Nhập%'
-           OR h.loai_dong LIKE N'%Xuất%' OR h.loai_dong LIKE N'%Nhập%'";
+        WHERE p.loai_phieu LIKE '%Xuất%' OR p.loai_phieu LIKE '%Nhập%'
+           OR h.loai_dong LIKE '%Xuất%' OR h.loai_dong LIKE '%Nhập%'";
 
     private const string AggregateColumns = @"
-        ISNULL(SUM(CASE WHEN loai = N'Xuat' THEN so_luong ELSE 0 END), 0) AS so_luong_xuat,
-        ISNULL(SUM(CASE WHEN loai = N'Nhap' THEN so_luong ELSE 0 END), 0) AS so_luong_nhap,
-        ISNULL(CASE
-            WHEN SUM(CASE WHEN loai = N'Xuat' THEN so_luong ELSE 0 END)
-                - SUM(CASE WHEN loai = N'Nhap' THEN so_luong ELSE 0 END) < 0 THEN 0
-            ELSE SUM(CASE WHEN loai = N'Xuat' THEN so_luong ELSE 0 END)
-                - SUM(CASE WHEN loai = N'Nhap' THEN so_luong ELSE 0 END)
+        COALESCE(SUM(CASE WHEN loai = 'Xuat' THEN so_luong ELSE 0 END), 0) AS so_luong_xuat,
+        COALESCE(SUM(CASE WHEN loai = 'Nhap' THEN so_luong ELSE 0 END), 0) AS so_luong_nhap,
+        COALESCE(CASE
+            WHEN SUM(CASE WHEN loai = 'Xuat' THEN so_luong ELSE 0 END)
+                - SUM(CASE WHEN loai = 'Nhap' THEN so_luong ELSE 0 END) < 0 THEN 0
+            ELSE SUM(CASE WHEN loai = 'Xuat' THEN so_luong ELSE 0 END)
+                - SUM(CASE WHEN loai = 'Nhap' THEN so_luong ELSE 0 END)
         END, 0) AS so_luong_con_tai_cong_ty,
-        ISNULL(SUM(CASE WHEN loai = N'Nhap' THEN so_luong * don_gia_gia_cong ELSE 0 END), 0) AS tien_gia_cong_phai_tra";
+        COALESCE(SUM(CASE WHEN loai = 'Nhap' THEN so_luong * don_gia_gia_cong ELSE 0 END), 0) AS tien_gia_cong_phai_tra";
 
     public static async Task EnsureTables(Database db)
     {
         await using var conn = await db.OpenAsync();
-        await conn.Cmd(@"
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='gia_cong_phieu' AND xtype='U')
-            CREATE TABLE gia_cong_phieu (
-                id BIGINT IDENTITY(1,1) PRIMARY KEY, ma_phieu NVARCHAR(20) NOT NULL,
-                loai_phieu NVARCHAR(50) NOT NULL, doi_tac NVARCHAR(200) NOT NULL DEFAULT '',
-                nhan_vien NVARCHAR(200) NOT NULL DEFAULT '', ngay_lap DATE NOT NULL,
-                han_hoan_thanh DATE NULL,
-                ghi_chu NVARCHAR(1000) NOT NULL DEFAULT '',
-                created_at DATETIME2 NOT NULL DEFAULT GETDATE(), updated_at DATETIME2 NOT NULL DEFAULT GETDATE());").ExecuteNonQueryAsync();
-        await conn.Cmd(@"
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='gia_cong_hang_hoa' AND xtype='U')
-            CREATE TABLE gia_cong_hang_hoa (
-                id BIGINT IDENTITY(1,1) PRIMARY KEY,
-                phieu_id BIGINT NOT NULL REFERENCES gia_cong_phieu(id) ON DELETE CASCADE,
-                loai_dong NVARCHAR(50) NOT NULL DEFAULT N'Xuất gia công', ma_hang NVARCHAR(50) NOT NULL DEFAULT '',
-                ten_hang NVARCHAR(200) NOT NULL DEFAULT '', quy_cach NVARCHAR(200) NOT NULL DEFAULT '',
-                don_vi_tinh NVARCHAR(30) NOT NULL DEFAULT '',
-                so_luong DECIMAL(18,2) NOT NULL DEFAULT 0, don_gia_gia_cong DECIMAL(18,2) NOT NULL DEFAULT 0,
-                ghi_chu NVARCHAR(500) NOT NULL DEFAULT '');").ExecuteNonQueryAsync();
-        await conn.Cmd(@"
-            IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name='quy_cach' AND Object_ID=Object_ID('gia_cong_hang_hoa'))
-            ALTER TABLE gia_cong_hang_hoa ADD quy_cach NVARCHAR(200) NOT NULL DEFAULT '';").ExecuteNonQueryAsync();
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS gia_cong_phieu (
+                id bigserial PRIMARY KEY,
+                ma_phieu varchar(20) NOT NULL,
+                loai_phieu varchar(50) NOT NULL,
+                doi_tac varchar(200) NOT NULL DEFAULT '',
+                nhan_vien varchar(200) NOT NULL DEFAULT '',
+                ngay_lap date NOT NULL,
+                han_hoan_thanh date NULL,
+                ghi_chu text NOT NULL DEFAULT '',
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS gia_cong_hang_hoa (
+                id bigserial PRIMARY KEY,
+                phieu_id bigint NOT NULL REFERENCES gia_cong_phieu(id) ON DELETE CASCADE,
+                loai_dong varchar(50) NOT NULL DEFAULT 'Xuất gia công',
+                ma_hang varchar(50) NOT NULL DEFAULT '',
+                ten_hang varchar(200) NOT NULL DEFAULT '',
+                quy_cach varchar(200) NOT NULL DEFAULT '',
+                don_vi_tinh varchar(30) NOT NULL DEFAULT '',
+                so_luong numeric(18,2) NOT NULL DEFAULT 0,
+                don_gia_gia_cong numeric(18,2) NOT NULL DEFAULT 0,
+                ghi_chu text NOT NULL DEFAULT ''
+            );
+
+            ALTER TABLE gia_cong_hang_hoa ADD COLUMN IF NOT EXISTS quy_cach varchar(200) NOT NULL DEFAULT '';
+            CREATE INDEX IF NOT EXISTS ix_gia_cong_phieu_filter ON gia_cong_phieu (id DESC, ngay_lap DESC);
+            CREATE INDEX IF NOT EXISTS ix_gia_cong_hang_hoa_phieu ON gia_cong_hang_hoa (phieu_id);
+            """).ExecuteNonQueryAsync();
     }
 
     public static void MapGiaCong(this IEndpointRouteBuilder app)
@@ -73,9 +82,9 @@ public static class GiaCongEndpoints
 
             var where = filter switch
             {
-                "nhap" => "WHERE p.loai_phieu LIKE N'%Nhập%'",
-                "xuat" => "WHERE p.loai_phieu LIKE N'%Xuất%'",
-                _ => "WHERE (p.loai_phieu LIKE N'%Xuất%' OR p.loai_phieu LIKE N'%Nhập%')"
+                "nhap" => "WHERE p.loai_phieu LIKE '%Nhập%'",
+                "xuat" => "WHERE p.loai_phieu LIKE '%Xuất%'",
+                _ => "WHERE (p.loai_phieu LIKE '%Xuất%' OR p.loai_phieu LIKE '%Nhập%')"
             };
             if (!string.IsNullOrWhiteSpace(search))
                 where += " AND (p.ma_phieu LIKE @s OR p.doi_tac LIKE @s OR p.nhan_vien LIKE @s)";
@@ -111,7 +120,7 @@ public static class GiaCongEndpoints
             GiaCongDetailDto? p = null;
             await using (var r = await conn.Cmd(
                 @"SELECT id, ma_phieu, loai_phieu, doi_tac, nhan_vien, ngay_lap, han_hoan_thanh, ghi_chu
-                  FROM gia_cong_phieu WHERE id=@id AND (loai_phieu LIKE N'%Xuất%' OR loai_phieu LIKE N'%Nhập%')")
+                  FROM gia_cong_phieu WHERE id=@id AND (loai_phieu LIKE '%Xuất%' OR loai_phieu LIKE '%Nhập%')")
                 .With("@id", id).ExecuteReaderAsync())
             {
                 if (await r.ReadAsync())
@@ -145,13 +154,13 @@ public static class GiaCongEndpoints
         });
     }
 
-    private static async Task<Dictionary<long, GiaCongStats>> ReadStatsByPhieu(SqlConnection conn)
+    private static async Task<Dictionary<long, GiaCongStats>> ReadStatsByPhieu(NpgsqlConnection conn)
     {
         var stats = new Dictionary<long, GiaCongStats>();
         await using var r = await conn.Cmd(
             $@"WITH typed AS ({TypedRowsSelect})
                SELECT phieu_id, COUNT(*) AS so_mat_hang, {AggregateColumns}
-               FROM typed WHERE loai IN (N'Xuat', N'Nhap') GROUP BY phieu_id").ExecuteReaderAsync();
+               FROM typed WHERE loai IN ('Xuat', 'Nhap') GROUP BY phieu_id").ExecuteReaderAsync();
         while (await r.ReadAsync())
         {
             stats[r.Long("phieu_id")] = ReadStats(r);
@@ -159,14 +168,14 @@ public static class GiaCongEndpoints
         return stats;
     }
 
-    private static async Task<GiaCongReportDto> ReadReport(SqlConnection conn, string? doiTac, DateOnly? from, DateOnly? to)
+    private static async Task<GiaCongReportDto> ReadReport(NpgsqlConnection conn, string? doiTac, DateOnly? from, DateOnly? to)
     {
         var where = BuildReportWhere(doiTac, from, to);
 
         GiaCongStats total;
         await using (var r = await CreateReportCommand(conn,
             $@"WITH typed AS ({TypedRowsSelect} {where})
-               SELECT COUNT(*) AS so_mat_hang, {AggregateColumns} FROM typed WHERE loai IN (N'Xuat', N'Nhap')",
+               SELECT COUNT(*) AS so_mat_hang, {AggregateColumns} FROM typed WHERE loai IN ('Xuat', 'Nhap')",
             doiTac, from, to).ExecuteReaderAsync())
         {
             total = await r.ReadAsync() ? ReadStats(r) : GiaCongStats.Empty;
@@ -175,11 +184,11 @@ public static class GiaCongEndpoints
         var partners = new List<GiaCongReportPartnerDto>();
         await using (var r = await CreateReportCommand(conn,
             $@"WITH typed AS ({TypedRowsSelect} {where})
-               SELECT COALESCE(NULLIF(doi_tac, N''), N'Chưa nhập đối tác') AS doi_tac,
+               SELECT COALESCE(NULLIF(doi_tac, ''), 'Chưa nhập đối tác') AS doi_tac,
                       COUNT(*) AS so_mat_hang, {AggregateColumns}
                FROM typed
-               WHERE loai IN (N'Xuat', N'Nhap')
-               GROUP BY COALESCE(NULLIF(doi_tac, N''), N'Chưa nhập đối tác')
+               WHERE loai IN ('Xuat', 'Nhap')
+               GROUP BY COALESCE(NULLIF(doi_tac, ''), 'Chưa nhập đối tác')
                ORDER BY doi_tac", doiTac, from, to).ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
@@ -193,13 +202,13 @@ public static class GiaCongEndpoints
         var items = new List<GiaCongReportItemDto>();
         await using (var r = await CreateReportCommand(conn,
             $@"WITH typed AS ({TypedRowsSelect} {where})
-               SELECT COALESCE(NULLIF(doi_tac, N''), N'Chưa nhập đối tác') AS doi_tac,
-                      COALESCE(NULLIF(ten_hang, N''), N'Chưa nhập tên hàng') AS ten_hang,
+               SELECT COALESCE(NULLIF(doi_tac, ''), 'Chưa nhập đối tác') AS doi_tac,
+                      COALESCE(NULLIF(ten_hang, ''), 'Chưa nhập tên hàng') AS ten_hang,
                       quy_cach, don_vi_tinh, COUNT(*) AS so_mat_hang, {AggregateColumns}
                FROM typed
-               WHERE loai IN (N'Xuat', N'Nhap')
-               GROUP BY COALESCE(NULLIF(doi_tac, N''), N'Chưa nhập đối tác'),
-                        COALESCE(NULLIF(ten_hang, N''), N'Chưa nhập tên hàng'), quy_cach, don_vi_tinh
+               WHERE loai IN ('Xuat', 'Nhap')
+               GROUP BY COALESCE(NULLIF(doi_tac, ''), 'Chưa nhập đối tác'),
+                        COALESCE(NULLIF(ten_hang, ''), 'Chưa nhập tên hàng'), quy_cach, don_vi_tinh
                ORDER BY doi_tac, ten_hang, quy_cach", doiTac, from, to).ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
@@ -224,16 +233,16 @@ public static class GiaCongEndpoints
         return filters.Count == 0 ? "" : " AND " + string.Join(" AND ", filters);
     }
 
-    private static SqlCommand CreateReportCommand(SqlConnection conn, string sql, string? doiTac, DateOnly? from, DateOnly? to)
+    private static NpgsqlCommand CreateReportCommand(NpgsqlConnection conn, string sql, string? doiTac, DateOnly? from, DateOnly? to)
     {
         var cmd = conn.Cmd(sql);
         if (!string.IsNullOrWhiteSpace(doiTac)) cmd.With("@doiTac", $"%{doiTac.Trim()}%");
-        if (from is not null) cmd.With("@from", from.Value.ToDateTime(TimeOnly.MinValue));
-        if (to is not null) cmd.With("@to", to.Value.ToDateTime(TimeOnly.MinValue));
+        if (from is not null) cmd.With("@from", from.Value);
+        if (to is not null) cmd.With("@to", to.Value);
         return cmd;
     }
 
-    private static GiaCongStats ReadStats(SqlDataReader r) => new(
+    private static GiaCongStats ReadStats(NpgsqlDataReader r) => new(
         r.Int("so_mat_hang"),
         r.Dec("so_luong_xuat"),
         r.Dec("so_luong_nhap"),
@@ -243,44 +252,44 @@ public static class GiaCongEndpoints
     private static async Task<IResult> Save(Database db, ClaimsPrincipal u, long? id, SaveGiaCongRequest req)
     {
         await using var conn = await db.OpenAsync();
-        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync();
         try
         {
             long phieuId;
             var loaiPhieu = NormalizePhieuType(req.LoaiPhieu);
-            var ngay = req.NgayLap.ToDateTime(TimeOnly.MinValue);
-            object han = req.HanHoanThanh is { } h ? h.ToDateTime(TimeOnly.MinValue) : DBNull.Value;
+            var ngay = req.NgayLap;
+            object han = req.HanHoanThanh is { } h ? h : DBNull.Value;
 
             if (id is null)
             {
-                var maxId = Convert.ToInt64(await new SqlCommand("SELECT ISNULL(MAX(id),0) FROM gia_cong_phieu", conn, tx).ExecuteScalarAsync());
-                var maPhieu = $"GC{(maxId + 1):D6}";
-                var cmd = new SqlCommand(
-                    @"INSERT INTO gia_cong_phieu (ma_phieu, loai_phieu, doi_tac, nhan_vien, ngay_lap, han_hoan_thanh, ghi_chu, updated_at)
-                      OUTPUT INSERTED.id
-                      VALUES (@mp, @lp, @dt, @nv, @ng, @han, @gc, GETDATE())", conn, tx);
+                phieuId = Convert.ToInt64(await new NpgsqlCommand("SELECT nextval(pg_get_serial_sequence('gia_cong_phieu', 'id'))", conn, tx).ExecuteScalarAsync());
+                var maPhieu = $"GC{phieuId:D6}";
+                var cmd = new NpgsqlCommand(
+                    @"INSERT INTO gia_cong_phieu (id, ma_phieu, loai_phieu, doi_tac, nhan_vien, ngay_lap, han_hoan_thanh, ghi_chu, updated_at)
+                      VALUES (@id, @mp, @lp, @dt, @nv, @ng, @han, @gc, CURRENT_TIMESTAMP)", conn, tx);
+                cmd.Parameters.AddWithValue("@id", phieuId);
                 cmd.Parameters.AddWithValue("@mp", maPhieu);
                 FillPhieu(cmd, req, loaiPhieu, ngay, han);
-                phieuId = Convert.ToInt64(await cmd.ExecuteScalarAsync());
+                await cmd.ExecuteNonQueryAsync();
             }
             else
             {
                 phieuId = id.Value;
-                var cmd = new SqlCommand(
+                var cmd = new NpgsqlCommand(
                     @"UPDATE gia_cong_phieu SET loai_phieu=@lp, doi_tac=@dt, nhan_vien=@nv, ngay_lap=@ng,
-                        han_hoan_thanh=@han, ghi_chu=@gc, updated_at=GETDATE()
+                        han_hoan_thanh=@han, ghi_chu=@gc, updated_at=CURRENT_TIMESTAMP
                       WHERE id=@id", conn, tx);
                 cmd.Parameters.AddWithValue("@id", phieuId);
                 FillPhieu(cmd, req, loaiPhieu, ngay, han);
                 if (await cmd.ExecuteNonQueryAsync() == 0) { await tx.RollbackAsync(); return Results.NotFound(); }
-                await new SqlCommand("DELETE FROM gia_cong_hang_hoa WHERE phieu_id=@id", conn, tx)
+                await new NpgsqlCommand("DELETE FROM gia_cong_hang_hoa WHERE phieu_id=@id", conn, tx)
                     { Parameters = { new("@id", phieuId) } }.ExecuteNonQueryAsync();
             }
 
             foreach (var line in req.Lines ?? new())
             {
                 var donGia = IsNhap(loaiPhieu) ? line.DonGiaGiaCong : 0m;
-                var lc = new SqlCommand(
+                var lc = new NpgsqlCommand(
                     @"INSERT INTO gia_cong_hang_hoa (phieu_id, loai_dong, ma_hang, ten_hang, quy_cach, don_vi_tinh, so_luong, don_gia_gia_cong, ghi_chu)
                       VALUES (@p, @ld, @mh, @th, @qc, @dv, @sl, @dg, @gc)", conn, tx);
                 lc.Parameters.AddWithValue("@p", phieuId);
@@ -300,14 +309,14 @@ public static class GiaCongEndpoints
                 "GiaCong", phieuId.ToString(), $"{(id is null ? "Tạo" : "Cập nhật")} phiếu gia công (web).");
             return Results.Ok(new { id = phieuId });
         }
-        catch (SqlException ex)
+        catch (NpgsqlException ex)
         {
             await tx.RollbackAsync();
             return Results.Json(new { message = "Lỗi lưu phiếu gia công: " + ex.Message }, statusCode: 400);
         }
     }
 
-    private static void FillPhieu(SqlCommand cmd, SaveGiaCongRequest req, string loaiPhieu, DateTime ngay, object han)
+    private static void FillPhieu(NpgsqlCommand cmd, SaveGiaCongRequest req, string loaiPhieu, DateOnly ngay, object han)
     {
         cmd.Parameters.AddWithValue("@lp", loaiPhieu);
         cmd.Parameters.AddWithValue("@dt", req.DoiTac ?? "");
