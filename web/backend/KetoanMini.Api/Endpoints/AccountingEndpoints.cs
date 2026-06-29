@@ -252,7 +252,7 @@ public static class AccountingEndpoints
                    FROM audit_logs a
                    WHERE a.entity = 'Document'
                      AND (a.entity_name = d.voucher_no OR a.entity_name = d.id::text)
-                     AND (a.action LIKE 'Tạo%' OR a.details LIKE 'Tạo%')
+                     AND (a.action ILIKE 'Tạo%' OR a.details ILIKE 'Tạo%')
                    ORDER BY a.occurred_at ASC
                    LIMIT 1
                ) creator ON TRUE
@@ -292,7 +292,7 @@ public static class AccountingEndpoints
                    FROM audit_logs a
                    WHERE a.entity = 'Document'
                      AND (a.entity_name = d.voucher_no OR a.entity_name = d.id::text)
-                     AND (a.action LIKE 'Tạo%' OR a.details LIKE 'Tạo%')
+                     AND (a.action ILIKE 'Tạo%' OR a.details ILIKE 'Tạo%')
                    ORDER BY a.occurred_at ASC
                    LIMIT 1
                ) creator ON TRUE

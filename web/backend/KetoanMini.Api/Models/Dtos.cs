@@ -2,6 +2,8 @@ namespace KetoanMini.Api.Models;
 
 // ----- Auth -----
 public record LoginRequest(string Username, string Password);
+// Đăng nhập bằng khuôn mặt: client gửi một loạt ảnh (data URL base64), server tự chọn khung tốt nhất.
+public record FaceLoginRequest(List<string> Images);
 public record LoginResponse(string Token, UserDto User);
 public record HeartbeatRequest(string? Sid);
 public record UpdateProfileRequest(string FullName, string Email);

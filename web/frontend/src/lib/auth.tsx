@@ -9,6 +9,7 @@ interface AuthCtx {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
+  loginWithFace: (images: string[]) => Promise<void>;
   logout: () => void;
   updateUser: (u: User) => void;
 }
@@ -99,6 +100,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.user); // kích hoạt heartbeat ngay qua effect ở trên
   };
 
+  // Đăng nhập bằng khuôn mặt: gửi một loạt ảnh, server nhận diện rồi cấp token như đăng nhập thường.
+  const loginWithFace = async (images: string[]) => {
+    const res = await api.post<{ token: string; user: User }>("/api/auth/login-face", { images });
+    tokenStore.set(res.token);
+    ensureWaterDailyLogin(res.user.id);
+    ensureEyeDailyLogin(res.user.id);
+    loadUserPreferences(res.user.id).catch(() => {});
+    setUser(res.user);
+  };
+
   const logout = () => {
     api.post("/api/auth/logout", { sid: sessionId() }).catch(() => {}); // tắt hiện diện ngay (best-effort)
     tokenStore.clear();
@@ -106,5 +117,5 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     location.href = "/login";
   };
 
-  return <Ctx.Provider value={{ user, loading, login, logout, updateUser: setUser }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, login, loginWithFace, logout, updateUser: setUser }}>{children}</Ctx.Provider>;
 }

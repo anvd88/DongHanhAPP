@@ -15,14 +15,14 @@ public static class GiaCongEndpoints
             p.id AS phieu_id, p.doi_tac, h.ten_hang, h.quy_cach, h.don_vi_tinh,
             h.so_luong, h.don_gia_gia_cong,
             CASE
-                WHEN h.loai_dong LIKE '%Nhập%' OR p.loai_phieu LIKE '%Nhập%' THEN 'Nhap'
-                WHEN h.loai_dong LIKE '%Xuất%' OR p.loai_phieu LIKE '%Xuất%' THEN 'Xuat'
+                WHEN h.loai_dong ILIKE '%Nhập%' OR p.loai_phieu ILIKE '%Nhập%' THEN 'Nhap'
+                WHEN h.loai_dong ILIKE '%Xuất%' OR p.loai_phieu ILIKE '%Xuất%' THEN 'Xuat'
                 ELSE ''
             END AS loai
         FROM gia_cong_phieu p
         JOIN gia_cong_hang_hoa h ON h.phieu_id = p.id
-        WHERE p.loai_phieu LIKE '%Xuất%' OR p.loai_phieu LIKE '%Nhập%'
-           OR h.loai_dong LIKE '%Xuất%' OR h.loai_dong LIKE '%Nhập%'";
+        WHERE p.loai_phieu ILIKE '%Xuất%' OR p.loai_phieu ILIKE '%Nhập%'
+           OR h.loai_dong ILIKE '%Xuất%' OR h.loai_dong ILIKE '%Nhập%'";
 
     private const string AggregateColumns = @"
         COALESCE(SUM(CASE WHEN loai = 'Xuat' THEN so_luong ELSE 0 END), 0) AS so_luong_xuat,
@@ -82,12 +82,12 @@ public static class GiaCongEndpoints
 
             var where = filter switch
             {
-                "nhap" => "WHERE p.loai_phieu LIKE '%Nhập%'",
-                "xuat" => "WHERE p.loai_phieu LIKE '%Xuất%'",
-                _ => "WHERE (p.loai_phieu LIKE '%Xuất%' OR p.loai_phieu LIKE '%Nhập%')"
+                "nhap" => "WHERE p.loai_phieu ILIKE '%Nhập%'",
+                "xuat" => "WHERE p.loai_phieu ILIKE '%Xuất%'",
+                _ => "WHERE (p.loai_phieu ILIKE '%Xuất%' OR p.loai_phieu ILIKE '%Nhập%')"
             };
             if (!string.IsNullOrWhiteSpace(search))
-                where += " AND (p.ma_phieu LIKE @s OR p.doi_tac LIKE @s OR p.nhan_vien LIKE @s)";
+                where += " AND (p.ma_phieu ILIKE @s OR p.doi_tac ILIKE @s OR p.nhan_vien ILIKE @s)";
 
             var list = new List<GiaCongListItemDto>();
             var cmd = conn.Cmd(
@@ -120,7 +120,7 @@ public static class GiaCongEndpoints
             GiaCongDetailDto? p = null;
             await using (var r = await conn.Cmd(
                 @"SELECT id, ma_phieu, loai_phieu, doi_tac, nhan_vien, ngay_lap, han_hoan_thanh, ghi_chu
-                  FROM gia_cong_phieu WHERE id=@id AND (loai_phieu LIKE '%Xuất%' OR loai_phieu LIKE '%Nhập%')")
+                  FROM gia_cong_phieu WHERE id=@id AND (loai_phieu ILIKE '%Xuất%' OR loai_phieu ILIKE '%Nhập%')")
                 .With("@id", id).ExecuteReaderAsync())
             {
                 if (await r.ReadAsync())
@@ -227,7 +227,7 @@ public static class GiaCongEndpoints
     private static string BuildReportWhere(string? doiTac, DateOnly? from, DateOnly? to)
     {
         var filters = new List<string>();
-        if (!string.IsNullOrWhiteSpace(doiTac)) filters.Add("p.doi_tac LIKE @doiTac");
+        if (!string.IsNullOrWhiteSpace(doiTac)) filters.Add("p.doi_tac ILIKE @doiTac");
         if (from is not null) filters.Add("p.ngay_lap >= @from");
         if (to is not null) filters.Add("p.ngay_lap <= @to");
         return filters.Count == 0 ? "" : " AND " + string.Join(" AND ", filters);

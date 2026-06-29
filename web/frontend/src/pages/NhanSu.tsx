@@ -107,11 +107,11 @@ export function NhanSu() {
                     <IconBtn title="Cấp tích xanh" onClick={() => act(() => api.post(`/api/users/${r.id}/verify`, { verified: true }))}><BadgeCheck className="h-4 w-4" /></IconBtn>
                   )}
                   <IconBtn title="Đặt lại mật khẩu" onClick={() => resetPw(r)}><KeyRound className="h-4 w-4" /></IconBtn>
-                  {r.isActive ? (
+                  {r.role !== "Admin" && (r.isActive ? (
                     <IconBtn title="Khóa" color="warning" onClick={() => act(() => api.post(`/api/users/${r.id}/lock`, { locked: true }))}><Lock className="h-4 w-4" /></IconBtn>
                   ) : (
                     <IconBtn title="Mở khóa" color="success" onClick={() => act(() => api.post(`/api/users/${r.id}/lock`, { locked: false }))}><Unlock className="h-4 w-4" /></IconBtn>
-                  )}
+                  ))}
                   <IconBtn title="Xóa" color="danger" onClick={() => confirm(`Xóa người dùng "${r.username}"?`) && act(() => api.del(`/api/users/${r.id}`))}><Trash2 className="h-4 w-4" /></IconBtn>
                 </div>
               ) },

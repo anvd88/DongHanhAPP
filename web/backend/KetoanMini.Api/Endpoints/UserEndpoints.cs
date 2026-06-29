@@ -93,10 +93,24 @@ public static class UserEndpoints
         g.MapPost("/{id:guid}/lock", async (Guid id, SetLockRequest req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("UPDATE app_users SET is_active=@active WHERE id=@id AND is_deleted=FALSE")
-                .With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
-            if (n > 0) await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", id.ToString(), "(web)");
-            return n > 0 ? Results.NoContent() : Results.NotFound();
+            await using (var reader = await conn.Cmd(
+                "SELECT username, role FROM app_users WHERE id=@id AND is_deleted=FALSE LIMIT 1")
+                .With("@id", id)
+                .ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync()) return Results.NotFound();
+
+                var username = reader.Str("username");
+                var role = reader.Str("role");
+                if (req.Locked && string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
+                    return Results.BadRequest(new { message = "Không thể khóa tài khoản Admin." });
+
+                await reader.CloseAsync();
+                var n = await conn.Cmd("UPDATE app_users SET is_active=@active WHERE id=@id AND is_deleted=FALSE")
+                    .With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
+                if (n > 0) await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", username, "(web)");
+                return n > 0 ? Results.NoContent() : Results.NotFound();
+            }
         });
 
         // Cấp / thu hồi "tích xanh" thủ công cho một tài khoản. Tài khoản Admin luôn có tích xanh

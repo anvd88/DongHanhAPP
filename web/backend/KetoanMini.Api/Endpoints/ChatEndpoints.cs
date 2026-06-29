@@ -50,7 +50,9 @@ public static class ChatEndpoints
                        FROM user_sessions us WHERE us.username = au.username
                    ) pres ON TRUE
                    {where}
-                   ORDER BY pres.is_online DESC, au.full_name, au.username")
+                   -- PostgreSQL xếp NULL trước khi DESC → người không có phiên (is_online NULL) sẽ
+                   -- nổi lên trên người đang online. COALESCE về FALSE để online luôn đứng đầu.
+                   ORDER BY COALESCE(pres.is_online, FALSE) DESC, au.full_name, au.username")
                 .With("@me", me);
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
 
@@ -360,7 +362,9 @@ public static class ChatEndpoints
                      AND (me.last_read_at IS NULL OR mm.created_at > me.last_read_at)
                ) unr ON TRUE
                WHERE me.username = @me {(onlyId is null ? "" : "AND c.id = @only")}
-               ORDER BY lm.created_at DESC")
+               -- NULLS LAST: PostgreSQL mặc định xếp NULL trước khi DESC, sẽ đẩy hội thoại chưa có
+               -- tin nhắn (last_at NULL) lên đầu. SQL Server xếp NULL cuối — giữ nguyên hành vi đó.
+               ORDER BY lm.created_at DESC NULLS LAST")
             .With("@me", me);
         if (onlyId is not null) cmd.With("@only", onlyId.Value);
 

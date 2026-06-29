@@ -182,7 +182,7 @@ public static class ChamCongEndpoints
         {
             await using var conn = await db.OpenAsync();
             var where = "WHERE 1=1";
-            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username LIKE @s OR full_name LIKE @s OR created_by LIKE @s)";
+            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username ILIKE @s OR full_name ILIKE @s OR created_by ILIKE @s)";
 
             var cmd = conn.Cmd(
                 $@"SELECT id, username, full_name, created_at, created_by
@@ -432,7 +432,7 @@ public static class ChamCongEndpoints
             await using var conn = await db.OpenAsync();
             var where = "WHERE 1=1";
             if (!string.IsNullOrWhiteSpace(date)) where += " AND occurred_at::date = @d::date";
-            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username LIKE @s OR full_name LIKE @s)";
+            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username ILIKE @s OR full_name ILIKE @s)";
 
             var cmd = conn.Cmd(
                 $@"SELECT id, username, full_name, loai, similarity, occurred_at, ghi_chu
