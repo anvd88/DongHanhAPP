@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Calculator, LogIn, Lock, ScanFace, User } from "lucide-react";
 import { GlassCard } from "../components/Glass";
 import { Button } from "../components/ui";
+import { FaceLoginModal } from "../components/FaceLoginModal";
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
 import { APP_BRAND_NAME } from "../lib/branding";
@@ -15,6 +16,7 @@ export function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [faceOpen, setFaceOpen] = useState(false);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -81,6 +83,14 @@ export function Login() {
           </Button>
         </form>
 
+        <button
+          type="button"
+          onClick={() => setFaceOpen(true)}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
+        >
+          <ScanFace className="h-4 w-4" /> Đăng nhập bằng khuôn mặt
+        </button>
+
         <Link
           to="/kiosk"
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
@@ -102,6 +112,10 @@ export function Login() {
           Chuyển sang giao diện {theme === "light" ? "tối" : "sáng"}
         </button>
       </GlassCard>
+
+      {faceOpen && (
+        <FaceLoginModal onClose={() => setFaceOpen(false)} onSuccess={() => nav("/dashboard")} />
+      )}
     </div>
   );
 }

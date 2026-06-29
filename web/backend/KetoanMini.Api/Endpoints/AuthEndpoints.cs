@@ -2,6 +2,7 @@ using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
+using KetoanMini.Api.Services;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -45,6 +46,88 @@ public static class AuthEndpoints
             await reader.CloseAsync();
             user = user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id), Verified = await LoadVerified(conn, user.Username, user.Role) };
             await db.RecordAudit(user.Username, "Đăng nhập web", "Auth", user.Username, "Đăng nhập phiên bản web.");
+
+            return Results.Ok(new LoginResponse(tokens.CreateToken(user), user));
+        });
+
+        // Đăng nhập bằng KHUÔN MẶT: client gửi một loạt ảnh; server chọn khung tốt nhất, kiểm tra
+        // chống giả mạo (liveness) rồi so khớp với mẫu đã đăng ký (bảng cham_cong_face). Khuôn mặt
+        // được đăng ký theo username trùng với app_users, nên khớp xong là tra thẳng ra tài khoản.
+        g.MapPost("/login-face", async (FaceLoginRequest req, Database db, TokenService tokens, IFaceEngine engine) =>
+        {
+            if (req?.Images is null || req.Images.Count == 0)
+                return Results.BadRequest(new { message = "Thiếu ảnh khuôn mặt." });
+
+            // 1) Lấy mọi khung CÓ MẶT, xếp theo chất lượng giảm dần để chọn khung tốt nhất.
+            var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
+            foreach (var img in req.Images)
+            {
+                if (!TryDecodeImage(img, out var bytes)) continue;
+                if (engine.AssessFrame(bytes) is not { FaceFound: true } q) continue;
+                candidates.Add((bytes, q));
+            }
+            if (candidates.Count == 0)
+                return Results.Json(new { message = "Không thấy khuôn mặt rõ ràng. Hãy nhìn thẳng vào camera." }, statusCode: 400);
+
+            candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
+            var bestBytes = candidates[0].Bytes;
+
+            // 2) Chống giả mạo: chấm liveness trên vài khung tốt nhất, qua nếu CÓ khung đạt.
+            const int livenessFramesToCheck = 5;
+            double bestLive = 0;
+            foreach (var c in candidates.Take(livenessFramesToCheck))
+            {
+                bestLive = Math.Max(bestLive, engine.LivenessProbability(c.Bytes));
+                if (bestLive >= engine.LivenessThreshold) break;
+            }
+            if (bestLive < engine.LivenessThreshold)
+                return Results.Json(new { message = "Nghi ngờ giả mạo. Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình." }, statusCode: 401);
+
+            var probe = engine.ExtractEmbedding(bestBytes);
+            if (probe is null)
+                return Results.Json(new { message = "Không trích được đặc trưng khuôn mặt. Vui lòng thử lại." }, statusCode: 400);
+
+            await using var conn = await db.OpenAsync();
+
+            // 3) So khớp toàn bộ mẫu đã đăng ký.
+            string? bestUser = null;
+            double bestSim = 0;
+            await using (var r = await conn.Cmd(
+                "SELECT username, embedding FROM cham_cong_face").ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync())
+                {
+                    var emb = EmbeddingCodec.FromBytes((byte[])r["embedding"]);
+                    var sim = engine.Compare(probe, emb);
+                    if (sim > bestSim) { bestSim = sim; bestUser = r.Str("username"); }
+                }
+            }
+            if (bestUser is null || bestSim < engine.MatchThreshold)
+                return Results.Json(new { message = "Không nhận diện được khuôn mặt. Khuôn mặt chưa được đăng ký hoặc ảnh chưa rõ." }, statusCode: 401);
+
+            // 4) Khuôn mặt khớp → tra tài khoản tương ứng (phải tồn tại, đã duyệt và còn hoạt động).
+            await using var reader = await conn.Cmd(
+                @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
+                  FROM app_users
+                  WHERE username = @u AND is_deleted = FALSE")
+                .With("@u", bestUser).ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+                return Results.Json(new { message = "Khuôn mặt khớp nhưng không tìm thấy tài khoản tương ứng." }, statusCode: 401);
+
+            var user = new UserDto(
+                reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
+                reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
+                reader.DtNull("created_at"));
+
+            if (user.IsPending)
+                return Results.Json(new { message = "Tài khoản đang chờ quản trị viên phê duyệt." }, statusCode: 403);
+            if (!user.IsActive)
+                return Results.Json(new { message = "Tài khoản đã bị khóa. Liên hệ quản trị viên." }, statusCode: 403);
+
+            await reader.CloseAsync();
+            user = user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id), Verified = await LoadVerified(conn, user.Username, user.Role) };
+            await db.RecordAudit(user.Username, "Đăng nhập web (khuôn mặt)", "Auth", user.Username,
+                $"Đăng nhập bản web bằng khuôn mặt (độ khớp {bestSim:0.000}).");
 
             return Results.Ok(new LoginResponse(tokens.CreateToken(user), user));
         });
@@ -192,6 +275,17 @@ public static class AuthEndpoints
                 .With("@t", sid).ExecuteNonQueryAsync();
             return Results.NoContent();
         }).RequireAuthorization();
+    }
+
+    /// <summary>Giải mã ảnh base64 (chấp nhận cả tiền tố data URL "data:image/...;base64,").</summary>
+    private static bool TryDecodeImage(string? b64, out byte[] bytes)
+    {
+        bytes = [];
+        if (string.IsNullOrWhiteSpace(b64)) return false;
+        var comma = b64.IndexOf(',');
+        if (b64.StartsWith("data:") && comma >= 0) b64 = b64[(comma + 1)..];
+        try { bytes = Convert.FromBase64String(b64); return bytes.Length > 0; }
+        catch { return false; }
     }
 
     // session_token là varchar(64); dùng sid của trình duyệt, fallback theo username nếu thiếu.
