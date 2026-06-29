@@ -125,6 +125,12 @@ export interface ChatConversation {
   /** Thời điểm hoạt động cuối của người kia (UTC); null nếu chưa từng online. */
   lastSeen?: string | null;
 }
+export interface ChatReaction {
+  emoji: string;
+  count: number;
+  /** Người đang đăng nhập có thả biểu cảm này không. */
+  mine: boolean;
+}
 export interface ChatMessage {
   id: number;
   senderUsername: string;
@@ -135,6 +141,7 @@ export interface ChatMessage {
   editedAt?: string | null;
   removed: boolean;
   forwarded: boolean;
+  reactions?: ChatReaction[] | null;
 }
 
 // Dung lượng DB mục Trò chuyện (admin xem trong trang Hệ thống). Đơn vị KB.

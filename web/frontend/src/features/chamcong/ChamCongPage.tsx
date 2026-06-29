@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Activity, Radio, RefreshCw, ScanFace, ToggleLeft, ToggleRight, Trash2, UserPlus, Wifi, WifiOff } from "lucide-react";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
 import type {
@@ -14,6 +15,14 @@ import { EnrollWizard } from "./EnrollWizard";
 import "./chamcong.css";
 
 type Tab = "dangky" | "khuonmat" | "nhatky";
+
+interface FaceDeleteConfirm {
+  title: string;
+  description: string;
+  detail?: string;
+  confirmLabel: string;
+  onConfirm: () => Promise<void>;
+}
 
 /**
  * Trang quản lý chấm công (admin): đăng ký khuôn mặt, dữ liệu sinh trắc, nhật ký và trạng thái
@@ -207,6 +216,7 @@ function RegisterTab() {
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<FaceDeleteConfirm | null>(null);
 
   const selected = users?.find((u) => u.username === username);
 
@@ -233,12 +243,20 @@ function RegisterTab() {
   };
 
   const remove = async (u: string) => {
-    if (!confirm(`Xóa toàn bộ mẫu khuôn mặt của "${u}"?`)) return;
-    await api.del(`/api/chamcong/dangky/${encodeURIComponent(u)}`);
-    reload();
+    setConfirmDelete({
+      title: "Xóa mẫu khuôn mặt?",
+      description: `Toàn bộ mẫu khuôn mặt của "${u}" sẽ bị xóa khỏi dữ liệu chấm công.`,
+      detail: "Thao tác này không thể hoàn tác.",
+      confirmLabel: "Xóa tất cả",
+      onConfirm: async () => {
+        await api.del(`/api/chamcong/dangky/${encodeURIComponent(u)}`);
+        reload();
+      },
+    });
   };
 
   return (
+    <>
     <div className="space-y-4">
       <div className="cc-grid">
         <div className="space-y-3">
@@ -301,6 +319,19 @@ function RegisterTab() {
         </div>
       )}
     </div>
+    <ConfirmDialog
+      open={Boolean(confirmDelete)}
+      title={confirmDelete?.title ?? ""}
+      description={confirmDelete?.description ?? ""}
+      detail={confirmDelete?.detail}
+      confirmLabel={confirmDelete?.confirmLabel}
+      busyLabel="Đang xóa..."
+      tone="danger"
+      icon={<Trash2 className="h-6 w-6" />}
+      onClose={() => setConfirmDelete(null)}
+      onConfirm={() => confirmDelete?.onConfirm()}
+    />
+    </>
   );
 }
 
@@ -309,6 +340,7 @@ function FaceDataTab() {
   const { data: faces, reload: reloadFaces } = useApi<FaceNguoiDung[]>("/api/chamcong/dadangky");
   const { data: logs, reload: reloadLogs } = useApi<FaceRegistrationLog[]>("/api/chamcong/dangky/log");
   const [search, setSearch] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<FaceDeleteConfirm | null>(null);
 
   const rows = (logs ?? []).filter(
     (l) =>
@@ -322,18 +354,33 @@ function FaceDataTab() {
   };
 
   const removeUser = async (u: string) => {
-    if (!confirm(`Xóa toàn bộ mẫu khuôn mặt của "${u}"?`)) return;
-    await api.del(`/api/chamcong/dangky/${encodeURIComponent(u)}`);
-    reloadAll();
+    setConfirmDelete({
+      title: "Xóa dữ liệu khuôn mặt?",
+      description: `Toàn bộ mẫu đã đăng ký của "${u}" sẽ bị xóa khỏi hệ thống.`,
+      detail: "Nhân viên này cần đăng ký lại khuôn mặt để chấm công.",
+      confirmLabel: "Xóa tất cả",
+      onConfirm: async () => {
+        await api.del(`/api/chamcong/dangky/${encodeURIComponent(u)}`);
+        reloadAll();
+      },
+    });
   };
 
   const removeSample = async (id: number) => {
-    if (!confirm("Xóa mẫu khuôn mặt này?")) return;
-    await api.del(`/api/chamcong/dangky/mau/${id}`);
-    reloadAll();
+    setConfirmDelete({
+      title: "Xóa mẫu khuôn mặt?",
+      description: "Mẫu khuôn mặt này sẽ bị xóa khỏi nhật ký đăng ký.",
+      detail: "Các mẫu còn lại của nhân viên vẫn được giữ nguyên.",
+      confirmLabel: "Xóa mẫu",
+      onConfirm: async () => {
+        await api.del(`/api/chamcong/dangky/mau/${id}`);
+        reloadAll();
+      },
+    });
   };
 
   return (
+    <>
     <div className="cc-grid">
       <div className="cc-result glass cc-list">
         <div className="cc-list-title">Đã đăng ký ({faces?.length ?? 0})</div>
@@ -394,6 +441,19 @@ function FaceDataTab() {
         </table>
       </div>
     </div>
+    <ConfirmDialog
+      open={Boolean(confirmDelete)}
+      title={confirmDelete?.title ?? ""}
+      description={confirmDelete?.description ?? ""}
+      detail={confirmDelete?.detail}
+      confirmLabel={confirmDelete?.confirmLabel}
+      busyLabel="Đang xóa..."
+      tone="danger"
+      icon={<Trash2 className="h-6 w-6" />}
+      onClose={() => setConfirmDelete(null)}
+      onConfirm={() => confirmDelete?.onConfirm()}
+    />
+    </>
   );
 }
 

@@ -21,6 +21,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { isAdmin, type ChatDbUsage, type RtspAttendanceStatus } from "../lib/types";
 import { useApi } from "../lib/useApi";
+import { IP_CAMERA_ENABLED } from "../lib/features";
 import {
   isKeepCreateVoucherOpenEnabled,
   subscribeKeepCreateVoucherOpenEnabled,
@@ -81,7 +82,7 @@ export function SystemSettings() {
     error: rtspError,
     reload: reloadRtspStatus,
     setData: setRtspStatus,
-  } = useApi<RtspAttendanceStatus>(admin ? "/api/chamcong/rtsp/status" : null, [admin]);
+  } = useApi<RtspAttendanceStatus>(admin && IP_CAMERA_ENABLED ? "/api/chamcong/rtsp/status" : null, [admin]);
 
   const waterCountdown = user && waterEnabled
     ? formatHHMMSS(countdownToNextReminder(ensureWaterDailyLogin(user.id, now), WATER_INTERVAL_MS, now))
@@ -404,7 +405,8 @@ export function SystemSettings() {
           </div>
         </GlassCard>
 
-        {admin && (
+        {/* Thẻ "Chấm công tự động" (camera IP) tạm ẩn theo IP_CAMERA_ENABLED. */}
+        {admin && IP_CAMERA_ENABLED && (
           <GlassCard className="system-settings-card p-5">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="flex min-w-0 gap-4">

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowLeft,
   Ban,
   Bell,
   CheckCheck,
   Forward,
+  Home,
   Loader2,
   MessageCircle,
   MoreHorizontal,
@@ -14,18 +16,20 @@ import {
   Search,
   Send,
   Smile,
+  SmilePlus,
   SquarePen,
   Trash2,
   User,
   Video,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { initials } from "../lib/format";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
-import type { ChatContact, ChatConversation, ChatMessage } from "../lib/types";
+import type { ChatContact, ChatConversation, ChatMessage, ChatReaction } from "../lib/types";
 import "../features/giacong/giacong.css";
 
 /* =========================================================================
@@ -180,7 +184,7 @@ function MessageMenu({
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0 });
+  const [pos, setPos] = useState<PickerPosition>({ left: 0 });
 
   const toggle = () => {
     if (!open && btnRef.current) {
@@ -195,7 +199,7 @@ function MessageMenu({
   };
 
   return (
-    <div className="opacity-0 transition group-hover:opacity-100">
+    <div className="hidden transition sm:block sm:opacity-0 sm:group-hover:opacity-100">
       <button
         ref={btnRef}
         type="button"
@@ -232,20 +236,207 @@ function MessageMenu({
   );
 }
 
+/** Bộ biểu cảm có thể thả cho một tin nhắn. */
+const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+const PICKER_WIDTH = 256;
+type PickerPosition = { left: number; top?: number; bottom?: number };
+
+function ReactionBarPortal({
+  pos,
+  onClose,
+  onReact,
+}: {
+  pos: PickerPosition;
+  onClose: () => void;
+  onReact: (emoji: string) => void;
+}) {
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[90]" onClick={onClose} />
+      <div
+        className="fixed z-[91] flex items-center gap-0.5 rounded-full border border-[var(--glass-border)] px-1.5 py-1 shadow-lg"
+        style={{
+          left: pos.left,
+          top: pos.top,
+          bottom: pos.bottom,
+          background: "var(--glass-bg-strong)",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+        }}
+      >
+        {REACTIONS.map((e) => (
+          <button
+            key={e}
+            type="button"
+            onClick={() => {
+              onClose();
+              onReact(e);
+            }}
+            className="grid h-8 w-8 place-items-center rounded-full text-lg leading-none transition hover:scale-125 hover:bg-[var(--accent-soft)]"
+          >
+            {e}
+          </button>
+        ))}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+/** Nút "mặt cười +" (hiện khi rê chuột) mở thanh chọn biểu cảm. Cùng kiểu portal/fixed như
+ *  MessageMenu để không bị vùng chat (overflow) cắt mất; tự mở lên trên nếu sát đáy. */
+function ReactionPicker({ mine, onReact }: { mine: boolean; onReact: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0 });
+
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      let left = mine ? r.right - PICKER_WIDTH : r.left;
+      left = Math.max(8, Math.min(left, window.innerWidth - PICKER_WIDTH - 8));
+      const openUp = window.innerHeight - r.bottom < 80;
+      setPos(openUp ? { left, bottom: window.innerHeight - r.top + 4 } : { left, top: r.bottom + 4 });
+    }
+    setOpen((o) => !o);
+  };
+
+  return (
+    <div className="opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={toggle}
+        aria-label="Thả biểu cảm"
+        className="grid h-7 w-7 place-items-center rounded-full text-[var(--text-muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+      >
+        <SmilePlus className="h-4 w-4" />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className="fixed inset-0 z-[90]" onClick={() => setOpen(false)} />
+            <div
+              className="fixed z-[91] flex items-center gap-0.5 rounded-full border border-[var(--glass-border)] px-1.5 py-1 shadow-lg"
+              style={{
+                left: pos.left,
+                top: pos.top,
+                bottom: pos.bottom,
+                background: "var(--glass-bg-strong)",
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+              }}
+            >
+              {REACTIONS.map((e) => (
+                <button
+                  key={e}
+                  type="button"
+                  onClick={() => { setOpen(false); onReact(e); }}
+                  className="grid h-8 w-8 place-items-center rounded-full text-lg leading-none transition hover:scale-125 hover:bg-[var(--accent-soft)]"
+                >
+                  {e}
+                </button>
+              ))}
+            </div>
+          </>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+/** Hàng "chip" biểu cảm dưới mỗi bong bóng — bấm để bỏ/đổi nhanh biểu cảm của mình. */
+function ReactionChips({
+  reactions,
+  mine,
+  onReact,
+}: {
+  reactions: ChatReaction[];
+  mine: boolean;
+  onReact: (emoji: string) => void;
+}) {
+  if (reactions.length === 0) return null;
+  return (
+    <div className={`mt-1 flex flex-wrap gap-1 ${mine ? "justify-end pr-1" : "justify-start pl-1"}`}>
+      {reactions.map((rx) => (
+        <button
+          key={rx.emoji}
+          type="button"
+          onClick={() => onReact(rx.emoji)}
+          title={rx.mine ? "Bỏ biểu cảm" : "Thả biểu cảm này"}
+          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold transition hover:opacity-90"
+          style={
+            rx.mine
+              ? { background: "var(--accent-soft)", borderColor: "var(--accent)", color: "var(--accent)" }
+              : { background: "var(--glass-bg-strong)", borderColor: "var(--glass-border)", color: "var(--text-secondary)" }
+          }
+        >
+          <span className="text-sm leading-none">{rx.emoji}</span>
+          <span>{rx.count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Bubble({
   msg,
   group,
   onForward,
   onEdit,
   onRemove,
+  onReact,
 }: {
   msg: ChatMessage;
   group?: boolean;
   onForward: () => void;
   onEdit: () => void;
   onRemove: () => void;
+  onReact: (emoji: string) => void;
 }) {
   const mine = msg.mine;
+  const reactions = msg.reactions ?? [];
+  const [longPressPos, setLongPressPos] = useState<PickerPosition | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current != null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const openLongPressPicker = (target: HTMLDivElement) => {
+    const r = target.getBoundingClientRect();
+    let left = r.left + r.width / 2 - PICKER_WIDTH / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - PICKER_WIDTH - 8));
+    const openUp = r.top > 72;
+    setLongPressPos(openUp ? { left, bottom: window.innerHeight - r.top + 8 } : { left, top: r.bottom + 8 });
+    navigator.vibrate?.(12);
+  };
+
+  const handleBubbleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!window.matchMedia("(max-width: 767px)").matches) return;
+    const t = e.touches[0];
+    if (!t) return;
+    longPressStartRef.current = { x: t.clientX, y: t.clientY };
+    const target = e.currentTarget;
+    clearLongPress();
+    longPressTimerRef.current = window.setTimeout(() => openLongPressPicker(target), 460);
+  };
+
+  const handleBubbleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const start = longPressStartRef.current;
+    const t = e.touches[0];
+    if (!start || !t) return;
+    if (Math.abs(t.clientX - start.x) > 12 || Math.abs(t.clientY - start.y) > 12) clearLongPress();
+  };
+
+  const handleBubbleTouchEnd = () => {
+    clearLongPress();
+    longPressStartRef.current = null;
+  };
 
   // Tin đã gỡ: hiển thị placeholder mờ, không có menu tùy chọn.
   if (msg.removed) {
@@ -265,9 +456,22 @@ function Bubble({
         <span className="mb-0.5 ml-1 text-[0.68rem] font-semibold text-[var(--text-secondary)]">{msg.senderName}</span>
       )}
       <div className={`group flex w-full items-center gap-1 ${mine ? "justify-end" : "justify-start"}`}>
-        {mine && <MessageMenu mine onForward={onForward} onEdit={onEdit} onRemove={onRemove} />}
+        {mine && (
+          <>
+            <MessageMenu mine onForward={onForward} onEdit={onEdit} onRemove={onRemove} />
+            <ReactionPicker mine onReact={onReact} />
+          </>
+        )}
         <div
-          className="max-w-[78%] rounded-2xl px-3.5 py-2.5 text-[0.9rem] leading-relaxed shadow-sm"
+          className="chat-message-bubble max-w-[86%] rounded-2xl px-3.5 py-2.5 text-[0.9rem] leading-relaxed shadow-sm sm:max-w-[78%]"
+          onTouchStart={handleBubbleTouchStart}
+          onTouchMove={handleBubbleTouchMove}
+          onTouchEnd={handleBubbleTouchEnd}
+          onTouchCancel={handleBubbleTouchEnd}
+          onSelect={(e) => e.preventDefault()}
+          onContextMenu={(e) => {
+            if (window.matchMedia("(max-width: 767px)").matches) e.preventDefault();
+          }}
           style={
             mine
               ? { background: "var(--accent)", color: "#fff", borderTopRightRadius: 6 }
@@ -296,8 +500,17 @@ function Bubble({
             {mine && <CheckCheck className="h-3.5 w-3.5" />}
           </div>
         </div>
-        {!mine && <MessageMenu mine={false} onForward={onForward} onEdit={onEdit} onRemove={onRemove} />}
+        {!mine && (
+          <>
+            <ReactionPicker mine={false} onReact={onReact} />
+            <MessageMenu mine={false} onForward={onForward} onEdit={onEdit} onRemove={onRemove} />
+          </>
+        )}
       </div>
+      <ReactionChips reactions={reactions} mine={mine} onReact={onReact} />
+      {longPressPos && (
+        <ReactionBarPortal pos={longPressPos} onClose={() => setLongPressPos(null)} onReact={onReact} />
+      )}
     </div>
   );
 }
@@ -317,7 +530,7 @@ function EditRow({
   return (
     <div className="flex justify-end">
       <div
-        className="w-full max-w-[78%] rounded-2xl p-2"
+        className="w-full max-w-[86%] rounded-2xl p-2 sm:max-w-[78%]"
         style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--accent)" }}
       >
         <textarea
@@ -443,6 +656,7 @@ function ContactSkeletons({ count = 6 }: { count?: number }) {
 }
 
 export function Chats() {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -451,10 +665,16 @@ export function Chats() {
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeFallback, setActiveFallback] = useState<ChatConversation | null>(null);
+  const [composerFocused, setComposerFocused] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [forwardMsg, setForwardMsg] = useState<ChatMessage | null>(null);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(max-width: 767px)").matches : false,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
+  const draftInputRef = useRef<HTMLInputElement>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const { data: convData, loading, reload: reloadConversations } = useApi<ChatConversation[]>("/api/chat/conversations");
   const allConversations = useMemo(() => convData ?? [], [convData]);
@@ -465,10 +685,37 @@ export function Chats() {
   );
   const messages = useMemo(() => msgData ?? [], [msgData]);
 
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile || !composerFocused) return;
+    const viewport = window.visualViewport;
+    const update = () => {
+      const height = viewport?.height ?? window.innerHeight;
+      document.documentElement.style.setProperty("--chat-visual-height", `${Math.floor(height)}px`);
+    };
+    update();
+    viewport?.addEventListener("resize", update);
+    viewport?.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    return () => {
+      viewport?.removeEventListener("resize", update);
+      viewport?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      document.documentElement.style.removeProperty("--chat-visual-height");
+    };
+  }, [composerFocused, isMobile]);
+
   // Tự chọn hội thoại đầu tiên khi vào trang (nếu chưa chọn).
   useEffect(() => {
-    if (!activeId && allConversations.length > 0) setActiveId(allConversations[0].id);
-  }, [activeId, allConversations]);
+    if (!isMobile && !activeId && allConversations.length > 0) setActiveId(allConversations[0].id);
+  }, [activeId, allConversations, isMobile]);
 
   const conversations = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -510,12 +757,49 @@ export function Chats() {
   const openConversation = (c: ChatConversation) => {
     setActiveId(c.id);
     setActiveFallback(c);
+    setProfileOpen(false);
     if (c.unread) reloadConversations({ silent: true });
+  };
+
+  const backToList = () => {
+    setProfileOpen(false);
+    setActiveId(null);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isMobile || (!activeId && !profileOpen)) return;
+    const t = e.touches[0];
+    if (!t) return;
+    if (!profileOpen && t.clientX > 56) {
+      touchStartRef.current = null;
+      return;
+    }
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start || !isMobile) return;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - start.x;
+    const dy = Math.abs(t.clientY - start.y);
+    if (dx < 70 || dy > 48) return;
+    if (profileOpen) {
+      setProfileOpen(false);
+    } else if (activeId) {
+      backToList();
+    }
   };
 
   const send = async () => {
     const text = draft.trim();
     if (!text || !activeId || sending) return;
+    const shouldKeepKeyboard = isMobile;
+    if (shouldKeepKeyboard) {
+      draftInputRef.current?.focus({ preventScroll: true });
+    }
     setSending(true);
     setDraft("");
     try {
@@ -528,6 +812,9 @@ export function Chats() {
       alert(e instanceof Error ? e.message : "Không gửi được tin nhắn");
     } finally {
       setSending(false);
+      if (shouldKeepKeyboard) {
+        requestAnimationFrame(() => draftInputRef.current?.focus({ preventScroll: true }));
+      }
     }
   };
 
@@ -588,6 +875,17 @@ export function Chats() {
     }
   };
 
+  // Thả / đổi / bỏ biểu cảm cho tin nhắn. Backend tự toggle (bấm lại đúng biểu cảm → bỏ).
+  const toggleReaction = async (m: ChatMessage, emoji: string) => {
+    if (!activeId) return;
+    try {
+      await api.post(`/api/chat/conversations/${activeId}/messages/${m.id}/react`, { emoji });
+      reloadMessages({ silent: true });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Không thả được biểu cảm");
+    }
+  };
+
   const doForward = async (c: ChatContact) => {
     const m = forwardMsg;
     if (!m) return;
@@ -615,11 +913,27 @@ export function Chats() {
   };
 
   return (
-    <div className="gc-root flex h-full min-h-0 gap-3">
+    <div
+      className={`gc-root chat-mobile-shell flex h-full min-h-0 gap-3 ${activeId ? "is-chat-open" : ""} ${
+        composerFocused ? "is-composer-focused" : ""
+      }`}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
       {/* ---------- Cột danh sách hội thoại ---------- */}
-      <GlassPanel strong className="flex w-[320px] shrink-0 flex-col overflow-hidden p-3">
+      <GlassPanel strong className="chat-conversation-list flex w-[320px] shrink-0 flex-col overflow-hidden p-3">
         <div className="mb-3 flex items-center justify-between">
-          <h1 className="text-xl font-bold text-[var(--text)]">Trò chuyện</h1>
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/dashboard")}
+              className="chat-home-button grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[var(--text-secondary)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+              aria-label="Về trang chủ"
+            >
+              <Home className="h-[18px] w-[18px]" />
+            </button>
+            <h1 className="truncate text-xl font-bold text-[var(--text)]">Trò chuyện</h1>
+          </div>
           <button
             type="button"
             onClick={() => setNewChatOpen(true)}
@@ -665,7 +979,7 @@ export function Chats() {
           })}
         </div>
 
-        <div className="scroll-thin -mx-1 flex-1 overflow-y-auto px-1">
+        <div className="scroll-thin -mx-1 flex-1 overflow-y-auto px-1 pt-[5px]">
           {conversations.map((c) => {
             const on = c.id === activeId;
             return (
@@ -711,10 +1025,18 @@ export function Chats() {
       </GlassPanel>
 
       {/* ---------- Cột hội thoại ---------- */}
-      <GlassPanel strong className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <GlassPanel strong className="chat-thread-panel flex min-w-0 flex-1 flex-col overflow-hidden">
         {active ? (
           <>
             <header className="flex items-center gap-3 border-b border-[var(--glass-border)] p-3">
+              <button
+                type="button"
+                onClick={backToList}
+                aria-label="Quay lai danh sach tro chuyen"
+                className="chat-mobile-back grid h-9 w-9 shrink-0 place-items-center rounded-full text-[var(--text-secondary)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+              >
+                <ArrowLeft className="h-[18px] w-[18px]" />
+              </button>
               <button
                 type="button"
                 onClick={() => setProfileOpen((o) => !o)}
@@ -780,6 +1102,7 @@ export function Chats() {
                         onForward={() => setForwardMsg(m)}
                         onEdit={() => startEdit(m)}
                         onRemove={() => removeMsg(m)}
+                        onReact={(emoji) => toggleReaction(m, emoji)}
                       />
                     ),
                   )}
@@ -800,8 +1123,11 @@ export function Chats() {
                 style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
               >
                 <input
+                  ref={draftInputRef}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
+                  onFocus={() => setComposerFocused(true)}
+                  onBlur={() => setComposerFocused(false)}
                   onKeyDown={(e) => e.key === "Enter" && send()}
                   placeholder="Nhập tin nhắn…"
                   className="w-full bg-transparent text-sm text-[var(--text)] outline-none"
@@ -812,6 +1138,7 @@ export function Chats() {
               </div>
               <button
                 type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={send}
                 disabled={sending || !draft.trim()}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:opacity-90 disabled:opacity-50"
@@ -835,7 +1162,7 @@ export function Chats() {
 
       {/* ---------- Cột hồ sơ (trượt từ phải sang, đẩy khung chat) ---------- */}
       <div
-        className={`flex justify-end overflow-hidden transition-[width,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        className={`chat-profile-shell flex justify-end overflow-hidden transition-[width,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
           profileOpen && active ? "" : "pointer-events-none"
         }`}
         style={profileOpen && active ? { width: 300, marginLeft: 0 } : { width: 0, marginLeft: -12 }}
@@ -844,6 +1171,14 @@ export function Chats() {
         <GlassPanel strong className="flex w-[300px] shrink-0 flex-col overflow-hidden">
           {active && (
             <div className="scroll-thin flex-1 overflow-y-auto p-4">
+              <button
+                type="button"
+                onClick={() => setProfileOpen(false)}
+                aria-label="Quay lai cuoc tro chuyen"
+                className="chat-profile-back mb-3 h-10 w-10 place-items-center rounded-full text-[var(--text-secondary)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+              >
+                <ArrowLeft className="h-[18px] w-[18px]" />
+              </button>
               <div className="flex flex-col items-center text-center">
                 <Avatar name={active.title} url={active.avatarUrl} size={88} online={active.isOnline} group={active.isGroup} />
                 <NameWithBadge name={active.title} verified={active.verified} className="mt-3 text-lg font-bold text-[var(--text)]" />

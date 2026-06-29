@@ -259,7 +259,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </div>
 
-      <nav ref={navRef} className="liquid-sidebar-nav relative flex-1">
+      <nav ref={navRef} className="liquid-sidebar-nav scroll-thin relative flex-1">
         <div ref={indicatorRef} className="liquid-active-indicator" aria-hidden="true" />
         <div className="km-sidebar-sections relative z-10">
           {visibleSections.map((section, i) => (

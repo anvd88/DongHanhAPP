@@ -28,7 +28,7 @@ export function Table<T>({
   const alignCls = (a?: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "");
   return (
     <div className="gc-scroll overflow-auto">
-      <table className="gc-table">
+      <table className="gc-table gc-mobile-cards">
         <thead>
           <tr>
             {columns.map((c, i) => (
@@ -43,7 +43,7 @@ export function Table<T>({
             Array.from({ length: skeletonRows }).map((_, i) => (
               <tr key={`sk-${i}`} style={{ cursor: "default" }}>
                 {columns.map((c, j) => (
-                  <td key={j} className={alignCls(c.align)}>
+                  <td key={j} className={alignCls(c.align)} data-label={c.header}>
                     <span
                       className={`gc-skeleton h-4 ${c.align === "right" ? "ml-auto" : c.align === "center" ? "mx-auto" : ""}`}
                       style={{ display: "block", width: c.align === "right" || c.align === "center" ? "48%" : "82%" }}
@@ -66,7 +66,7 @@ export function Table<T>({
                 style={{ cursor: onRowClick ? "pointer" : "default" }}
               >
                 {columns.map((c, j) => (
-                  <td key={j} className={`${alignCls(c.align)} ${c.className ?? ""}`}>
+                  <td key={j} className={`${alignCls(c.align)} ${c.className ?? ""}`} data-label={c.header}>
                     {c.cell(row, i)}
                   </td>
                 ))}

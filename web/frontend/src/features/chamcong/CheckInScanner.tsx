@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Camera, CheckCircle2, Loader2, ScanFace, UserCheck } from "lucide-react";
+import { Camera, Loader2, ScanFace, Smartphone, UserCheck, Video } from "lucide-react";
 import { api } from "../../lib/api";
 import type { ChamCongResult } from "../../lib/types";
 import { useCamera } from "./useCamera";
+import { useIpCamera } from "./useIpCamera";
+import { IP_CAMERA_ENABLED } from "../../lib/features";
 import { FaceTrackingOverlay, type Framing } from "./FaceTrackingOverlay";
+
+/** Nguồn camera dùng để chấm công: webcam thiết bị (điện thoại/laptop) hoặc camera IP (RTSP kiosk). */
+type CameraSource = "device" | "ip";
 
 type CheckInToastData = {
   id: number;
@@ -27,6 +32,9 @@ type FaceScanAnimationStatus = "idle" | "starting" | "scanning" | "success" | "e
 // Số khung chụp mỗi lượt và khoảng cách giữa các khung (≈ 1.2s) — đủ để có vài khung nét, chính diện.
 const BURST_COUNT = 10;
 const BURST_GAP_MS = 110;
+// Camera IP: gom khung từ ảnh snapshot (FFmpeg ghi ~10 khung/giây) — giãn nhịp để có khung khác nhau.
+const IP_BURST_COUNT = 8;
+const IP_BURST_GAP_MS = 150;
 const START_SCAN_ANIMATION_MS = 460;
 // Cổng giữ khung: khuôn mặt phải ở đúng khung "đạt" LIÊN TỤC đủ ngần này mới chấm — tránh hệ thống
 // quá nhạy bắt nhầm người chỉ thoáng qua khung. Rời khung là đếm lại từ đầu.
@@ -241,17 +249,144 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>) {
   return { videoRef, active, error, phase, hint, result, busy, aiming, holding, run, stop, cancel, reset };
 }
 
+/**
+ * Hook chấm công bằng CAMERA IP: hiển thị hình trực tiếp từ snapshot rồi gom 1 loạt khung gửi
+ * server nhận diện. Không có cổng "ngắm/giữ khung" như webcam (không gắn MediaPipe vào ảnh poll);
+ * chất lượng/tư thế/liveness vẫn do server kiểm ở /api/chamcong/cham như chế độ điện thoại.
+ */
+function useIpBurstCheckIn() {
+  const { active, error, frameUrl, start: startFeed, stop, captureBurst } = useIpCamera();
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [hint, setHint] = useState("Sẵn sàng chấm công");
+  const [result, setResult] = useState<ChamCongResult | null>(null);
+  const runningRef = useRef(false);
+
+  const run = useCallback(async () => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    setResult(null);
+    try {
+      if (!active) {
+        setPhase("opening");
+        setHint(PROCESSING_HINT);
+        await startFeed();
+        await wait(START_SCAN_ANIMATION_MS);
+      }
+
+      setPhase("capturing");
+      setHint(PROCESSING_HINT);
+      const frames = await captureBurst(IP_BURST_COUNT, IP_BURST_GAP_MS);
+      if (frames.length === 0) {
+        setPhase("warning");
+        setHint("Chưa lấy được hình từ camera IP. Kiểm tra kết nối camera rồi thử lại.");
+        setResult(null);
+        return;
+      }
+
+      setPhase("analyzing");
+      setHint(PROCESSING_HINT);
+      const res = await api.post<ChamCongResult>("/api/chamcong/cham", { images: frames });
+      setResult(res);
+
+      if (res.matched && res.status === "ok") {
+        setPhase("success");
+        setHint(`${res.fullName || res.username || "Nhân viên"} đã chấm công`);
+      } else {
+        setPhase("warning");
+        setHint(res.guidance || res.message);
+      }
+    } catch (e) {
+      setPhase("warning");
+      setHint(e instanceof Error ? e.message : "Lỗi chấm công. Vui lòng thử lại.");
+      setResult(null);
+    } finally {
+      runningRef.current = false;
+    }
+  }, [active, startFeed, captureBurst]);
+
+  const reset = useCallback(() => {
+    setResult(null);
+    setPhase("idle");
+    setHint("Sẵn sàng chấm công");
+  }, []);
+
+  const busy = phase === "opening" || phase === "capturing" || phase === "analyzing";
+  return { active, error, frameUrl, phase, hint, result, busy, start: startFeed, run, stop, reset };
+}
+
+/** Bộ chọn nguồn camera (Điện thoại / Camera IP) cho màn chấm công. */
+function CameraSourceToggle({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: CameraSource;
+  onChange: (next: CameraSource) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="cc-source-toggle" role="tablist" aria-label="Nguồn camera chấm công">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={value === "device"}
+        data-on={value === "device"}
+        disabled={disabled}
+        onClick={() => onChange("device")}
+      >
+        <Smartphone className="h-4 w-4" /> Điện thoại
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={value === "ip"}
+        data-on={value === "ip"}
+        disabled={disabled}
+        onClick={() => onChange("ip")}
+      >
+        <Video className="h-4 w-4" /> Camera IP
+      </button>
+    </div>
+  );
+}
+
 /* --------------------------- Thẻ camera trong app --------------------------- */
 function PanelCheckInScanner() {
+  const [source, setSource] = useState<CameraSource>("device");
   const [framing, setFraming] = useState<Framing | null>(null);
   const framingRef = useRef<Framing | null>(null);
   const onFraming = useCallback((f: Framing) => {
     framingRef.current = f;
     setFraming(f);
   }, []);
-  const { videoRef, active, error, phase, hint, result, busy, aiming, holding, run, cancel } =
-    useBurstCheckIn(framingRef);
+  const device = useBurstCheckIn(framingRef);
+  const ip = useIpBurstCheckIn();
   const [toast, setToast] = useState<CheckInToastData | null>(null);
+
+  // Nguồn đang chọn quyết định pha/kết quả hiển thị chung cho cả thẻ.
+  const phase = source === "ip" ? ip.phase : device.phase;
+  const result = source === "ip" ? ip.result : device.result;
+
+  // Đổi nguồn: tắt nguồn cũ và đặt lại trạng thái để tránh dính kết quả/khung hình cũ.
+  const switchSource = useCallback(
+    (next: CameraSource) => {
+      if (next === source) return;
+      device.cancel();
+      ip.stop();
+      device.reset();
+      ip.reset();
+      setFraming(null);
+      framingRef.current = null;
+      setSource(next);
+    },
+    [source, device, ip],
+  );
+
+  // Chọn Camera IP → bật ngay hình trực tiếp để nhân viên thấy mình trong khung trước khi chấm.
+  useEffect(() => {
+    if (source === "ip" && !ip.active) void ip.start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source]);
 
   useEffect(() => {
     if (phase === "success" && result?.matched) {
@@ -263,121 +398,124 @@ function PanelCheckInScanner() {
     }
   }, [phase, result]);
 
-  // Gợi ý dưới camera: khi đang xử lý hiện thông báo trung tính; khi rảnh hiện hướng dẫn căn khung.
-  const showFramingHint = active && !busy && phase !== "success" && framing != null && framing.state !== "good";
-
   return (
     <div className="cc-grid cc-checkin-grid">
       <CheckInToastHost toast={toast} onExpire={() => setToast(null)} />
 
       <div className="cc-camera glass">
-        <div className="cc-video-wrap">
-          <video ref={videoRef} playsInline muted className="cc-video" data-active={active} />
-          {!active && (
-            <div className="cc-video-empty">
-              <Camera className="h-8 w-8" />
-              <span>Camera đang tắt</span>
-            </div>
-          )}
-          {active && <FaceTrackingOverlay videoRef={videoRef} active={active} onFraming={onFraming} />}
-          {busy ? (
-            <div className="cc-scan-hint">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> {hint}
-            </div>
-          ) : aiming ? (
-            <>
-              <div className="cc-scan-hint" data-hold={holding ? "true" : undefined}>
-                {hint}
-              </div>
-              <div className="cc-hold-bar" aria-hidden="true">
-                {/* Thanh tự chạy bằng CSS transition trên transform (GPU) — mượt, không giật theo JS. */}
-                <span
-                  data-run={holding ? "true" : "false"}
-                  style={{ transitionDuration: holding ? `${HOLD_STABLE_MS}ms` : "0ms" }}
-                />
-              </div>
-            </>
-          ) : showFramingHint ? (
-            <div className="cc-scan-hint" data-warn="true">
-              {framing!.hint}
-            </div>
-          ) : null}
-        </div>
-
-        {error && <div className="cc-error">{error}</div>}
-
-        <div className="cc-camera-actions">
-          <button className="cc-btn cc-btn-primary" onClick={run} disabled={busy || aiming} type="button">
-            {busy || aiming ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanFace className="h-4 w-4" />}{" "}
-            {busy
-              ? PROCESSING_HINT
-              : aiming
-                ? "Giữ khuôn mặt trong khung…"
-                : active
-                  ? "Chấm công"
-                  : "Bật camera & chấm công"}
-          </button>
-          {active && (
-            <button className="cc-btn" onClick={cancel} disabled={busy} type="button">
-              Tắt camera
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="cc-result glass">
-        <PanelResult phase={phase} hint={hint} result={result} />
+        {IP_CAMERA_ENABLED && <CameraSourceToggle value={source} onChange={switchSource} />}
+        {source === "device" ? (
+          <DeviceCameraArea device={device} framing={framing} onFraming={onFraming} />
+        ) : (
+          <IpCameraArea ip={ip} />
+        )}
       </div>
     </div>
   );
 }
 
-function PanelResult({ phase, hint, result }: { phase: Phase; hint: string; result: ChamCongResult | null }) {
-  if (phase === "success" && result?.matched) {
-    return (
-      <div className="cc-result-ok">
-        <CheckCircle2 className="h-12 w-12" />
-        <div className="cc-result-name">{result.fullName || result.username}</div>
-        {result.loai && <div className="cc-result-badge" data-loai={result.loai}>{result.loai}</div>}
-        <div className="cc-result-meta">Độ khớp {(result.similarity * 100).toFixed(1)}%</div>
-      </div>
-    );
-  }
-
-  if (phase === "warning") {
-    return (
-      <div className="cc-result-fail" data-tone={result?.status === "posture" || result?.status === "lowquality" ? "warn" : undefined}>
-        <ScanFace className="h-12 w-12" />
-        <div className="cc-result-name cc-result-name--sm">{result?.message ?? "Chưa chấm công được"}</div>
-        {result?.guidance && <p>{result.guidance}</p>}
-        {!result?.guidance && <p>{hint}</p>}
-      </div>
-    );
-  }
-
-  if (phase === "aiming") {
-    return (
-      <div className="cc-result-empty">
-        <ScanFace className="h-10 w-10" />
-        <p>{hint}</p>
-        <p className="cc-result-sub">Giữ mặt trong khung ~3 giây để xác nhận.</p>
-      </div>
-    );
-  }
-
-  if (phase === "opening" || phase === "capturing" || phase === "analyzing") {
-    return (
-      <div className="cc-result-empty">
-        <Loader2 className="h-10 w-10 animate-spin" />
-        <p>{hint}</p>
-      </div>
-    );
-  }
+/** Khu camera webcam thiết bị (có cổng căn khung MediaPipe + thanh giữ khung). */
+function DeviceCameraArea({
+  device,
+  framing,
+  onFraming,
+}: {
+  device: ReturnType<typeof useBurstCheckIn>;
+  framing: Framing | null;
+  onFraming: (f: Framing) => void;
+}) {
+  const { videoRef, active, error, phase, hint, busy, aiming, holding, run, cancel } = device;
+  const showFramingHint = active && !busy && phase !== "success" && framing != null && framing.state !== "good";
 
   return (
-    <div className="cc-result-empty">
-      <ScanFace className="h-10 w-10" />
-    </div>
+    <>
+      <div className="cc-video-wrap">
+        <video ref={videoRef} playsInline muted className="cc-video" data-active={active} />
+        {!active && (
+          <div className="cc-video-empty">
+            <Camera className="h-8 w-8" />
+            <span>Camera đang tắt</span>
+          </div>
+        )}
+        {active && <FaceTrackingOverlay videoRef={videoRef} active={active} onFraming={onFraming} />}
+        {busy ? (
+          <div className="cc-scan-hint">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> {hint}
+          </div>
+        ) : aiming ? (
+          <>
+            <div className="cc-scan-hint" data-hold={holding ? "true" : undefined}>
+              {hint}
+            </div>
+            <div className="cc-hold-bar" aria-hidden="true">
+              {/* Thanh tự chạy bằng CSS transition trên transform (GPU) — mượt, không giật theo JS. */}
+              <span
+                data-run={holding ? "true" : "false"}
+                style={{ transitionDuration: holding ? `${HOLD_STABLE_MS}ms` : "0ms" }}
+              />
+            </div>
+          </>
+        ) : showFramingHint ? (
+          <div className="cc-scan-hint" data-warn="true">
+            {framing!.hint}
+          </div>
+        ) : null}
+      </div>
+
+      {error && <div className="cc-error">{error}</div>}
+
+      <div className="cc-camera-actions">
+        <button className="cc-btn cc-btn-primary" onClick={run} disabled={busy || aiming} type="button">
+          {busy || aiming ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanFace className="h-4 w-4" />}{" "}
+          {busy
+            ? PROCESSING_HINT
+            : aiming
+              ? "Giữ khuôn mặt trong khung…"
+              : active
+                ? "Chấm công"
+                : "Bật camera & chấm công"}
+        </button>
+        {active && (
+          <button className="cc-btn" onClick={cancel} disabled={busy} type="button">
+            Tắt camera
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** Khu camera IP: hiển thị hình trực tiếp từ snapshot RTSP, không có cổng căn khung. */
+function IpCameraArea({ ip }: { ip: ReturnType<typeof useIpBurstCheckIn> }) {
+  const { active, error, frameUrl, hint, busy, run } = ip;
+
+  return (
+    <>
+      <div className="cc-video-wrap">
+        {frameUrl ? (
+          <img src={frameUrl} alt="Hình trực tiếp từ camera IP" className="cc-video cc-video--ip" data-active="true" />
+        ) : (
+          <div className="cc-video-empty">
+            <Video className="h-8 w-8" />
+            <span>{active ? "Đang kết nối camera IP…" : "Camera IP đang tắt"}</span>
+          </div>
+        )}
+        {busy && (
+          <div className="cc-scan-hint">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> {hint}
+          </div>
+        )}
+      </div>
+
+      {error && <div className="cc-error">{error}</div>}
+
+      <div className="cc-camera-actions">
+        <button className="cc-btn cc-btn-primary" onClick={run} disabled={busy} type="button">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanFace className="h-4 w-4" />}{" "}
+          {busy ? PROCESSING_HINT : active ? "Chấm công" : "Kết nối camera IP & chấm công"}
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -387,21 +525,50 @@ function BiometricCheckInScanner({
   returnToLoginOnOk = false,
 }: Pick<CheckInScannerProps, "autoStart" | "returnToLoginOnOk">) {
   const navigate = useNavigate();
+  const [source, setSource] = useState<CameraSource>("device");
   const framingRef = useRef<Framing | null>(null);
   const onFraming = useCallback((f: Framing) => {
     framingRef.current = f;
   }, []);
-  const { videoRef, active, error, phase, hint, result, busy, aiming, run } = useBurstCheckIn(framingRef);
+  const device = useBurstCheckIn(framingRef);
+  const ip = useIpBurstCheckIn();
+
+  const active = source === "ip" ? ip.active : device.active;
+  const phase = source === "ip" ? ip.phase : device.phase;
+  const hint = source === "ip" ? ip.hint : device.hint;
+  const result = source === "ip" ? ip.result : device.result;
+  const busy = source === "ip" ? ip.busy : device.busy;
+  const aiming = source === "ip" ? false : device.aiming;
+  const run = source === "ip" ? ip.run : device.run;
+
+  const switchSource = useCallback(
+    (next: CameraSource) => {
+      if (next === source) return;
+      device.cancel();
+      ip.stop();
+      device.reset();
+      ip.reset();
+      framingRef.current = null;
+      setSource(next);
+    },
+    [source, device, ip],
+  );
 
   const autoStartedRef = useRef(false);
   useEffect(() => {
     if (autoStart && !autoStartedRef.current) {
       autoStartedRef.current = true;
-      void run();
+      void device.run();
     }
     // run đổi mỗi render; chỉ chạy 1 lần khi gắn nên không đưa vào deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart]);
+
+  // Chọn Camera IP → bật ngay hình trực tiếp làm nền kiosk.
+  useEffect(() => {
+    if (source === "ip" && !ip.active) void ip.start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source]);
 
   const success = phase === "success" && result?.matched;
   const successName = result?.fullName || result?.username || "Nhân viên";
@@ -423,8 +590,19 @@ function BiometricCheckInScanner({
 
   return (
     <div className="cc-bio-shell">
-      <video ref={videoRef} playsInline muted className="cc-bio-video" aria-hidden="true" />
-      {active && <FaceTrackingOverlay videoRef={videoRef} active={active} drawBox={false} onFraming={onFraming} />}
+      {/* Webcam thiết bị: ẩn (chỉ dùng để quét), MediaPipe căn khung chạy nền. */}
+      <video ref={device.videoRef} playsInline muted className="cc-bio-video" aria-hidden="true" />
+      {source === "device" && device.active && (
+        <FaceTrackingOverlay videoRef={device.videoRef} active={device.active} drawBox={false} onFraming={onFraming} />
+      )}
+      {/* Camera IP: hiển thị hình trực tiếp làm nền phía sau đảo kính. */}
+      {source === "ip" && ip.frameUrl && (
+        <img src={ip.frameUrl} alt="Hình trực tiếp từ camera IP" className="cc-bio-ip-bg" aria-hidden="true" />
+      )}
+
+      <div className="cc-bio-source">
+        {IP_CAMERA_ENABLED && <CameraSourceToggle value={source} onChange={switchSource} />}
+      </div>
 
       <motion.div
         className="cc-bio-island"
@@ -477,7 +655,6 @@ function BiometricCheckInScanner({
         )}
       </motion.div>
 
-      {error && <div className="cc-bio-note" data-warn="true">{error}</div>}
     </div>
   );
 }
@@ -750,7 +927,7 @@ function FaceScanAnimation({
 }
 
 /**
- * Khu chứa toast chấm công (góc dưới phải). Toast trượt vào từ bên phải; sau ~5s (khi 2 thanh
+ * Khu chứa toast chấm công (góc dưới phải). Toast trượt vào từ bên phải; sau ~5s (khi thanh
  * xanh chạy hết) thì trượt lên trên và mờ dần rồi biến mất. AnimatePresence lo hoạt ảnh thoát.
  */
 function CheckInToastHost({ toast, onExpire }: { toast: CheckInToastData | null; onExpire: () => void }) {
@@ -792,7 +969,6 @@ function CheckInToast({ data, onExpire }: { data: CheckInToastData; onExpire: ()
         <div className="cc-toast-title">{data.name} đã chấm công</div>
         <div className="cc-toast-sub">vào lúc {data.time}</div>
         <div className="cc-toast-bars" aria-hidden="true">
-          <span />
           <span />
         </div>
       </div>

@@ -113,9 +113,52 @@ public static class ChamCongEndpoints
             Results.Ok(new FaceEngineStatusDto(engine.Name, engine.MatchThreshold)))
             .AllowAnonymous();
 
+        // ── Camera IP (RTSP kiosk) TẠM ẨN ──────────────────────────────────────────────
+        // Toàn bộ nhóm endpoint /rtsp/* chỉ được đăng ký khi KioskCamera:Enabled = true.
+        // Đặt KioskCamera:Enabled = false (appsettings) để ẩn hẳn API camera IP (trả 404).
+        // Bật lại tính năng: chỉ cần đổi cờ này về true rồi khởi động lại backend.
+        var cameraEnabled = app.ServiceProvider.GetService<IConfiguration>()?.GetValue("KioskCamera:Enabled", false) ?? false;
+        if (cameraEnabled)
+        {
         g.MapGet("/rtsp/status", (RtspAttendanceWorker worker) =>
             Results.Ok(worker.GetStatus()))
             .RequireAuthorization(p => p.RequireRole("Admin"));
+
+        // Ảnh khung hình mới nhất của camera kiosk (snapshot do FFmpeg ghi liên tục ra latest.jpg).
+        // Frontend poll ảnh này để hiển thị "khung chấm công" camera IP cho nhân viên.
+        // Ẩn danh: màn hình kiosk chấm công (ngoài trang đăng nhập) cần xem được luồng camera.
+        g.MapGet("/rtsp/snapshot", (IConfiguration cfg, IHostEnvironment env) =>
+        {
+            var configured = cfg["KioskCamera:LatestFramePath"];
+            if (string.IsNullOrWhiteSpace(configured))
+                return Results.NotFound(new { message = "Chưa cấu hình đường dẫn ảnh camera." });
+
+            var path = Path.IsPathRooted(configured)
+                ? Path.GetFullPath(configured)
+                : Path.GetFullPath(Path.Combine(env.ContentRootPath, configured));
+
+            if (!File.Exists(path))
+                return Results.NotFound(new { message = "Chưa có ảnh camera. Đang chờ FFmpeg ghi khung hình đầu tiên." });
+
+            try
+            {
+                // FileShare.ReadWrite: FFmpeg đang ghi liên tục nên phải cho phép đọc song song.
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var ms = new MemoryStream();
+                fs.CopyTo(ms);
+                var bytes = ms.ToArray();
+                if (bytes.Length == 0)
+                    return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+                // Không cache: mỗi lần poll phải lấy khung mới nhất.
+                return Results.File(bytes, "image/jpeg", lastModified: File.GetLastWriteTimeUtc(path));
+            }
+            catch (IOException)
+            {
+                // Trùng nhịp ghi của FFmpeg → để client thử lại lần poll sau.
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+        }).AllowAnonymous();
 
         g.MapPost("/rtsp/reconnect", async (
             RtspAttendanceWorker worker,
@@ -162,6 +205,7 @@ public static class ChamCongEndpoints
                 status
             });
         }).RequireAuthorization(p => p.RequireRole("Admin"));
+        } // ── hết nhóm /rtsp/* (camera IP tạm ẩn) ──
 
         // Danh sách nhân viên đã đăng ký khuôn mặt (gộp theo username).
         g.MapGet("/dadangky", async (Database db) =>

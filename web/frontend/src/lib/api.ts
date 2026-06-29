@@ -46,9 +46,28 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
+/** Tải tài nguyên nhị phân (vd. ảnh snapshot camera) kèm Bearer token; trả Blob để tạo object URL. */
+async function requestBlob(path: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  const token = tokenStore.get();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(path, { method: "GET", headers });
+
+  if (res.status === 401) {
+    tokenStore.clear();
+    if (!location.pathname.startsWith("/login")) location.href = "/login";
+    throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
+  }
+
+  if (!res.ok) throw new ApiError(res.status, `Lỗi ${res.status}`);
+  return res.blob();
+}
+
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, body?: unknown) => request<T>("POST", p, body ?? {}),
   put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body ?? {}),
   del: <T>(p: string) => request<T>("DELETE", p),
+  getBlob: (p: string) => requestBlob(p),
 };

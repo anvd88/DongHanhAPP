@@ -68,12 +68,14 @@ if ($cameraUrl -match "127\.0\.0\.1:8555|localhost:8555") {
     $inputAttempts += ,@()
 }
 
+# KHÔNG dùng "-fflags nobuffer -flags low_delay": với luồng H.265 hay rớt gói (camera này),
+# tắt đệm khiến mất khung tham chiếu → decode hỏng nhiều → hình giật/đơ. Cho đệm + rtbufsize lớn
+# để bộ giải mã giữ đủ khung tham chiếu, đổi lại độ trễ tăng vài trăm ms (chấp nhận được cho snapshot).
 $commonInputArgs = @(
     "-hide_banner",
     "-nostdin",
     "-loglevel", "warning",
-    "-fflags", "nobuffer",
-    "-flags", "low_delay",
+    "-rtbufsize", "16M",
     "-allowed_media_types", "video",
     "-timeout", "5000000"
 )
@@ -81,8 +83,10 @@ $commonInputArgs = @(
 $outputArgs = @(
     "-i", $cameraUrl,
     "-an",
-    "-vf", "fps=3,scale=960:-2",
-    "-q:v", "3",
+    # crop=iw:ih/2:0:ih/2 → chỉ giữ NỬA DƯỚI khung hình (nửa trên của camera IP này bị đen, không có hình).
+    # fps=10 cho hình mượt hơn (trước đây 3 fps nên nhìn giật); q:v 5 giảm dung lượng để ghi/đọc nhanh.
+    "-vf", "fps=10,crop=iw:ih/2:0:ih/2,scale=960:-2",
+    "-q:v", "5",
     "-update", "1",
     "-atomic_writing", "1",
     "-y",

@@ -65,9 +65,12 @@ public record ChatContactDto(string Username, string DisplayName, string? Avatar
 public record ChatConversationDto(Guid Id, bool IsGroup, string Title, string? Username, string? AvatarUrl,
     bool IsOnline, bool Verified, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen);
 public record ChatMessageDto(long Id, string SenderUsername, string SenderName, bool Mine, string Body, DateTime CreatedAt,
-    DateTime? EditedAt, bool Removed, bool Forwarded);
+    DateTime? EditedAt, bool Removed, bool Forwarded, IReadOnlyList<ChatReactionDto>? Reactions = null);
+// Một biểu cảm (cảm xúc) gộp theo emoji trên một tin nhắn: số người thả + tôi có thả hay không.
+public record ChatReactionDto(string Emoji, int Count, bool Mine);
 public record SendMessageRequest(string Body, bool Forwarded = false);
 public record EditMessageRequest(string Body);
+public record ReactRequest(string Emoji);
 
 // Dung lượng DB của mục Trò chuyện (admin xem trong trang Hệ thống).
 public record ChatTableUsageDto(string Table, string Label, long Rows, long DataKb, long IndexKb, long TotalKb);

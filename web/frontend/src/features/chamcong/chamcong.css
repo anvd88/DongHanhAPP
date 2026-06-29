@@ -53,9 +53,9 @@
   .cc-grid { grid-template-columns: 1fr; }
 }
 
-/* Bố cục tab Chấm công: ưu tiên ô camera TO hơn ô kết quả. */
+/* Bố cục tab Chấm công: chỉ giữ khu camera, không hiển thị ô trạng thái phụ. */
 .cc-checkin-grid {
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 .cc-checkin-grid .cc-camera-actions .cc-btn-primary {
   flex: 1;
@@ -773,17 +773,6 @@ html[data-theme="dark"] .cc-bio-active-pill {
   border-color: rgba(255, 255, 255, 0.14);
 }
 
-.cc-bio-note {
-  max-width: 34ch;
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--text-muted);
-}
-
-.cc-bio-note[data-warn="true"] {
-  color: var(--danger);
-}
-
 @keyframes cc-bio-scan {
   0%, 100% { transform: translateY(-14px); opacity: 0.45; }
   50% { transform: translateY(14px); opacity: 1; }
@@ -1094,7 +1083,7 @@ html[data-theme="dark"] .cc-result-fail[data-tone="warn"] {
   }
 }
 
-/* Toast chấm công — thẻ kính trượt vào từ phải, 2 thanh xanh chạy 5s rồi trượt lên mờ dần. */
+/* Toast chấm công - thẻ kính trượt vào từ phải, 1 thanh xanh chạy 5s rồi trượt lên mờ dần. */
 .cc-toast-host {
   position: fixed;
   right: clamp(12px, 2.5vw, 28px);
@@ -1272,4 +1261,72 @@ html[data-theme="dark"] .cc-toast {
   text-align: center;
   padding: 1.5rem 0;
   color: var(--text-muted);
+}
+
+/* ----- Chọn nguồn camera (Điện thoại / Camera IP) ----- */
+.cc-source-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 0.75rem;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+.cc-source-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+.cc-source-toggle button[data-on="true"] {
+  color: #0b4aa2;
+  background: #fff;
+  box-shadow: 0 8px 18px -12px rgba(11, 74, 162, 0.6);
+}
+.cc-source-toggle button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Hình camera IP không lật gương như selfie. */
+.cc-video--ip {
+  transform: none;
+}
+
+/* Bộ chọn nguồn ở màn kiosk: nổi phía trên đảo kính. */
+.cc-bio-source {
+  position: relative;
+  z-index: 3;
+}
+
+/* Hình trực tiếp camera IP làm nền kiosk (mờ nhẹ để chữ trên đảo kính dễ đọc). */
+.cc-bio-ip-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.32;
+  filter: saturate(1.05);
+  pointer-events: none;
+  z-index: 0;
+}
+
+html[data-theme="dark"] .cc-source-toggle {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+html[data-theme="dark"] .cc-source-toggle button[data-on="true"] {
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.22);
+  box-shadow: none;
 }
