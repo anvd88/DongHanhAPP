@@ -29,9 +29,9 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<TokenService>();
 
-// Bộ máy nhận diện khuôn mặt cho chấm công — OpenCV YuNet + SFace ONNX (nhận diện THẬT).
+// Bộ máy nhận diện khuôn mặt cho chấm công: YuNet + căn chỉnh 5 điểm + AdaFace R50 ONNX Runtime.
 // Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
-builder.Services.AddSingleton<IFaceEngine, OpenCvSFaceEngine>();
+builder.Services.AddSingleton<IFaceEngine, AdaFaceR50Engine>();
 
 // Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
 builder.Services.AddSignalR();

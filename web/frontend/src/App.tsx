@@ -4,6 +4,7 @@ import { startRealtime } from "./lib/realtime";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ThemeProvider } from "./lib/theme";
 import { Layout } from "./components/Layout";
+import { ChatNotificationProvider } from "./components/ChatNotifications";
 import { WaterReminderPopup } from "./components/WaterReminderPopup";
 import { EyeReminderPopup } from "./components/EyeReminderPopup";
 import { Login } from "./pages/Login";
@@ -40,9 +41,11 @@ function Protected({ children, admin }: { children: React.ReactNode; admin?: boo
   if (admin && !isAdmin(user)) return <Navigate to="/dashboard" replace />;
   return (
     <>
-      <Layout>{children}</Layout>
-      <WaterReminderPopup user={user} />
-      <EyeReminderPopup user={user} />
+      <ChatNotificationProvider>
+        <Layout>{children}</Layout>
+        <WaterReminderPopup user={user} />
+        <EyeReminderPopup user={user} />
+      </ChatNotificationProvider>
     </>
   );
 }

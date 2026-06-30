@@ -424,7 +424,7 @@ function DeviceCameraArea({
   framing: Framing | null;
   onFraming: (f: Framing) => void;
 }) {
-  const { videoRef, active, error, phase, hint, busy, aiming, holding, run, cancel } = device;
+  const { videoRef, active, error, phase, hint, result, busy, aiming, holding, run, cancel } = device;
   const showFramingHint = active && !busy && phase !== "success" && framing != null && framing.state !== "good";
 
   return (
@@ -460,6 +460,17 @@ function DeviceCameraArea({
             {framing!.hint}
           </div>
         ) : null}
+
+        <AnimatePresence>
+          {phase === "success" && result?.matched && (
+            <CheckInSuccessOverlay
+              name={result.fullName || result.username || "Nhân viên"}
+              time={result.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
+              loai={result.loai}
+            />
+          )}
+          {phase === "warning" && <CheckInFailOverlay message={hint} />}
+        </AnimatePresence>
       </div>
 
       {error && <div className="cc-error">{error}</div>}
@@ -487,7 +498,7 @@ function DeviceCameraArea({
 
 /** Khu camera IP: hiển thị hình trực tiếp từ snapshot RTSP, không có cổng căn khung. */
 function IpCameraArea({ ip }: { ip: ReturnType<typeof useIpBurstCheckIn> }) {
-  const { active, error, frameUrl, hint, busy, run } = ip;
+  const { active, error, frameUrl, phase, hint, result, busy, run } = ip;
 
   return (
     <>
@@ -505,6 +516,17 @@ function IpCameraArea({ ip }: { ip: ReturnType<typeof useIpBurstCheckIn> }) {
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> {hint}
           </div>
         )}
+
+        <AnimatePresence>
+          {phase === "success" && result?.matched && (
+            <CheckInSuccessOverlay
+              name={result.fullName || result.username || "Nhân viên"}
+              time={result.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
+              loai={result.loai}
+            />
+          )}
+          {phase === "warning" && <CheckInFailOverlay message={hint} />}
+        </AnimatePresence>
       </div>
 
       {error && <div className="cc-error">{error}</div>}
@@ -922,6 +944,184 @@ function FaceScanAnimation({
           )}
         </AnimatePresence>
       </svg>
+    </motion.div>
+  );
+}
+
+/** Lớp phủ kết quả thành công hiện trực tiếp trên khung camera. */
+function CheckInSuccessOverlay({
+  name,
+  time,
+  loai,
+}: {
+  name: string;
+  time: string | null;
+  loai?: string | null;
+}) {
+  const reducedMotion = useReducedMotion();
+  const meta = [loai, time].filter(Boolean).join(" · ");
+
+  return (
+    <motion.div
+      className="cc-success-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.26, ease: "easeOut" }}
+    >
+      <motion.div
+        className="cc-success-card"
+        initial={{ scale: 0.92, y: 10, opacity: 0 }}
+        animate={{ scale: 1, y: 0, opacity: 1 }}
+        exit={{ scale: 0.96, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 260, damping: 22 }}
+      >
+        <div className="cc-success-mark">
+          <motion.span
+            className="cc-success-disc"
+            initial={reducedMotion ? { scale: 1, opacity: 1 } : { scale: 0.82, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={
+              reducedMotion
+                ? { duration: 0.12 }
+                : { type: "spring", stiffness: 360, damping: 24, delay: 0.04 }
+            }
+          />
+          <svg className="cc-success-svg" viewBox="0 0 100 100" aria-hidden="true">
+            <motion.circle
+              cx="50"
+              cy="50"
+              r="32"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="4.5"
+              strokeLinecap="round"
+              initial={{ pathLength: 0, opacity: 0 }}
+              animate={{ pathLength: 1, opacity: 1 }}
+              transition={
+                reducedMotion
+                  ? { duration: 0.12 }
+                  : { duration: 0.36, ease: "easeOut", delay: 0.08 }
+              }
+              style={{ rotate: -90, transformOrigin: "50% 50%" }}
+            />
+            <motion.path
+              d="M34 51 L45 62 L67 38"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              initial={{ pathLength: 0, opacity: 0 }}
+              animate={{ pathLength: 1, opacity: 1 }}
+              transition={
+                reducedMotion
+                  ? { duration: 0.14, delay: 0.06 }
+                  : { duration: 0.34, ease: "easeOut", delay: 0.32 }
+              }
+            />
+          </svg>
+        </div>
+
+        <div className="cc-success-text">
+          <div className="cc-success-eyebrow">Chấm công thành công</div>
+          <div className="cc-success-name">{name}</div>
+          {meta && <div className="cc-success-meta">{meta}</div>}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/** Lớp phủ kết quả thất bại hiện trực tiếp trên khung camera. */
+function CheckInFailOverlay({ message }: { message: string }) {
+  const reducedMotion = useReducedMotion();
+
+  return (
+    <motion.div
+      className="cc-fail-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.26, ease: "easeOut" }}
+    >
+      <motion.div
+        className="cc-fail-card"
+        initial={{ scale: 0.92, y: 10, opacity: 0 }}
+        animate={{ scale: 1, y: 0, opacity: 1 }}
+        exit={{ scale: 0.96, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 260, damping: 22 }}
+      >
+        <motion.div
+          className="cc-fail-mark"
+          initial={reducedMotion ? { x: 0 } : { x: 0 }}
+          animate={reducedMotion ? { x: 0 } : { x: [0, -4, 4, -2, 0] }}
+          transition={reducedMotion ? { duration: 0 } : { duration: 0.36, delay: 0.18, ease: "easeInOut" }}
+        >
+          <motion.span
+            className="cc-fail-disc"
+            initial={reducedMotion ? { scale: 1, opacity: 1 } : { scale: 0.82, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={
+              reducedMotion
+                ? { duration: 0.12 }
+                : { type: "spring", stiffness: 360, damping: 24, delay: 0.04 }
+            }
+          />
+          <svg className="cc-fail-svg" viewBox="0 0 100 100" aria-hidden="true">
+            <motion.circle
+              cx="50"
+              cy="50"
+              r="32"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="4.5"
+              strokeLinecap="round"
+              initial={{ pathLength: 0, opacity: 0 }}
+              animate={{ pathLength: 1, opacity: 1 }}
+              transition={
+                reducedMotion
+                  ? { duration: 0.12 }
+                  : { duration: 0.32, ease: "easeOut", delay: 0.08 }
+              }
+              style={{ rotate: -90, transformOrigin: "50% 50%" }}
+            />
+            <motion.path
+              d="M39 39 L61 61"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="6.5"
+              strokeLinecap="round"
+              initial={{ pathLength: 0, opacity: 0 }}
+              animate={{ pathLength: 1, opacity: 1 }}
+              transition={
+                reducedMotion
+                  ? { duration: 0.12, delay: 0.06 }
+                  : { duration: 0.26, ease: "easeOut", delay: 0.24 }
+              }
+            />
+            <motion.path
+              d="M61 39 L39 61"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="6.5"
+              strokeLinecap="round"
+              initial={{ pathLength: 0, opacity: 0 }}
+              animate={{ pathLength: 1, opacity: 1 }}
+              transition={
+                reducedMotion
+                  ? { duration: 0.12, delay: 0.06 }
+                  : { duration: 0.26, ease: "easeOut", delay: 0.42 }
+              }
+            />
+          </svg>
+        </motion.div>
+
+        <div className="cc-fail-text">
+          <div className="cc-fail-eyebrow">Chấm công chưa thành công</div>
+          {message && <div className="cc-fail-message">{message}</div>}
+        </div>
+      </motion.div>
     </motion.div>
   );
 }

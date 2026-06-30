@@ -149,6 +149,11 @@ public static class ChatEndpoints
                   RETURNING id;")
                 .With("@cid", id).With("@me", me).With("@body", body).With("@fwd", forwarded).ExecuteScalarAsync());
 
+            await conn.Cmd(
+                @"UPDATE web_chat_members
+                  SET is_hidden = FALSE, deleted_at = NULL
+                  WHERE conversation_id = @cid AND username <> @me")
+                .With("@cid", id).With("@me", me).ExecuteNonQueryAsync();
             await MarkRead(conn, id, me);
             await NotifyChat(hub, conn, id);
 
@@ -239,6 +244,60 @@ public static class ChatEndpoints
             return Results.NoContent();
         });
 
+        // Ghim / bỏ ghim cuộc trò chuyện trong danh sách của riêng người đang đăng nhập.
+        g.MapPost("/conversations/{id:guid}/pin", async (Guid id, SetConversationPinnedRequest req, ClaimsPrincipal principal, Database db) =>
+        {
+            var me = principal.Username();
+            await using var conn = await db.OpenAsync();
+            if (!await IsMember(conn, id, me)) return Results.Forbid();
+            await conn.Cmd(
+                "UPDATE web_chat_members SET is_pinned = @p WHERE conversation_id = @cid AND username = @u")
+                .With("@p", req.Pinned).With("@cid", id).With("@u", me).ExecuteNonQueryAsync();
+            return Results.NoContent();
+        });
+
+        // Ẩn khỏi danh sách của riêng người đang đăng nhập. Tin nhắn mới từ người khác sẽ tự hiện lại.
+        g.MapPost("/conversations/{id:guid}/hide", async (Guid id, ClaimsPrincipal principal, Database db) =>
+        {
+            var me = principal.Username();
+            await using var conn = await db.OpenAsync();
+            if (!await IsMember(conn, id, me)) return Results.Forbid();
+            await conn.Cmd(
+                "UPDATE web_chat_members SET is_hidden = TRUE WHERE conversation_id = @cid AND username = @u")
+                .With("@cid", id).With("@u", me).ExecuteNonQueryAsync();
+            return Results.NoContent();
+        });
+
+        // Xóa khỏi danh sách của riêng người đang đăng nhập (không xóa dữ liệu của người còn lại).
+        g.MapDelete("/conversations/{id:guid}", async (Guid id, ClaimsPrincipal principal, Database db) =>
+        {
+            var me = principal.Username();
+            await using var conn = await db.OpenAsync();
+            if (!await IsMember(conn, id, me)) return Results.Forbid();
+            await conn.Cmd(
+                @"UPDATE web_chat_members
+                  SET is_hidden = TRUE, is_pinned = FALSE, deleted_at = CURRENT_TIMESTAMP
+                  WHERE conversation_id = @cid AND username = @u")
+                .With("@cid", id).With("@u", me).ExecuteNonQueryAsync();
+            return Results.NoContent();
+        });
+
+        // Báo xấu cuộc trò chuyện để lưu lại dấu vết xử lý sau.
+        g.MapPost("/conversations/{id:guid}/report", async (Guid id, ChatReportRequest req, ClaimsPrincipal principal, Database db) =>
+        {
+            var me = principal.Username();
+            var reason = (req?.Reason ?? "").Trim();
+            if (reason.Length > 500) reason = reason[..500];
+
+            await using var conn = await db.OpenAsync();
+            if (!await IsMember(conn, id, me)) return Results.Forbid();
+            await conn.Cmd(
+                @"INSERT INTO web_chat_reports (conversation_id, reporter_username, reason, created_at)
+                  VALUES (@cid, @u, @reason, CURRENT_TIMESTAMP)")
+                .With("@cid", id).With("@u", me).With("@reason", reason).ExecuteNonQueryAsync();
+            return Results.NoContent();
+        });
+
         // Dung lượng DB của mục Trò chuyện (chỉ admin) — phục vụ trang Hệ thống → tab Cơ sở dữ liệu.
         g.MapGet("/db-usage", async (ClaimsPrincipal principal, Database db) =>
         {
@@ -255,6 +314,7 @@ public static class ChatEndpoints
         ("web_chat_conversations", "Cuộc trò chuyện"),
         ("web_chat_members", "Thành viên"),
         ("web_chat_reactions", "Biểu cảm"),
+        ("web_chat_reports", "Báo xấu"),
         ("web_verified_users", "Tài khoản tích xanh"),
     ];
 
@@ -267,6 +327,7 @@ public static class ChatEndpoints
                   UNION ALL SELECT 'web_chat_conversations', COUNT(*)::bigint FROM web_chat_conversations
                   UNION ALL SELECT 'web_chat_members', COUNT(*)::bigint FROM web_chat_members
                   UNION ALL SELECT 'web_chat_reactions', COUNT(*)::bigint FROM web_chat_reactions
+                  UNION ALL SELECT 'web_chat_reports', COUNT(*)::bigint FROM web_chat_reports
                   UNION ALL SELECT 'web_verified_users', COUNT(*)::bigint FROM web_verified_users
               )
               SELECT table_name,
@@ -379,7 +440,15 @@ public static class ChatEndpoints
                 AND (SELECT COUNT(*) FROM web_chat_members m WHERE m.conversation_id = c.id) = 2
               LIMIT 1")
             .With("@me", me).With("@other", other).ExecuteScalarAsync();
-        if (found is Guid g) return g;
+        if (found is Guid g)
+        {
+            await conn.Cmd(
+                @"UPDATE web_chat_members
+                  SET is_hidden = FALSE, deleted_at = NULL
+                  WHERE conversation_id = @cid AND username = @me")
+                .With("@cid", g).With("@me", me).ExecuteNonQueryAsync();
+            return g;
+        }
 
         var id = Guid.NewGuid();
         await conn.Cmd(
@@ -395,7 +464,7 @@ public static class ChatEndpoints
     {
         var list = new List<ChatConversationDto>();
         var cmd = conn.Cmd(
-            $@"SELECT c.id, c.is_group, c.title,
+            $@"SELECT c.id, c.is_group, c.title, COALESCE(me.is_pinned, FALSE) AS is_pinned,
                       o.username AS other_username,
                       au.full_name AS other_full_name,
                       {VerifiedExpr} AS other_verified,
@@ -433,10 +502,13 @@ public static class ChatEndpoints
                    WHERE mm.conversation_id = c.id AND mm.sender_username <> @me AND mm.is_removed = FALSE
                      AND (me.last_read_at IS NULL OR mm.created_at > me.last_read_at)
                ) unr ON TRUE
-               WHERE me.username = @me {(onlyId is null ? "" : "AND c.id = @only")}
+               WHERE me.username = @me
+                 AND COALESCE(me.is_hidden, FALSE) = FALSE
+                 AND me.deleted_at IS NULL
+                 {(onlyId is null ? "" : "AND c.id = @only")}
                -- NULLS LAST: PostgreSQL mặc định xếp NULL trước khi DESC, sẽ đẩy hội thoại chưa có
                -- tin nhắn (last_at NULL) lên đầu. SQL Server xếp NULL cuối — giữ nguyên hành vi đó.
-               ORDER BY lm.created_at DESC NULLS LAST")
+               ORDER BY COALESCE(me.is_pinned, FALSE) DESC, lm.created_at DESC NULLS LAST")
             .With("@me", me);
         if (onlyId is not null) cmd.With("@only", onlyId.Value);
 
@@ -469,7 +541,8 @@ public static class ChatEndpoints
                 !isGroup && r.Bool("other_online"),
                 !isGroup && r.Bool("other_verified"),
                 preview, r.DtNull("last_at"), r.Int("unread"),
-                isGroup ? null : r.DtNull("other_last_seen")));
+                isGroup ? null : r.DtNull("other_last_seen"),
+                r.Bool("is_pinned")));
         }
         return list;
     }
@@ -509,6 +582,9 @@ public static class ChatEndpoints
             ALTER TABLE web_chat_messages ADD COLUMN IF NOT EXISTS edited_at timestamptz NULL;
             ALTER TABLE web_chat_messages ADD COLUMN IF NOT EXISTS is_removed boolean NOT NULL DEFAULT FALSE;
             ALTER TABLE web_chat_messages ADD COLUMN IF NOT EXISTS is_forwarded boolean NOT NULL DEFAULT FALSE;
+            ALTER TABLE web_chat_members ADD COLUMN IF NOT EXISTS is_pinned boolean NOT NULL DEFAULT FALSE;
+            ALTER TABLE web_chat_members ADD COLUMN IF NOT EXISTS is_hidden boolean NOT NULL DEFAULT FALSE;
+            ALTER TABLE web_chat_members ADD COLUMN IF NOT EXISTS deleted_at timestamptz NULL;
 
             CREATE TABLE IF NOT EXISTS web_verified_users (
                 username varchar(128) NOT NULL PRIMARY KEY,
@@ -524,9 +600,19 @@ public static class ChatEndpoints
                 CONSTRAINT pk_web_chat_reactions PRIMARY KEY (message_id, username)
             );
 
+            CREATE TABLE IF NOT EXISTS web_chat_reports (
+                id bigserial NOT NULL PRIMARY KEY,
+                conversation_id uuid NOT NULL,
+                reporter_username varchar(128) NOT NULL,
+                reason varchar(500) NOT NULL DEFAULT '',
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS ix_web_chat_messages_conv ON web_chat_messages (conversation_id, created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS ix_web_chat_members_user ON web_chat_members (username, conversation_id, last_read_at);
+            CREATE INDEX IF NOT EXISTS ix_web_chat_members_list ON web_chat_members (username, is_hidden, deleted_at, is_pinned);
             CREATE INDEX IF NOT EXISTS ix_web_chat_reactions_msg ON web_chat_reactions (message_id);
+            CREATE INDEX IF NOT EXISTS ix_web_chat_reports_conv ON web_chat_reports (conversation_id, created_at DESC);
             """)
             .ExecuteNonQueryAsync(ct);
     }

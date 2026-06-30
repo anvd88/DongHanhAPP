@@ -5,6 +5,8 @@ import {
   Ban,
   Bell,
   CheckCheck,
+  EyeOff,
+  Flag,
   Forward,
   Home,
   Loader2,
@@ -12,6 +14,8 @@ import {
   MoreHorizontal,
   Pencil,
   Phone,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Send,
@@ -22,7 +26,8 @@ import {
   User,
   Video,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import type { LucideIcon } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { initials } from "../lib/format";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
@@ -147,7 +152,7 @@ function MenuItem({
   onClick,
   danger,
 }: {
-  icon: typeof Forward;
+  icon: LucideIcon;
   label: string;
   onClick: () => void;
   danger?: boolean;
@@ -167,6 +172,7 @@ function MenuItem({
 }
 
 const MENU_WIDTH = 160;
+const CONVERSATION_MENU_WIDTH = 184;
 
 /** Nút "..." (hiện khi rê chuột) mở menu Chuyển tiếp / Chỉnh sửa / Gỡ.
  *  Menu render qua portal ra <body> với vị trí fixed → không bị vùng chat (overflow)
@@ -655,8 +661,180 @@ function ContactSkeletons({ count = 6 }: { count?: number }) {
   );
 }
 
+function ConversationContextMenu({
+  pos,
+  unread,
+  pinned,
+  onClose,
+  onOpen,
+  onShowProfile,
+  onMarkRead,
+  onTogglePin,
+  onHide,
+  onReport,
+  onDelete,
+}: {
+  pos: PickerPosition;
+  unread: number;
+  pinned: boolean;
+  onClose: () => void;
+  onOpen: () => void;
+  onShowProfile: () => void;
+  onMarkRead: () => void;
+  onTogglePin: () => void;
+  onHide: () => void;
+  onReport: () => void;
+  onDelete: () => void;
+}) {
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[90]" onClick={onClose} />
+      <div
+        className="fixed z-[91] overflow-hidden rounded-xl border border-[var(--glass-border)] py-1 shadow-lg"
+        style={{
+          left: pos.left,
+          top: pos.top,
+          bottom: pos.bottom,
+          width: CONVERSATION_MENU_WIDTH,
+          background: "var(--glass-bg-strong)",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+        }}
+      >
+        <MenuItem icon={MessageCircle} label="Mở trò chuyện" onClick={() => { onClose(); onOpen(); }} />
+        <MenuItem icon={pinned ? PinOff : Pin} label={pinned ? "Bỏ ghim" : "Ghim hội thoại"} onClick={() => { onClose(); onTogglePin(); }} />
+        <MenuItem icon={User} label="Xem hồ sơ" onClick={() => { onClose(); onShowProfile(); }} />
+        {unread > 0 && (
+          <MenuItem icon={CheckCheck} label="Đánh dấu đã đọc" onClick={() => { onClose(); onMarkRead(); }} />
+        )}
+        <MenuItem icon={EyeOff} label="Ẩn trò chuyện" onClick={() => { onClose(); onHide(); }} />
+        <MenuItem icon={Flag} label="Báo xấu" onClick={() => { onClose(); onReport(); }} />
+        <MenuItem icon={Trash2} label="Xóa hội thoại" danger onClick={() => { onClose(); onDelete(); }} />
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+function ConversationRow({
+  conversation,
+  active,
+  onOpen,
+  onShowProfile,
+  onMarkRead,
+  onTogglePin,
+  onHide,
+  onReport,
+  onDelete,
+}: {
+  conversation: ChatConversation;
+  active: boolean;
+  onOpen: () => void;
+  onShowProfile: () => void;
+  onMarkRead: () => void;
+  onTogglePin: () => void;
+  onHide: () => void;
+  onReport: () => void;
+  onDelete: () => void;
+}) {
+  const [menuPos, setMenuPos] = useState<PickerPosition | null>(null);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+
+  const positionMenu = (left: number, top: number, anchorBottom?: number) => {
+    const safeLeft = Math.max(8, Math.min(left, window.innerWidth - CONVERSATION_MENU_WIDTH - 8));
+    const menuHeight = conversation.unread > 0 ? 276 : 236;
+    const shouldOpenUp = window.innerHeight - top < menuHeight + 16;
+    setMenuPos(
+      shouldOpenUp
+        ? { left: safeLeft, bottom: Math.max(8, window.innerHeight - (anchorBottom ?? top)) }
+        : { left: safeLeft, top: Math.max(8, top) },
+    );
+  };
+
+  const openMenu = () => {
+    const r = menuBtnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    positionMenu(r.right - CONVERSATION_MENU_WIDTH, r.bottom + 6, r.top - 6);
+  };
+
+  const handleRowKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    onOpen();
+  };
+
+  const handleMenuClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    openMenu();
+  };
+
+  return (
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={handleRowKeyDown}
+        className="chat-conversation-row group mb-1 flex w-full cursor-pointer items-center gap-3 rounded-2xl p-2.5 text-left transition"
+        style={active ? { background: "var(--accent-soft)" } : undefined}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Avatar name={conversation.title} url={conversation.avatarUrl} online={conversation.isOnline} group={conversation.isGroup} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                {conversation.pinned && <Pin className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--accent)" }} />}
+                <NameWithBadge name={conversation.title} verified={conversation.verified} className="text-sm font-bold" />
+              </span>
+              <span className="shrink-0 text-[0.68rem] font-medium text-[var(--text-muted)]">{fmtTime(conversation.lastAt)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-xs text-[var(--text-secondary)]">{conversation.preview || "Bắt đầu trò chuyện..."}</span>
+
+            </div>
+          </div>
+        </div>
+        <div className={`chat-conversation-actions ${conversation.unread ? "has-unread" : ""}`}>
+          <button
+            ref={menuBtnRef}
+            type="button"
+            onClick={handleMenuClick}
+            className="chat-conversation-menu-button grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--text-muted)] opacity-100 transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] sm:opacity-0 sm:group-hover:opacity-100"
+            aria-label="Tuy chon hoi thoai"
+            aria-haspopup="menu"
+            aria-expanded={!!menuPos}
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          {conversation.unread ? (
+            <span className="chat-conversation-unread-badge">
+              {conversation.unread}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      {menuPos && (
+        <ConversationContextMenu
+          pos={menuPos}
+          unread={conversation.unread}
+          pinned={!!conversation.pinned}
+          onClose={() => setMenuPos(null)}
+          onOpen={onOpen}
+          onShowProfile={onShowProfile}
+          onMarkRead={onMarkRead}
+          onTogglePin={onTogglePin}
+          onHide={onHide}
+          onReport={onReport}
+          onDelete={onDelete}
+        />
+      )}
+    </>
+  );
+}
+
 export function Chats() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -678,6 +856,7 @@ export function Chats() {
 
   const { data: convData, loading, reload: reloadConversations } = useApi<ChatConversation[]>("/api/chat/conversations");
   const allConversations = useMemo(() => convData ?? [], [convData]);
+  const requestedConversationId = searchParams.get("conversation");
 
   const { data: msgData, loading: msgLoading, reload: reloadMessages } = useApi<ChatMessage[]>(
     activeId ? `/api/chat/conversations/${activeId}/messages` : null,
@@ -716,6 +895,16 @@ export function Chats() {
   useEffect(() => {
     if (!isMobile && !activeId && allConversations.length > 0) setActiveId(allConversations[0].id);
   }, [activeId, allConversations, isMobile]);
+
+  useEffect(() => {
+    if (!requestedConversationId) return;
+    const found = allConversations.find((c) => c.id === requestedConversationId);
+    if (!found) return;
+    setActiveId(found.id);
+    setActiveFallback(found);
+    setProfileOpen(false);
+    setSearchParams({}, { replace: true });
+  }, [allConversations, requestedConversationId, setSearchParams]);
 
   const conversations = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -759,6 +948,69 @@ export function Chats() {
     setActiveFallback(c);
     setProfileOpen(false);
     if (c.unread) reloadConversations({ silent: true });
+  };
+
+  const showConversationProfile = (c: ChatConversation) => {
+    setActiveId(c.id);
+    setActiveFallback(c);
+    setProfileOpen(true);
+    if (c.unread) reloadConversations({ silent: true });
+  };
+
+  const markConversationRead = async (c: ChatConversation) => {
+    try {
+      await api.post(`/api/chat/conversations/${c.id}/read`);
+      reloadConversations({ silent: true });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Không đánh dấu đã đọc được cuộc trò chuyện");
+    }
+  };
+
+  const toggleConversationPin = async (c: ChatConversation) => {
+    try {
+      await api.post(`/api/chat/conversations/${c.id}/pin`, { pinned: !c.pinned });
+      reloadConversations({ silent: true });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Không ghim được cuộc trò chuyện");
+    }
+  };
+
+  const removeConversationFromList = (id: string) => {
+    if (activeId === id) {
+      setActiveId(null);
+      setActiveFallback(null);
+      setProfileOpen(false);
+    }
+    reloadConversations({ silent: true });
+  };
+
+  const hideConversation = async (c: ChatConversation) => {
+    try {
+      await api.post(`/api/chat/conversations/${c.id}/hide`);
+      removeConversationFromList(c.id);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Không ẩn được cuộc trò chuyện");
+    }
+  };
+
+  const deleteConversation = async (c: ChatConversation) => {
+    if (!confirm("Xóa hội thoại này khỏi danh sách của bạn? Tin nhắn phía người còn lại không bị xóa.")) return;
+    try {
+      await api.del(`/api/chat/conversations/${c.id}`);
+      removeConversationFromList(c.id);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Không xóa được cuộc trò chuyện");
+    }
+  };
+
+  const reportConversation = async (c: ChatConversation) => {
+    if (!confirm("Báo xấu cuộc trò chuyện này?")) return;
+    try {
+      await api.post(`/api/chat/conversations/${c.id}/report`, { reason: "Người dùng báo xấu từ menu hội thoại." });
+      alert("Đã ghi nhận báo xấu.");
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Không báo xấu được cuộc trò chuyện");
+    }
   };
 
   const backToList = () => {
@@ -928,7 +1180,7 @@ export function Chats() {
               type="button"
               onClick={() => navigate("/dashboard")}
               className="chat-home-button grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[var(--text-secondary)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
-              aria-label="Về trang chủ"
+              aria-label="Ve trang tong quan"
             >
               <Home className="h-[18px] w-[18px]" />
             </button>
@@ -983,36 +1235,18 @@ export function Chats() {
           {conversations.map((c) => {
             const on = c.id === activeId;
             return (
-              <button
+              <ConversationRow
                 key={c.id}
-                type="button"
-                onClick={() => openConversation(c)}
-                className="mb-1 flex w-full items-center gap-3 rounded-2xl p-2.5 text-left transition"
-                style={on ? { background: "var(--accent-soft)" } : undefined}
-              >
-                <Avatar name={c.title} url={c.avatarUrl} online={c.isOnline} group={c.isGroup} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <NameWithBadge
-                      name={c.title}
-                      verified={c.verified}
-                      className="text-sm font-bold text-[var(--text)]"
-                    />
-                    <span className="shrink-0 text-[0.68rem] font-medium text-[var(--text-muted)]">{fmtTime(c.lastAt)}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs text-[var(--text-secondary)]">{c.preview || "Bắt đầu trò chuyện…"}</span>
-                    {c.unread ? (
-                      <span
-                        className="grid h-5 min-w-[20px] shrink-0 place-items-center rounded-full px-1.5 text-[0.66rem] font-bold text-white"
-                        style={{ background: "var(--accent)" }}
-                      >
-                        {c.unread}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-              </button>
+                conversation={c}
+                active={on}
+                onOpen={() => openConversation(c)}
+                onShowProfile={() => showConversationProfile(c)}
+                onMarkRead={() => markConversationRead(c)}
+                onTogglePin={() => toggleConversationPin(c)}
+                onHide={() => hideConversation(c)}
+                onReport={() => reportConversation(c)}
+                onDelete={() => deleteConversation(c)}
+              />
             );
           })}
           {loading && conversations.length === 0 && <ConversationSkeletons />}

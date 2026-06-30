@@ -19,9 +19,9 @@ public static class ChamCongEndpoints
 {
     // Số mẫu khuôn mặt tối đa giữ cho mỗi nhân viên (mẫu admin đăng ký + mẫu tự học).
     private const int MaxFaceSamples = 5;
-    // Chỉ TỰ HỌC khi độ khớp cao hơn HẲN ngưỡng nhận diện (0.363) để chắc chắn đúng người
+    // Chỉ TỰ HỌC khi độ khớp cao hơn hẳn ngưỡng nhận diện để chắc chắn đúng người
     // → tránh "nhiễm" hồ sơ bằng một lần khớp sai. Tăng/giảm nếu cần chặt/lỏng hơn.
-    private const double AdaptiveLearnMinSimilarity = 0.5;
+    private const double AdaptiveLearnMinSimilarity = 0.65;
     // Nhãn ở cột created_by để phân biệt mẫu hệ thống TỰ HỌC với mẫu admin đăng ký.
     private const string AutoLearnTag = "(tự học)";
     private const string AutoAttendanceSettingKey = "KioskCamera.AutoAttendanceEnabled";
@@ -71,6 +71,16 @@ public static class ChamCongEndpoints
             CREATE INDEX IF NOT EXISTS ix_cham_cong_face_username ON cham_cong_face (username, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_cham_cong_log_username_time ON cham_cong_log (username, occurred_at DESC);
             """).ExecuteNonQueryAsync();
+
+        // AdaFace R50 emits 512-float embeddings. SFace embeddings from older versions are incompatible,
+        // so drop stale templates once during startup; newly registered AdaFace templates are preserved.
+        await conn.Cmd("DELETE FROM cham_cong_face WHERE octet_length(embedding) <> 2048")
+            .ExecuteNonQueryAsync();
+
+        // Quyền riêng tư: hệ thống KHÔNG lưu ảnh gốc khuôn mặt nữa (chỉ giữ vector đặc trưng).
+        // Dọn mọi ảnh đăng ký cũ còn sót lại. Tự chữa: sau lần đầu sẽ là no-op (0 dòng).
+        await conn.Cmd("UPDATE cham_cong_face SET anh = NULL WHERE anh IS NOT NULL")
+            .ExecuteNonQueryAsync();
     }
 
     private static async Task SaveSystemSetting(Database db, string key, string value, string updatedBy)
@@ -256,13 +266,14 @@ public static class ChamCongEndpoints
                 return Results.BadRequest(new { message = "Không phát hiện được khuôn mặt trong ảnh. Hãy chụp lại rõ hơn." });
 
             await using var conn = await db.OpenAsync();
+            // CHỈ lưu vector đặc trưng, KHÔNG lưu ảnh gốc khuôn mặt (riêng tư + gọn DB). Ảnh chỉ dùng
+            // tạm để trích embedding rồi bỏ; nhận diện về sau chỉ cần vector (cột anh để mặc định NULL).
             await conn.Cmd(
-                @"INSERT INTO cham_cong_face (username, full_name, embedding, anh, created_at, created_by)
-                  VALUES (@u, @fn, @emb, @anh, CURRENT_TIMESTAMP, @by)")
+                @"INSERT INTO cham_cong_face (username, full_name, embedding, created_at, created_by)
+                  VALUES (@u, @fn, @emb, CURRENT_TIMESTAMP, @by)")
                 .With("@u", req.Username.Trim())
                 .With("@fn", req.FullName ?? "")
                 .With("@emb", EmbeddingCodec.ToBytes(emb))
-                .With("@anh", (object?)req.ImageBase64 ?? DBNull.Value)
                 .With("@by", u.Username())
                 .ExecuteNonQueryAsync();
 

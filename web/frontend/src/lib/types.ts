@@ -124,6 +124,7 @@ export interface ChatConversation {
   unread: number;
   /** Thời điểm hoạt động cuối của người kia (UTC); null nếu chưa từng online. */
   lastSeen?: string | null;
+  pinned?: boolean;
 }
 export interface ChatReaction {
   emoji: string;

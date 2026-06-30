@@ -5,6 +5,7 @@ import {
   Eye,
   FilePlus2,
   HardDrive,
+  MessageCircle,
   MessageSquare,
   Power,
   RefreshCw,
@@ -39,6 +40,10 @@ import {
   subscribeWaterReminderEnabled,
 } from "../lib/waterReminderClock";
 import { loadUserPreferences, saveUserPreferencesPatch } from "../lib/userPreferences";
+import {
+  isMessagePreviewEnabled,
+  subscribeMessagePreviewEnabled,
+} from "../lib/messagePreviewPreference";
 import "./system-settings.css";
 
 const WATER_INTERVAL_MS = 60 * 60 * 1000;
@@ -73,6 +78,9 @@ export function SystemSettings() {
   const [keepCreateVoucherOpen, setKeepCreateVoucherOpen] = useState(() =>
     user ? isKeepCreateVoucherOpenEnabled(user.id) : false,
   );
+  const [messagePreviewEnabled, setMessagePreviewEnabled] = useState(() =>
+    user ? isMessagePreviewEnabled(user.id) : true,
+  );
   const [preferenceError, setPreferenceError] = useState<string | null>(null);
   const [attendanceToggling, setAttendanceToggling] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
@@ -98,6 +106,7 @@ export function SystemSettings() {
     setWaterEnabled(isWaterReminderEnabled(user.id));
     setEyeEnabled(isEyeReminderEnabled(user.id));
     setKeepCreateVoucherOpen(isKeepCreateVoucherOpenEnabled(user.id));
+    setMessagePreviewEnabled(isMessagePreviewEnabled(user.id));
     setPreferenceError(null);
 
     loadUserPreferences(user.id).catch(() => {
@@ -113,11 +122,15 @@ export function SystemSettings() {
     const unsubscribeAccounting = subscribeKeepCreateVoucherOpenEnabled(user.id, () => {
       setKeepCreateVoucherOpen(isKeepCreateVoucherOpenEnabled(user.id));
     });
+    const unsubscribeMessagePreview = subscribeMessagePreviewEnabled(user.id, () => {
+      setMessagePreviewEnabled(isMessagePreviewEnabled(user.id));
+    });
 
     return () => {
       unsubscribeWater();
       unsubscribeEye();
       unsubscribeAccounting();
+      unsubscribeMessagePreview();
     };
   }, [user]);
 
@@ -184,6 +197,20 @@ export function SystemSettings() {
     } catch {
       setKeepCreateVoucherOpen(!next);
       setPreferenceError("Không lưu được tuỳ chọn giữ form tạo phiếu theo tài khoản.");
+    }
+  };
+
+  const toggleMessagePreview = async () => {
+    if (!user) return;
+
+    const next = !messagePreviewEnabled;
+    setMessagePreviewEnabled(next);
+    setPreferenceError(null);
+    try {
+      await saveUserPreferencesPatch(user.id, { messagePreviewEnabled: next });
+    } catch {
+      setMessagePreviewEnabled(!next);
+      setPreferenceError("Không lưu được tuỳ chọn đọc trước tin nhắn theo tài khoản.");
     }
   };
 
@@ -405,6 +432,55 @@ export function SystemSettings() {
           </div>
         </GlassCard>
 
+        <GlassCard className="system-settings-card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 gap-4">
+              <div className="system-settings-icon is-chat">
+                <MessageCircle className="h-7 w-7" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-black text-[var(--text)]">{"\u0110\u1ecdc tr\u01b0\u1edbc tin nh\u1eafn"}</h2>
+                  <Badge color={messagePreviewEnabled ? "success" : "muted"}>
+                    {messagePreviewEnabled ? "\u0110ang b\u1eadt" : "\u0110ang t\u1eaft"}
+                  </Badge>
+                  <TooltipProvider delayDuration={120}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button className="system-rules-hint" type="button" aria-label="Quy tắc thông báo tin nhắn">
+                          <ShieldCheck className="h-4 w-4" />
+                          <span>{"Tin nh\u1eafn"}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" align="start" className="system-rules-tooltip">
+                        {"Khi b\u1eadt, th\u00f4ng b\u00e1o tin nh\u1eafn m\u1edbi hi\u1ec7n n\u1ed9i dung xem tr\u01b0\u1edbc. Khi t\u1eaft, th\u00f4ng b\u00e1o ch\u1ec9 hi\u1ec7n \"B\u1ea1n c\u00f3 th\u00f4ng b\u00e1o m\u1edbi\"."}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </div>
+            </div>
+
+            <button
+              className={`water-toggle chat-toggle ${messagePreviewEnabled ? "is-on" : ""}`}
+              type="button"
+              role="switch"
+              aria-checked={messagePreviewEnabled}
+              aria-label={`${messagePreviewEnabled ? "T\u1eaft" : "B\u1eadt"} \u0111\u1ecdc tr\u01b0\u1edbc n\u1ed9i dung tin nh\u1eafn trong th\u00f4ng b\u00e1o`}
+              onClick={toggleMessagePreview}
+            >
+              <span className="water-toggle-icon">
+                <Power className="h-4 w-4" />
+              </span>
+              <span className="reminder-toggle-countdown" aria-hidden="true">
+                {messagePreviewEnabled ? "XEM" : "\u1ea8N"}
+              </span>
+              <span className="water-toggle-track">
+                <span className="water-toggle-thumb" />
+              </span>
+            </button>
+          </div>
+        </GlassCard>
         {/* Thẻ "Chấm công tự động" (camera IP) tạm ẩn theo IP_CAMERA_ENABLED. */}
         {admin && IP_CAMERA_ENABLED && (
           <GlassCard className="system-settings-card p-5">

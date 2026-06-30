@@ -5,7 +5,7 @@ namespace KetoanMini.Api.Services;
 /// Toàn bộ endpoint chấm công chỉ phụ thuộc interface này, nên khi đổi engine chỉ cần
 /// viết 1 lớp mới và đổi đăng ký DI trong Program.cs — không sửa nghiệp vụ.
 ///
-/// Mặc định đang chạy <see cref="OpenCvSFaceEngine"/> (OpenCV YuNet + SFace, nhận diện THẬT).
+/// Mặc định đang chạy <see cref="AdaFaceR50Engine"/> (YuNet + AdaFace R50, nhận diện THẬT).
 /// </summary>
 public interface IFaceEngine
 {

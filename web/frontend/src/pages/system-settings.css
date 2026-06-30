@@ -62,6 +62,13 @@
     linear-gradient(135deg, rgba(14, 165, 233, 0.24), rgba(20, 184, 166, 0.16));
 }
 
+.system-settings-icon.is-chat {
+  color: #2563eb;
+  background:
+    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.68), transparent 32%),
+    linear-gradient(135deg, rgba(96, 165, 250, 0.24), rgba(14, 165, 233, 0.14));
+}
+
 .system-rules-hint {
   display: inline-flex;
   align-items: center;

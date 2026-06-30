@@ -9,8 +9,10 @@ public record HeartbeatRequest(string? Sid);
 public record UpdateProfileRequest(string FullName, string Email);
 public record UpdateAvatarRequest(string ImageDataUrl);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
-public record UserPreferencesDto(bool WaterReminderEnabled, bool EyeReminderEnabled, bool KeepCreateVoucherOpen);
-public record UserPreferencePatchRequest(bool? WaterReminderEnabled, bool? EyeReminderEnabled, bool? KeepCreateVoucherOpen);
+public record UserPreferencesDto(bool WaterReminderEnabled, bool EyeReminderEnabled, bool KeepCreateVoucherOpen,
+    bool MessagePreviewEnabled);
+public record UserPreferencePatchRequest(bool? WaterReminderEnabled, bool? EyeReminderEnabled, bool? KeepCreateVoucherOpen,
+    bool? MessagePreviewEnabled);
 public record UserDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt)
 {
@@ -63,7 +65,7 @@ public record ResetPasswordResponse(string Code);
 // ----- Chat (Trò chuyện, web-only) -----
 public record ChatContactDto(string Username, string DisplayName, string? AvatarUrl, bool IsOnline, bool Verified, string Role);
 public record ChatConversationDto(Guid Id, bool IsGroup, string Title, string? Username, string? AvatarUrl,
-    bool IsOnline, bool Verified, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen);
+    bool IsOnline, bool Verified, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen, bool Pinned = false);
 public record ChatMessageDto(long Id, string SenderUsername, string SenderName, bool Mine, string Body, DateTime CreatedAt,
     DateTime? EditedAt, bool Removed, bool Forwarded, IReadOnlyList<ChatReactionDto>? Reactions = null);
 // Một biểu cảm (cảm xúc) gộp theo emoji trên một tin nhắn: số người thả + tôi có thả hay không.
@@ -71,6 +73,8 @@ public record ChatReactionDto(string Emoji, int Count, bool Mine);
 public record SendMessageRequest(string Body, bool Forwarded = false);
 public record EditMessageRequest(string Body);
 public record ReactRequest(string Emoji);
+public record SetConversationPinnedRequest(bool Pinned);
+public record ChatReportRequest(string? Reason);
 
 // Dung lượng DB của mục Trò chuyện (admin xem trong trang Hệ thống).
 public record ChatTableUsageDto(string Table, string Label, long Rows, long DataKb, long IndexKb, long TotalKb);

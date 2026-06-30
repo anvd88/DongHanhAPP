@@ -7,6 +7,7 @@ import { isAdmin } from "../lib/types";
 import { APP_BRAND_NAME } from "../lib/branding";
 import { initials } from "../lib/format";
 import { ChangePasswordModal, EditProfileModal } from "./AccountModals";
+import { useChatNotifications } from "./ChatNotifications";
 
 interface IndicatorState {
   x: number;
@@ -52,6 +53,7 @@ function isNavPathActive(pathname: string, path: string) {
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
+  const { unreadCount } = useChatNotifications();
   const location = useLocation();
   const admin = isAdmin(user);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -288,6 +290,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                     >
                       <span className="km-sidebar-icon"><Icon className="h-[18px] w-[18px] shrink-0" /></span>
                       <span className="min-w-0 flex-1 truncate">{it.label}</span>
+                      {it.key === "chats" && unreadCount > 0 && (
+                        <span className="km-notification-badge km-notification-badge--sidebar">
+                          {unreadCount > 99 ? "99+" : unreadCount}
+                        </span>
+                      )}
                       {!it.ready && (
                         <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[9px] font-semibold opacity-70">
                           sắp có

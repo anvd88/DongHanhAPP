@@ -11,9 +11,50 @@ export type Framing = {
   /** Tổng "cử động biểu cảm" tích lũy (tăng dần) — liveness THỤ ĐỘNG: người thật luôn nhúc nhích,
    *  ảnh tĩnh thì gần như đứng yên. So sánh mức tăng trong cửa sổ giữ khung để biết có phải mặt sống. */
   motion: number;
+  /** Hướng mặt tính NGAY TRÊN TRÌNH DUYỆT (tỉ lệ hình học, CÙNG quy ước với server /huongmat):
+   *  yaw > 0 ⇒ người dùng quay sang TRÁI; pitch nhỏ = ngước lên, lớn = cúi xuống. Dùng cho đăng ký realtime. */
+  yaw: number;
+  pitch: number;
+  hasPose: boolean;
 };
 
-const NONE: Framing = { state: "none", hint: "Đưa khuôn mặt vào khung", ok: false, blinkCount: 0, motion: 0 };
+const NONE: Framing = {
+  state: "none", hint: "Đưa khuôn mặt vào khung", ok: false,
+  blinkCount: 0, motion: 0, yaw: 0, pitch: 0, hasPose: false,
+};
+
+// Chỉ số landmark MediaPipe FaceMesh dùng để ước lượng hướng mặt (khớp công thức 5 điểm của server).
+const LM_NOSE = 1; // đầu mũi
+const LM_REYE = [33, 133]; // khóe mắt phải (ngoài, trong)
+const LM_LEYE = [263, 362]; // khóe mắt trái (ngoài, trong)
+const LM_MOUTH = [61, 291]; // hai khóe miệng
+
+type LMPoint = { x: number; y: number };
+
+/** Ước lượng yaw/pitch từ landmark — cùng quy ước hình học với PoseFrom() phía server. */
+function estimatePose(lm: LMPoint[]): { yaw: number; pitch: number; hasPose: boolean } {
+  const get = (i: number) => lm[i];
+  const mid = (idx: number[]) => ({
+    x: (get(idx[0]).x + get(idx[1]).x) / 2,
+    y: (get(idx[0]).y + get(idx[1]).y) / 2,
+  });
+  if (!get(LM_NOSE) || !get(LM_REYE[0]) || !get(LM_LEYE[0]) || !get(LM_MOUTH[0]))
+    return { yaw: 0, pitch: 0, hasPose: false };
+
+  const rEye = mid(LM_REYE);
+  const lEye = mid(LM_LEYE);
+  const nose = get(LM_NOSE);
+  const eyeMidX = (rEye.x + lEye.x) / 2;
+  const eyeMidY = (rEye.y + lEye.y) / 2;
+  const eyeDist = Math.abs(rEye.x - lEye.x);
+  if (eyeDist < 1e-4) return { yaw: 0, pitch: 0, hasPose: false };
+
+  const mouthMidY = (get(LM_MOUTH[0]).y + get(LM_MOUTH[1]).y) / 2;
+  const faceVert = mouthMidY - eyeMidY;
+  const yaw = (nose.x - eyeMidX) / eyeDist;
+  const pitch = Math.abs(faceVert) < 1e-4 ? 0.5 : (nose.y - eyeMidY) / faceVert;
+  return { yaw, pitch, hasPose: true };
+}
 
 // Ngưỡng căn khung (theo tỉ lệ bbox khuôn mặt so với khung hình nguồn).
 const FACE_MIN_RATIO = 0.16; // mặt nhỏ hơn ⇒ ở quá xa
@@ -194,13 +235,14 @@ export function FaceTrackingOverlay({
       const sizeRatio = maxX - minX;
       const cx = (minX + maxX) / 2 - 0.5;
       const cy = (minY + maxY) / 2 - 0.5;
+      const pose = estimatePose(lm as LMPoint[]); // hướng mặt realtime cho đăng ký
 
       let framing: Omit<Framing, "blinkCount" | "motion">;
-      if (sizeRatio < FACE_MIN_RATIO) framing = { state: "far", hint: "Lại gần hơn", ok: false };
-      else if (sizeRatio > FACE_MAX_RATIO) framing = { state: "near", hint: "Lùi ra một chút", ok: false };
+      if (sizeRatio < FACE_MIN_RATIO) framing = { state: "far", hint: "Lại gần hơn", ok: false, ...pose };
+      else if (sizeRatio > FACE_MAX_RATIO) framing = { state: "near", hint: "Lùi ra một chút", ok: false, ...pose };
       else if (Math.abs(cx) > OFFCENTER || Math.abs(cy) > OFFCENTER)
-        framing = { state: "offcenter", hint: "Đưa khuôn mặt vào giữa khung", ok: false };
-      else framing = { state: "good", hint: "Giữ yên — đã vào khung", ok: true };
+        framing = { state: "offcenter", hint: "Đưa khuôn mặt vào giữa khung", ok: false, ...pose };
+      else framing = { state: "good", hint: "Giữ yên — đã vào khung", ok: true, ...pose };
 
       setBox({ left, top, width, height });
       setOk(framing.ok);

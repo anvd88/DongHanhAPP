@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.11" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.18.0" />
     <PackageReference Include="Npgsql" Version="8.0.6" />
     <PackageReference Include="OpenCvSharp4" Version="4.10.0.20240616" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.10.0.20240616" />
@@ -18,7 +19,7 @@
     <None Include="certs\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- OpenCV YuNet + SFace ONNX models (Apache 2.0) for higher-accuracy face recognition. -->
+  <!-- Face ONNX models: YuNet detection, AdaFace R50 recognition, MiniFASNet anti-spoof. -->
   <ItemGroup>
     <None Include="Models\Face\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
