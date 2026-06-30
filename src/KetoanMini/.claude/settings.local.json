@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell($p = Get-Process KetoanMini -ErrorAction SilentlyContinue; if \\($p\\) { \"RUNNING: $\\($p.Id -join ', '\\)\" } else { \"not running\" })"
-    ]
-  }
-}
