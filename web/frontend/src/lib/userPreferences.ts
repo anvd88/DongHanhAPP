@@ -11,11 +11,16 @@ import {
   isWaterReminderEnabled,
   setWaterReminderEnabled,
 } from "./waterReminderClock";
+import {
+  isMessagePreviewEnabled,
+  setMessagePreviewEnabled,
+} from "./messagePreviewPreference";
 
 export interface UserPreferences {
   waterReminderEnabled: boolean;
   eyeReminderEnabled: boolean;
   keepCreateVoucherOpen: boolean;
+  messagePreviewEnabled: boolean;
 }
 
 export type UserPreferencePatch = Partial<UserPreferences>;
@@ -25,6 +30,7 @@ export function readLocalUserPreferences(userId: string): UserPreferences {
     waterReminderEnabled: isWaterReminderEnabled(userId),
     eyeReminderEnabled: isEyeReminderEnabled(userId),
     keepCreateVoucherOpen: isKeepCreateVoucherOpenEnabled(userId),
+    messagePreviewEnabled: isMessagePreviewEnabled(userId),
   };
 }
 
@@ -32,6 +38,7 @@ export function applyUserPreferencesToLocal(userId: string, preferences: UserPre
   setWaterReminderEnabled(userId, preferences.waterReminderEnabled);
   setEyeReminderEnabled(userId, preferences.eyeReminderEnabled);
   setKeepCreateVoucherOpenEnabled(userId, preferences.keepCreateVoucherOpen);
+  setMessagePreviewEnabled(userId, preferences.messagePreviewEnabled);
 }
 
 export async function loadUserPreferences(userId: string) {

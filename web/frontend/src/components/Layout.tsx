@@ -6,6 +6,7 @@ import { QuickToolsDrawer } from "./QuickToolsDrawer";
 import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/types";
+import { useChatNotifications } from "./ChatNotifications";
 
 const MOBILE_NAV_KEYS = new Set(["dashboard", "giacong", "ketoan", "khachhang", "chats", "chamcong"]);
 
@@ -13,6 +14,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const { user } = useAuth();
+  const { unreadCount } = useChatNotifications();
   const admin = isAdmin(user);
   const mobileNavItems = NAV.flatMap((section) => section.items)
     .filter((item) => MOBILE_NAV_KEYS.has(item.key) && (!item.adminOnly || admin));
@@ -50,6 +52,11 @@ export function Layout({ children }: { children: ReactNode }) {
               className={({ isActive }) => `km-mobile-bottom-link ${isActive ? "is-active" : ""}`}
             >
               <Icon className="h-5 w-5" aria-hidden="true" />
+              {item.key === "chats" && unreadCount > 0 && (
+                <span className="km-notification-badge km-notification-badge--mobile">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
               <span>{item.label}</span>
             </NavLink>
           );
