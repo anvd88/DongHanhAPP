@@ -1,16 +1,31 @@
 # Node / frontend
 node_modules/
 dist/
+build/
 *.local
 .vite/
 
 # .NET / backend
 bin/
 obj/
-# Frontend build output gộp vào backend (sinh ra bởi `npm run build`)
+# Frontend build output gop vao backend (sinh ra boi `npm run build`)
 backend/KetoanMini.Api/wwwroot/
 
-# Logs & môi trường
+# Desktop app / release artifacts
+desktop/
+release/
+release-packager/
+*.exe
+*.msi
+*.zip
+*.asar
+builder-debug.yml
+
+# Local editor / agent config
+.claude/
+.codex/
+
+# Logs & moi truong
 *.log
 .env
 .env.*
@@ -19,7 +34,7 @@ backend/KetoanMini.Api/wwwroot/
 .codex-build/
 tools/video-bridge/runtime/
 
-# Chứng chỉ HTTPS LAN — chứa khóa bí mật, KHÔNG commit
+# Chung chi HTTPS LAN - chua khoa bi mat, KHONG commit
 backend/KetoanMini.Api/certs/
 *.pfx
 *.p12
