@@ -11,6 +11,7 @@ export interface User {
   avatarUrl?: string | null;
   /** Tích xanh (giống Facebook): Admin luôn có, hoặc được admin cấp thủ công. */
   verified?: boolean;
+  isDiamond?: boolean;
 }
 export const isAdmin = (u?: User | null) => u?.role?.toLowerCase() === "admin";
 
@@ -100,6 +101,19 @@ export interface UserAdmin {
   isOnline: boolean;
   lastSeen?: string;
   verified: boolean;
+  isDiamond: boolean;
+}
+
+export interface FeedbackItem {
+  id: number;
+  type: "ChatReport" | "AttendanceIssue" | string;
+  typeLabel: string;
+  reporterUsername: string;
+  reporterName: string;
+  targetName: string;
+  reason: string;
+  conversationId?: string | null;
+  createdAt: string;
 }
 
 // ----- Chat (Trò chuyện) -----
@@ -109,6 +123,7 @@ export interface ChatContact {
   avatarUrl?: string | null;
   isOnline: boolean;
   verified: boolean;
+  isDiamond: boolean;
   role: string;
 }
 export interface ChatConversation {
@@ -119,12 +134,14 @@ export interface ChatConversation {
   avatarUrl?: string | null;
   isOnline: boolean;
   verified: boolean;
+  isDiamond: boolean;
   preview: string;
   lastAt?: string | null;
   unread: number;
   /** Thời điểm hoạt động cuối của người kia (UTC); null nếu chưa từng online. */
   lastSeen?: string | null;
   pinned?: boolean;
+  supportConversation?: boolean;
 }
 export interface ChatReaction {
   emoji: string;
@@ -143,6 +160,13 @@ export interface ChatMessage {
   removed: boolean;
   forwarded: boolean;
   reactions?: ChatReaction[] | null;
+  /** "text" (mặc định) hoặc "file" — tin nhắn ghi lại một tệp đã gửi qua LAN (chỉ metadata). */
+  kind?: "text" | "file";
+  fileName?: string | null;
+  fileSize?: number | null;
+  fileMime?: string | null;
+  /** Server đang giữ tạm nội dung tệp (người nhận offline lúc gửi) → có thể bấm Tải xuống. */
+  hasBlob?: boolean;
 }
 
 // Dung lượng DB mục Trò chuyện (admin xem trong trang Hệ thống). Đơn vị KB.
@@ -288,7 +312,8 @@ export type ChamCongStatus =
   | "lowquality"
   | "noface"
   | "spoof"
-  | "unknown";
+  | "unknown"
+  | "offline";
 
 /** Kết quả chấm công theo loạt ảnh (server tự chọn khung tốt nhất). */
 export interface ChamCongResult {

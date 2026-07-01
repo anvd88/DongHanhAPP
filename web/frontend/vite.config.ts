@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
   server: {
     host: true, // cho phép truy cập dev server qua LAN
@@ -16,7 +16,7 @@ export default defineConfig({
   },
   build: {
     // Build thẳng vào wwwroot của backend để backend phục vụ luôn (1 cổng, cùng origin).
-    outDir: '../backend/KetoanMini.Api/wwwroot',
+    outDir: mode === 'android' ? '.android-wwwroot' : '../backend/KetoanMini.Api/wwwroot',
     emptyOutDir: true,
     chunkSizeWarningLimit: 1000,
     rolldownOptions: {
@@ -27,4 +27,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

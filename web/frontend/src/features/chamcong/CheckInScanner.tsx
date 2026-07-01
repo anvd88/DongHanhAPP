@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Camera, Loader2, ScanFace, Smartphone, UserCheck, Video } from "lucide-react";
-import { api } from "../../lib/api";
+import { submitCheckInFrames } from "../../lib/offlineAttendance";
 import type { ChamCongResult } from "../../lib/types";
 import { useCamera } from "./useCamera";
 import { useIpCamera } from "./useIpCamera";
@@ -208,10 +208,15 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>) {
 
       setPhase("analyzing");
       setHint(PROCESSING_HINT);
-      const res = await api.post<ChamCongResult>("/api/chamcong/cham", { images: frames });
+      const res = await submitCheckInFrames(frames);
       setResult(res);
 
-      if (res.matched && res.status === "ok") {
+      if (res.status === "offline") {
+        // Mất mạng: đã xếp hàng, coi như xong lượt này (server sẽ nhận diện khi đồng bộ).
+        setPhase("success");
+        setHint(res.message);
+        stop();
+      } else if (res.matched && res.status === "ok") {
         setPhase("success");
         setHint(`${res.fullName || res.username || "Nhân viên"} đã chấm công`);
         stop();
@@ -285,10 +290,13 @@ function useIpBurstCheckIn() {
 
       setPhase("analyzing");
       setHint(PROCESSING_HINT);
-      const res = await api.post<ChamCongResult>("/api/chamcong/cham", { images: frames });
+      const res = await submitCheckInFrames(frames);
       setResult(res);
 
-      if (res.matched && res.status === "ok") {
+      if (res.status === "offline") {
+        setPhase("success");
+        setHint(res.message);
+      } else if (res.matched && res.status === "ok") {
         setPhase("success");
         setHint(`${res.fullName || res.username || "Nhân viên"} đã chấm công`);
       } else {
@@ -462,11 +470,12 @@ function DeviceCameraArea({
         ) : null}
 
         <AnimatePresence>
-          {phase === "success" && result?.matched && (
+          {phase === "success" && (result?.matched || result?.status === "offline") && (
             <CheckInSuccessOverlay
-              name={result.fullName || result.username || "Nhân viên"}
-              time={result.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
-              loai={result.loai}
+              offline={result?.status === "offline"}
+              name={result?.status === "offline" ? "Đã lưu ngoại tuyến" : result!.fullName || result!.username || "Nhân viên"}
+              time={result?.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
+              loai={result?.status === "offline" ? null : result!.loai}
             />
           )}
           {phase === "warning" && <CheckInFailOverlay message={hint} />}
@@ -518,11 +527,12 @@ function IpCameraArea({ ip }: { ip: ReturnType<typeof useIpBurstCheckIn> }) {
         )}
 
         <AnimatePresence>
-          {phase === "success" && result?.matched && (
+          {phase === "success" && (result?.matched || result?.status === "offline") && (
             <CheckInSuccessOverlay
-              name={result.fullName || result.username || "Nhân viên"}
-              time={result.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
-              loai={result.loai}
+              offline={result?.status === "offline"}
+              name={result?.status === "offline" ? "Đã lưu ngoại tuyến" : result!.fullName || result!.username || "Nhân viên"}
+              time={result?.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
+              loai={result?.status === "offline" ? null : result!.loai}
             />
           )}
           {phase === "warning" && <CheckInFailOverlay message={hint} />}
@@ -592,9 +602,12 @@ function BiometricCheckInScanner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
-  const success = phase === "success" && result?.matched;
+  const offline = result?.status === "offline";
+  const success = phase === "success" && (result?.matched || offline);
   const successName = result?.fullName || result?.username || "Nhân viên";
   const successTime = result?.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null;
+  const successCaption = offline ? "Đã lưu chấm công ngoại tuyến" : `${successName} đã chấm công`;
+  const successMeta = offline ? "Sẽ tự đồng bộ khi có mạng" : [result?.loai, successTime].filter(Boolean).join(" · ");
 
   const scanStatus: FaceScanAnimationStatus =
     phase === "success"
@@ -635,7 +648,7 @@ function BiometricCheckInScanner({
         <FaceScanAnimation status={scanStatus} />
 
         <div className="cc-bio-copy">
-          <div className="cc-bio-title">{success ? "Chấm công thành công" : "Chấm công khuôn mặt"}</div>
+          <div className="cc-bio-title">{success ? (offline ? "Đã lưu ngoại tuyến" : "Chấm công thành công") : "Chấm công khuôn mặt"}</div>
           {success ? (
             <motion.div
               className="cc-bio-success"
@@ -643,8 +656,8 @@ function BiometricCheckInScanner({
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.24, ease: "easeOut", delay: 0.08 }}
             >
-              <div className="cc-bio-success-name">{successName} đã chấm công</div>
-              <div className="cc-bio-success-meta">{[result?.loai, successTime].filter(Boolean).join(" · ")}</div>
+              <div className="cc-bio-success-name">{successCaption}</div>
+              <div className="cc-bio-success-meta">{successMeta}</div>
             </motion.div>
           ) : (
             <div className="cc-bio-hint" data-warn={phase === "warning"}>
@@ -953,13 +966,15 @@ function CheckInSuccessOverlay({
   name,
   time,
   loai,
+  offline = false,
 }: {
   name: string;
   time: string | null;
   loai?: string | null;
+  offline?: boolean;
 }) {
   const reducedMotion = useReducedMotion();
-  const meta = [loai, time].filter(Boolean).join(" · ");
+  const meta = offline ? "Sẽ tự đồng bộ khi có mạng" : [loai, time].filter(Boolean).join(" · ");
 
   return (
     <motion.div
@@ -988,28 +1003,21 @@ function CheckInSuccessOverlay({
             }
           />
           <svg className="cc-success-svg" viewBox="0 0 100 100" aria-hidden="true">
-            <motion.circle
-              cx="50"
-              cy="50"
-              r="32"
+            <path
+              className="cc-success-check-guide"
+              d="M25 53 L42.5 70 L76 33"
               fill="none"
               stroke="currentColor"
-              strokeWidth="4.5"
+              strokeWidth="7.5"
               strokeLinecap="round"
-              initial={{ pathLength: 0, opacity: 0 }}
-              animate={{ pathLength: 1, opacity: 1 }}
-              transition={
-                reducedMotion
-                  ? { duration: 0.12 }
-                  : { duration: 0.36, ease: "easeOut", delay: 0.08 }
-              }
-              style={{ rotate: -90, transformOrigin: "50% 50%" }}
+              strokeLinejoin="round"
             />
             <motion.path
-              d="M34 51 L45 62 L67 38"
+              className="cc-success-check-draw"
+              d="M25 53 L42.5 70 L76 33"
               fill="none"
               stroke="currentColor"
-              strokeWidth="7"
+              strokeWidth="7.5"
               strokeLinecap="round"
               strokeLinejoin="round"
               initial={{ pathLength: 0, opacity: 0 }}
@@ -1017,14 +1025,14 @@ function CheckInSuccessOverlay({
               transition={
                 reducedMotion
                   ? { duration: 0.14, delay: 0.06 }
-                  : { duration: 0.34, ease: "easeOut", delay: 0.32 }
+                  : { duration: 0.72, ease: [0.22, 1, 0.36, 1], delay: 0.18 }
               }
             />
           </svg>
         </div>
 
         <div className="cc-success-text">
-          <div className="cc-success-eyebrow">Chấm công thành công</div>
+          <div className="cc-success-eyebrow">{offline ? "Đã lưu ngoại tuyến" : "Chấm công thành công"}</div>
           <div className="cc-success-name">{name}</div>
           {meta && <div className="cc-success-meta">{meta}</div>}
         </div>

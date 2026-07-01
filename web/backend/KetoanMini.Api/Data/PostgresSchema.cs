@@ -187,6 +187,18 @@ public static class PostgresSchema
             updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS web_verified_users (
+            username varchar(128) NOT NULL PRIMARY KEY,
+            granted_by varchar(128) NOT NULL DEFAULT '',
+            granted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS web_diamond_members (
+            username varchar(128) NOT NULL PRIMARY KEY,
+            granted_by varchar(128) NOT NULL DEFAULT '',
+            granted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS ix_app_users_username_live ON app_users (username) WHERE is_deleted = FALSE;
         CREATE INDEX IF NOT EXISTS ix_customers_name_active ON customers (name) WHERE is_active = TRUE;
         CREATE INDEX IF NOT EXISTS ix_documents_customer ON documents (customer_id, doc_date DESC);

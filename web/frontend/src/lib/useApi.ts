@@ -11,6 +11,7 @@ function scopesForPath(path: string): RealtimeScope[] {
   if (path.startsWith("/api/chat/conversations/") && path.endsWith("/messages")) return ["chat"];
   if (path.startsWith("/api/chat/conversations") || path.startsWith("/api/chat/contacts"))
     return ["chat", "presence"];
+  if (path.startsWith("/api/feedback")) return ["feedback"];
   // Mọi path nghiệp vụ khác: phản ứng với thay đổi dữ liệu & hiện diện, KHÔNG bị chat làm phiền.
   return ["data", "presence"];
 }

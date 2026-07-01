@@ -458,27 +458,32 @@ public static class ChamCongEndpoints
                     "Không nhận diện được. Khuôn mặt chưa đăng ký hoặc ảnh chưa rõ.", null));
 
             // 6) Quyết định Vào/Ra + ghi nhật ký.
-            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser);
+            // Đồng bộ ngoại tuyến: dùng giờ chấm thật (req.OccurredAt) cho cả quyết định Vào/Ra lẫn log.
+            var occurredAtUtc = req.OccurredAt?.ToUniversalTime();
+            var isOffline = occurredAtUtc is not null;
+            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser, atUtc: occurredAtUtc);
             if (!decision.ShouldRecord)
                 return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, decision.Loai,
                     decision.ExistingAt, best.Score, decision.Message, null));
 
             var loai = decision.Loai;
             await conn.Cmd(
-                @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at)
-                  VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP)")
+                @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
+                  VALUES (@u, @fn, @loai, @sim, COALESCE(@at, CURRENT_TIMESTAMP), @note)")
                 .With("@u", bestUser).With("@fn", bestName ?? "")
                 .With("@loai", loai).With("@sim", bestSim)
+                .With("@at", (object?)occurredAtUtc ?? DBNull.Value)
+                .With("@note", isOffline ? "Đồng bộ ngoại tuyến" : "")
                 .ExecuteNonQueryAsync();
 
             await db.RecordAudit(bestUser, $"Chấm công {loai}", "ChamCong", bestUser,
-                $"Độ khớp {bestSim:0.000}, chất lượng ảnh {best.Score:0.00} (web).");
+                $"Độ khớp {bestSim:0.000}, chất lượng ảnh {best.Score:0.00}{(isOffline ? ", đồng bộ ngoại tuyến" : "")} (web).");
 
             try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, bestSim); }
             catch { /* tự học là phụ trợ, lỗi không được làm hỏng chấm công */ }
 
             return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, loai,
-                DateTime.UtcNow, best.Score, decision.Message, null));
+                occurredAtUtc ?? DateTime.UtcNow, best.Score, decision.Message, null));
         }).AllowAnonymous();
 
         // Nhật ký chấm công (lọc theo ngày yyyy-MM-dd và/hoặc từ khóa).

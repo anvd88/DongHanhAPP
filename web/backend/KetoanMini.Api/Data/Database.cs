@@ -81,6 +81,12 @@ public static class SqlExtensions
         return r.IsDBNull(i) ? 0 : Convert.ToInt64(r.GetValue(i));
     }
 
+    public static long? LongNull(this NpgsqlDataReader r, string col)
+    {
+        var i = r.GetOrdinal(col);
+        return r.IsDBNull(i) ? null : Convert.ToInt64(r.GetValue(i));
+    }
+
     public static bool Bool(this NpgsqlDataReader r, string col)
     {
         var i = r.GetOrdinal(col);

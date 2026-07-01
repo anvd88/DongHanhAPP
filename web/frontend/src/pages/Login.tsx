@@ -5,6 +5,7 @@ import { GlassCard } from "../components/Glass";
 import { Button } from "../components/ui";
 import { FaceLoginModal } from "../components/FaceLoginModal";
 import { useAuth } from "../lib/auth";
+import { DEFAULT_AUTH_PATH, IS_HR_APK } from "../lib/appConfig";
 import { useTheme } from "../lib/theme";
 import { APP_BRAND_NAME } from "../lib/branding";
 
@@ -24,7 +25,7 @@ export function Login() {
     setLoading(true);
     try {
       await login(username, password);
-      nav("/dashboard");
+      nav(DEFAULT_AUTH_PATH);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Đăng nhập thất bại.");
     } finally {
@@ -91,19 +92,23 @@ export function Login() {
           <ScanFace className="h-4 w-4" /> Đăng nhập bằng khuôn mặt
         </button>
 
-        <Link
-          to="/kiosk"
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
-        >
-          <ScanFace className="h-4 w-4" /> Chấm công
-        </Link>
+        {!IS_HR_APK && (
+          <Link
+            to="/kiosk"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
+          >
+            <ScanFace className="h-4 w-4" /> Chấm công
+          </Link>
+        )}
 
-        <Link
-          to="/tinh-toan"
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
-        >
-          <Calculator className="h-4 w-4" /> Tính toán
-        </Link>
+        {!IS_HR_APK && (
+          <Link
+            to="/tinh-toan"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/40 py-3 text-sm font-semibold text-[var(--text)] transition-all hover:border-[var(--accent)] dark:bg-white/5"
+          >
+            <Calculator className="h-4 w-4" /> Tính toán
+          </Link>
+        )}
 
         <button
           onClick={toggle}
@@ -114,7 +119,7 @@ export function Login() {
       </GlassCard>
 
       {faceOpen && (
-        <FaceLoginModal onClose={() => setFaceOpen(false)} onSuccess={() => nav("/dashboard")} />
+        <FaceLoginModal onClose={() => setFaceOpen(false)} onSuccess={() => nav(DEFAULT_AUTH_PATH)} />
       )}
     </div>
   );

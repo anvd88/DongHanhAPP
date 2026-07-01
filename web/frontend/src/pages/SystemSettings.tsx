@@ -277,16 +277,16 @@ export function SystemSettings() {
         </div>
       )}
 
-      <section className="system-settings-grid">
-        <GlassCard className="system-settings-card p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+      <section className="system-settings-shell">
+        <GlassCard className="system-settings-card system-settings-list p-5">
+          <div className="system-settings-row">
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon">
-                <Droplet className="h-7 w-7" />
+                <Droplet className="h-5 w-5" />
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-black text-[var(--text)]">Nhắc nhở uống nước</h2>
+                  <h2 className="text-sm font-black text-[var(--text)]">Nhắc nhở uống nước</h2>
                   <Badge color={waterEnabled ? "success" : "muted"}>
                     {waterEnabled ? "Đang bật" : "Đang tắt"}
                   </Badge>
@@ -328,17 +328,14 @@ export function SystemSettings() {
             </button>
           </div>
 
-        </GlassCard>
-
-        <GlassCard className="system-settings-card p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="system-settings-row">
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon is-soft">
-                <Eye className="h-7 w-7" />
+                <Eye className="h-5 w-5" />
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-black text-[var(--text)]">Nhắc bảo vệ mắt 20-20-20</h2>
+                  <h2 className="text-sm font-black text-[var(--text)]">Nhắc bảo vệ mắt 20-20-20</h2>
                   <Badge color={eyeEnabled ? "success" : "muted"}>
                     {eyeEnabled ? "Đang bật" : "Đang tắt"}
                   </Badge>
@@ -379,17 +376,14 @@ export function SystemSettings() {
               </span>
             </button>
           </div>
-        </GlassCard>
-
-        <GlassCard className="system-settings-card p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="system-settings-row">
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon is-accounting">
-                <FilePlus2 className="h-7 w-7" />
+                <FilePlus2 className="h-5 w-5" />
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-black text-[var(--text)]">Giữ form tạo phiếu</h2>
+                  <h2 className="text-sm font-black text-[var(--text)]">Giữ form tạo phiếu</h2>
                   <Badge color={keepCreateVoucherOpen ? "success" : "muted"}>
                     {keepCreateVoucherOpen ? "Đang bật" : "Đang tắt"}
                   </Badge>
@@ -430,17 +424,14 @@ export function SystemSettings() {
               </span>
             </button>
           </div>
-        </GlassCard>
-
-        <GlassCard className="system-settings-card p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="system-settings-row">
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon is-chat">
-                <MessageCircle className="h-7 w-7" />
+                <MessageCircle className="h-5 w-5" />
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-black text-[var(--text)]">{"\u0110\u1ecdc tr\u01b0\u1edbc tin nh\u1eafn"}</h2>
+                  <h2 className="text-sm font-black text-[var(--text)]">{"\u0110\u1ecdc tr\u01b0\u1edbc tin nh\u1eafn"}</h2>
                   <Badge color={messagePreviewEnabled ? "success" : "muted"}>
                     {messagePreviewEnabled ? "\u0110ang b\u1eadt" : "\u0110ang t\u1eaft"}
                   </Badge>
@@ -480,18 +471,16 @@ export function SystemSettings() {
               </span>
             </button>
           </div>
-        </GlassCard>
         {/* Thẻ "Chấm công tự động" (camera IP) tạm ẩn theo IP_CAMERA_ENABLED. */}
         {admin && IP_CAMERA_ENABLED && (
-          <GlassCard className="system-settings-card p-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="system-settings-row">
               <div className="flex min-w-0 gap-4">
                 <div className="system-settings-icon is-attendance">
-                  <ScanFace className="h-7 w-7" />
+                  <ScanFace className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-lg font-black text-[var(--text)]">Chấm công tự động</h2>
+                    <h2 className="text-sm font-black text-[var(--text)]">Chấm công tự động</h2>
                     <Badge color={rtspError || attendanceError ? "warning" : autoAttendanceEnabled ? "success" : "muted"}>
                       {rtspLoading && !rtspStatus
                         ? "Đang tải"
@@ -535,9 +524,13 @@ export function SystemSettings() {
                   <span className="water-toggle-thumb" />
                 </span>
               </button>
-            </div>
-          </GlassCard>
+          </div>
         )}
+        </GlassCard>
+
+        <GlassCard className="system-settings-empty p-5" aria-label="Khu vực nội dung hệ thống để trống">
+          <div className="system-settings-empty-inner" aria-hidden="true" />
+        </GlassCard>
       </section>
       </>
       )}

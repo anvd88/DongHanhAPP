@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { tokenStore } from "../../lib/api";
+import { appUrl } from "../../lib/appConfig";
 
 /**
  * Hook lấy hình từ CAMERA IP (RTSP kiosk) qua ảnh snapshot mới nhất do FFmpeg ghi liên tục.
@@ -43,7 +44,7 @@ export function useIpCamera() {
     const token = tokenStore.get();
     if (token) headers["Authorization"] = `Bearer ${token}`;
     try {
-      const res = await fetch(SNAPSHOT_URL, { headers, cache: "no-store" });
+      const res = await fetch(appUrl(SNAPSHOT_URL), { headers, cache: "no-store" });
       if (!res.ok) {
         setError(
           res.status === 404 || res.status === 503

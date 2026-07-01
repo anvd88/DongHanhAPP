@@ -24,6 +24,7 @@ public record UserDto(Guid Id, string Username, string FullName, string Email, s
 
     /// <summary>Tích xanh (giống Facebook): Admin luôn có, hoặc được admin cấp thủ công.</summary>
     public bool Verified { get; init; }
+    public bool IsDiamond { get; init; }
 }
 
 // ----- Dashboard -----
@@ -56,25 +57,38 @@ public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal
 
 // ----- Users (Nhân sự) -----
 public record UserAdminDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
-    string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen, bool Verified);
+    string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen, bool Verified, bool IsDiamond);
 public record CreateUserRequest(string Username, string FullName, string Email, string Password, string Role);
 public record SetLockRequest(bool Locked);
 public record SetVerifiedRequest(bool Verified);
+public record SetDiamondRequest(bool IsDiamond);
 public record ResetPasswordResponse(string Code);
 
 // ----- Chat (Trò chuyện, web-only) -----
-public record ChatContactDto(string Username, string DisplayName, string? AvatarUrl, bool IsOnline, bool Verified, string Role);
+public record ChatContactDto(string Username, string DisplayName, string? AvatarUrl, bool IsOnline, bool Verified, bool IsDiamond, string Role);
 public record ChatConversationDto(Guid Id, bool IsGroup, string Title, string? Username, string? AvatarUrl,
-    bool IsOnline, bool Verified, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen, bool Pinned = false);
+    bool IsOnline, bool Verified, bool IsDiamond, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen,
+    bool Pinned = false, bool SupportConversation = false);
 public record ChatMessageDto(long Id, string SenderUsername, string SenderName, bool Mine, string Body, DateTime CreatedAt,
-    DateTime? EditedAt, bool Removed, bool Forwarded, IReadOnlyList<ChatReactionDto>? Reactions = null);
+    DateTime? EditedAt, bool Removed, bool Forwarded, IReadOnlyList<ChatReactionDto>? Reactions = null,
+    // Tin nhắn tệp gửi qua LAN: chỉ lưu METADATA (tên/dung lượng/kiểu), KHÔNG lưu nội dung tệp.
+    // HasBlob = true khi server đang GIỮ TẠM nội dung tệp (người nhận offline lúc gửi) chờ tải về rồi xóa.
+    string Kind = "text", string? FileName = null, long? FileSize = null, string? FileMime = null,
+    bool HasBlob = false);
 // Một biểu cảm (cảm xúc) gộp theo emoji trên một tin nhắn: số người thả + tôi có thả hay không.
 public record ChatReactionDto(string Emoji, int Count, bool Mine);
-public record SendMessageRequest(string Body, bool Forwarded = false);
+public record SendMessageRequest(string Body, bool Forwarded = false, bool SendAsSupport = false);
+// Ghi lại "đã gửi tệp X" qua LAN — chỉ metadata; nội dung tệp truyền thẳng P2P, không lưu server.
+public record SendFileMessageRequest(string FileName, long FileSize, string? FileMime = null);
 public record EditMessageRequest(string Body);
 public record ReactRequest(string Emoji);
 public record SetConversationPinnedRequest(bool Pinned);
 public record ChatReportRequest(string? Reason);
+
+// ----- Feedback (Phan hoi) -----
+public record FeedbackDto(long Id, string Type, string TypeLabel, string ReporterUsername, string ReporterName,
+    string TargetName, string Reason, Guid? ConversationId, DateTime CreatedAt);
+public record AttendanceFeedbackRequest(string TargetName, string? Reason);
 
 // Dung lượng DB của mục Trò chuyện (admin xem trong trang Hệ thống).
 public record ChatTableUsageDto(string Table, string Label, long Rows, long DataKb, long IndexKb, long TotalKb);
@@ -120,8 +134,13 @@ public record FacePoseDto(bool Found, double Yaw, double Pitch);
 public record NhanDienResult(bool Matched, string? Username, string? FullName, double Similarity,
     string? Loai, DateTime? OccurredAt, string Message);
 
-/// <summary>Loạt ảnh chụp liên tiếp; server tự chọn khung tốt nhất để phân tích.</summary>
-public record ChamCongBurstRequest(List<string> Images);
+/// <summary>
+/// Loạt ảnh chụp liên tiếp; server tự chọn khung tốt nhất để phân tích.
+/// <see cref="OccurredAt"/> (tùy chọn) là giờ chấm thật khi ĐỒNG BỘ NGOẠI TUYẾN — client mất mạng
+/// lúc chấm nên xếp hàng ảnh vào IndexedDB, khi có mạng lại mới gửi lên; server ghi log theo giờ này
+/// thay vì giờ nhận. Null (mặc định) = chấm trực tuyến bình thường, dùng giờ server.
+/// </summary>
+public record ChamCongBurstRequest(List<string> Images, DateTime? OccurredAt = null);
 
 /// <summary>
 /// Kết quả chấm công theo loạt ảnh. <see cref="Status"/>:

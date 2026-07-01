@@ -24,3 +24,17 @@ export const dateTime = (s?: string | null) => {
 /** Lấy chữ cái đầu cho avatar. */
 export const initials = (name: string) =>
   (name || "?").trim().split(/\s+/).slice(-2).map((w) => w[0]).join("").toUpperCase();
+
+/** Dung lượng tệp gọn: 0–999 B, KB, MB, GB. */
+export const formatBytes = (bytes?: number | null) => {
+  const n = Math.max(0, bytes ?? 0);
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v >= 100 || v % 1 === 0 ? 0 : 1)} ${units[i]}`;
+};

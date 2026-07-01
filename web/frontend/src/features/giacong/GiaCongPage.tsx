@@ -3,6 +3,7 @@ import { MotionConfig, motion } from "motion/react";
 import { ArrowDownToLine, ArrowUpFromLine, RefreshCw } from "lucide-react";
 import { TooltipProvider } from "../../shadcn/tooltip";
 import { Button } from "../../shadcn/button";
+import { useAppNotifications } from "../../components/AppNotifications";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
 import type { GiaCongListItem } from "../../lib/types";
@@ -20,6 +21,7 @@ const FORCE_FULL_MOTION =
   localStorage.getItem("force-full-motion") === "true";
 
 export function GiaCongPage() {
+  const { notify, confirm } = useAppNotifications();
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<number | "new" | null>(null);
@@ -79,9 +81,19 @@ export function GiaCongPage() {
   const closeEditor = () => setEditing(null);
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Xóa phiếu gia công này?")) return;
-    await api.del(`/api/giacong/${id}`);
-    reload();
+    const ok = await confirm({
+      title: "Xóa phiếu gia công?",
+      description: "Phiếu gia công này sẽ bị xóa khỏi danh sách.",
+      confirmLabel: "Xóa",
+      tone: "danger",
+    });
+    if (!ok) return;
+    try {
+      await api.del(`/api/giacong/${id}`);
+      reload();
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không xóa được phiếu gia công");
+    }
   };
 
   return (

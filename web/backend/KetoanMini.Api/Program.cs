@@ -42,6 +42,8 @@ builder.Services.AddSingleton<CameraSnapshotBridgeService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraSnapshotBridgeService>());
 builder.Services.AddSingleton<RtspAttendanceWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RtspAttendanceWorker>());
+// Dọn tệp "giữ tạm" (gửi tệp qua LAN khi người nhận offline) đã quá hạn khỏi đĩa.
+builder.Services.AddHostedService<LanFileCleanupService>();
 
 var jwt = builder.Configuration.GetSection("Jwt");
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -164,6 +166,11 @@ app.MapUsers();
 app.MapReleases();
 app.MapPreferences();
 app.MapChat();
+app.MapFeedback();
+app.MapHr();
+app.MapRequests();
+app.MapShifts();
+app.MapTimesheet();
 
 // Hub tín hiệu real-time (web + desktop kết nối tới đây).
 app.MapHub<ChangesHub>("/hubs/changes");
@@ -188,5 +195,18 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang anh dai dien l
 
 try { await ChatEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tro chuyen luc khoi dong: {Msg}", ex.Message); }
+
+try { await FeedbackEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang phan hoi luc khoi dong: {Msg}", ex.Message); }
+
+// Nền tảng nhân sự phải tạo TRƯỚC (đơn từ & ca làm tham chiếu hr_employees).
+try { await HrEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang nhan su luc khoi dong: {Msg}", ex.Message); }
+
+try { await RequestEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang don tu luc khoi dong: {Msg}", ex.Message); }
+
+try { await ShiftEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang ca lam luc khoi dong: {Msg}", ex.Message); }
 
 app.Run();

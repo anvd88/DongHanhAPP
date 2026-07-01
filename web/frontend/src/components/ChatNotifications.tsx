@@ -6,6 +6,7 @@ import { useAuth } from "../lib/auth";
 import { initials } from "../lib/format";
 import { isMessagePreviewEnabled, subscribeMessagePreviewEnabled } from "../lib/messagePreviewPreference";
 import { subscribeRealtime } from "../lib/realtime";
+import { FileTransferPrompts } from "./FileTransferPrompts";
 import type { ChatConversation } from "../lib/types";
 
 type ChatToast = {
@@ -37,8 +38,13 @@ function normalizePreview(preview: string) {
   return preview.trim() || "Tin nhắn mới";
 }
 
+function visibleChatConversations(conversations: ChatConversation[], admin: boolean) {
+  return admin ? conversations.filter((c) => !c.supportConversation) : conversations;
+}
+
 export function ChatNotificationProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const admin = user?.role?.toLowerCase() === "admin";
   const navigate = useNavigate();
   const location = useLocation();
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
@@ -70,7 +76,8 @@ export function ChatNotificationProvider({ children }: { children: ReactNode }) 
   const loadConversations = useCallback(
     async ({ notify = false, payload }: { notify?: boolean; payload?: string } = {}) => {
       if (!user) return;
-      const next = await api.get<ChatConversation[]>("/api/chat/conversations");
+      const allNext = await api.get<ChatConversation[]>("/api/chat/conversations");
+      const next = visibleChatConversations(allNext, admin);
       const previous = conversationsRef.current;
       conversationsRef.current = next;
       setConversations(next);
@@ -88,7 +95,7 @@ export function ChatNotificationProvider({ children }: { children: ReactNode }) 
       });
       if (newestIncoming) showToastForConversation(newestIncoming);
     },
-    [showToastForConversation, user],
+    [admin, showToastForConversation, user],
   );
 
   useEffect(() => {
@@ -136,6 +143,7 @@ export function ChatNotificationProvider({ children }: { children: ReactNode }) 
   return (
     <ChatNotificationContext.Provider value={value}>
       {children}
+      <FileTransferPrompts />
       <div className="km-chat-toast-host" aria-live="polite">
         {toast && (
           <ChatMessageToast

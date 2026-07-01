@@ -44,7 +44,12 @@ public static class AuthEndpoints
                 return Results.Json(new { message = "Tài khoản đã bị khóa. Liên hệ quản trị viên." }, statusCode: 403);
 
             await reader.CloseAsync();
-            user = user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id), Verified = await LoadVerified(conn, user.Username, user.Role) };
+            user = user with
+            {
+                AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                Verified = await LoadVerified(conn, user.Username, user.Role),
+                IsDiamond = await LoadDiamond(conn, user.Username, user.Role)
+            };
             await db.RecordAudit(user.Username, "Đăng nhập web", "Auth", user.Username, "Đăng nhập phiên bản web.");
 
             return Results.Ok(new LoginResponse(tokens.CreateToken(user), user));
@@ -125,7 +130,12 @@ public static class AuthEndpoints
                 return Results.Json(new { message = "Tài khoản đã bị khóa. Liên hệ quản trị viên." }, statusCode: 403);
 
             await reader.CloseAsync();
-            user = user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id), Verified = await LoadVerified(conn, user.Username, user.Role) };
+            user = user with
+            {
+                AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                Verified = await LoadVerified(conn, user.Username, user.Role),
+                IsDiamond = await LoadDiamond(conn, user.Username, user.Role)
+            };
             await db.RecordAudit(user.Username, "Đăng nhập web (khuôn mặt)", "Auth", user.Username,
                 $"Đăng nhập bản web bằng khuôn mặt (độ khớp {bestSim:0.000}).");
 
@@ -137,7 +147,7 @@ public static class AuthEndpoints
             await using var conn = await db.OpenAsync();
             var user = await ReadUserByUsername(conn, principal.Username());
             if (user is null) return Results.Unauthorized();
-            return Results.Ok(user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id) });
+            return Results.Ok(user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id), IsDiamond = await LoadDiamond(conn, user.Username, user.Role) });
         }).RequireAuthorization();
 
         // Sửa hồ sơ của chính mình (web): đổi tên hiển thị. (Ảnh đại diện trên desktop lưu cục bộ
@@ -307,7 +317,11 @@ public static class AuthEndpoints
             reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
             reader.DtNull("created_at"));
         await reader.CloseAsync();
-        return dto with { Verified = await LoadVerified(conn, dto.Username, dto.Role) };
+        return dto with
+        {
+            Verified = await LoadVerified(conn, dto.Username, dto.Role),
+            IsDiamond = await LoadDiamond(conn, dto.Username, dto.Role)
+        };
     }
 
     // Tích xanh: Admin luôn có; tài khoản thường thì tra bảng web_verified_users (web-only).
@@ -318,6 +332,19 @@ public static class AuthEndpoints
         {
             var r = await conn.Cmd(
                 "SELECT 1 FROM web_verified_users WHERE username = @u LIMIT 1")
+                .With("@u", username).ExecuteScalarAsync();
+            return r is not null and not DBNull;
+        }
+        catch { return false; }
+    }
+
+    private static async Task<bool> LoadDiamond(NpgsqlConnection conn, string username, string role)
+    {
+        if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            var r = await conn.Cmd(
+                "SELECT 1 FROM web_diamond_members WHERE username = @u LIMIT 1")
                 .With("@u", username).ExecuteScalarAsync();
             return r is not null and not DBNull;
         }

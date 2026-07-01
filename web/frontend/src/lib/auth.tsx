@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, tokenStore } from "./api";
+import { appUrl } from "./appConfig";
 import type { User } from "./types";
 import { ensureWaterDailyLogin } from "./waterReminderClock";
 import { ensureEyeDailyLogin } from "./eyeReminderClock";
@@ -38,7 +39,7 @@ function sendHeartbeat() {
 function sendOfflineKeepalive() {
   const token = tokenStore.get();
   if (!token) return;
-  fetch("/api/auth/logout", {
+  fetch(appUrl("/api/auth/logout"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -114,7 +115,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api.post("/api/auth/logout", { sid: sessionId() }).catch(() => {}); // tắt hiện diện ngay (best-effort)
     tokenStore.clear();
     setUser(null);
-    location.href = "/login";
   };
 
   return <Ctx.Provider value={{ user, loading, login, loginWithFace, logout, updateUser: setUser }}>{children}</Ctx.Provider>;
