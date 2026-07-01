@@ -5,24 +5,27 @@ import {
   Ban,
   Bell,
   CheckCheck,
+  Download,
   EyeOff,
+  FileText,
   Flag,
   Forward,
   Home,
   Loader2,
   MessageCircle,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   Phone,
   Pin,
   PinOff,
-  Plus,
   Search,
   Send,
   Smile,
   SmilePlus,
   SquarePen,
   Trash2,
+  Upload,
   User,
   Video,
 } from "lucide-react";
@@ -31,9 +34,18 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { initials } from "../lib/format";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
-import { VerifiedBadge } from "../components/VerifiedBadge";
+import { DiamondLabel, VerifiedBadge } from "../components/VerifiedBadge";
+import { useAuth } from "../lib/auth";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
+import { useAppNotifications } from "../components/AppNotifications";
+import { formatBytes } from "../lib/format";
+import {
+  redownload,
+  startSend,
+  useTransfers,
+  type TransferInfo,
+} from "../lib/filetransfer";
 import type { ChatContact, ChatConversation, ChatMessage, ChatReaction } from "../lib/types";
 import "../features/giacong/giacong.css";
 
@@ -45,6 +57,7 @@ import "../features/giacong/giacong.css";
    ========================================================================= */
 
 type Filter = "all" | "unread" | "groups";
+const SUPPORT_USERNAME = "__support__";
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "Tất cả" },
@@ -135,12 +148,25 @@ function Avatar({
   );
 }
 
-/** Tên + tích xanh (nếu đã xác minh). */
-function NameWithBadge({ name, verified, className }: { name: string; verified?: boolean; className?: string }) {
+/** Tên + tích xanh, nhãn kim cương nằm dưới để không chen mất tên. */
+function NameWithBadge({
+  name,
+  verified,
+  isDiamond,
+  className,
+}: {
+  name: string;
+  verified?: boolean;
+  isDiamond?: boolean;
+  className?: string;
+}) {
   return (
-    <span className={`inline-flex min-w-0 items-center gap-1 ${className ?? ""}`}>
-      <span className="truncate">{name}</span>
-      {verified && <VerifiedBadge size={15} />}
+    <span className={`inline-flex min-w-0 max-w-full flex-col items-start gap-1 ${className ?? ""}`}>
+      <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+        <span className="min-w-0 truncate">{name}</span>
+        {verified && <VerifiedBadge size={15} />}
+      </span>
+      {isDiamond && <DiamondLabel />}
     </span>
   );
 }
@@ -521,6 +547,120 @@ function Bubble({
   );
 }
 
+/** Bong bóng tin nhắn TỆP gửi qua LAN: tên + dung lượng + trạng thái (P2P trực tiếp hoặc tải từ server). */
+function FileBubble({
+  msg,
+  transfer,
+  serverBusy,
+  onRedownload,
+  onServerDownload,
+}: {
+  msg: ChatMessage;
+  transfer?: TransferInfo;
+  serverBusy?: boolean;
+  onRedownload: () => void;
+  onServerDownload: () => void;
+}) {
+  const mine = msg.mine;
+  const name = msg.fileName ?? transfer?.name ?? "Tệp";
+  const size = msg.fileSize ?? transfer?.size ?? 0;
+  const st = transfer?.status;
+  const pct =
+    transfer && transfer.size > 0 ? Math.min(100, Math.floor((transfer.transferred / transfer.size) * 100)) : null;
+  const showBar = st === "transferring";
+
+  // Người nhận có thể tải bản server giữ tạm khi không đang/đã nhận trực tiếp qua P2P.
+  const p2pReceiving = st === "connecting" || st === "transferring";
+  const p2pGotBlob = st === "done" && !!transfer?.blobUrl;
+  const canServerDownload = !mine && !!msg.hasBlob && !p2pReceiving && !p2pGotBlob;
+  const canRedownload = !mine && p2pGotBlob;
+
+  type Tone = "muted" | "accent" | "success" | "danger";
+  let statusText = mine ? "Đã gửi" : "Tệp đã gửi — cần gửi lại để tải";
+  let tone: Tone = "muted";
+  if (canServerDownload) (statusText = "Người gửi đã lưu trên máy chủ — bấm để tải"), (tone = "accent");
+  else if (st === "inviting") (statusText = "Đang chờ người nhận đồng ý…"), (tone = "muted");
+  else if (st === "incoming") (statusText = "Có lời mời nhận — xem thông báo"), (tone = "accent");
+  else if (st === "connecting") (statusText = "Đang kết nối…"), (tone = "accent");
+  else if (st === "transferring") (statusText = `${mine ? "Đang gửi" : "Đang nhận"}… ${pct ?? 0}%`), (tone = "accent");
+  else if (st === "uploading") (statusText = "Người nhận offline — đang lưu lên máy chủ…"), (tone = "accent");
+  else if (st === "stored") (statusText = "Đã lưu trên máy chủ — chờ người nhận tải"), (tone = "success");
+  else if (st === "done") (statusText = mine ? "Đã gửi xong" : "Đã nhận xong"), (tone = "success");
+  else if (st === "declined") (statusText = mine ? "Người nhận đã từ chối" : "Bạn đã từ chối"), (tone = "danger");
+  else if (st === "canceled") (statusText = "Đã hủy"), (tone = "danger");
+  else if (st === "error") (statusText = transfer?.error ?? "Truyền tệp lỗi"), (tone = "danger");
+  else if (mine && msg.hasBlob) (statusText = "Đã lưu trên máy chủ — chờ người nhận tải"), (tone = "muted");
+
+  const toneColor =
+    tone === "success"
+      ? "var(--success)"
+      : tone === "danger"
+        ? "var(--danger)"
+        : tone === "accent"
+          ? mine
+            ? "rgba(255,255,255,0.92)"
+            : "var(--accent)"
+          : mine
+            ? "rgba(255,255,255,0.78)"
+            : "var(--text-muted)";
+
+  return (
+    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+      <div
+        className="chat-message-bubble max-w-[86%] rounded-2xl px-3 py-2.5 shadow-sm sm:max-w-[78%]"
+        style={
+          mine
+            ? { background: "var(--accent)", color: "#fff", borderTopRightRadius: 6, minWidth: 220 }
+            : {
+                background: "var(--glass-bg-strong)",
+                border: "1px solid var(--glass-border)",
+                color: "var(--text)",
+                borderTopLeftRadius: 6,
+                minWidth: 220,
+              }
+        }
+      >
+        <div className="flex items-center gap-2.5">
+          <span
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
+            style={{ background: mine ? "rgba(255,255,255,0.18)" : "var(--accent-soft)", color: mine ? "#fff" : "var(--accent)" }}
+          >
+            <FileText className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[0.88rem] font-semibold" title={name}>
+              {name}
+            </div>
+            <div className={`text-[0.7rem] ${mine ? "text-white/75" : "text-[var(--text-muted)]"}`}>
+              {formatBytes(size)} · {fmtClock(msg.createdAt)}
+            </div>
+          </div>
+          {(canServerDownload || canRedownload) && (
+            <button
+              type="button"
+              onClick={canServerDownload ? onServerDownload : onRedownload}
+              disabled={serverBusy}
+              aria-label="Tải tệp"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition hover:opacity-80 disabled:opacity-50"
+              style={{ background: mine ? "rgba(255,255,255,0.18)" : "var(--accent-soft)", color: mine ? "#fff" : "var(--accent)" }}
+            >
+              {serverBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            </button>
+          )}
+        </div>
+        {showBar && (
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full" style={{ background: mine ? "rgba(255,255,255,0.25)" : "var(--glass-border)" }}>
+            <div className="h-full rounded-full transition-[width]" style={{ width: `${pct ?? 0}%`, background: mine ? "#fff" : "var(--accent)" }} />
+          </div>
+        )}
+        <div className="mt-1.5 text-[0.72rem] font-medium" style={{ color: toneColor }}>
+          {statusText}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Ô chỉnh sửa tin nhắn nội tuyến (thay cho bong bóng khi đang sửa). */
 function EditRow({
   value,
@@ -784,7 +924,12 @@ function ConversationRow({
             <div className="flex items-baseline justify-between gap-2">
               <span className="inline-flex min-w-0 items-center gap-1.5">
                 {conversation.pinned && <Pin className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--accent)" }} />}
-                <NameWithBadge name={conversation.title} verified={conversation.verified} className="text-sm font-bold" />
+                <NameWithBadge
+                  name={conversation.title}
+                  verified={conversation.verified}
+                  isDiamond={conversation.isDiamond}
+                  className="text-sm font-bold"
+                />
               </span>
               <span className="shrink-0 text-[0.68rem] font-medium text-[var(--text-muted)]">{fmtTime(conversation.lastAt)}</span>
             </div>
@@ -832,8 +977,26 @@ function ConversationRow({
   );
 }
 
+/** Lớp phủ gợi ý khi đang kéo tệp vào một vùng thả (gửi nhanh / xem trước). */
+function DropOverlay({ icon, title, sub }: { icon: React.ReactNode; title: string; sub?: string }) {
+  return (
+    <div
+      className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-2xl border-2 border-dashed"
+      style={{ borderColor: "var(--accent)", background: "var(--accent-soft)" }}
+    >
+      <div className="flex flex-col items-center gap-1 text-center text-[var(--accent)]">
+        {icon}
+        <div className="text-sm font-bold">{title}</div>
+        {sub && <div className="text-xs opacity-80">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function Chats() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { notify, confirm } = useAppNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -847,12 +1010,19 @@ export function Chats() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [forwardMsg, setForwardMsg] = useState<ChatMessage | null>(null);
+  const [sendAsSupport, setSendAsSupport] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" ? window.matchMedia("(max-width: 767px)").matches : false,
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const draftInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const transfers = useTransfers();
+  const [serverDownloading, setServerDownloading] = useState<number | null>(null);
+  const [dragZone, setDragZone] = useState<null | "thread" | "composer">(null);
+  const [previewFile, setPreviewFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const { data: convData, loading, reload: reloadConversations } = useApi<ChatConversation[]>("/api/chat/conversations");
   const allConversations = useMemo(() => convData ?? [], [convData]);
@@ -891,10 +1061,16 @@ export function Chats() {
     };
   }, [composerFocused, isMobile]);
 
+  const admin = user?.role?.toLowerCase() === "admin";
+  const chatConversations = useMemo(
+    () => allConversations.filter((c) => !(admin && c.supportConversation)),
+    [admin, allConversations],
+  );
+
   // Tự chọn hội thoại đầu tiên khi vào trang (nếu chưa chọn).
   useEffect(() => {
-    if (!isMobile && !activeId && allConversations.length > 0) setActiveId(allConversations[0].id);
-  }, [activeId, allConversations, isMobile]);
+    if (!isMobile && !activeId && chatConversations.length > 0) setActiveId(chatConversations[0].id);
+  }, [activeId, chatConversations, isMobile]);
 
   useEffect(() => {
     if (!requestedConversationId) return;
@@ -908,17 +1084,21 @@ export function Chats() {
 
   const conversations = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return allConversations.filter((c) => {
+    return chatConversations.filter((c) => {
       if (filter === "unread" && !c.unread) return false;
       if (filter === "groups" && !c.isGroup) return false;
       if (q && !c.title.toLowerCase().includes(q) && !c.preview.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [allConversations, filter, query]);
+  }, [chatConversations, filter, query]);
 
   const active =
     allConversations.find((c) => c.id === activeId) ??
     (activeFallback?.id === activeId ? activeFallback : null);
+  const canUseSupportSender = !!admin && !!active && !active.isGroup && !!active.username && active.username !== SUPPORT_USERNAME;
+  const outgoingAsSupport = canUseSupportSender && sendAsSupport;
+  const isSupportPeer = active?.username === SUPPORT_USERNAME;
+  const canSendLanFiles = !!user?.isDiamond && !isSupportPeer && !outgoingAsSupport;
 
   const scrollToBottom = (smooth = true) =>
     requestAnimationFrame(() =>
@@ -930,11 +1110,24 @@ export function Chats() {
     scrollToBottom(false);
   }, [activeId, messages.length]);
 
-  // Hủy chỉnh sửa khi chuyển sang hội thoại khác.
+  // Hủy chỉnh sửa + xóa xem trước/kéo-thả khi chuyển sang hội thoại khác.
   useEffect(() => {
     setEditingId(null);
     setEditDraft("");
-  }, [activeId]);
+    setPreviewFile(null);
+    setDragZone(null);
+    setSendAsSupport(!!active?.supportConversation && active.username !== SUPPORT_USERNAME);
+  }, [activeId, active?.supportConversation, active?.username]);
+
+  // Tạo ảnh thu nhỏ cho tệp đang xem trước (nếu là ảnh); thu hồi object URL khi đổi/đóng.
+  useEffect(() => {
+    if (previewFile && previewFile.type.startsWith("image/")) {
+      const url = URL.createObjectURL(previewFile);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setPreviewUrl(null);
+  }, [previewFile]);
 
   // Nhịp mỗi phút để cập nhật trạng thái "Hoạt động X phút trước" mà không cần tải lại.
   const [, setTick] = useState(0);
@@ -950,6 +1143,10 @@ export function Chats() {
     if (c.unread) reloadConversations({ silent: true });
   };
 
+  const notifyError = (e: unknown, fallback: string) => {
+    notify.error(e instanceof Error ? e.message : fallback);
+  };
+
   const showConversationProfile = (c: ChatConversation) => {
     setActiveId(c.id);
     setActiveFallback(c);
@@ -962,7 +1159,7 @@ export function Chats() {
       await api.post(`/api/chat/conversations/${c.id}/read`);
       reloadConversations({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không đánh dấu đã đọc được cuộc trò chuyện");
+      notifyError(e, "Không đánh dấu đã đọc được cuộc trò chuyện");
     }
   };
 
@@ -971,7 +1168,7 @@ export function Chats() {
       await api.post(`/api/chat/conversations/${c.id}/pin`, { pinned: !c.pinned });
       reloadConversations({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không ghim được cuộc trò chuyện");
+      notifyError(e, "Không ghim được cuộc trò chuyện");
     }
   };
 
@@ -989,27 +1186,39 @@ export function Chats() {
       await api.post(`/api/chat/conversations/${c.id}/hide`);
       removeConversationFromList(c.id);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không ẩn được cuộc trò chuyện");
+      notifyError(e, "Không ẩn được cuộc trò chuyện");
     }
   };
 
   const deleteConversation = async (c: ChatConversation) => {
-    if (!confirm("Xóa hội thoại này khỏi danh sách của bạn? Tin nhắn phía người còn lại không bị xóa.")) return;
+    const ok = await confirm({
+      title: "Xóa hội thoại?",
+      description: "Xóa hội thoại này khỏi danh sách của bạn? Tin nhắn phía người còn lại không bị xóa.",
+      confirmLabel: "Xóa",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await api.del(`/api/chat/conversations/${c.id}`);
       removeConversationFromList(c.id);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không xóa được cuộc trò chuyện");
+      notifyError(e, "Không xóa được cuộc trò chuyện");
     }
   };
 
   const reportConversation = async (c: ChatConversation) => {
-    if (!confirm("Báo xấu cuộc trò chuyện này?")) return;
+    const ok = await confirm({
+      title: "Báo xấu cuộc trò chuyện?",
+      description: "Bạn muốn gửi báo xấu cuộc trò chuyện này để quản trị viên xem xét?",
+      confirmLabel: "Báo xấu",
+      tone: "warning",
+    });
+    if (!ok) return;
     try {
       await api.post(`/api/chat/conversations/${c.id}/report`, { reason: "Người dùng báo xấu từ menu hội thoại." });
-      alert("Đã ghi nhận báo xấu.");
+      notify.success("Đã gửi báo xấu sang mục Phản hồi của admin.");
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không báo xấu được cuộc trò chuyện");
+      notifyError(e, "Không báo xấu được cuộc trò chuyện");
     }
   };
 
@@ -1055,19 +1264,138 @@ export function Chats() {
     setSending(true);
     setDraft("");
     try {
-      await api.post(`/api/chat/conversations/${activeId}/messages`, { body: text });
-      reloadMessages({ silent: true });
+      let targetConversationId = activeId;
+      if (outgoingAsSupport && active && !active.supportConversation && active.username && active.username !== SUPPORT_USERNAME) {
+        const { id } = await api.post<{ id: string }>(`/api/chat/support/${encodeURIComponent(active.username)}`);
+        targetConversationId = id;
+        setActiveId(id);
+        setActiveFallback({
+          id,
+          isGroup: false,
+          title: active.title,
+          username: active.username,
+          avatarUrl: active.avatarUrl,
+          isOnline: active.isOnline,
+          verified: active.verified,
+          isDiamond: active.isDiamond,
+          preview: "",
+          lastAt: null,
+          unread: 0,
+          supportConversation: true,
+        });
+      }
+      await api.post(`/api/chat/conversations/${targetConversationId}/messages`, { body: text, sendAsSupport: outgoingAsSupport });
+      if (targetConversationId === activeId) reloadMessages({ silent: true });
       reloadConversations({ silent: true });
       scrollToBottom();
     } catch (e) {
       setDraft(text);
-      alert(e instanceof Error ? e.message : "Không gửi được tin nhắn");
+      notifyError(e, "Không gửi được tin nhắn");
     } finally {
       setSending(false);
       if (shouldKeepKeyboard) {
         requestAnimationFrame(() => draftInputRef.current?.focus({ preventScroll: true }));
       }
     }
+  };
+
+  // Gửi tệp qua LAN (P2P). Ghi MỘT dòng metadata "đã gửi tệp X" rồi mời người nhận qua WebRTC.
+  // Nội dung tệp KHÔNG đi qua server/DB — truyền thẳng giữa 2 trình duyệt khi người nhận đồng ý.
+  const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB: chặn nhầm; truyền P2P nên không giới hạn server
+  const handleSendFile = async (file: File) => {
+    if (!activeId || !active) return;
+    if (active.isGroup || !active.username) {
+      notify.warning("Hiện chỉ gửi tệp qua LAN trong cuộc trò chuyện 1-1.");
+      return;
+    }
+    if (!canSendLanFiles) {
+      notify.warning("Chỉ hội viên kim cương mới được gửi tệp qua LAN.");
+      return;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      notify.warning("Tệp quá lớn (giới hạn 2GB).");
+      return;
+    }
+    const peer = active.username;
+    try {
+      const msg = await api.post<ChatMessage>(`/api/chat/conversations/${activeId}/messages/file`, {
+        fileName: file.name,
+        fileSize: file.size,
+        fileMime: file.type || null,
+      });
+      startSend(peer, file, msg.id, activeId, !!active.isOnline);
+      reloadMessages({ silent: true });
+      reloadConversations({ silent: true });
+      scrollToBottom();
+    } catch (e) {
+      notifyError(e, "Không gửi được tệp");
+    }
+  };
+
+  const onFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // cho phép chọn lại cùng tệp lần sau
+    if (file) void handleSendFile(file);
+  };
+
+  // Tải tệp người gửi đã LƯU TẠM trên server (khi mình offline lúc họ gửi). Tải xong server tự xóa.
+  const serverDownload = async (m: ChatMessage) => {
+    if (!activeId) return;
+    setServerDownloading(m.id);
+    try {
+      const blob = await api.getBlob(`/api/chat/conversations/${activeId}/messages/${m.id}/download`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = m.fileName || `tep-${m.id}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      reloadMessages({ silent: true });
+      reloadConversations({ silent: true });
+    } catch (e) {
+      notifyError(e, "Không tải được tệp (có thể đã hết hạn hoặc đã tải).");
+    } finally {
+      setServerDownloading(null);
+    }
+  };
+
+  // ----- Kéo-thả tệp: thả vào VÙNG TIN NHẮN → gửi nhanh; thả vào KHUNG NHẬP → xem trước rồi gửi -----
+  const dragHasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const canDropFile = !!active && !active.isGroup && !!active.username && canSendLanFiles;
+
+  const onZoneOver = (zone: "thread" | "composer") => (e: React.DragEvent) => {
+    if (!dragHasFiles(e) || !canDropFile) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDragZone(zone);
+  };
+  const onZoneLeave = (zone: "thread" | "composer") => (e: React.DragEvent) => {
+    // Chỉ tắt khi con trỏ rời hẳn vùng (không phải khi đi qua phần tử con).
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setDragZone((z) => (z === zone ? null : z));
+    }
+  };
+  const onThreadDrop = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    setDragZone(null);
+    const f = e.dataTransfer.files?.[0];
+    if (f) void handleSendFile(f); // gửi nhanh
+  };
+  const onComposerDrop = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    setDragZone(null);
+    const f = e.dataTransfer.files?.[0];
+    if (f) setPreviewFile(f); // xem trước
+  };
+  const sendPreview = async () => {
+    if (!previewFile) return;
+    const f = previewFile;
+    setPreviewFile(null);
+    await handleSendFile(f);
   };
 
   const startChat = async (c: ChatContact) => {
@@ -1083,13 +1411,15 @@ export function Chats() {
         avatarUrl: c.avatarUrl,
         isOnline: c.isOnline,
         verified: c.verified,
+        isDiamond: c.isDiamond,
         preview: "",
         lastAt: null,
         unread: 0,
+        supportConversation: c.username === SUPPORT_USERNAME,
       });
       reloadConversations({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không mở được cuộc trò chuyện");
+      notifyError(e, "Không mở được cuộc trò chuyện");
     }
   };
 
@@ -1111,19 +1441,25 @@ export function Chats() {
       reloadMessages({ silent: true });
       reloadConversations({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không sửa được tin nhắn");
+      notifyError(e, "Không sửa được tin nhắn");
     }
   };
 
   const removeMsg = async (m: ChatMessage) => {
     if (!activeId) return;
-    if (!confirm("Gỡ tin nhắn này? Mọi người trong cuộc trò chuyện sẽ không xem được nữa.")) return;
+    const ok = await confirm({
+      title: "Gỡ tin nhắn?",
+      description: "Mọi người trong cuộc trò chuyện sẽ không xem được tin nhắn này nữa.",
+      confirmLabel: "Gỡ",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await api.del(`/api/chat/conversations/${activeId}/messages/${m.id}`);
       reloadMessages({ silent: true });
       reloadConversations({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không gỡ được tin nhắn");
+      notifyError(e, "Không gỡ được tin nhắn");
     }
   };
 
@@ -1134,7 +1470,7 @@ export function Chats() {
       await api.post(`/api/chat/conversations/${activeId}/messages/${m.id}/react`, { emoji });
       reloadMessages({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không thả được biểu cảm");
+      notifyError(e, "Không thả được biểu cảm");
     }
   };
 
@@ -1154,13 +1490,15 @@ export function Chats() {
         avatarUrl: c.avatarUrl,
         isOnline: c.isOnline,
         verified: c.verified,
+        isDiamond: c.isDiamond,
         preview: "",
         lastAt: null,
         unread: 0,
+        supportConversation: c.username === SUPPORT_USERNAME,
       });
       reloadConversations({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Không chuyển tiếp được tin nhắn");
+      notifyError(e, "Không chuyển tiếp được tin nhắn");
     }
   };
 
@@ -1171,6 +1509,9 @@ export function Chats() {
       }`}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
+      // Chặn trình duyệt mở tệp khi vô tình thả ra ngoài vùng nhận (header, danh sách…).
+      onDragOver={(e) => { if (dragHasFiles(e)) e.preventDefault(); }}
+      onDrop={(e) => { if (dragHasFiles(e)) e.preventDefault(); }}
     >
       {/* ---------- Cột danh sách hội thoại ---------- */}
       <GlassPanel strong className="chat-conversation-list flex w-[320px] shrink-0 flex-col overflow-hidden p-3">
@@ -1252,7 +1593,7 @@ export function Chats() {
           {loading && conversations.length === 0 && <ConversationSkeletons />}
           {!loading && conversations.length === 0 && (
             <div className="px-2 py-10 text-center text-sm text-[var(--text-muted)]">
-              {allConversations.length === 0 ? "Chưa có cuộc trò chuyện nào. Bấm + để bắt đầu." : "Không có hội thoại phù hợp."}
+              {chatConversations.length === 0 ? "Chưa có cuộc trò chuyện nào. Bấm + để bắt đầu." : "Không có hội thoại phù hợp."}
             </div>
           )}
         </div>
@@ -1280,7 +1621,12 @@ export function Chats() {
               >
                 <Avatar name={active.title} url={active.avatarUrl} size={42} online={active.isOnline} group={active.isGroup} />
                 <div className="min-w-0 max-w-[220px]">
-                  <NameWithBadge name={active.title} verified={active.verified} className="text-sm font-bold text-[var(--text)]" />
+                  <NameWithBadge
+                    name={active.title}
+                    verified={active.verified}
+                    isDiamond={active.isDiamond}
+                    className="text-sm font-bold text-[var(--text)]"
+                  />
                   <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
                     {active.isGroup ? (
                       "Nhóm trò chuyện"
@@ -1305,6 +1651,12 @@ export function Chats() {
               </div>
             </header>
 
+            <div
+              className="relative flex min-h-0 flex-1 flex-col"
+              onDragOver={onZoneOver("thread")}
+              onDragLeave={onZoneLeave("thread")}
+              onDrop={onThreadDrop}
+            >
             <div ref={scrollRef} className="scroll-thin flex-1 overflow-y-auto p-4">
               {msgLoading ? (
                 <MessageSkeletons />
@@ -1328,11 +1680,23 @@ export function Chats() {
                         onSave={saveEdit}
                         onCancel={cancelEdit}
                       />
+                    ) : m.kind === "file" ? (
+                      <FileBubble
+                        key={m.id}
+                        msg={m}
+                        transfer={transfers.get(m.id)}
+                        serverBusy={serverDownloading === m.id}
+                        onRedownload={() => {
+                          const t = transfers.get(m.id);
+                          if (t) redownload(t.tid);
+                        }}
+                        onServerDownload={() => void serverDownload(m)}
+                      />
                     ) : (
                       <Bubble
                         key={m.id}
                         msg={m}
-                        group={active.isGroup}
+                        group={active.isGroup || active.supportConversation}
                         onForward={() => setForwardMsg(m)}
                         onEdit={() => startEdit(m)}
                         onRemove={() => removeMsg(m)}
@@ -1343,19 +1707,97 @@ export function Chats() {
                 </div>
               )}
             </div>
+              {dragZone === "thread" && (
+                <DropOverlay icon={<Send className="h-7 w-7" />} title="Thả để gửi nhanh" sub="Gửi ngay qua LAN" />
+              )}
+            </div>
 
-            <footer className="flex items-center gap-2 border-t border-[var(--glass-border)] p-3">
+            {previewFile && (
+              <div className="border-t border-[var(--glass-border)] p-3">
+                <div
+                  className="flex items-center gap-3 rounded-2xl p-2.5"
+                  style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
+                >
+                  {previewUrl ? (
+                    <img src={previewUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+                  ) : (
+                    <span
+                      className="grid h-14 w-14 shrink-0 place-items-center rounded-xl"
+                      style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                    >
+                      <FileText className="h-6 w-6" />
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-[var(--text)]" title={previewFile.name}>
+                      {previewFile.name}
+                    </div>
+                    <div className="text-xs text-[var(--text-muted)]">{formatBytes(previewFile.size)} · Xem trước khi gửi</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewFile(null)}
+                    className="rounded-lg px-3 py-1.5 text-sm font-semibold text-[var(--text-secondary)] transition hover:bg-[var(--accent-soft)]"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void sendPreview()}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition hover:opacity-90"
+                    style={{ background: "var(--accent)" }}
+                  >
+                    <Send className="h-4 w-4" />
+                    Gửi
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <footer
+              className="relative flex items-center gap-2 border-t border-[var(--glass-border)] p-3"
+              onDragOver={onZoneOver("composer")}
+              onDragLeave={onZoneLeave("composer")}
+              onDrop={onComposerDrop}
+            >
+              <input ref={fileInputRef} type="file" className="hidden" onChange={onFileInputChange} />
+              {dragZone === "composer" && (
+                <DropOverlay icon={<Upload className="h-6 w-6" />} title="Thả để xem trước" sub="Kiểm tra rồi mới gửi" />
+              )}
               <button
                 type="button"
-                className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--accent)] transition hover:bg-[var(--accent-soft)]"
-                aria-label="Đính kèm"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={active.isGroup || !canSendLanFiles}
+                title={
+                  active.isGroup
+                    ? "Gửi tệp chỉ hỗ trợ trò chuyện 1-1"
+                    : isSupportPeer
+                      ? "Tài khoản hỗ trợ không nhận tệp qua LAN"
+                      : outgoingAsSupport
+                        ? "Tắt chế độ Hỗ Trợ để gửi tệp bằng tài khoản admin"
+                        : canSendLanFiles
+                          ? "Gửi tệp qua LAN"
+                          : "Chỉ hội viên kim cương mới được gửi tệp qua LAN"
+                }
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-40"
+                aria-label="Gửi tệp qua LAN"
               >
-                <Plus className="h-5 w-5" />
+                <Paperclip className="h-5 w-5" />
               </button>
-              <div
-                className="flex flex-1 items-center gap-2 rounded-full px-4 py-2"
-                style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
-              >
+              {canUseSupportSender && (
+                <select
+                  value={outgoingAsSupport ? "support" : "admin"}
+                  onChange={(e) => setSendAsSupport(e.target.value === "support")}
+                  className="h-10 shrink-0 rounded-full px-3 text-xs font-bold text-[var(--text)] outline-none transition"
+                  style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
+                  aria-label="Chọn tài khoản gửi"
+                  title="Chọn tài khoản gửi"
+                >
+                  <option value="admin">Admin</option>
+                  <option value="support">Hỗ Trợ Người Dùng</option>
+                </select>
+              )}
+              <div className="flex flex-1 items-center gap-2 px-1 py-1.5">
                 <input
                   ref={draftInputRef}
                   value={draft}
@@ -1363,7 +1805,7 @@ export function Chats() {
                   onFocus={() => setComposerFocused(true)}
                   onBlur={() => setComposerFocused(false)}
                   onKeyDown={(e) => e.key === "Enter" && send()}
-                  placeholder="Nhập tin nhắn…"
+                  placeholder={outgoingAsSupport ? "Nhập tin nhắn với tài khoản Hỗ Trợ…" : "Nhập tin nhắn…"}
                   className="w-full bg-transparent text-sm text-[var(--text)] outline-none"
                 />
                 <button type="button" className="text-[var(--text-muted)] transition hover:text-[var(--accent)]" aria-label="Biểu cảm">
@@ -1415,7 +1857,12 @@ export function Chats() {
               </button>
               <div className="flex flex-col items-center text-center">
                 <Avatar name={active.title} url={active.avatarUrl} size={88} online={active.isOnline} group={active.isGroup} />
-                <NameWithBadge name={active.title} verified={active.verified} className="mt-3 text-lg font-bold text-[var(--text)]" />
+                <NameWithBadge
+                  name={active.title}
+                  verified={active.verified}
+                  isDiamond={active.isDiamond}
+                  className="mt-3 text-lg font-bold text-[var(--text)]"
+                />
                 <div className="text-sm text-[var(--text-secondary)]">
                   {active.isGroup ? "Nhóm trò chuyện" : active.isOnline ? "Trực tuyến" : lastActive(active.lastSeen)}
                 </div>
@@ -1440,16 +1887,6 @@ export function Chats() {
                   </button>
                 ))}
               </div>
-
-              {active.verified && (
-                <div
-                  className="mt-4 flex items-center gap-2 rounded-2xl p-3.5 text-sm"
-                  style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
-                >
-                  <VerifiedBadge size={20} />
-                  <span className="font-semibold text-[var(--text)]">Tài khoản đã xác minh</span>
-                </div>
-              )}
             </div>
           )}
         </GlassPanel>
@@ -1511,7 +1948,12 @@ function ContactPickerModal({
               >
                 <Avatar name={c.displayName} url={c.avatarUrl} size={40} online={c.isOnline} />
                 <div className="min-w-0 flex-1">
-                  <NameWithBadge name={c.displayName} verified={c.verified} className="text-sm font-bold text-[var(--text)]" />
+                  <NameWithBadge
+                    name={c.displayName}
+                    verified={c.verified}
+                    isDiamond={c.isDiamond}
+                    className="text-sm font-bold text-[var(--text)]"
+                  />
                   <div className="truncate text-xs text-[var(--text-secondary)]">
                     @{c.username} · {c.isOnline ? "Trực tuyến" : "Ngoại tuyến"}
                   </div>

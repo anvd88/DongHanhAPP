@@ -6,6 +6,7 @@ import { QuickToolsDrawer } from "./QuickToolsDrawer";
 import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/types";
+import { HR_APK_NAV_KEYS, IS_HR_APK } from "../lib/appConfig";
 import { useChatNotifications } from "./ChatNotifications";
 
 const MOBILE_NAV_KEYS = new Set(["dashboard", "giacong", "ketoan", "khachhang", "chats", "chamcong"]);
@@ -16,13 +17,14 @@ export function Layout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { unreadCount } = useChatNotifications();
   const admin = isAdmin(user);
+  const bottomNavKeys = IS_HR_APK ? HR_APK_NAV_KEYS : MOBILE_NAV_KEYS;
   const mobileNavItems = NAV.flatMap((section) => section.items)
-    .filter((item) => MOBILE_NAV_KEYS.has(item.key) && (!item.adminOnly || admin));
+    .filter((item) => bottomNavKeys.has(item.key) && (!item.adminOnly || admin));
 
   return (
     <div className="km-app-shell">
       {/* Sidebar desktop */}
-      <div className="hidden lg:block">
+      <div className="km-sidebar-rail hidden lg:block">
         <Sidebar />
       </div>
 

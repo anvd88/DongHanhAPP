@@ -4,7 +4,8 @@ import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Table } from "../components/Table";
 import { Modal } from "../components/Modal";
-import { VerifiedBadge } from "../components/VerifiedBadge";
+import { useAppNotifications } from "../components/AppNotifications";
+import { DiamondLabel, VerifiedBadge } from "../components/VerifiedBadge";
 import { Button, Input, Select, Field, Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
@@ -20,6 +21,7 @@ const ROLES = [
 ];
 
 export function NhanSu() {
+  const { notify, confirm } = useAppNotifications();
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("");
   const [adding, setAdding] = useState(false);
@@ -34,13 +36,32 @@ export function NhanSu() {
   }, [reload]);
 
   const act = async (fn: () => Promise<unknown>) => {
-    try { await fn(); reload({ silent: true }); } catch (e) { alert(e instanceof Error ? e.message : "Lỗi"); }
+    try { await fn(); reload({ silent: true }); } catch (e) { notify.error(e instanceof Error ? e.message : "Lỗi"); }
+  };
+  const setDiamond = (u: UserAdmin, isDiamond: boolean) => {
+    if (u.role === "Admin") return;
+    void act(() => api.post(`/api/users/${u.id}/diamond`, { isDiamond }));
   };
   const resetPw = async (u: UserAdmin) => {
     try {
       const r = await api.post<{ code: string }>(`/api/users/${u.id}/reset-password`);
-      alert(`Mật khẩu mới của "${u.username}":\n\n${r.code}\n\nHãy gửi cho người dùng.`);
-    } catch (e) { alert(e instanceof Error ? e.message : "Lỗi"); }
+      notify.show({
+        title: "Mật khẩu mới",
+        message: `Tài khoản "${u.username}":\n${r.code}\nHãy gửi cho người dùng.`,
+        tone: "info",
+        duration: 20000,
+      });
+    } catch (e) { notify.error(e instanceof Error ? e.message : "Lỗi"); }
+  };
+
+  const deleteUser = async (u: UserAdmin) => {
+    const ok = await confirm({
+      title: "Xóa người dùng?",
+      description: `Xóa người dùng "${u.username}"?`,
+      confirmLabel: "Xóa",
+      tone: "danger",
+    });
+    if (ok) void act(() => api.del(`/api/users/${u.id}`));
   };
 
   return (
@@ -76,10 +97,23 @@ export function NhanSu() {
                 <span className="inline-flex items-center gap-1.5">
                   {r.fullName || "—"}
                   {r.verified && <VerifiedBadge size={15} />}
+                  {r.isDiamond && <DiamondLabel />}
                 </span>
               ) },
               { header: "Email", cell: (r) => r.email || "—" },
               { header: "Vai trò", cell: (r) => <Badge color={r.role === "Admin" ? "purple" : "muted"}>{r.role}</Badge> },
+              { header: "Hội viên", cell: (r) => (
+                <Select
+                  value={r.isDiamond ? "diamond" : "normal"}
+                  disabled={r.role === "Admin"}
+                  title={r.role === "Admin" ? "Admin luôn có đầy đủ đặc quyền" : "Chọn hạng hội viên"}
+                  onChange={(e) => setDiamond(r, e.target.value === "diamond")}
+                  className="min-w-[128px] py-1.5 text-xs font-semibold"
+                >
+                  <option value="normal">Thường</option>
+                  <option value="diamond">Kim cương</option>
+                </Select>
+              ) },
               { header: "Online", cell: (r) => (
                 <div className="inline-flex min-w-[112px] flex-col gap-1">
                   <Badge color={r.isOnline ? "success" : "muted"}>
@@ -112,7 +146,7 @@ export function NhanSu() {
                   ) : (
                     <IconBtn title="Mở khóa" color="success" onClick={() => act(() => api.post(`/api/users/${r.id}/lock`, { locked: false }))}><Unlock className="h-4 w-4" /></IconBtn>
                   ))}
-                  <IconBtn title="Xóa" color="danger" onClick={() => confirm(`Xóa người dùng "${r.username}"?`) && act(() => api.del(`/api/users/${r.id}`))}><Trash2 className="h-4 w-4" /></IconBtn>
+                  <IconBtn title="Xóa" color="danger" onClick={() => void deleteUser(r)}><Trash2 className="h-4 w-4" /></IconBtn>
                 </div>
               ) },
             ]}

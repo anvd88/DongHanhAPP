@@ -33,9 +33,11 @@ public static class UserEndpoints
                 $@"SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active, u.approval_status, u.created_at,
                           COALESCE(p.is_online, FALSE) AS is_online,
                           p.last_seen,
-                          (u.role = 'Admin' OR vu.username IS NOT NULL) AS verified
+                          (u.role = 'Admin' OR vu.username IS NOT NULL) AS verified,
+                          (u.role = 'Admin' OR du.username IS NOT NULL) AS is_diamond
                    FROM app_users u
                    LEFT JOIN web_verified_users vu ON vu.username = u.username
+                   LEFT JOIN web_diamond_members du ON du.username = u.username
                    LEFT JOIN LATERAL (
                        SELECT
                            BOOL_OR(us.is_active = TRUE AND us.last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds') AS is_online,
@@ -51,7 +53,7 @@ public static class UserEndpoints
             while (await r.ReadAsync())
                 list.Add(new UserAdminDto(r.Guid("id"), r.Str("username"), r.Str("full_name"),
                     r.Str("email"), r.Str("role"), r.Bool("is_active"), r.Str("approval_status"), r.DtNull("created_at"),
-                    r.Bool("is_online"), r.DtNull("last_seen"), r.Bool("verified")));
+                    r.Bool("is_online"), r.DtNull("last_seen"), r.Bool("verified"), r.Bool("is_diamond")));
             return Results.Ok(list);
         });
 
@@ -118,10 +120,19 @@ public static class UserEndpoints
         g.MapPost("/{id:guid}/verify", async (Guid id, SetVerifiedRequest req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            var username = Convert.ToString(await conn.Cmd(
-                "SELECT username FROM app_users WHERE id = @id AND is_deleted = FALSE LIMIT 1")
-                .With("@id", id).ExecuteScalarAsync())?.Trim();
+            string username;
+            string role;
+            await using (var reader = await conn.Cmd(
+                "SELECT username, role FROM app_users WHERE id = @id AND is_deleted = FALSE LIMIT 1")
+                .With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync()) return Results.NotFound();
+                username = reader.Str("username").Trim();
+                role = reader.Str("role");
+            }
             if (string.IsNullOrWhiteSpace(username)) return Results.NotFound();
+            if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new { message = "Admin luôn có đầy đủ đặc quyền." });
 
             await ChatEndpoints.EnsureTables(db);
             if (req.Verified)
@@ -137,6 +148,31 @@ public static class UserEndpoints
                     .With("@u", username).ExecuteNonQueryAsync();
 
             await db.RecordAudit(u.Username(), req.Verified ? "Cấp tích xanh" : "Thu hồi tích xanh", "User", username, "(web)");
+            return Results.NoContent();
+        });
+
+        g.MapPost("/{id:guid}/diamond", async (Guid id, SetDiamondRequest req, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var username = Convert.ToString(await conn.Cmd(
+                "SELECT username FROM app_users WHERE id = @id AND is_deleted = FALSE LIMIT 1")
+                .With("@id", id).ExecuteScalarAsync())?.Trim();
+            if (string.IsNullOrWhiteSpace(username)) return Results.NotFound();
+
+            await ChatEndpoints.EnsureTables(db);
+            if (req.IsDiamond)
+                await conn.Cmd(
+                    @"INSERT INTO web_diamond_members (username, granted_by, granted_at)
+                      VALUES (@u, @by, CURRENT_TIMESTAMP)
+                      ON CONFLICT (username) DO UPDATE SET
+                          granted_by = EXCLUDED.granted_by,
+                          granted_at = EXCLUDED.granted_at")
+                    .With("@u", username).With("@by", u.Username()).ExecuteNonQueryAsync();
+            else
+                await conn.Cmd("DELETE FROM web_diamond_members WHERE username = @u")
+                    .With("@u", username).ExecuteNonQueryAsync();
+
+            await db.RecordAudit(u.Username(), req.IsDiamond ? "Cap hoi vien kim cuong" : "Thu hoi hoi vien kim cuong", "User", username, "(web)");
             return Results.NoContent();
         });
 
@@ -198,6 +234,7 @@ DELETE FROM web_chat_conversations c
 WHERE NOT EXISTS (SELECT 1 FROM web_chat_members mm WHERE mm.conversation_id = c.id);
 
 DELETE FROM web_verified_users WHERE username = @username;
+DELETE FROM web_diamond_members WHERE username = @username;
 DELETE FROM cham_cong_log WHERE username = @username;
 DELETE FROM cham_cong_face WHERE username = @username;
 UPDATE cham_cong_face SET created_by = '' WHERE created_by = @username;

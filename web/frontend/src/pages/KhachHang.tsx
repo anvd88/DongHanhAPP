@@ -17,6 +17,7 @@ import {
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
+import { useAppNotifications } from "../components/AppNotifications";
 import { Button, Field, Input } from "../components/ui";
 import { Button as GlassButton } from "../shadcn/button";
 import { api } from "../lib/api";
@@ -56,6 +57,7 @@ function CustomerRowsSkeleton() {
 }
 
 export function KhachHang() {
+  const { notify, confirm } = useAppNotifications();
   const { data: customers, loading, error, reload } = useApi<Customer[]>("/api/customers");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -94,9 +96,12 @@ export function KhachHang() {
 
   const removeCustomer = async (customer: Customer) => {
     if (deletingId) return;
-    const ok = window.confirm(
-      `Xóa vĩnh viễn khách hàng "${customer.name}" và toàn bộ phiếu, dòng hàng, thanh toán liên quan?`,
-    );
+    const ok = await confirm({
+      title: "Xóa khách hàng?",
+      description: `Xóa vĩnh viễn khách hàng "${customer.name}" và toàn bộ phiếu, dòng hàng, thanh toán liên quan?`,
+      confirmLabel: "Xóa",
+      tone: "danger",
+    });
     if (!ok) return;
 
     setDeletingId(customer.id);
@@ -104,6 +109,8 @@ export function KhachHang() {
       await api.del(`/api/customers/${customer.id}`);
       if (selectedId === customer.id) setSelectedId(null);
       reload({ silent: true });
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không xóa được khách hàng");
     } finally {
       setDeletingId(null);
     }

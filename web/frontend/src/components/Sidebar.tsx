@@ -5,6 +5,7 @@ import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/types";
 import { APP_BRAND_NAME } from "../lib/branding";
+import { HR_APK_NAV_KEYS, IS_HR_APK } from "../lib/appConfig";
 import { initials } from "../lib/format";
 import { ChangePasswordModal, EditProfileModal } from "./AccountModals";
 import { useChatNotifications } from "./ChatNotifications";
@@ -69,7 +70,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     () =>
       NAV.map((section) => ({
         ...section,
-        items: section.items.filter((it) => !it.adminOnly || admin),
+        items: section.items.filter((it) => (!IS_HR_APK || HR_APK_NAV_KEYS.has(it.key)) && (!it.adminOnly || admin)),
       })).filter((section) => section.items.length),
     [admin],
   );
@@ -201,8 +202,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     const navRect = nav.getBoundingClientRect();
     const itemRect = activeItem.getBoundingClientRect();
     setIndicatorTarget({
-      x: itemRect.left - navRect.left,
-      y: itemRect.top - navRect.top,
+      x: itemRect.left - navRect.left + nav.scrollLeft,
+      y: itemRect.top - navRect.top + nav.scrollTop,
       w: itemRect.width,
       h: itemRect.height,
     });

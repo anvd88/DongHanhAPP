@@ -6,6 +6,7 @@ import { GlassPanel } from "../components/glass/GlassPanel";
 import { LiquidTabs, type LiquidTab } from "../components/glass/LiquidTabs";
 import { Button as GlassButton } from "../shadcn/button";
 import { Modal } from "../components/Modal";
+import { useAppNotifications } from "../components/AppNotifications";
 import { MonthPicker } from "../components/DateField";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
@@ -467,6 +468,7 @@ function buildExcelHtml(items: PrintableDocument[], month: string) {
 
 export function KeToan() {
   const { user } = useAuth();
+  const { notify } = useAppNotifications();
   const { data, loading, error, reload } = useApi<DocumentListItem[]>("/api/documents");
   const { data: customers } = useApi<Customer[]>("/api/customers");
   const [search, setSearch] = useState("");
@@ -575,7 +577,7 @@ export function KeToan() {
       setDeleting(null);
       reload({ silent: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Lỗi xóa phiếu.");
+      notify.error(e instanceof Error ? e.message : "Lỗi xóa phiếu.");
     } finally {
       setDeletingBusy(false);
     }
@@ -594,7 +596,7 @@ export function KeToan() {
   const printVoucher = async (row: DocumentListItem) => {
     const printWindow = window.open("", "_blank", "width=1024,height=768");
     if (!printWindow) {
-      alert("Trình duyệt đang chặn cửa sổ in. Vui lòng cho phép popup rồi thử lại.");
+      notify.warning("Trình duyệt đang chặn cửa sổ in. Vui lòng cho phép popup rồi thử lại.");
       return;
     }
 
@@ -614,7 +616,7 @@ export function KeToan() {
 
   const exportMonthExcel = async () => {
     if (!monthRows.length) {
-      alert(`Không có phiếu trong tháng ${monthLabel(month)} để xuất Excel.`);
+      notify.info(`Không có phiếu trong tháng ${monthLabel(month)} để xuất Excel.`);
       return;
     }
 
