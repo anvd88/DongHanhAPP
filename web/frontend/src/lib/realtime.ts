@@ -11,11 +11,15 @@ import { appUrl } from "./appConfig";
  * Client chỉ LẮNG NGHE WebSocket — không poll. Mỗi listener đăng ký phạm vi quan tâm để
  * tránh refetch thừa: trang chat không tải lại khi có thay đổi kế toán và ngược lại.
  */
-export type RealtimeScope = "data" | "presence" | "chat" | "feedback";
+export type RealtimeScope = "data" | "presence" | "chat" | "feedback" | "hr" | "release" | "all";
 type Listener = (scope: RealtimeScope, payload?: string) => void;
 
 const listeners = new Set<Listener>();
 let connection: signalR.HubConnection | null = null;
+
+function emitChanged(scope: RealtimeScope, payload?: string) {
+  for (const cb of listeners) cb(scope, payload);
+}
 
 /* ----- Tín hiệu bắt tay WebRTC để gửi tệp thẳng P2P qua LAN (xem lib/filetransfer.ts) -----
  * Server (ChangesHub.Relay) chỉ TRUNG CHUYỂN gói tín hiệu giữa 2 người; nội dung tệp KHÔNG
@@ -56,7 +60,7 @@ export function subscribeRealtime(cb: Listener, scopes?: RealtimeScope[]): () =>
   const wrapped: Listener =
     scopes && scopes.length
       ? (scope, payload) => {
-          if (scopes.includes(scope)) cb(scope, payload);
+          if (scope === "all" || scopes.includes(scope)) cb(scope, payload);
         }
       : cb;
   listeners.add(wrapped);
@@ -76,9 +80,10 @@ export function startRealtime() {
     .withAutomaticReconnect([0, 2000, 5000, 10000])
     .configureLogging(signalR.LogLevel.Warning)
     .build();
+  const current = connection;
 
   connection.on("changed", (scope: RealtimeScope = "data", payload?: string) => {
-    for (const cb of listeners) cb(scope, payload);
+    emitChanged(scope, payload);
   });
 
   connection.on("signal", (fromUsername: string, payload: string) => {
@@ -89,9 +94,47 @@ export function startRealtime() {
     for (const cb of feedbackResolvedListeners) cb(message);
   });
 
+  connection.onreconnected(() => {
+    emitChanged("all");
+  });
+
+  connection.onclose(() => {
+    if (connection !== current) return;
+    connection = null;
+    setTimeout(startRealtime, 3000);
+  });
+
   // Tự thử lại nếu lần kết nối đầu thất bại (backend chưa sẵn sàng).
   const connect = () => {
-    connection?.start().catch(() => setTimeout(connect, 3000));
+    if (connection !== current) return;
+    current.start().catch(() => {
+      if (connection === current) setTimeout(connect, 3000);
+    });
   };
   connect();
+}
+
+export async function restartRealtime() {
+  const old = connection;
+  connection = null;
+  if (old) {
+    try {
+      await old.stop();
+    } catch {
+      // The old connection may already be gone; build a fresh one with the current token.
+    }
+  }
+  startRealtime();
+}
+
+export async function stopRealtime() {
+  const old = connection;
+  connection = null;
+  if (old) {
+    try {
+      await old.stop();
+    } catch {
+      // Best effort when signing out or switching sessions.
+    }
+  }
 }

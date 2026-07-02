@@ -45,11 +45,37 @@ public sealed class ChangeWatcher(
             (SELECT COALESCE(md5(string_agg(concat_ws('|', id, role, is_active, approval_status, is_deleted), '|' ORDER BY id::text)), '0') FROM app_users), '|',
             (SELECT COUNT(*) FROM (SELECT username FROM user_sessions WHERE is_active = TRUE AND last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' GROUP BY username) online_users), '|',
             (SELECT COALESCE(md5(string_agg(username, '|' ORDER BY username)), '0') FROM (SELECT username FROM user_sessions WHERE is_active = TRUE AND last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' GROUP BY username) online_users)
-        ) AS presence_token;";
+        ) AS presence_token,
+        CONCAT(
+            (SELECT COUNT(*) FROM hr_departments), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, code, name, parent_id, manager_employee_id), '|' ORDER BY id::text)), '0') FROM hr_departments), '|',
+            (SELECT COUNT(*) FROM hr_employees), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_code, username, full_name, department_id, position, manager_id, status, updated_at), '|' ORDER BY id::text)), '0') FROM hr_employees), '|',
+            (SELECT COUNT(*) FROM hr_contracts), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, contract_no, contract_type, start_date, end_date, base_salary, allowance, status), '|' ORDER BY id::text)), '0') FROM hr_contracts), '|',
+            (SELECT COUNT(*) FROM hr_payslips), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, published), '|' ORDER BY id::text)), '0') FROM hr_payslips), '|',
+            (SELECT COUNT(*) FROM hr_leave_balances), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, year, leave_type, total_days, used_days), '|' ORDER BY id::text)), '0') FROM hr_leave_balances), '|',
+            (SELECT COUNT(*) FROM hr_documents), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, doc_type, title, issued_by, issued_date), '|' ORDER BY id::text)), '0') FROM hr_documents), '|',
+            (SELECT COUNT(*) FROM hr_shifts), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, code, name, start_time, end_time, break_minutes, late_grace_minutes, standard_hours, is_overnight), '|' ORDER BY id::text)), '0') FROM hr_shifts), '|',
+            (SELECT COUNT(*) FROM hr_shift_assignments), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, shift_id, work_date, note), '|' ORDER BY id::text)), '0') FROM hr_shift_assignments), '|',
+            (SELECT COUNT(*) FROM hr_requests), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, request_no, req_type, employee_id, requester_username, status, current_step, updated_at), '|' ORDER BY id::text)), '0') FROM hr_requests), '|',
+            (SELECT COUNT(*) FROM hr_request_approvals), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, request_id, step_no, approver_username, status, decided_at, decided_by), '|' ORDER BY id::text)), '0') FROM hr_request_approvals), '|',
+            (SELECT COUNT(*) FROM cham_cong_log), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, loai, similarity, occurred_at), '|' ORDER BY id::text)), '0') FROM cham_cong_log), '|',
+            (SELECT COUNT(*) FROM cham_cong_face), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, full_name, created_at, created_by), '|' ORDER BY id::text)), '0') FROM cham_cong_face)
+        ) AS hr_token;";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        string? lastData = null, lastPresence = null;
+        string? lastData = null, lastPresence = null, lastHr = null;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -57,13 +83,14 @@ public sealed class ChangeWatcher(
             {
                 await using var conn = await db.OpenAsync(stoppingToken);
                 await using var cmd = conn.Cmd(TokenSql);
-                string dataToken = "", presenceToken = "";
+                string dataToken = "", presenceToken = "", hrToken = "";
                 await using (var r = await cmd.ExecuteReaderAsync(stoppingToken))
                 {
                     if (await r.ReadAsync(stoppingToken))
                     {
                         dataToken = r.IsDBNull(0) ? "" : r.GetString(0);
                         presenceToken = r.IsDBNull(1) ? "" : r.GetString(1);
+                        hrToken = r.IsDBNull(2) ? "" : r.GetString(2);
                     }
                 }
 
@@ -78,9 +105,15 @@ public sealed class ChangeWatcher(
                     await hub.Clients.All.SendAsync("changed", "presence", stoppingToken);
                     logger.LogDebug("ChangeWatcher: phát tín hiệu presence.");
                 }
+                if (lastHr is not null && hrToken != lastHr)
+                {
+                    await hub.Clients.All.SendAsync("changed", "hr", stoppingToken);
+                    logger.LogDebug("ChangeWatcher: phat tin hieu hr.");
+                }
 
                 lastData = dataToken;
                 lastPresence = presenceToken;
+                lastHr = hrToken;
             }
             catch (OperationCanceledException)
             {

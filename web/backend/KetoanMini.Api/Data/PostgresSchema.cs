@@ -154,13 +154,34 @@ public static class PostgresSchema
 
         CREATE TABLE IF NOT EXISTS app_releases (
             id bigserial NOT NULL PRIMARY KEY,
+            app_target varchar(32) NOT NULL DEFAULT 'hr-apk',
             version varchar(64) NOT NULL DEFAULT '',
+            version_code integer NOT NULL DEFAULT 1,
             release_notes text NOT NULL DEFAULT '',
             is_mandatory boolean NOT NULL DEFAULT FALSE,
             is_published boolean NOT NULL DEFAULT FALSE,
+            apk_file_name varchar(256) NOT NULL DEFAULT '',
+            apk_mime_type varchar(128) NOT NULL DEFAULT 'application/vnd.android.package-archive',
+            apk_size bigint NOT NULL DEFAULT 0,
+            apk_sha256 varchar(64) NOT NULL DEFAULT '',
+            apk_data bytea NULL,
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
             published_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
             published_by varchar(128) NOT NULL DEFAULT ''
         );
+
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS app_target varchar(32) NOT NULL DEFAULT 'hr-apk';
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS version_code integer NOT NULL DEFAULT 1;
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_file_name varchar(256) NOT NULL DEFAULT '';
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_mime_type varchar(128) NOT NULL DEFAULT 'application/vnd.android.package-archive';
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_size bigint NOT NULL DEFAULT 0;
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_sha256 varchar(64) NOT NULL DEFAULT '';
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_data bytea NULL;
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
+        CREATE INDEX IF NOT EXISTS ix_app_releases_latest
+            ON app_releases (app_target, is_published, version_code DESC, published_at DESC, id DESC);
 
         CREATE TABLE IF NOT EXISTS work_access_requests (
             id bigserial NOT NULL PRIMARY KEY,

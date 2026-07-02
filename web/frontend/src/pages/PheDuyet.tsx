@@ -3,7 +3,7 @@ import { CheckCircle2, Eraser, Inbox, PenLine, RefreshCw, XCircle } from "lucide
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
-import { Badge, Button, Field } from "../components/ui";
+import { Badge, Button, Field, Input } from "../components/ui";
 import { Table } from "../components/Table";
 import { api } from "../lib/api";
 import { dateTime } from "../lib/format";
@@ -167,11 +167,31 @@ function ApproveModal({
   const [comment, setComment] = useState("");
   const [signature, setSignature] = useState<string | null>(null);
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const [penaltyOutcome, setPenaltyOutcome] = useState<"waive" | "reduce">("waive");
+  const [newAmount, setNewAmount] = useState("");
+
+  // Khiếu nại án phạt: ở bước duyệt cuối, người duyệt chọn xử lý phạt (bác bỏ / giảm tiền).
+  const isPenaltyAppeal = data?.request.type === "penalty_appeal";
+  const isFinalStep = !!data && data.request.currentStep >= data.approvals.length;
+  const showPenaltyDecision = isPenaltyAppeal && isFinalStep;
+  const oldAmount = Number(data?.request.payload?.penaltyAmount ?? 0) || 0;
 
   const decide = async (approve: boolean) => {
+    if (approve && showPenaltyDecision && penaltyOutcome === "reduce") {
+      const n = Number(newAmount);
+      if (!(n > 0) || n >= oldAmount) {
+        notify.error("Số tiền phạt mới phải lớn hơn 0 và nhỏ hơn mức phạt hiện tại.");
+        return;
+      }
+    }
     setBusy(approve ? "approve" : "reject");
     try {
-      await api.post(`/api/requests/${id}/${approve ? "approve" : "reject"}`, { comment: comment.trim(), signature });
+      const body: Record<string, unknown> = { comment: comment.trim(), signature };
+      if (approve && showPenaltyDecision) {
+        body.penaltyOutcome = penaltyOutcome;
+        if (penaltyOutcome === "reduce") body.newAmount = Number(newAmount);
+      }
+      await api.post(`/api/requests/${id}/${approve ? "approve" : "reject"}`, body);
       onDecided(approve ? "Đã duyệt đơn." : "Đã từ chối đơn.");
     } catch (e) {
       notify.error(e instanceof Error ? e.message : "Không thực hiện được.");
@@ -190,7 +210,7 @@ function ApproveModal({
       footer={
         <>
           <Button variant="danger" onClick={() => decide(false)} loading={busy === "reject"}>
-            <XCircle className="h-4 w-4" /> Từ chối
+            <XCircle className="h-4 w-4" /> {isPenaltyAppeal ? "Từ chối khiếu nại" : "Từ chối"}
           </Button>
           <Button onClick={() => decide(true)} loading={busy === "approve"}>
             <CheckCircle2 className="h-4 w-4" /> Duyệt
@@ -225,6 +245,34 @@ function ApproveModal({
           </div>
 
           <div className="space-y-4">
+            {showPenaltyDecision && (
+              <div className="rounded-2xl border border-[var(--glass-border)] bg-amber-500/5 p-4">
+                <div className="mb-2 text-sm font-bold text-[var(--text)]">Xử lý án phạt khi duyệt</div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="radio" name="penaltyOutcome" checked={penaltyOutcome === "waive"} onChange={() => setPenaltyOutcome("waive")} />
+                    <span>Bác bỏ phạt (miễn toàn bộ)</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="radio" name="penaltyOutcome" checked={penaltyOutcome === "reduce"} onChange={() => setPenaltyOutcome("reduce")} />
+                    <span>Giảm tiền phạt</span>
+                  </label>
+                  {penaltyOutcome === "reduce" && (
+                    <Field label={`Số tiền phạt mới (hiện tại ${oldAmount.toLocaleString("en-US")}₫)`}>
+                      <Input
+                        inputMode="numeric"
+                        value={newAmount ? Number(newAmount).toLocaleString("en-US") : ""}
+                        onChange={(e) => setNewAmount(e.target.value.replace(/[^\d]/g, ""))}
+                        placeholder="Ví dụ 200000"
+                      />
+                    </Field>
+                  )}
+                </div>
+                <p className="mt-2 text-xs text-[var(--text-muted)]">
+                  Nếu tiền phạt đã bị trừ vào lương, hệ thống sẽ tạo khoản hoàn tương ứng và chuyển phòng Kế toán duyệt chi.
+                </p>
+              </div>
+            )}
             <Field label="Ý kiến / ghi chú">
               <textarea
                 value={comment}

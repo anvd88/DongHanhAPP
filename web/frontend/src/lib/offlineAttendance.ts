@@ -15,6 +15,7 @@ interface QueueItem {
   frames: string[];
   capturedAt: string; // ISO UTC — giờ chấm thật
   tryCount: number;
+  selfOnly?: boolean; // chỉ chấm cho chính tài khoản đang đăng nhập (trang HR Nhân sự)
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -45,8 +46,8 @@ function tx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBReque
   );
 }
 
-async function enqueue(frames: string[], capturedAt: string): Promise<void> {
-  await tx("readwrite", (s) => s.add({ frames, capturedAt, tryCount: 0 } as QueueItem));
+async function enqueue(frames: string[], capturedAt: string, selfOnly: boolean): Promise<void> {
+  await tx("readwrite", (s) => s.add({ frames, capturedAt, tryCount: 0, selfOnly } as QueueItem));
   emitCount();
 }
 
@@ -97,21 +98,30 @@ function offlineResult(capturedAt: string): ChamCongResult {
   };
 }
 
+/** Tùy chọn chấm công. selfOnly: chỉ chấm cho chính tài khoản đang đăng nhập (trang HR Nhân sự). */
+export interface SubmitCheckInOptions {
+  selfOnly?: boolean;
+}
+
 /**
  * Gửi loạt khung để chấm công. Trực tuyến: POST bình thường. Mất mạng (offline hoặc fetch lỗi):
  * xếp hàng vào IndexedDB kèm giờ hiện tại và trả kết quả trạng thái "offline".
  */
-export async function submitCheckInFrames(frames: string[]): Promise<ChamCongResult> {
+export async function submitCheckInFrames(
+  frames: string[],
+  opts: SubmitCheckInOptions = {},
+): Promise<ChamCongResult> {
   const capturedAt = new Date().toISOString();
+  const selfOnly = opts.selfOnly ?? false;
   if (!navigator.onLine) {
-    await enqueue(frames, capturedAt);
+    await enqueue(frames, capturedAt, selfOnly);
     return offlineResult(capturedAt);
   }
   try {
-    return await api.post<ChamCongResult>("/api/chamcong/cham", { images: frames });
+    return await api.post<ChamCongResult>("/api/chamcong/cham", { images: frames, selfOnly });
   } catch (e) {
     if (isNetworkError(e)) {
-      await enqueue(frames, capturedAt);
+      await enqueue(frames, capturedAt, selfOnly);
       return offlineResult(capturedAt);
     }
     throw e;
@@ -143,6 +153,7 @@ export async function syncOfflineAttendance(): Promise<SyncSummary> {
         const res = await api.post<ChamCongResult>("/api/chamcong/cham", {
           images: item.frames,
           occurredAt: item.capturedAt,
+          selfOnly: item.selfOnly ?? false,
         });
         // Server đã xử lý (dù nhận diện được hay không) → không giữ lại nữa.
         await removeItem(item.id!);

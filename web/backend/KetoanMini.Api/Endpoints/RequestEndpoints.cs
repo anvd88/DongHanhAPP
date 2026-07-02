@@ -29,6 +29,7 @@ public static class RequestEndpoints
         ("advance", "Tạm ứng", "Tài chính"),
         ("purchase", "Mua sắm vật tư", "Tài chính"),
         ("booking", "Đăng ký xe / phòng họp", "Hành chính"),
+        ("penalty_appeal", "Khiếu nại án phạt", "Kỷ luật"),
     };
 
     private static string TypeLabel(string type) =>
@@ -281,6 +282,7 @@ public static class RequestEndpoints
 
             await db.RecordAudit(me, "Gửi đơn từ", "Request", no, $"{TypeLabel(req.Type)} (web).");
             await hub.Clients.All.SendAsync("changed", "data");
+            await hub.Clients.All.SendAsync("changed", "hr");
             return Results.Ok(new { id = reqId, requestNo = no });
         });
 
@@ -299,6 +301,7 @@ public static class RequestEndpoints
                 """).With("@id", id).With("@me", u.Username()).ExecuteNonQueryAsync();
             if (n == 0) return Results.BadRequest(new { message = "Chỉ hủy được đơn của bạn khi còn chờ duyệt." });
             await hub.Clients.All.SendAsync("changed", "data");
+            await hub.Clients.All.SendAsync("changed", "hr");
             return Results.NoContent();
         });
     }
@@ -384,24 +387,41 @@ public static class RequestEndpoints
             {
                 await conn.Cmd("UPDATE hr_requests SET status='Approved', updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                     .With("@id", id).ExecuteNonQueryAsync();
-                await ApplyApprovedEffects(conn, reqType, employeeId, payloadJson);
+                await ApplyApprovedEffects(conn, reqType, employeeId, payloadJson, req, requestNo, me);
             }
         }
 
         await db.RecordAudit(me, approve ? "Duyệt đơn từ" : "Từ chối đơn từ", "Request", requestNo, TypeLabel(reqType));
         // Báo cho người gửi biết đơn đã được xử lý (tín hiệu chung + nhắm riêng người gửi).
         await hub.Clients.All.SendAsync("changed", "data");
+        await hub.Clients.All.SendAsync("changed", "hr");
         await hub.Clients.User(requester).SendAsync("changed", "data");
+        await hub.Clients.User(requester).SendAsync("changed", "hr");
         return Results.NoContent();
     }
 
-    /// <summary>Tác động phụ khi đơn được duyệt hoàn tất (vd. trừ ngày phép, ghi bù chấm công).</summary>
-    private static async Task ApplyApprovedEffects(NpgsqlConnection conn, string reqType, Guid employeeId, string payloadJson)
+    /// <summary>Tác động phụ khi đơn được duyệt hoàn tất (vd. trừ ngày phép, ghi bù chấm công, xử lý phạt).</summary>
+    private static async Task ApplyApprovedEffects(NpgsqlConnection conn, string reqType, Guid employeeId,
+        string payloadJson, DecideReq req, string requestNo, string decidedBy)
     {
+        // Khiếu nại án phạt: bác bỏ (miễn) hoặc giảm tiền phạt; nếu tiền đã trừ → sinh khoản hoàn cho kế toán.
+        if (reqType == "penalty_appeal")
+        {
+            await ApplyPenaltyAppeal(conn, employeeId, payloadJson, req, requestNo, decidedBy);
+            return;
+        }
+
         // Báo quên chấm công: ghi (đè) giờ nhân viên khai vào nhật ký chấm công của hệ thống.
         if (reqType == "forgot_checkin")
         {
             await ApplyForgotCheckin(conn, employeeId, payloadJson);
+            return;
+        }
+
+        // Điều chỉnh chấm công: ghi đè giờ Vào/Ra đúng do nhân viên khai vào nhật ký chấm công.
+        if (reqType == "attendance_fix")
+        {
+            await ApplyAttendanceFix(conn, employeeId, payloadJson);
             return;
         }
 
@@ -421,9 +441,79 @@ public static class RequestEndpoints
     }
 
     /// <summary>
+    /// Xử lý khiếu nại án phạt đã được duyệt: bác bỏ (miễn toàn bộ) hoặc giảm tiền phạt. Nếu tiền phạt
+    /// đã bị trừ vào các phiếu lương đã phát hành thì sinh một khoản hoàn (chờ kế toán duyệt) cho phần
+    /// chênh: bác bỏ → hoàn toàn bộ đã trừ; giảm → hoàn phần đã trừ vượt quá mức mới.
+    /// </summary>
+    private static async Task ApplyPenaltyAppeal(NpgsqlConnection conn, Guid employeeId, string payloadJson,
+        DecideReq req, string requestNo, string decidedBy)
+    {
+        var penaltyNo = ReadString(payloadJson, "penaltyNo");
+        if (string.IsNullOrWhiteSpace(penaltyNo)) return;
+
+        // Tra án phạt tiền còn hiệu lực đúng người.
+        Guid penaltyId = default;
+        decimal amount = 0; int installments = 1; string startPeriod = "", note = "";
+        var found = false;
+        await using (var r = await conn.Cmd("""
+            SELECT id, amount, installments, start_period, note FROM hr_penalties
+            WHERE penalty_no=@no AND employee_id=@emp AND penalty_type='fine' AND status='Active'
+            """).With("@no", penaltyNo).With("@emp", employeeId).ExecuteReaderAsync())
+        {
+            if (await r.ReadAsync())
+            {
+                found = true;
+                penaltyId = r.Guid("id");
+                amount = r.Dec("amount");
+                installments = r.Int("installments");
+                startPeriod = r.Str("start_period");
+                note = r.Str("note");
+            }
+        }
+        if (!found) return;
+
+        var deducted = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(conn, employeeId, startPeriod, amount, installments);
+        var reduce = req.PenaltyOutcome == "reduce" && req.NewAmount is > 0 && req.NewAmount < amount;
+
+        decimal refund;
+        string appended;
+        if (reduce)
+        {
+            var newAmount = decimal.Round(req.NewAmount!.Value, 0);
+            // Quy đổi các kỳ ĐÃ trừ sang LỊCH MỚI: chỉ hoàn phần đã thu vượt so với mức mới cho những kỳ đó.
+            // Các kỳ còn lại sẽ tự trừ theo lịch mới, nên tổng thu cuối cùng = mức phạt mới (không thừa/thiếu).
+            var newScheduledForPaid = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(
+                conn, employeeId, startPeriod, newAmount, installments);
+            await conn.Cmd("UPDATE hr_penalties SET amount=@amt, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                .With("@id", penaltyId).With("@amt", newAmount)
+                .With("@note", Append(note, $"Giảm còn {newAmount:0} theo khiếu nại {requestNo}"))
+                .ExecuteNonQueryAsync();
+            refund = Math.Max(0, deducted - newScheduledForPaid);
+            appended = $"Giảm tiền phạt {penaltyNo}";
+        }
+        else
+        {
+            // Mặc định (kể cả khi outcome trống): bác bỏ = miễn toàn bộ.
+            await conn.Cmd("UPDATE hr_penalties SET status='Waived', note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                .With("@id", penaltyId)
+                .With("@note", Append(note, $"Miễn theo khiếu nại {requestNo}"))
+                .ExecuteNonQueryAsync();
+            refund = deducted;
+            appended = $"Bác bỏ phạt {penaltyNo}";
+        }
+
+        if (refund > 0)
+            await PenaltyRefundEndpoints.CreateAsync(conn, employeeId, penaltyId, penaltyNo, requestNo, refund,
+                $"Hoàn tiền phạt {penaltyNo} ({appended}, khiếu nại {requestNo} được duyệt)", decidedBy);
+    }
+
+    private static string Append(string note, string extra) =>
+        string.IsNullOrWhiteSpace(note) ? extra : $"{note} | {extra}";
+
+    /// <summary>
     /// Ghi bù chấm công từ đơn "Báo quên chấm công" đã duyệt: lấy ngày + giờ thực tế nhân viên khai,
-    /// suy ra Vào/Ra theo giờ trong ngày rồi GHI ĐÈ (xóa bản ghi cùng loại trong ngày, chèn bản mới)
-    /// vào cham_cong_log để bảng công phản ánh đúng.
+    /// dùng loại Vào/Ra do người khai chọn (thiếu thì suy ra theo giờ trong ngày) rồi GHI ĐÈ
+    /// (xóa bản ghi cùng loại trong ngày, chèn bản mới) vào cham_cong_log để bảng công phản ánh đúng.
     /// </summary>
     private static async Task ApplyForgotCheckin(NpgsqlConnection conn, Guid employeeId, string payloadJson)
     {
@@ -432,19 +522,59 @@ public static class RequestEndpoints
         if (!DateOnly.TryParse(dateStr, out var day) || !TimeOnly.TryParse(timeStr, out var time))
             return;
 
-        string username = "", fullName = "";
-        await using (var r = await conn.Cmd("SELECT username, full_name FROM hr_employees WHERE id=@id")
-            .With("@id", employeeId).ExecuteReaderAsync())
-        {
-            if (await r.ReadAsync()) { username = r.Str("username"); fullName = r.Str("full_name"); }
-        }
+        var (username, fullName) = await LoadEmployeeUser(conn, employeeId);
         if (string.IsNullOrWhiteSpace(username)) return;
 
-        var localNaive = day.ToDateTime(time);
-        var occurredUtc = AttendancePolicy.LocalToUtc(localNaive);
-        var loai = AttendancePolicy.LoaiForLocalTime(time.ToTimeSpan());
+        // Ưu tiên loại Vào/Ra do người khai chọn; nếu không có thì suy ra theo giờ trong ngày.
+        var direction = ReadString(payloadJson, "direction");
+        var loai = direction switch
+        {
+            "in" => AttendancePolicy.CheckInTypeIn,
+            "out" => AttendancePolicy.CheckInTypeOut,
+            _ => AttendancePolicy.LoaiForLocalTime(time.ToTimeSpan()),
+        };
 
-        // Ghi đè: bỏ bản ghi cùng loại trong đúng ngày (theo giờ VN) rồi chèn giờ đã khai.
+        await OverwriteAttendance(conn, username, fullName, day, loai, time, "Bù công theo đơn báo quên chấm công");
+    }
+
+    /// <summary>
+    /// Điều chỉnh chấm công đã duyệt: ghi đè giờ Vào và/hoặc giờ Ra đúng do nhân viên khai vào
+    /// cham_cong_log cho đúng ngày (bảng công tự tính lại từ log). Trường để trống thì giữ nguyên.
+    /// </summary>
+    private static async Task ApplyAttendanceFix(NpgsqlConnection conn, Guid employeeId, string payloadJson)
+    {
+        var dateStr = ReadString(payloadJson, "date");
+        if (!DateOnly.TryParse(dateStr, out var day)) return;
+
+        var (username, fullName) = await LoadEmployeeUser(conn, employeeId);
+        if (string.IsNullOrWhiteSpace(username)) return;
+
+        if (TimeOnly.TryParse(ReadString(payloadJson, "checkIn"), out var checkIn))
+            await OverwriteAttendance(conn, username, fullName, day, AttendancePolicy.CheckInTypeIn, checkIn,
+                "Điều chỉnh giờ vào theo đơn đã duyệt");
+
+        if (TimeOnly.TryParse(ReadString(payloadJson, "checkOut"), out var checkOut))
+            await OverwriteAttendance(conn, username, fullName, day, AttendancePolicy.CheckInTypeOut, checkOut,
+                "Điều chỉnh giờ ra theo đơn đã duyệt");
+    }
+
+    private static async Task<(string Username, string FullName)> LoadEmployeeUser(NpgsqlConnection conn, Guid employeeId)
+    {
+        await using var r = await conn.Cmd("SELECT username, full_name FROM hr_employees WHERE id=@id")
+            .With("@id", employeeId).ExecuteReaderAsync();
+        if (await r.ReadAsync()) return (r.Str("username"), r.Str("full_name"));
+        return ("", "");
+    }
+
+    /// <summary>
+    /// Ghi đè một mốc chấm công (Vào/Ra) của nhân viên trong đúng ngày (giờ VN): xóa bản ghi cùng loại
+    /// trong ngày rồi chèn giờ đã khai. Dùng chung cho báo quên chấm công &amp; điều chỉnh chấm công.
+    /// </summary>
+    private static async Task OverwriteAttendance(NpgsqlConnection conn, string username, string fullName,
+        DateOnly day, string loai, TimeOnly time, string note)
+    {
+        var occurredUtc = AttendancePolicy.LocalToUtc(day.ToDateTime(time));
+
         await conn.Cmd("""
             DELETE FROM cham_cong_log
             WHERE username=@u AND loai=@loai AND (occurred_at AT TIME ZONE @tz)::date = @date
@@ -457,7 +587,7 @@ public static class RequestEndpoints
             VALUES (@u, @fn, @loai, 0, @at, @note)
             """)
             .With("@u", username).With("@fn", fullName).With("@loai", loai)
-            .With("@at", occurredUtc).With("@note", "Bù công theo đơn báo quên chấm công")
+            .With("@at", occurredUtc).With("@note", note)
             .ExecuteNonQueryAsync();
     }
 
@@ -495,5 +625,5 @@ public static class RequestEndpoints
     }
 
     public record CreateRequestReq(string? Type, string? Title, JsonElement? Payload);
-    public record DecideReq(string? Comment, string? Signature);
+    public record DecideReq(string? Comment, string? Signature, string? PenaltyOutcome, decimal? NewAmount);
 }

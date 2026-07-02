@@ -18,6 +18,7 @@ import { useTheme } from "../lib/theme";
 import { initials } from "../lib/format";
 import { isAdmin } from "../lib/types";
 import { APP_BRAND_NAME } from "../lib/branding";
+import { IS_HR_APK } from "../lib/appConfig";
 import { VerifiedBadge } from "./VerifiedBadge";
 import { EditProfileModal, ChangePasswordModal } from "./AccountModals";
 import { useChatNotifications } from "./ChatNotifications";
@@ -57,7 +58,9 @@ export function Header({ onMenu }: { onMenu: () => void }) {
 
       <div className="km-header-company">
         <div className="km-brand-title text-sm font-bold text-[var(--text)]">{APP_BRAND_NAME}</div>
-        <div className="mt-1 text-xs font-medium text-[var(--text-secondary)]">Hệ thống kế toán doanh nghiệp</div>
+        <div className="mt-1 text-xs font-medium text-[var(--text-secondary)]">
+          {IS_HR_APK ? "Cổng nhân sự công ty" : "Hệ thống kế toán doanh nghiệp"}
+        </div>
       </div>
 
       <label className="km-header-search">
