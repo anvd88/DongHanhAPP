@@ -92,6 +92,33 @@ async function postBlob<T>(path: string, blob: Blob): Promise<T> {
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
+async function requestForm<T>(method: string, path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = tokenStore.get();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(appUrl(path), { method, headers, body: form });
+
+  if (res.status === 401) {
+    tokenStore.clear();
+    if (!location.pathname.startsWith("/login") && location.hash !== "#/login") redirectToLogin();
+    throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
+  }
+
+  if (!res.ok) {
+    let msg = `Lỗi ${res.status}`;
+    try {
+      const data = await res.json();
+      msg = data.message || data.detail || msg;
+    } catch { /* body rỗng */ }
+    throw new ApiError(res.status, msg);
+  }
+
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return text ? (JSON.parse(text) as T) : (undefined as T);
+}
+
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, body?: unknown) => request<T>("POST", p, body ?? {}),
@@ -99,4 +126,5 @@ export const api = {
   del: <T>(p: string) => request<T>("DELETE", p),
   getBlob: (p: string) => requestBlob(p),
   postBlob: <T>(p: string, blob: Blob) => postBlob<T>(p, blob),
+  postForm: <T>(p: string, form: FormData) => requestForm<T>("POST", p, form),
 };

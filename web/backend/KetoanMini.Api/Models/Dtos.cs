@@ -139,8 +139,10 @@ public record NhanDienResult(bool Matched, string? Username, string? FullName, d
 /// <see cref="OccurredAt"/> (tùy chọn) là giờ chấm thật khi ĐỒNG BỘ NGOẠI TUYẾN — client mất mạng
 /// lúc chấm nên xếp hàng ảnh vào IndexedDB, khi có mạng lại mới gửi lên; server ghi log theo giờ này
 /// thay vì giờ nhận. Null (mặc định) = chấm trực tuyến bình thường, dùng giờ server.
+/// <see cref="SelfOnly"/> = true: CHỈ chấm công cho chính tài khoản đang đăng nhập (trang HR Nhân sự).
+/// Khuôn mặt khớp nhân viên KHÁC ⇒ chặn (status "proxy"), không cho chấm công hộ.
 /// </summary>
-public record ChamCongBurstRequest(List<string> Images, DateTime? OccurredAt = null);
+public record ChamCongBurstRequest(List<string> Images, DateTime? OccurredAt = null, bool SelfOnly = false);
 
 /// <summary>
 /// Kết quả chấm công theo loạt ảnh. <see cref="Status"/>:
@@ -153,4 +155,6 @@ public record ChamCongLogDto(long Id, string Username, string FullName, string L
     DateTime OccurredAt, string GhiChu);
 
 // ----- Releases (Cập nhật) -----
-public record ReleaseDto(long Id, string Version, string ReleaseNotes, bool IsMandatory, bool IsPublished, DateTime PublishedAt, string PublishedBy);
+public record ReleaseDto(long Id, string AppTarget, string Version, int VersionCode, string ReleaseNotes,
+    bool IsMandatory, bool IsPublished, DateTime PublishedAt, string PublishedBy,
+    string ApkFileName, long ApkSize, string ApkSha256);

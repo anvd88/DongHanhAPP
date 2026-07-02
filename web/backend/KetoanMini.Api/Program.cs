@@ -171,6 +171,10 @@ app.MapHr();
 app.MapRequests();
 app.MapShifts();
 app.MapTimesheet();
+app.MapPenalties();
+app.MapPenaltyRefunds();
+app.MapPayroll();
+app.MapBankAccounts();
 
 // Hub tín hiệu real-time (web + desktop kết nối tới đây).
 app.MapHub<ChangesHub>("/hubs/changes");
@@ -208,5 +212,17 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang don tu luc kho
 
 try { await ShiftEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang ca lam luc khoi dong: {Msg}", ex.Message); }
+
+try { await PenaltyEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang phat/ky luat luc khoi dong: {Msg}", ex.Message); }
+
+try { await PenaltyRefundEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang hoan tien phat luc khoi dong: {Msg}", ex.Message); }
+
+try { await PayrollEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang bang luong luc khoi dong: {Msg}", ex.Message); }
+
+try { await BankAccountEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tai khoan ngan hang luc khoi dong: {Msg}", ex.Message); }
 
 app.Run();

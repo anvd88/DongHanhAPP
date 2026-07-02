@@ -8,6 +8,7 @@ import { ThemeProvider } from "./lib/theme";
 import { Layout } from "./components/Layout";
 import { ChatNotificationProvider } from "./components/ChatNotifications";
 import { AppNotificationProvider, useAppNotifications } from "./components/AppNotifications";
+import { AppUpdatePrompt } from "./components/AppUpdatePrompt";
 import { WaterReminderPopup } from "./components/WaterReminderPopup";
 import { EyeReminderPopup } from "./components/EyeReminderPopup";
 import { Login } from "./pages/Login";
@@ -20,18 +21,31 @@ import { KhachHang } from "./pages/KhachHang";
 import { GiaCongPage } from "./features/giacong/GiaCongPage";
 import { ChamCongPage } from "./features/chamcong/ChamCongPage";
 import { ChamCongScannerPage } from "./features/chamcong/ChamCongScannerPage";
+import { NhanSuPortal } from "./pages/NhanSuPortal";
 import { NhanSu } from "./pages/NhanSu";
 import { HoSo } from "./pages/HoSo";
 import { DonTu } from "./pages/DonTu";
 import { PheDuyet } from "./pages/PheDuyet";
 import { BangCong } from "./pages/BangCong";
 import { QuanLyNhanSu } from "./pages/QuanLyNhanSu";
+import { TaiKhoanNganHang } from "./pages/TaiKhoanNganHang";
+import {
+  HRAttendanceAdminPage,
+  HRAttendancePage,
+  HRApprovalPage,
+  HRHomePage,
+  HRManagerPage,
+  HRPayrollPage,
+  HRPenaltyPage,
+  HRProfilePage,
+  HRRequestsPage,
+  HRTimesheetPage,
+} from "./pages/hr/HRPages";
 import { BaoCao } from "./pages/BaoCao";
 import { CongCu } from "./pages/CongCu";
 import { Chats } from "./pages/Chats";
 import { SaoLuu } from "./pages/SaoLuu";
 import { PhanHoi } from "./pages/PhanHoi";
-import { CapNhat } from "./pages/CapNhat";
 import { StubPage } from "./pages/StubPage";
 import { SystemSettings } from "./pages/SystemSettings";
 import { isAdmin } from "./lib/types";
@@ -106,10 +120,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <AppNotificationProvider>
-        <div className="liquid-bg"><div className="orb" /></div>
+        <div className={`liquid-bg ${IS_HR_APK ? "liquid-bg--plain" : ""}`}><div className="orb" /></div>
         <Router>
         <RealtimeBoot />
         <AuthProvider>
+          <AppUpdatePrompt />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/kiosk" element={<KioskPage />} />
@@ -121,19 +136,21 @@ export default function App() {
             <Route path="/giacong" element={<Protected><GiaCongPage /></Protected>} />
             <Route path="/baocao" element={<Protected><BaoCao /></Protected>} />
             <Route path="/saoluu" element={<Protected><SaoLuu /></Protected>} />
-            <Route path="/chamcong" element={<Protected><ChamCongScannerPage /></Protected>} />
-            <Route path="/ql-chamcong" element={<Protected admin><ChamCongPage /></Protected>} />
+            <Route path="/chamcong" element={<Protected>{IS_HR_APK ? <HRAttendancePage /> : <ChamCongScannerPage />}</Protected>} />
+            <Route path="/ql-chamcong" element={<Protected admin>{IS_HR_APK ? <HRAttendanceAdminPage /> : <ChamCongPage />}</Protected>} />
             <Route path="/tinhtoan" element={<Protected><CongCu /></Protected>} />
             <Route path="/chats" element={<Protected><Chats /></Protected>} />
             <Route path="/phanhoi" element={<Protected><PhanHoi /></Protected>} />
+            <Route path="/nhan-su" element={<Protected>{IS_HR_APK ? <HRHomePage /> : <NhanSuPortal />}</Protected>} />
             <Route path="/nhansu" element={<Protected admin><NhanSu /></Protected>} />
-            <Route path="/hoso" element={<Protected><HoSo /></Protected>} />
-            <Route path="/dontu" element={<Protected><DonTu /></Protected>} />
-            <Route path="/pheduyet" element={<Protected><PheDuyet /></Protected>} />
-            <Route path="/bangcong" element={<Protected><BangCong /></Protected>} />
-            <Route path="/quanly-nhansu" element={<Protected admin><QuanLyNhanSu /></Protected>} />
-            <Route path="/capnhat" element={<Protected admin><CapNhat /></Protected>} />
-
+            <Route path="/hoso" element={<Protected>{IS_HR_APK ? <HRProfilePage /> : <HoSo />}</Protected>} />
+            <Route path="/dontu" element={<Protected>{IS_HR_APK ? <HRRequestsPage /> : <DonTu />}</Protected>} />
+            <Route path="/pheduyet" element={<Protected>{IS_HR_APK ? <HRApprovalPage /> : <PheDuyet />}</Protected>} />
+            <Route path="/bangcong" element={<Protected>{IS_HR_APK ? <HRTimesheetPage /> : <BangCong />}</Protected>} />
+            <Route path="/quanly-nhansu" element={<Protected admin>{IS_HR_APK ? <HRManagerPage /> : <QuanLyNhanSu />}</Protected>} />
+            <Route path="/phat" element={<Protected><HRPenaltyPage /></Protected>} />
+            <Route path="/tai-khoan-ngan-hang" element={<Protected><TaiKhoanNganHang /></Protected>} />
+            <Route path="/bang-luong" element={<Protected admin><HRPayrollPage /></Protected>} />
             {/* Module chưa hiện thực — hiển thị "đang phát triển" giống bản desktop */}
             <Route path="/kho" element={<Protected><StubPage title="Hàng tồn kho" /></Protected>} />
             <Route path="/muahang" element={<Protected><StubPage title="Mua hàng" /></Protected>} />

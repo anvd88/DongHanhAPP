@@ -12,12 +12,25 @@ function scopesForPath(path: string): RealtimeScope[] {
   if (path.startsWith("/api/chat/conversations") || path.startsWith("/api/chat/contacts"))
     return ["chat", "presence"];
   if (path.startsWith("/api/feedback")) return ["feedback"];
+  if (path.startsWith("/api/releases")) return ["release"];
+  if (
+    path.startsWith("/api/hr") ||
+    path.startsWith("/api/requests") ||
+    path.startsWith("/api/shifts") ||
+    path.startsWith("/api/timesheet") ||
+    path.startsWith("/api/bank-accounts") ||
+    path.startsWith("/api/penalt") ||
+    path.startsWith("/api/payroll") ||
+    path.startsWith("/api/chamcong")
+  )
+    return ["hr", "data", "presence"];
   // Mọi path nghiệp vụ khác: phản ứng với thay đổi dữ liệu & hiện diện, KHÔNG bị chat làm phiền.
   return ["data", "presence"];
 }
 
 /** Hook fetch GET đơn giản với trạng thái loading/error + refetch. */
-export function useApi<T>(path: string | null, deps: unknown[] = []) {
+export function useApi<T>(path: string | null, _deps: unknown[] = []) {
+  void _deps;
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,8 +61,7 @@ export function useApi<T>(path: string | null, deps: unknown[] = []) {
       .finally(() => {
         if (!silent) setLoading(false);
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, ...deps]);
+  }, [path]);
 
   useEffect(() => reload(), [reload]);
 

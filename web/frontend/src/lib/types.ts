@@ -313,6 +313,7 @@ export type ChamCongStatus =
   | "noface"
   | "spoof"
   | "unknown"
+  | "proxy" // khớp khuôn mặt nhân viên KHÁC khi chấm công cho chính mình → bị chặn
   | "offline";
 
 /** Kết quả chấm công theo loạt ảnh (server tự chọn khung tốt nhất). */
@@ -331,10 +332,31 @@ export interface ChamCongResult {
 
 export interface Release {
   id: number;
+  appTarget: string;
   version: string;
+  versionCode: number;
   releaseNotes: string;
   isMandatory: boolean;
   isPublished: boolean;
   publishedAt: string;
   publishedBy: string;
+  apkFileName: string;
+  apkSize: number;
+  apkSha256: string;
+}
+
+export interface AppUpdateInfo {
+  hasUpdate: boolean;
+  id?: number;
+  appTarget?: string;
+  currentVersionCode?: number;
+  version?: string;
+  versionCode?: number;
+  releaseNotes?: string;
+  isMandatory?: boolean;
+  publishedAt?: string;
+  apkFileName?: string;
+  apkSize?: number;
+  apkSha256?: string;
+  downloadUrl?: string;
 }

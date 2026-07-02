@@ -3,21 +3,28 @@ import { NavLink, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { QuickToolsDrawer } from "./QuickToolsDrawer";
+import { HRLayout } from "./hr/HRLayout";
 import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/types";
-import { HR_APK_NAV_KEYS, IS_HR_APK } from "../lib/appConfig";
+import { IS_HR_APK } from "../lib/appConfig";
 import { useChatNotifications } from "./ChatNotifications";
 
 const MOBILE_NAV_KEYS = new Set(["dashboard", "giacong", "ketoan", "khachhang", "chats", "chamcong"]);
+const HR_APK_BOTTOM_NAV_KEYS = new Set(["nhan-su-portal", "chamcong", "bangcong", "dontu", "pheduyet"]);
 
 export function Layout({ children }: { children: ReactNode }) {
+  if (IS_HR_APK) return <HRLayout>{children}</HRLayout>;
+  return <ClassicLayout>{children}</ClassicLayout>;
+}
+
+function ClassicLayout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const { user } = useAuth();
   const { unreadCount } = useChatNotifications();
   const admin = isAdmin(user);
-  const bottomNavKeys = IS_HR_APK ? HR_APK_NAV_KEYS : MOBILE_NAV_KEYS;
+  const bottomNavKeys = IS_HR_APK ? HR_APK_BOTTOM_NAV_KEYS : MOBILE_NAV_KEYS;
   const mobileNavItems = NAV.flatMap((section) => section.items)
     .filter((item) => bottomNavKeys.has(item.key) && (!item.adminOnly || admin));
 
@@ -44,7 +51,11 @@ export function Layout({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
-      <nav className="km-mobile-bottom-nav lg:hidden" aria-label="Điều hướng chính">
+      <nav
+        className="km-mobile-bottom-nav lg:hidden"
+        aria-label="Điều hướng chính"
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, mobileNavItems.length)}, minmax(0, 1fr))` }}
+      >
         {mobileNavItems.map((item) => {
           const Icon = item.icon;
           return (

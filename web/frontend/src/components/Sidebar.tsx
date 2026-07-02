@@ -258,7 +258,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="km-sidebar-logo">CP</div>
         <div className="min-w-0 leading-tight">
           <div className="km-brand-title text-sm font-bold text-white">{APP_BRAND_NAME}</div>
-          <div className="mt-1 text-[11px] text-[var(--sidebar-text)]">Hệ thống quản lý kế toán</div>
+          <div className="mt-1 text-[11px] text-[var(--sidebar-text)]">
+            {IS_HR_APK ? "Cổng nhân sự công ty" : "Hệ thống quản lý kế toán"}
+          </div>
         </div>
       </div>
 

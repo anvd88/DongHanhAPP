@@ -5,6 +5,7 @@ import type { User } from "./types";
 import { ensureWaterDailyLogin } from "./waterReminderClock";
 import { ensureEyeDailyLogin } from "./eyeReminderClock";
 import { loadUserPreferences } from "./userPreferences";
+import { restartRealtime, stopRealtime } from "./realtime";
 
 interface AuthCtx {
   user: User | null;
@@ -66,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ensureEyeDailyLogin(currentUser.id);
         loadUserPreferences(currentUser.id).catch(() => {});
         setUser(currentUser);
+        void restartRealtime();
       })
       .catch(() => tokenStore.clear())
       .finally(() => setLoading(false));
@@ -98,6 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ensureWaterDailyLogin(res.user.id);
     ensureEyeDailyLogin(res.user.id);
     loadUserPreferences(res.user.id).catch(() => {});
+    void restartRealtime();
     setUser(res.user); // kích hoạt heartbeat ngay qua effect ở trên
   };
 
@@ -108,12 +111,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ensureWaterDailyLogin(res.user.id);
     ensureEyeDailyLogin(res.user.id);
     loadUserPreferences(res.user.id).catch(() => {});
+    void restartRealtime();
     setUser(res.user);
   };
 
   const logout = () => {
     api.post("/api/auth/logout", { sid: sessionId() }).catch(() => {}); // tắt hiện diện ngay (best-effort)
     tokenStore.clear();
+    void stopRealtime();
     setUser(null);
   };
 

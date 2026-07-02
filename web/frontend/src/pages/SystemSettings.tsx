@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   Database,
   Droplet,
@@ -9,18 +9,25 @@ import {
   MessageSquare,
   Power,
   RefreshCw,
+  Rocket,
   ScanFace,
   Settings2,
   ShieldCheck,
+  Trash2,
+  Upload,
   Users2,
 } from "lucide-react";
 import { GlassCard } from "../components/Glass";
+import { GlassPanel } from "../components/glass/GlassPanel";
 import { PageHeader } from "../components/Layout";
-import { Badge } from "../components/ui";
+import { Table } from "../components/Table";
+import { Badge, Button, Field, Input } from "../components/ui";
+import { useAppNotifications } from "../components/AppNotifications";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../shadcn/tooltip";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { isAdmin, type ChatDbUsage, type RtspAttendanceStatus } from "../lib/types";
+import { dateTime } from "../lib/format";
+import { isAdmin, type ChatDbUsage, type Release, type RtspAttendanceStatus } from "../lib/types";
 import { useApi } from "../lib/useApi";
 import { IP_CAMERA_ENABLED } from "../lib/features";
 import {
@@ -71,7 +78,7 @@ function formatHHMMSS(ms: number) {
 export function SystemSettings() {
   const { user } = useAuth();
   const admin = isAdmin(user);
-  const [tab, setTab] = useState<"settings" | "db">("settings");
+  const [tab, setTab] = useState<"settings" | "db" | "updates">("settings");
   const [now, setNow] = useState(() => new Date());
   const [waterEnabled, setWaterEnabled] = useState(() => (user ? isWaterReminderEnabled(user.id) : true));
   const [eyeEnabled, setEyeEnabled] = useState(() => (user ? isEyeReminderEnabled(user.id) : true));
@@ -238,9 +245,9 @@ export function SystemSettings() {
         subtitle="Cài đặt thông báo và tuỳ chọn trải nghiệm web"
       />
 
-      {/* Thanh trượt 2 phần (chỉ admin): Hệ thống ↔ Cơ sở dữ liệu. */}
+      {/* Thanh trượt phần quản trị (chỉ admin). */}
       {admin && (
-        <div className="system-segment" data-active={tab === "db" ? "db" : "settings"} role="tablist">
+        <div className="system-segment" data-active={tab} role="tablist">
           <span className="system-segment-thumb" aria-hidden="true" />
           <button
             type="button"
@@ -264,11 +271,24 @@ export function SystemSettings() {
             <Database className="h-4 w-4" />
             Cơ sở dữ liệu
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "updates"}
+            data-on={tab === "updates"}
+            className="system-segment-btn"
+            onClick={() => setTab("updates")}
+          >
+            <Rocket className="h-4 w-4" />
+            Cập nhật
+          </button>
         </div>
       )}
 
       {admin && tab === "db" ? (
         <ChatDbUsagePanel />
+      ) : admin && tab === "updates" ? (
+        <ReleaseUpdatePanel />
       ) : (
       <>
       {preferenceError && (
@@ -538,6 +558,172 @@ export function SystemSettings() {
   );
 }
 
+function ReleaseUpdatePanel() {
+  const { data, loading, error, reload } = useApi<Release[]>("/api/releases/");
+  const { confirm, notify } = useAppNotifications();
+  const [version, setVersion] = useState("1.0");
+  const [versionCode, setVersionCode] = useState("1");
+  const [releaseNotes, setReleaseNotes] = useState("");
+  const [isMandatory, setIsMandatory] = useState(true);
+  const [isPublished, setIsPublished] = useState(true);
+  const [apk, setApk] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!apk) {
+      notify.warning("Vui lòng chọn file APK trước khi phát hành.");
+      return;
+    }
+
+    const form = new FormData();
+    form.append("appTarget", "hr-apk");
+    form.append("version", version);
+    form.append("versionCode", versionCode);
+    form.append("releaseNotes", releaseNotes);
+    form.append("isMandatory", String(isMandatory));
+    form.append("isPublished", String(isPublished));
+    form.append("apk", apk);
+
+    setSaving(true);
+    try {
+      await api.postForm<Release>("/api/releases/", form);
+      notify.success(isPublished ? "Đã phát hành bản APK mới." : "Đã lưu bản APK nháp.");
+      setApk(null);
+      setReleaseNotes("");
+      reload({ silent: true });
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không đăng được bản cập nhật.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const publish = async (release: Release, mandatory: boolean) => {
+    try {
+      await api.post(`/api/releases/${release.id}/publish`, { isPublished: true, isMandatory: mandatory });
+      notify.success(mandatory ? "Đã yêu cầu tất cả app cập nhật." : "Đã phát hành bản cập nhật.");
+      reload({ silent: true });
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không phát hành được bản cập nhật.");
+    }
+  };
+
+  const unpublish = async (release: Release) => {
+    try {
+      await api.post(`/api/releases/${release.id}/publish`, { isPublished: false });
+      notify.info("Đã gỡ phát hành bản cập nhật.");
+      reload({ silent: true });
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không gỡ phát hành được.");
+    }
+  };
+
+  const remove = async (release: Release) => {
+    const ok = await confirm({
+      title: `Xóa bản ${release.version}?`,
+      description: "File APK lưu trong DB của bản này cũng sẽ bị xóa.",
+      confirmLabel: "Xóa",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    try {
+      await api.del(`/api/releases/${release.id}`);
+      notify.success("Đã xóa bản phát hành.");
+      reload({ silent: true });
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không xóa được bản phát hành.");
+    }
+  };
+
+  return (
+    <section className="space-y-4">
+      <GlassPanel strong className="rounded-[20px] p-4">
+        <form onSubmit={submit} className="grid gap-3 lg:grid-cols-[1fr_120px_1.4fr_auto] lg:items-end">
+          <Field label="Phiên bản">
+            <Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.0" required />
+          </Field>
+          <Field label="Mã bản">
+            <Input value={versionCode} onChange={(e) => setVersionCode(e.target.value)} inputMode="numeric" required />
+          </Field>
+          <Field label="Ghi chú">
+            <Input value={releaseNotes} onChange={(e) => setReleaseNotes(e.target.value)} placeholder="Nội dung thay đổi" />
+          </Field>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text-secondary)]">
+              <input type="checkbox" checked={isMandatory} onChange={(e) => setIsMandatory(e.target.checked)} />
+              Bắt buộc
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text-secondary)]">
+              <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
+              Phát hành
+            </label>
+          </div>
+          <Field label="File APK">
+            <Input type="file" accept=".apk,application/vnd.android.package-archive" onChange={(e) => setApk(e.target.files?.[0] ?? null)} required />
+          </Field>
+          <div className="text-xs font-semibold text-[var(--text-muted)] lg:col-span-2">
+            {apk ? `${apk.name} · ${fmtBytes(apk.size)}` : "APK sẽ được lưu trực tiếp trong PostgreSQL."}
+          </div>
+          <Button type="submit" loading={saving} className="lg:col-start-4">
+            <Upload className="h-4 w-4" />
+            Đăng bản APK
+          </Button>
+        </form>
+      </GlassPanel>
+
+      <GlassPanel strong className="overflow-hidden rounded-[20px]">
+        {error ? (
+          <div className="p-5 text-sm text-[var(--danger)]">{error}</div>
+        ) : (
+          <Table<Release>
+            loading={loading}
+            rows={data ?? []}
+            keyOf={(r) => r.id}
+            empty="Chưa có bản phát hành"
+            columns={[
+              { header: "Ứng dụng", cell: (r) => <span className="font-semibold">{r.appTarget}</span> },
+              { header: "Phiên bản", cell: (r) => <span className="font-semibold">{r.version}</span> },
+              { header: "Mã", align: "right", cell: (r) => r.versionCode },
+              { header: "Bắt buộc", cell: (r) => (r.isMandatory ? <Badge color="danger">Bắt buộc</Badge> : <Badge color="muted">Tùy chọn</Badge>) },
+              { header: "Trạng thái", cell: (r) => (r.isPublished ? <Badge color="success">Đã phát hành</Badge> : <Badge color="muted">Nháp</Badge>) },
+              { header: "APK", cell: (r) => <span className="text-[var(--text-secondary)]">{r.apkFileName || "—"}{r.apkSize ? ` · ${fmtBytes(r.apkSize)}` : ""}</span> },
+              { header: "Ngày", cell: (r) => dateTime(r.publishedAt) },
+              { header: "Người phát hành", cell: (r) => r.publishedBy || "—" },
+              { header: "Ghi chú", cell: (r) => <span className="text-[var(--text-secondary)]">{r.releaseNotes}</span> },
+              {
+                header: "Thao tác",
+                align: "right",
+                cell: (r) => (
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button type="button" variant="soft" className="px-3 py-2" onClick={() => publish(r, true)}>
+                      <Rocket className="h-4 w-4" />
+                      Yêu cầu
+                    </Button>
+                    {r.isPublished ? (
+                      <Button type="button" variant="ghost" className="px-3 py-2" onClick={() => unpublish(r)}>
+                        Gỡ
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="ghost" className="px-3 py-2" onClick={() => publish(r, r.isMandatory)}>
+                        Phát hành
+                      </Button>
+                    )}
+                    <Button type="button" variant="danger" className="px-3 py-2" onClick={() => remove(r)} aria-label="Xóa bản phát hành">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ),
+              },
+            ]}
+          />
+        )}
+      </GlassPanel>
+    </section>
+  );
+}
+
 /** Định dạng KB → đơn vị đọc được (KB/MB/GB). */
 function fmtSize(kb: number): string {
   if (!kb || kb < 0) return "0 KB";
@@ -545,6 +731,18 @@ function fmtSize(kb: number): string {
   const mb = kb / 1024;
   if (mb < 1024) return `${mb.toLocaleString("vi-VN", { maximumFractionDigits: 1 })} MB`;
   return `${(mb / 1024).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} GB`;
+}
+
+function fmtBytes(value: number): string {
+  if (!value) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toLocaleString("vi-VN", { maximumFractionDigits: unit === 0 ? 0 : 1 })} ${units[unit]}`;
 }
 
 /** Tab "Cơ sở dữ liệu": dung lượng mục Trò chuyện trong DB (admin). */

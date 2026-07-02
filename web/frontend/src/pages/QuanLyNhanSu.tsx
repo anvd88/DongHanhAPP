@@ -18,6 +18,7 @@ import {
   type EmployeeDoc,
   type LeaveBalance,
   type Payslip,
+  type PenaltyDeductions,
   type Shift,
   type ShiftAssignment,
 } from "../lib/hr";
@@ -282,14 +283,21 @@ function PayslipAdmin({ empId }: { empId: string }) {
   const { data, loading, reload } = useApi<Payslip[]>(`/api/hr/employees/${empId}/payslips`, [empId]);
   const [f, setF] = useState({ period: "", workDays: "", baseSalary: "", allowance: "", overtimePay: "", deductions: "", published: true });
   const set = (k: keyof typeof f, v: string | boolean) => setF((s) => ({ ...s, [k]: v }));
+  // Tiền phạt phải khấu trừ cho kỳ đang lập (tự động cộng vào tổng khấu trừ).
+  const { data: penalty } = useApi<PenaltyDeductions>(
+    f.period ? `/api/penalties/deductions?employeeId=${empId}&period=${f.period}` : null,
+    [empId, f.period],
+  );
+  const penaltyTotal = penalty?.total ?? 0;
+  const totalDeductions = (Number(f.deductions) || 0) + penaltyTotal;
   const add = async () => {
     if (!f.period) { notify.error("Nhập kỳ lương (yyyy-MM)."); return; }
     try {
       await api.post(`/api/hr/employees/${empId}/payslips`, {
         period: f.period, workDays: Number(f.workDays) || 0, overtimeHours: 0,
         baseSalary: Number(f.baseSalary) || 0, allowance: Number(f.allowance) || 0,
-        overtimePay: Number(f.overtimePay) || 0, deductions: Number(f.deductions) || 0,
-        note: "", published: f.published,
+        overtimePay: Number(f.overtimePay) || 0, deductions: totalDeductions,
+        note: penaltyTotal > 0 ? `Đã trừ phạt ${moneyVnd(penaltyTotal)}` : "", published: f.published,
       });
       reload({ silent: true });
       notify.success("Đã lập phiếu lương.");
@@ -304,8 +312,28 @@ function PayslipAdmin({ empId }: { empId: string }) {
         <Field label="Lương CB"><Input type="number" value={f.baseSalary} onChange={(e) => set("baseSalary", e.target.value)} /></Field>
         <Field label="Phụ cấp"><Input type="number" value={f.allowance} onChange={(e) => set("allowance", e.target.value)} /></Field>
         <Field label="Tăng ca (₫)"><Input type="number" value={f.overtimePay} onChange={(e) => set("overtimePay", e.target.value)} /></Field>
-        <Field label="Khấu trừ"><Input type="number" value={f.deductions} onChange={(e) => set("deductions", e.target.value)} /></Field>
+        <Field label="Khấu trừ khác"><Input type="number" value={f.deductions} onChange={(e) => set("deductions", e.target.value)} /></Field>
       </div>
+      {penaltyTotal > 0 && (
+        <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-sm">
+          <div className="flex items-center justify-between font-semibold text-red-600">
+            <span>Khấu trừ do phạt (kỳ {f.period})</span>
+            <span>{moneyVnd(penaltyTotal)}</span>
+          </div>
+          <ul className="mt-1.5 space-y-0.5 text-xs text-[var(--text-secondary)]">
+            {penalty?.items.map((it) => (
+              <li key={it.penaltyNo} className="flex items-center justify-between gap-2">
+                <span className="truncate">{it.penaltyNo}{it.installments > 1 ? ` · đợt ${it.installmentNo}/${it.installments}` : ""}{it.reason ? ` · ${it.reason}` : ""}</span>
+                <span className="whitespace-nowrap">{moneyVnd(it.monthAmount)}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex items-center justify-between border-t border-red-500/20 pt-2 font-semibold text-[var(--text)]">
+            <span>Tổng khấu trừ</span>
+            <span>{moneyVnd(totalDeductions)}</span>
+          </div>
+        </div>
+      )}
       <div className="mb-4 flex items-center justify-between">
         <label className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
           <input type="checkbox" checked={f.published} onChange={(e) => set("published", e.target.checked)} /> Phát hành cho nhân viên
@@ -449,13 +477,14 @@ function DepartmentModal({ value, departments, employees, onClose, onSaved }: {
 }) {
   const { notify } = useAppNotifications();
   const [f, setF] = useState({ code: value?.code ?? "", name: value?.name ?? "", parentId: value?.parentId ?? "", managerEmployeeId: value?.managerEmployeeId ?? "" });
+  const [isAccounting, setIsAccounting] = useState(value?.isAccounting ?? false);
   const [saving, setSaving] = useState(false);
   const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
   const save = async () => {
     if (!f.name.trim()) { notify.error("Nhập tên phòng ban."); return; }
     setSaving(true);
     try {
-      const body = { code: f.code, name: f.name, parentId: f.parentId || null, managerEmployeeId: f.managerEmployeeId || null };
+      const body = { code: f.code, name: f.name, parentId: f.parentId || null, managerEmployeeId: f.managerEmployeeId || null, isAccounting };
       if (value) await api.put(`/api/hr/departments/${value.id}`, body);
       else await api.post("/api/hr/departments", body);
       onSaved();
@@ -479,6 +508,13 @@ function DepartmentModal({ value, departments, employees, onClose, onSaved }: {
             {employees.map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)}
           </Select>
         </Field>
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--glass-border)] bg-white/40 p-3 dark:bg-white/5">
+          <input type="checkbox" checked={isAccounting} onChange={(e) => setIsAccounting(e.target.checked)} className="mt-0.5 h-4 w-4" />
+          <span className="text-sm">
+            <span className="font-semibold text-[var(--text)]">Phòng Kế toán</span>
+            <span className="block text-xs text-[var(--text-secondary)]">Nhân viên phòng này được duyệt khoản chi hoàn tiền phạt.</span>
+          </span>
+        </label>
       </div>
     </Modal>
   );

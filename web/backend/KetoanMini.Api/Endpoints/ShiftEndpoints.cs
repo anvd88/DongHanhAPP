@@ -210,7 +210,36 @@ public static class ShiftEndpoints
         });
     }
 
+    /// <summary>Tổng hợp bảng công của một nhân viên trong một tháng — dùng lại khi tính lương.</summary>
+    public sealed record TimesheetSummary(
+        string Period, int WorkedDays, int AbsentDays, int LateDays, int EarlyDays,
+        int TotalLateMinutes, int TotalEarlyMinutes, int TotalOvertimeMinutes, double TotalWorkedHours);
+
+    public static async Task<TimesheetSummary> ComputeSummaryAsync(NpgsqlConnection conn, Guid employeeId, string? month)
+        => (await ComputeCore(conn, employeeId, month)).Summary;
+
     private static async Task<object> BuildTimesheet(NpgsqlConnection conn, Guid employeeId, string? month)
+    {
+        var (s, days) = await ComputeCore(conn, employeeId, month);
+        return new
+        {
+            period = s.Period,
+            summary = new
+            {
+                workedDays = s.WorkedDays,
+                absentDays = s.AbsentDays,
+                lateDays = s.LateDays,
+                earlyDays = s.EarlyDays,
+                totalLateMinutes = s.TotalLateMinutes,
+                totalEarlyMinutes = s.TotalEarlyMinutes,
+                totalOvertimeMinutes = s.TotalOvertimeMinutes,
+                totalWorkedHours = s.TotalWorkedHours,
+            },
+            days,
+        };
+    }
+
+    private static async Task<(TimesheetSummary Summary, List<object> Days)> ComputeCore(NpgsqlConnection conn, Guid employeeId, string? month)
     {
         // month: yyyy-MM (mặc định tháng hiện tại).
         var now = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
@@ -331,22 +360,10 @@ public static class ShiftEndpoints
             });
         }
 
-        return new
-        {
-            period = $"{year:D4}-{mon:D2}",
-            summary = new
-            {
-                workedDays,
-                absentDays,
-                lateDays,
-                earlyDays,
-                totalLateMinutes = totalLate,
-                totalEarlyMinutes = totalEarly,
-                totalOvertimeMinutes = totalOt,
-                totalWorkedHours = Math.Round(totalWorkedHours, 2),
-            },
-            days,
-        };
+        var summary = new TimesheetSummary(
+            $"{year:D4}-{mon:D2}", workedDays, absentDays, lateDays, earlyDays,
+            totalLate, totalEarly, totalOt, Math.Round(totalWorkedHours, 2));
+        return (summary, days);
     }
 
     private sealed record ShiftInfo(string Name, TimeOnly Start, TimeOnly End, int Break, int Grace, decimal StandardHours);
@@ -372,6 +389,7 @@ public static class ShiftEndpoints
     {
         await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
         await hub.Clients.All.SendAsync("changed", "data");
+        await hub.Clients.All.SendAsync("changed", "hr");
     }
 
     public record SaveShiftReq(string? Code, string? Name, string? StartTime, string? EndTime,

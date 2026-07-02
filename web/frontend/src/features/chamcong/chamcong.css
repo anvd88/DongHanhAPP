@@ -316,6 +316,30 @@
   font-size: 0.86rem;
   font-weight: 700;
 }
+.cc-overlay-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.2rem;
+}
+.cc-overlay-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  padding: 0 14px;
+  font-size: 0.84rem;
+  font-weight: 850;
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+.cc-overlay-action:hover {
+  background: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
 
 /* ---- Lớp phủ "Chấm công chưa thành công" ngay trên khung camera (dấu X động) ---- */
 .cc-fail-overlay {

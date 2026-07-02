@@ -10,6 +10,7 @@ import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { useAppNotifications } from "../components/AppNotifications";
 import {
+  fieldDisplayValue,
   fieldLabel,
   requestFields,
   requestStatusColor,
@@ -214,6 +215,35 @@ function CreateRequestModal({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {fields.map((f) => {
             const autoDays = daysAutoSynced && f.key === "days";
+            if (f.type === "checkboxes") {
+              return (
+                <div key={f.key} className="sm:col-span-2">
+                  <div role="group" aria-label={f.label} className="grid grid-cols-2 gap-2">
+                    {f.options?.map((o) => {
+                      const checked = values[f.key] === o.value;
+                      return (
+                        <label
+                          key={o.value}
+                          className={`flex h-11 cursor-pointer items-center gap-2 rounded-xl border px-3.5 text-sm font-semibold transition-all ${
+                            checked
+                              ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] ring-2 ring-[var(--accent-soft)]"
+                              : "border-[var(--glass-border)] bg-white/55 text-[var(--text)] hover:border-[var(--accent)] dark:bg-white/5"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => setField(f.key, e.target.checked ? o.value : "")}
+                            className="h-4 w-4 rounded border-[var(--glass-border)] accent-[var(--accent)]"
+                          />
+                          <span>{o.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
             return (
             <div key={f.key} className={f.type === "textarea" ? "sm:col-span-2" : ""}>
               <Field label={autoDays ? `${f.label} (tự tính)` : f.label}>
@@ -230,6 +260,17 @@ function CreateRequestModal({
                     value={values[f.key] ? Number(values[f.key]).toLocaleString("en-US") : ""}
                     onChange={(e) => setField(f.key, e.target.value.replace(/[^\d]/g, ""))}
                   />
+                ) : f.type === "select" ? (
+                  <Select
+                    value={values[f.key] ?? ""}
+                    onChange={(e) => setField(f.key, e.target.value)}
+                    className="w-full"
+                  >
+                    <option value="" disabled>— Chọn —</option>
+                    {f.options?.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </Select>
                 ) : (
                   <Input
                     type={f.type === "number" ? "number" : f.type === "date" ? "date" : f.type === "time" ? "time" : "text"}
@@ -271,7 +312,10 @@ function RequestDetailModal({
     const fieldTypeOf = (k: string) => requestFields[data.request.type]?.find((f) => f.key === k)?.type;
     return Object.entries(p).map(([k, v]) => ({
       label: fieldLabel(data.request.type, k),
-      value: fieldTypeOf(k) === "money" && v != null && v !== "" ? Number(v).toLocaleString("en-US") : String(v),
+      value:
+        fieldTypeOf(k) === "money" && v != null && v !== ""
+          ? Number(v).toLocaleString("en-US")
+          : fieldDisplayValue(data.request.type, k, v),
     }));
   }, [data]);
 

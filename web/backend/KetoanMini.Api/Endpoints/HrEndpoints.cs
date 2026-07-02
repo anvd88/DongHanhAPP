@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Realtime;
 using Microsoft.AspNetCore.SignalR;
@@ -23,8 +24,10 @@ public static class HrEndpoints
                 name varchar(200) NOT NULL,
                 parent_id uuid NULL REFERENCES hr_departments(id) ON DELETE SET NULL,
                 manager_employee_id uuid NULL,
+                is_accounting boolean NOT NULL DEFAULT false,
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            ALTER TABLE hr_departments ADD COLUMN IF NOT EXISTS is_accounting boolean NOT NULL DEFAULT false;
 
             CREATE SEQUENCE IF NOT EXISTS hr_employee_code_seq START 1;
 
@@ -81,9 +84,11 @@ public static class HrEndpoints
                 deductions numeric(18,2) NOT NULL DEFAULT 0,
                 net_pay numeric(18,2) NOT NULL DEFAULT 0,
                 note text NOT NULL DEFAULT '',
+                details jsonb NOT NULL DEFAULT '{}',
                 published boolean NOT NULL DEFAULT FALSE,
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}';
             CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_payslips_emp_period ON hr_payslips (employee_id, period);
 
             CREATE TABLE IF NOT EXISTS hr_leave_balances (
@@ -169,7 +174,7 @@ public static class HrEndpoints
             await using var conn = await db.OpenAsync();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
-                SELECT d.id, d.code, d.name, d.parent_id, d.manager_employee_id,
+                SELECT d.id, d.code, d.name, d.parent_id, d.manager_employee_id, d.is_accounting,
                        COALESCE(p.name, '') AS parent_name,
                        COALESCE(m.full_name, '') AS manager_name,
                        (SELECT COUNT(*) FROM hr_employees e WHERE e.department_id = d.id) AS emp_count
@@ -188,6 +193,7 @@ public static class HrEndpoints
                     parentName = r.Str("parent_name"),
                     managerEmployeeId = r.IsDBNull(r.GetOrdinal("manager_employee_id")) ? (Guid?)null : r.Guid("manager_employee_id"),
                     managerName = r.Str("manager_name"),
+                    isAccounting = r.Bool("is_accounting"),
                     employeeCount = r.Int("emp_count"),
                 });
             return Results.Ok(list);
@@ -200,12 +206,13 @@ public static class HrEndpoints
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
             await conn.Cmd("""
-                INSERT INTO hr_departments (id, code, name, parent_id, manager_employee_id)
-                VALUES (@id, @code, @name, @parent, @mgr)
+                INSERT INTO hr_departments (id, code, name, parent_id, manager_employee_id, is_accounting)
+                VALUES (@id, @code, @name, @parent, @mgr, @acc)
                 """)
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", req.Name.Trim())
                 .With("@parent", (object?)req.ParentId ?? DBNull.Value)
                 .With("@mgr", (object?)req.ManagerEmployeeId ?? DBNull.Value)
+                .With("@acc", req.IsAccounting)
                 .ExecuteNonQueryAsync();
             await Signal(hub, db, u, "Tạo phòng ban", "Department", req.Name);
             return Results.Ok(new { id });
@@ -216,12 +223,14 @@ public static class HrEndpoints
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("""
-                UPDATE hr_departments SET code=@code, name=@name, parent_id=@parent, manager_employee_id=@mgr
+                UPDATE hr_departments SET code=@code, name=@name, parent_id=@parent, manager_employee_id=@mgr,
+                    is_accounting=@acc
                 WHERE id=@id
                 """)
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", (req.Name ?? "").Trim())
                 .With("@parent", (object?)req.ParentId ?? DBNull.Value)
                 .With("@mgr", (object?)req.ManagerEmployeeId ?? DBNull.Value)
+                .With("@acc", req.IsAccounting)
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(hub, db, u, "Cập nhật phòng ban", "Department", req.Name ?? "");
@@ -449,7 +458,7 @@ public static class HrEndpoints
             var onlyPublished = !u.IsAdmin();
             var list = new List<object>();
             await using var r = await conn.Cmd($"""
-                SELECT id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, published
+                SELECT id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, details::text AS details, published
                 FROM hr_payslips WHERE employee_id=@id {(onlyPublished ? "AND published = TRUE" : "")}
                 ORDER BY period DESC
                 """).With("@id", id).ExecuteReaderAsync();
@@ -466,6 +475,7 @@ public static class HrEndpoints
                     deductions = r.Dec("deductions"),
                     netPay = r.Dec("net_pay"),
                     note = r.Str("note"),
+                    details = ParseJson(r.Str("details")),
                     published = r.Bool("published"),
                 });
             return Results.Ok(list);
@@ -626,6 +636,7 @@ public static class HrEndpoints
             SELECT e.id, e.employee_code, e.username, e.full_name, e.dob, e.gender, e.phone, e.email, e.address,
                    e.department_id, e.position, e.manager_id, e.hire_date, e.status, e.avatar,
                    COALESCE(d.name, '') AS department_name,
+                   COALESCE(d.is_accounting, false) AS is_accounting,
                    COALESCE(m.full_name, '') AS manager_name
             FROM hr_employees e
             LEFT JOIN hr_departments d ON d.id = e.department_id
@@ -652,20 +663,28 @@ public static class HrEndpoints
             hireDate = DateOrNull(r, "hire_date"),
             status = r.Str("status"),
             avatar = r.IsDBNull(r.GetOrdinal("avatar")) ? null : r.Str("avatar"),
+            isAccounting = r.Bool("is_accounting"),
         };
     }
 
     private static DateOnly? DateOrNull(NpgsqlDataReader r, string col)
         => r.IsDBNull(r.GetOrdinal(col)) ? (DateOnly?)null : r.DateOnly(col);
 
+    private static JsonElement ParseJson(string json)
+    {
+        try { return JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json).RootElement.Clone(); }
+        catch { return JsonDocument.Parse("{}").RootElement.Clone(); }
+    }
+
     private static async Task Signal(IHubContext<ChangesHub> hub, Database db, ClaimsPrincipal u, string action, string entity, string name)
     {
         await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
         await hub.Clients.All.SendAsync("changed", "data");
+        await hub.Clients.All.SendAsync("changed", "hr");
     }
 
     // ---- DTO nhận từ client ----
-    public record SaveDepartmentReq(string? Code, string? Name, Guid? ParentId, Guid? ManagerEmployeeId);
+    public record SaveDepartmentReq(string? Code, string? Name, Guid? ParentId, Guid? ManagerEmployeeId, bool IsAccounting);
     public record SaveEmployeeReq(string? EmployeeCode, string? Username, string? FullName, DateOnly? Dob, string? Gender,
         string? Phone, string? Email, string? Address, Guid? DepartmentId, string? Position, Guid? ManagerId,
         DateOnly? HireDate, string? Status, string? Avatar);

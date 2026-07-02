@@ -315,7 +315,7 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
-/* ---------- Thanh trượt chuyển phần (Hệ thống ↔ Cơ sở dữ liệu) ---------- */
+/* ---------- Thanh trượt chuyển phần quản trị ---------- */
 .system-segment {
   position: relative;
   display: inline-grid;
@@ -341,7 +341,7 @@
   top: 5px;
   bottom: 5px;
   left: 5px;
-  width: calc(50% - 5px);
+  width: calc(33.333333% - 5px);
   border-radius: 999px;
   background:
     radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.5), transparent 42%),
@@ -354,6 +354,10 @@
 
 .system-segment[data-active="db"] .system-segment-thumb {
   transform: translateX(100%);
+}
+
+.system-segment[data-active="updates"] .system-segment-thumb {
+  transform: translateX(200%);
 }
 
 .system-segment-btn {

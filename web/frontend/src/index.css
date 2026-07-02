@@ -121,6 +121,17 @@ html[data-theme="dark"] input[list] {
   overflow: hidden;
   background: var(--bg);
 }
+.liquid-bg--plain {
+  background: #f5f6f8;
+}
+.liquid-bg--plain::before,
+.liquid-bg--plain::after,
+.liquid-bg--plain .orb {
+  display: none;
+}
+html[data-theme="dark"] .liquid-bg--plain {
+  background: #0f141b;
+}
 .liquid-bg::before,
 .liquid-bg::after,
 .liquid-bg .orb {

@@ -384,10 +384,17 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u) =>
         {
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
+
+            // CHẶN CỨNG chế độ "chỉ chấm cho chính mình": xác định TỪ TOKEN phía server, KHÔNG tin cờ
+            // client (req.SelfOnly). Mọi tài khoản ĐÃ đăng nhập không phải admin đều bắt buộc chỉ chấm
+            // cho CHÍNH MÌNH — không thể gọi thẳng API với selfOnly=false để chấm công hộ. Admin được
+            // miễn (chấm hộ mọi người). Kiosk ẩn danh (không có token) → currentUser rỗng → so khớp mở.
+            var currentUser = u.Username();
+            var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.IsAdmin();
 
             // 1) Lấy mọi khung CÓ MẶT, xếp theo chất lượng giảm dần (nét, đủ sáng, mặt to & chính diện).
             var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
@@ -439,17 +446,50 @@ public static class ChamCongEndpoints
 
             await using var conn = await db.OpenAsync();
 
-            // 5) So khớp toàn bộ mẫu đã đăng ký.
+            // 5) So khớp toàn bộ mẫu đã đăng ký. Đồng thời theo dõi độ khớp cao nhất với chính tài
+            //    khoản đang đăng nhập (phục vụ chế độ self-only bên dưới).
             string? bestUser = null, bestName = null;
             double bestSim = 0;
+            double selfSim = 0;
+            string? selfName = null;
             await using (var r = await conn.Cmd(
                 "SELECT username, full_name, embedding FROM cham_cong_face").ExecuteReaderAsync())
             {
                 while (await r.ReadAsync())
                 {
+                    var uname = r.Str("username");
                     var emb = EmbeddingCodec.FromBytes((byte[])r["embedding"]);
                     var sim = engine.Compare(probe, emb);
-                    if (sim > bestSim) { bestSim = sim; bestUser = r.Str("username"); bestName = r.Str("full_name"); }
+                    if (sim > bestSim) { bestSim = sim; bestUser = uname; bestName = r.Str("full_name"); }
+                    if (selfOnly && sim > selfSim
+                        && string.Equals(uname, currentUser, StringComparison.OrdinalIgnoreCase))
+                    { selfSim = sim; selfName = r.Str("full_name"); }
+                }
+            }
+
+            // 5b) Self-only: chỉ cho phép nhân viên chấm công cho CHÍNH MÌNH.
+            if (selfOnly)
+            {
+                if (selfSim >= engine.MatchThreshold)
+                {
+                    // Đúng là người đang đăng nhập → ghi công cho họ (bỏ qua mọi khớp của người khác).
+                    bestUser = currentUser;
+                    bestName = selfName ?? "";
+                    bestSim = selfSim;
+                }
+                else if (bestUser is not null && bestSim >= engine.MatchThreshold
+                         && !string.Equals(bestUser, currentUser, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Khuôn mặt khớp NHÂN VIÊN KHÁC → chặn, không cho chấm công hộ.
+                    return Results.Ok(new ChamCongResult("proxy", false, null, null, bestSim, null, null, best.Score,
+                        "Không được chấm công hộ nhân viên khác trong công ty.",
+                        "Mỗi người chỉ được chấm công bằng khuôn mặt của chính mình."));
+                }
+                else
+                {
+                    // Không khớp chính mình và cũng không rõ là ai → yêu cầu thử lại.
+                    return Results.Ok(new ChamCongResult("unknown", false, null, null, bestSim, null, null, best.Score,
+                        "Khuôn mặt không khớp. Vui lòng thử lại.", null));
                 }
             }
 

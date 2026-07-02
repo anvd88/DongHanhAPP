@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Camera, Loader2, ScanFace, Smartphone, UserCheck, Video } from "lucide-react";
+import { Camera, Loader2, RotateCcw, ScanFace, Smartphone, UserCheck, Video } from "lucide-react";
 import { submitCheckInFrames } from "../../lib/offlineAttendance";
 import type { ChamCongResult } from "../../lib/types";
 import { useCamera } from "./useCamera";
@@ -24,6 +24,11 @@ type CheckInScannerProps = {
   biometricMode?: boolean;
   /** Tự bắt đầu chấm công ngay khi gắn (dùng cho kiosk khi đã bấm nút bên ngoài). */
   autoStart?: boolean;
+  /**
+   * Chỉ chấm công cho CHÍNH tài khoản đang đăng nhập (trang HR Nhân sự). Khuôn mặt khớp nhân viên
+   * khác sẽ bị chặn với thông báo không được chấm công hộ. Kiosk (đăng nhập ẩn danh) để mặc định false.
+   */
+  selfOnly?: boolean;
 };
 
 type Phase = "idle" | "opening" | "aiming" | "capturing" | "analyzing" | "warning" | "success";
@@ -59,11 +64,11 @@ const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(re
  * KHÔNG quét trực tiếp liên tục: mỗi lượt chụp một loạt khung, server tự chọn khung tốt nhất,
  * báo trực tiếp nếu sai tư thế / thiếu sáng, rồi nhận diện. Dùng chung cho tab "Chấm công" và kiosk.
  */
-export function CheckInScanner({ returnToLoginOnOk = false, biometricMode = false, autoStart = false }: CheckInScannerProps) {
+export function CheckInScanner({ returnToLoginOnOk = false, biometricMode = false, autoStart = false, selfOnly = false }: CheckInScannerProps) {
   return biometricMode ? (
-    <BiometricCheckInScanner autoStart={autoStart} returnToLoginOnOk={returnToLoginOnOk} />
+    <BiometricCheckInScanner autoStart={autoStart} returnToLoginOnOk={returnToLoginOnOk} selfOnly={selfOnly} />
   ) : (
-    <PanelCheckInScanner />
+    <PanelCheckInScanner selfOnly={selfOnly} />
   );
 }
 
@@ -71,7 +76,7 @@ export function CheckInScanner({ returnToLoginOnOk = false, biometricMode = fals
  * Hook lõi: quản lý camera + một lượt chấm công (mở camera → chụp loạt → POST /cham → kết quả).
  * Tách khỏi giao diện để dùng lại cho cả thẻ camera trong app lẫn kiosk Liquid Glass.
  */
-function useBurstCheckIn(framingRef?: RefObject<Framing | null>) {
+function useBurstCheckIn(framingRef?: RefObject<Framing | null>, selfOnly = false) {
   const { videoRef, active, error, start, stop, capture, captureBurst } = useCamera();
   const [phase, setPhase] = useState<Phase>("idle");
   const [hint, setHint] = useState("Sẵn sàng chấm công");
@@ -208,7 +213,7 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>) {
 
       setPhase("analyzing");
       setHint(PROCESSING_HINT);
-      const res = await submitCheckInFrames(frames);
+      const res = await submitCheckInFrames(frames, { selfOnly });
       setResult(res);
 
       if (res.status === "offline") {
@@ -231,7 +236,7 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>) {
     } finally {
       runningRef.current = false;
     }
-  }, [active, start, stop, captureBurst, framingRef, aimAndCapture, setHold]);
+  }, [active, start, stop, captureBurst, framingRef, aimAndCapture, setHold, selfOnly]);
 
   // Hủy lượt chấm đang chờ giữ khung và tắt camera.
   const cancel = useCallback(() => {
@@ -259,7 +264,7 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>) {
  * server nhận diện. Không có cổng "ngắm/giữ khung" như webcam (không gắn MediaPipe vào ảnh poll);
  * chất lượng/tư thế/liveness vẫn do server kiểm ở /api/chamcong/cham như chế độ điện thoại.
  */
-function useIpBurstCheckIn() {
+function useIpBurstCheckIn(selfOnly = false) {
   const { active, error, frameUrl, start: startFeed, stop, captureBurst } = useIpCamera();
   const [phase, setPhase] = useState<Phase>("idle");
   const [hint, setHint] = useState("Sẵn sàng chấm công");
@@ -290,7 +295,7 @@ function useIpBurstCheckIn() {
 
       setPhase("analyzing");
       setHint(PROCESSING_HINT);
-      const res = await submitCheckInFrames(frames);
+      const res = await submitCheckInFrames(frames, { selfOnly });
       setResult(res);
 
       if (res.status === "offline") {
@@ -310,7 +315,7 @@ function useIpBurstCheckIn() {
     } finally {
       runningRef.current = false;
     }
-  }, [active, startFeed, captureBurst]);
+  }, [active, startFeed, captureBurst, selfOnly]);
 
   const reset = useCallback(() => {
     setResult(null);
@@ -359,7 +364,7 @@ function CameraSourceToggle({
 }
 
 /* --------------------------- Thẻ camera trong app --------------------------- */
-function PanelCheckInScanner() {
+function PanelCheckInScanner({ selfOnly = false }: Pick<CheckInScannerProps, "selfOnly">) {
   const [source, setSource] = useState<CameraSource>("device");
   const [framing, setFraming] = useState<Framing | null>(null);
   const framingRef = useRef<Framing | null>(null);
@@ -367,8 +372,8 @@ function PanelCheckInScanner() {
     framingRef.current = f;
     setFraming(f);
   }, []);
-  const device = useBurstCheckIn(framingRef);
-  const ip = useIpBurstCheckIn();
+  const device = useBurstCheckIn(framingRef, selfOnly);
+  const ip = useIpBurstCheckIn(selfOnly);
   const [toast, setToast] = useState<CheckInToastData | null>(null);
 
   // Nguồn đang chọn quyết định pha/kết quả hiển thị chung cho cả thẻ.
@@ -410,7 +415,7 @@ function PanelCheckInScanner() {
     <div className="cc-grid cc-checkin-grid">
       <CheckInToastHost toast={toast} onExpire={() => setToast(null)} />
 
-      <div className="cc-camera glass">
+      <div className="cc-camera glass" data-phase={phase}>
         {IP_CAMERA_ENABLED && <CameraSourceToggle value={source} onChange={switchSource} />}
         {source === "device" ? (
           <DeviceCameraArea device={device} framing={framing} onFraming={onFraming} />
@@ -433,7 +438,7 @@ function DeviceCameraArea({
   onFraming: (f: Framing) => void;
 }) {
   const { videoRef, active, error, phase, hint, result, busy, aiming, holding, run, cancel } = device;
-  const showFramingHint = active && !busy && phase !== "success" && framing != null && framing.state !== "good";
+  const showFramingHint = active && !busy && phase !== "success" && phase !== "warning" && framing != null && framing.state !== "good";
 
   return (
     <>
@@ -476,9 +481,10 @@ function DeviceCameraArea({
               name={result?.status === "offline" ? "Đã lưu ngoại tuyến" : result!.fullName || result!.username || "Nhân viên"}
               time={result?.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
               loai={result?.status === "offline" ? null : result!.loai}
+              onRetry={run}
             />
           )}
-          {phase === "warning" && <CheckInFailOverlay message={hint} />}
+          {phase === "warning" && <CheckInFailOverlay message={hint} onRetry={run} />}
         </AnimatePresence>
       </div>
 
@@ -533,9 +539,10 @@ function IpCameraArea({ ip }: { ip: ReturnType<typeof useIpBurstCheckIn> }) {
               name={result?.status === "offline" ? "Đã lưu ngoại tuyến" : result!.fullName || result!.username || "Nhân viên"}
               time={result?.occurredAt ? new Date(result.occurredAt).toLocaleTimeString("vi-VN") : null}
               loai={result?.status === "offline" ? null : result!.loai}
+              onRetry={run}
             />
           )}
-          {phase === "warning" && <CheckInFailOverlay message={hint} />}
+          {phase === "warning" && <CheckInFailOverlay message={hint} onRetry={run} />}
         </AnimatePresence>
       </div>
 
@@ -555,15 +562,16 @@ function IpCameraArea({ ip }: { ip: ReturnType<typeof useIpBurstCheckIn> }) {
 function BiometricCheckInScanner({
   autoStart = false,
   returnToLoginOnOk = false,
-}: Pick<CheckInScannerProps, "autoStart" | "returnToLoginOnOk">) {
+  selfOnly = false,
+}: Pick<CheckInScannerProps, "autoStart" | "returnToLoginOnOk" | "selfOnly">) {
   const navigate = useNavigate();
   const [source, setSource] = useState<CameraSource>("device");
   const framingRef = useRef<Framing | null>(null);
   const onFraming = useCallback((f: Framing) => {
     framingRef.current = f;
   }, []);
-  const device = useBurstCheckIn(framingRef);
-  const ip = useIpBurstCheckIn();
+  const device = useBurstCheckIn(framingRef, selfOnly);
+  const ip = useIpBurstCheckIn(selfOnly);
 
   const active = source === "ip" ? ip.active : device.active;
   const phase = source === "ip" ? ip.phase : device.phase;
@@ -967,11 +975,13 @@ function CheckInSuccessOverlay({
   time,
   loai,
   offline = false,
+  onRetry,
 }: {
   name: string;
   time: string | null;
   loai?: string | null;
   offline?: boolean;
+  onRetry?: () => void | Promise<void>;
 }) {
   const reducedMotion = useReducedMotion();
   const meta = offline ? "Sẽ tự đồng bộ khi có mạng" : [loai, time].filter(Boolean).join(" · ");
@@ -1036,13 +1046,20 @@ function CheckInSuccessOverlay({
           <div className="cc-success-name">{name}</div>
           {meta && <div className="cc-success-meta">{meta}</div>}
         </div>
+        {onRetry && (
+          <div className="cc-overlay-actions">
+            <button className="cc-overlay-action" type="button" onClick={() => { void onRetry(); }}>
+              <RotateCcw className="h-4 w-4" /> Quét lại
+            </button>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   );
 }
 
 /** Lớp phủ kết quả thất bại hiện trực tiếp trên khung camera. */
-function CheckInFailOverlay({ message }: { message: string }) {
+function CheckInFailOverlay({ message, onRetry }: { message: string; onRetry?: () => void | Promise<void> }) {
   const reducedMotion = useReducedMotion();
 
   return (
@@ -1129,6 +1146,13 @@ function CheckInFailOverlay({ message }: { message: string }) {
           <div className="cc-fail-eyebrow">Chấm công chưa thành công</div>
           {message && <div className="cc-fail-message">{message}</div>}
         </div>
+        {onRetry && (
+          <div className="cc-overlay-actions">
+            <button className="cc-overlay-action" type="button" onClick={() => { void onRetry(); }}>
+              <RotateCcw className="h-4 w-4" /> Quét lại
+            </button>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   );
