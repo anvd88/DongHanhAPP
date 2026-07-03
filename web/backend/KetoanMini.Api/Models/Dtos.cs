@@ -1,11 +1,14 @@
 namespace KetoanMini.Api.Models;
 
 // ----- Auth -----
-public record LoginRequest(string Username, string Password);
+public record LoginRequest(string Username, string Password, string? Sid = null);
 // Đăng nhập bằng khuôn mặt: client gửi một loạt ảnh (data URL base64), server tự chọn khung tốt nhất.
-public record FaceLoginRequest(List<string> Images);
+public record FaceLoginRequest(List<string> Images, string? Sid = null);
 public record LoginResponse(string Token, UserDto User);
 public record HeartbeatRequest(string? Sid);
+// Thiết bị/phiên đăng nhập của một tài khoản (phục vụ màn "Quản lý thiết bị đăng nhập").
+public record DeviceDto(string Sid, string MachineName, string ClientKind, string UserAgent,
+    DateTime? StartedAt, DateTime? LastSeen, bool IsActive, bool Revoked, bool Current);
 public record UpdateProfileRequest(string FullName, string Email);
 public record UpdateAvatarRequest(string ImageDataUrl);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
@@ -119,14 +122,6 @@ public record GiaCongReportItemDto(string DoiTac, string TenHang, string QuyCach
 // ----- Chấm công khuôn mặt -----
 public record FaceEngineStatusDto(string Engine, double MatchThreshold);
 public record DangKyKhuonMatRequest(string Username, string FullName, string ImageBase64);
-public sealed class RtspTestScanRequest
-{
-    public bool Enabled { get; set; }
-}
-public sealed class RtspAutoAttendanceRequest
-{
-    public bool Enabled { get; set; }
-}
 public record FaceNguoiDungDto(string Username, string FullName, int SoMau, DateTime? CreatedAt);
 public record FaceRegistrationLogDto(long Id, string Username, string FullName, DateTime CreatedAt, string CreatedBy);
 public record NhanDienRequest(string ImageBase64);

@@ -9,7 +9,9 @@ import {
   LogOut,
   Menu,
   ScanFace,
+  Settings,
   UserCog,
+  UserRound,
   Wallet,
   X,
 } from "lucide-react";
@@ -24,9 +26,11 @@ const HR_NAV = [
   { key: "timesheet", label: "Bảng công", path: "/bangcong", icon: CalendarClock },
   { key: "requests", label: "Đơn từ", path: "/dontu", icon: FileText },
   { key: "approval", label: "Phê duyệt", path: "/pheduyet", icon: Inbox },
+  { key: "profile", label: "Hồ sơ", path: "/hoso", icon: UserRound },
   { key: "penalty", label: "Phạt", path: "/phat", icon: Gavel },
   { key: "payroll", label: "Bảng lương", path: "/bang-luong", icon: Wallet, adminOnly: true },
   { key: "people", label: "Quản lý", path: "/quanly-nhansu", icon: UserCog, adminOnly: true },
+  { key: "settings", label: "Cài đặt", path: "/caidat", icon: Settings },
 ];
 
 function activeTitle(pathname: string) {

@@ -1,24 +1,32 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { QRCodeSVG } from "qrcode.react";
 import {
   Ban,
   Banknote,
+  BadgeCheck,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
   CloudOff,
+  Download,
+  Droplet,
+  Eye,
   FilePlus2,
   FileText,
   Gavel,
   IdCard,
   Inbox,
   Megaphone,
+  MessageCircle,
   Pencil,
   Plus,
+  Power,
   RefreshCw,
   Save,
   ScanFace,
   Send,
+  Settings,
   Trash2,
   UserCog,
   Wallet,
@@ -30,8 +38,10 @@ import { Field, Input, Select } from "../../components/ui";
 import { CheckInScanner } from "../../features/chamcong/CheckInScanner";
 import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
+import { checkForAppUpdate, getCurrentAppVersion, installAppUpdate } from "../../lib/apkUpdater";
 import { date, dateTime, initials, moneyVnd } from "../../lib/format";
 import {
+  docTypeLabel,
   fieldDisplayValue,
   fieldLabel,
   leaveTypeLabel,
@@ -47,6 +57,7 @@ import {
   type Department,
   type EmployeeCard,
   type EmployeeDetail,
+  type EmployeeDoc,
   type PayLine,
   type PayrollCompute,
   type Penalty,
@@ -72,7 +83,11 @@ import {
 import { useApi } from "../../lib/useApi";
 import { useAppNotifications } from "../../components/AppNotifications";
 import { isAdmin } from "../../lib/types";
-import type { ChamCongLog, FaceNguoiDung, RtspAttendanceStatus } from "../../lib/types";
+import type { ChamCongLog, FaceNguoiDung } from "../../lib/types";
+import { isEyeReminderEnabled, subscribeEyeReminderEnabled } from "../../lib/eyeReminderClock";
+import { isMessagePreviewEnabled, subscribeMessagePreviewEnabled } from "../../lib/messagePreviewPreference";
+import { loadUserPreferences, saveUserPreferencesPatch, type UserPreferencePatch } from "../../lib/userPreferences";
+import { isWaterReminderEnabled, subscribeWaterReminderEnabled } from "../../lib/waterReminderClock";
 import "./hr-pages.css";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "muted";
@@ -327,6 +342,7 @@ export function HRHomePage() {
         <HomeAction icon={<Gavel />} title="Phạt / kỷ luật" hint={admin ? "Lập & quản lý quyết định phạt" : "Xem các lần bị phạt"} to="/phat" />
         {admin && <HomeAction icon={<Wallet />} title="Bảng lương" hint="Mức lương & lập phiếu lương" to="/bang-luong" />}
         {admin && <HomeAction icon={<UserCog />} title="Quản lý nhân sự" hint="Nhân viên, phòng ban, ca làm" to="/quanly-nhansu" />}
+        <HomeAction icon={<Settings />} title="Cài đặt hệ thống" hint="Tuỳ chọn cá nhân, cập nhật ứng dụng" to="/caidat" />
       </div>
     </HrPage>
   );
@@ -348,7 +364,7 @@ function HomeAction({ icon, title, hint, to }: { icon: ReactNode; title: string;
 export function HRProfilePage() {
   const { notify } = useAppNotifications();
   const { data: me, loading, reload } = useApi<EmployeeDetail>("/api/hr/me");
-  const [tab, setTab] = useState<"info" | "contract" | "salary" | "leave">("info");
+  const [tab, setTab] = useState<"info" | "card" | "contract" | "salary" | "leave" | "docs">("info");
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Partial<Pick<EmployeeDetail, "phone" | "email" | "address" | "dob" | "gender">>>({});
 
@@ -357,7 +373,15 @@ export function HRProfilePage() {
     setSaving(true);
     try {
       await api.put(`/api/hr/employees/${me.id}`, {
+        employeeCode: me.employeeCode,
+        username: me.username,
         fullName: me.fullName,
+        departmentId: me.departmentId ?? null,
+        position: me.position ?? "",
+        managerId: me.managerId ?? null,
+        hireDate: me.hireDate ?? null,
+        status: me.status ?? "Active",
+        avatar: me.avatar ?? null,
         phone: form.phone ?? me.phone ?? "",
         email: form.email ?? me.email ?? "",
         address: form.address ?? me.address ?? "",
@@ -390,9 +414,11 @@ export function HRProfilePage() {
       <div className="hr-tabs">
         {[
           ["info", "Thông tin"],
+          ["card", "Thẻ nhân viên"],
           ["contract", "Hợp đồng"],
           ["salary", "Lương"],
           ["leave", "Ngày phép"],
+          ["docs", "Bằng cấp"],
         ].map(([key, label]) => (
           <button key={key} type="button" data-active={tab === key} onClick={() => setTab(key as typeof tab)}>{label}</button>
         ))}
@@ -404,7 +430,10 @@ export function HRProfilePage() {
             <Read label="Mã nhân viên" value={me.employeeCode} />
             <Read label="Tài khoản" value={me.username || "--"} />
             <Read label="Phòng ban" value={me.departmentName || "--"} />
+            <Read label="Chức vụ" value={me.position || "--"} />
             <Read label="Quản lý" value={me.managerName || "--"} />
+            <Read label="Ngày vào làm" value={me.hireDate ? date(me.hireDate) : "--"} />
+            <Read label="Trạng thái" value={me.status === "Active" ? "Đang làm việc" : me.status || "--"} />
             <Field label="Ngày sinh"><Input type="date" value={form.dob ?? me.dob ?? ""} onChange={(e) => setForm((s) => ({ ...s, dob: e.target.value }))} /></Field>
             <Field label="Giới tính"><Input value={form.gender ?? me.gender ?? ""} onChange={(e) => setForm((s) => ({ ...s, gender: e.target.value }))} /></Field>
             <Field label="Số điện thoại"><Input value={form.phone ?? me.phone ?? ""} onChange={(e) => setForm((s) => ({ ...s, phone: e.target.value }))} /></Field>
@@ -414,15 +443,46 @@ export function HRProfilePage() {
           <div className="hr-card-actions"><HrButton onClick={save} disabled={saving}><Save className="h-4 w-4" /> Lưu hồ sơ</HrButton></div>
         </HrCard>
       )}
+      {tab === "card" && <HRProfileCard me={me} />}
       {tab === "contract" && <HRProfileContracts empId={me.id} />}
       {tab === "salary" && <HRProfilePayslips empId={me.id} />}
       {tab === "leave" && <HRProfileLeave empId={me.id} />}
+      {tab === "docs" && <HRProfileDocs empId={me.id} />}
     </HrPage>
   );
 }
 
 function Read({ label, value }: { label: string; value: string }) {
   return <div className="hr-read"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function HRProfileCard({ me }: { me: EmployeeDetail }) {
+  const qr = JSON.stringify({ id: me.id, code: me.employeeCode, name: me.fullName });
+  return (
+    <HrCard className="hr-employee-card-shell">
+      <div className="hr-employee-card">
+        <div className="hr-employee-card-top">
+          <span>Thẻ nhân viên</span>
+          <BadgeCheck className="h-6 w-6" />
+        </div>
+        <div className="hr-employee-card-body">
+          <span className="hr-person-avatar is-large">{me.avatar ? <img src={me.avatar} alt="" /> : initials(me.fullName)}</span>
+          <div className="hr-employee-card-info">
+            <h2>{me.fullName}</h2>
+            <p>{me.position || "Nhân viên"}</p>
+            <strong>{me.employeeCode}</strong>
+          </div>
+          <div className="hr-employee-card-qr">
+            <QRCodeSVG value={qr} size={86} level="M" />
+          </div>
+        </div>
+        <dl className="hr-employee-card-meta">
+          <div><dt>Phòng ban</dt><dd>{me.departmentName || "--"}</dd></div>
+          <div><dt>Ngày vào làm</dt><dd>{me.hireDate ? date(me.hireDate) : "--"}</dd></div>
+        </dl>
+      </div>
+    </HrCard>
+  );
 }
 
 function HRProfileContracts({ empId }: { empId: string }) {
@@ -479,6 +539,28 @@ export function PayslipDetailModal({ payslip, onClose }: { payslip: Payslip; onC
 function HRProfileLeave({ empId }: { empId: string }) {
   const { data, loading } = useApi<Array<{ id: string; year: number; leaveType: string; totalDays: number; usedDays: number; remainingDays: number }>>(`/api/hr/employees/${empId}/leave-balances`, [empId]);
   return <HrCard>{loading ? <HrEmpty text="Đang tải ngày phép..." /> : (data?.length ? data.map((item) => <ListRow key={item.id} title={`${leaveTypeLabel(item.leaveType)} ${item.year}`} meta={`Tổng ${item.totalDays} · Đã dùng ${item.usedDays}`} status={`Còn ${item.remainingDays}`} />) : <HrEmpty text="Chưa thiết lập ngày phép." />)}</HrCard>;
+}
+
+function HRProfileDocs({ empId }: { empId: string }) {
+  const { data, loading } = useApi<EmployeeDoc[]>(`/api/hr/employees/${empId}/documents`, [empId]);
+  return (
+    <HrCard>
+      {loading ? (
+        <HrEmpty text="Đang tải bằng cấp..." />
+      ) : data?.length ? (
+        data.map((item) => (
+          <ListRow
+            key={item.id}
+            title={item.title}
+            meta={`${docTypeLabel(item.docType)} · ${item.issuedBy || "--"}${item.issuedDate ? ` · ${date(item.issuedDate)}` : ""}`}
+            status={item.fileUrl ? "Có tệp" : undefined}
+          />
+        ))
+      ) : (
+        <HrEmpty text="Chưa có bằng cấp / chứng chỉ." />
+      )}
+    </HrCard>
+  );
 }
 
 function ListRow({ title, meta, status, onClick }: { title: string; meta?: string; status?: string; onClick?: () => void }) {
@@ -1651,6 +1733,181 @@ export function HRAttendancePage() {
   );
 }
 
+export function HRSystemSettingsPage() {
+  const { user } = useAuth();
+  const { confirm, notify } = useAppNotifications();
+  const admin = isAdmin(user);
+  const [waterEnabled, setWaterEnabled] = useState(() => (user ? isWaterReminderEnabled(user.id) : true));
+  const [eyeEnabled, setEyeEnabled] = useState(() => (user ? isEyeReminderEnabled(user.id) : true));
+  const [messagePreviewEnabled, setMessagePreviewEnabled] = useState(() => (user ? isMessagePreviewEnabled(user.id) : true));
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState<{ versionCode: number; versionName: string } | null>(null);
+
+  const displayName = user?.fullName || user?.username || "Nhân viên";
+  const currentVersionText = currentVersion ? `v${currentVersion.versionName} (${currentVersion.versionCode})` : "đang đọc phiên bản";
+
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentAppVersion()
+      .then((version) => {
+        if (!cancelled) setCurrentVersion(version);
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentVersion(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    setWaterEnabled(isWaterReminderEnabled(user.id));
+    setEyeEnabled(isEyeReminderEnabled(user.id));
+    setMessagePreviewEnabled(isMessagePreviewEnabled(user.id));
+    setPreferenceError(null);
+
+    loadUserPreferences(user.id).catch(() => {
+      setPreferenceError("Không tải được tuỳ chọn đã lưu theo tài khoản.");
+    });
+
+    const unsubscribeWater = subscribeWaterReminderEnabled(user.id, () => setWaterEnabled(isWaterReminderEnabled(user.id)));
+    const unsubscribeEye = subscribeEyeReminderEnabled(user.id, () => setEyeEnabled(isEyeReminderEnabled(user.id)));
+    const unsubscribeMessage = subscribeMessagePreviewEnabled(user.id, () => setMessagePreviewEnabled(isMessagePreviewEnabled(user.id)));
+
+    return () => {
+      unsubscribeWater();
+      unsubscribeEye();
+      unsubscribeMessage();
+    };
+  }, [user]);
+
+  const savePreference = async (patch: UserPreferencePatch) => {
+    if (!user) return;
+    setPreferenceError(null);
+    try {
+      await saveUserPreferencesPatch(user.id, patch);
+    } catch {
+      setPreferenceError("Không lưu được cài đặt. Vui lòng thử lại.");
+    }
+  };
+
+  const checkUpdateNow = async () => {
+    setCheckingUpdate(true);
+    try {
+      const installed = await getCurrentAppVersion();
+      setCurrentVersion(installed);
+      const update = await checkForAppUpdate();
+      if (!update) {
+        notify.success(`Đang dùng phiên bản mới nhất: v${installed.versionName} (${installed.versionCode}).`);
+        return;
+      }
+
+      const ok = await confirm({
+        title: `Có bản cập nhật ${update.version ?? ""}`,
+        description: update.releaseNotes || "Admin đã phát hành bản APK mới cho ứng dụng Nhân sự.",
+        confirmLabel: "Tải và cài",
+        cancelLabel: "Để sau",
+        tone: "info",
+      });
+      if (!ok) return;
+
+      setInstallingUpdate(true);
+      try {
+        await installAppUpdate(update);
+        notify.info("Android sẽ mở màn hình cài đặt APK.", "Đang mở bản cập nhật");
+      } finally {
+        setInstallingUpdate(false);
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không kiểm tra được bản cập nhật.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  return (
+    <HrPage eyebrow="Hệ thống" title="Cài đặt">
+      <HrCard className="hr-settings-profile-card">
+        <span className="hr-person-avatar is-large">{initials(displayName)}</span>
+        <div>
+          <h2>{displayName}</h2>
+          <p>{admin ? "Quản trị nhân sự" : "Nhân viên"}</p>
+          <small>Phiên bản hiện tại {currentVersionText}</small>
+        </div>
+      </HrCard>
+
+      {preferenceError && <div className="hr-inline-error">{preferenceError}</div>}
+
+      <div className="hr-settings-list">
+        <HRSettingToggle
+          icon={<Droplet />}
+          title="Nhắc uống nước"
+          meta={waterEnabled ? "Đang bật" : "Đang tắt"}
+          enabled={waterEnabled}
+          onClick={() => savePreference({ waterReminderEnabled: !waterEnabled })}
+        />
+        <HRSettingToggle
+          icon={<Eye />}
+          title="Nhắc bảo vệ mắt"
+          meta={eyeEnabled ? "Đang bật" : "Đang tắt"}
+          enabled={eyeEnabled}
+          onClick={() => savePreference({ eyeReminderEnabled: !eyeEnabled })}
+        />
+        <HRSettingToggle
+          icon={<MessageCircle />}
+          title="Đọc trước tin nhắn"
+          meta={messagePreviewEnabled ? "Hiện nội dung thông báo" : "Ẩn nội dung thông báo"}
+          enabled={messagePreviewEnabled}
+          onClick={() => savePreference({ messagePreviewEnabled: !messagePreviewEnabled })}
+        />
+      </div>
+
+      <HrCard className="hr-update-card">
+        <div>
+          <h2>Cập nhật ứng dụng</h2>
+          <p>Kiểm tra bản APK Nhân sự mới nhất do admin phát hành.</p>
+        </div>
+        <HrButton onClick={checkUpdateNow} disabled={checkingUpdate || installingUpdate}>
+          {checkingUpdate ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {checkingUpdate ? "Đang kiểm tra..." : `Kiểm tra cập nhật · ${currentVersionText}`}
+        </HrButton>
+      </HrCard>
+    </HrPage>
+  );
+}
+
+function HRSettingToggle({
+  icon,
+  title,
+  meta,
+  enabled,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  meta: string;
+  enabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="hr-setting-toggle" data-on={enabled} onClick={onClick}>
+      <span className="hr-setting-icon">{icon}</span>
+      <span className="hr-setting-copy">
+        <strong>{title}</strong>
+        <small>{meta}</small>
+      </span>
+      <span className="hr-setting-switch">
+        <Power className="h-4 w-4" />
+        <b>{enabled ? "Bật" : "Tắt"}</b>
+      </span>
+    </button>
+  );
+}
+
 export function HRManagerPage() {
   const [tab, setTab] = useState<"employees" | "departments" | "shifts" | "assignments">("employees");
   return (
@@ -1731,15 +1988,22 @@ function HRAssignmentsAdmin() {
 }
 
 export function HRAttendanceAdminPage() {
-  const { data: status, loading, reload } = useApi<RtspAttendanceStatus>("/api/chamcong/rtsp/status");
-  const { data: faces } = useApi<FaceNguoiDung[]>("/api/chamcong/dadangky");
-  const { data: logs } = useApi<ChamCongLog[]>("/api/chamcong/log");
+  const { data: faces, loading: facesLoading, reload: reloadFaces } = useApi<FaceNguoiDung[]>("/api/chamcong/dadangky");
+  const { data: logs, loading: logsLoading, reload: reloadLogs } = useApi<ChamCongLog[]>("/api/chamcong/log");
+  const totalSamples = faces?.reduce((sum, f) => sum + f.soMau, 0) ?? 0;
+  const latestLog = logs?.[0];
+  const loading = facesLoading || logsLoading;
+  const reload = () => {
+    reloadFaces();
+    reloadLogs();
+  };
+
   return (
     <HrPage eyebrow="Quản trị" title="Quản lý chấm công" action={<HrButton tone="secondary" onClick={() => reload()}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Làm mới</HrButton>}>
       <div className="hr-grid-3">
-        <HrStat label="Camera" value={status?.cameraConnected ? "Đã kết nối" : "Chưa kết nối"} hint={status?.mode || "RTSP"} tone={status?.cameraConnected ? "success" : "warning"} />
-        <HrStat label="Mẫu khuôn mặt" value={`${status?.enrolledTemplates ?? faces?.reduce((sum, f) => sum + f.soMau, 0) ?? 0}`} hint={`${faces?.length ?? 0} nhân viên`} />
-        <HrStat label="Scan gần nhất" value={status?.lastMatchedName || status?.lastMatchedUser || "--"} hint={status?.lastMessage || "Chưa có dữ liệu"} />
+        <HrStat label="Nhân viên" value={`${faces?.length ?? 0}`} hint="Đã đăng ký khuôn mặt" />
+        <HrStat label="Mẫu khuôn mặt" value={`${totalSamples}`} hint="Dữ liệu nhận diện đang lưu" />
+        <HrStat label="Lần gần nhất" value={latestLog?.fullName || latestLog?.username || "--"} hint={latestLog ? `${latestLog.loai} · ${dateTime(latestLog.occurredAt)}` : "Chưa có dữ liệu"} />
       </div>
       <HrCard>
         <div className="hr-card-head"><h2>Dữ liệu khuôn mặt</h2></div>

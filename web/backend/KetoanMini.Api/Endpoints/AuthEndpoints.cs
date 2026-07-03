@@ -13,7 +13,7 @@ public static class AuthEndpoints
     {
         var g = app.MapGroup("/api/auth");
 
-        g.MapPost("/login", async (LoginRequest req, Database db, TokenService tokens) =>
+        g.MapPost("/login", async (LoginRequest req, Database db, TokenService tokens, HttpContext http) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mật khẩu." });
@@ -50,15 +50,19 @@ public static class AuthEndpoints
                 Verified = await LoadVerified(conn, user.Username, user.Role),
                 IsDiamond = await LoadDiamond(conn, user.Username, user.Role)
             };
+            // Ghi nhận thiết bị đăng nhập ngay để hiện trong "Quản lý thiết bị" + gắn sid vào token
+            // (phục vụ thu hồi từ xa). Đăng nhập mới luôn gỡ cờ thu hồi cũ của chính thiết bị đó.
+            var sid = WebSessionId(req.Sid, user.Username);
+            await RegisterDeviceSessionAsync(conn, user.Username, sid, UserAgentOf(http));
             await db.RecordAudit(user.Username, "Đăng nhập web", "Auth", user.Username, "Đăng nhập phiên bản web.");
 
-            return Results.Ok(new LoginResponse(tokens.CreateToken(user), user));
+            return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
         });
 
         // Đăng nhập bằng KHUÔN MẶT: client gửi một loạt ảnh; server chọn khung tốt nhất, kiểm tra
         // chống giả mạo (liveness) rồi so khớp với mẫu đã đăng ký (bảng cham_cong_face). Khuôn mặt
         // được đăng ký theo username trùng với app_users, nên khớp xong là tra thẳng ra tài khoản.
-        g.MapPost("/login-face", async (FaceLoginRequest req, Database db, TokenService tokens, IFaceEngine engine) =>
+        g.MapPost("/login-face", async (FaceLoginRequest req, Database db, TokenService tokens, IFaceEngine engine, FieldCipher cipher, HttpContext http) =>
         {
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh khuôn mặt." });
@@ -102,7 +106,7 @@ public static class AuthEndpoints
             {
                 while (await r.ReadAsync())
                 {
-                    var emb = EmbeddingCodec.FromBytes((byte[])r["embedding"]);
+                    var emb = cipher.DecryptEmbedding((byte[])r["embedding"]);
                     var sim = engine.Compare(probe, emb);
                     if (sim > bestSim) { bestSim = sim; bestUser = r.Str("username"); }
                 }
@@ -136,10 +140,12 @@ public static class AuthEndpoints
                 Verified = await LoadVerified(conn, user.Username, user.Role),
                 IsDiamond = await LoadDiamond(conn, user.Username, user.Role)
             };
+            var sid = WebSessionId(req.Sid, user.Username);
+            await RegisterDeviceSessionAsync(conn, user.Username, sid, UserAgentOf(http));
             await db.RecordAudit(user.Username, "Đăng nhập web (khuôn mặt)", "Auth", user.Username,
                 $"Đăng nhập bản web bằng khuôn mặt (độ khớp {bestSim:0.000}).");
 
-            return Results.Ok(new LoginResponse(tokens.CreateToken(user), user));
+            return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
         });
 
         g.MapGet("/me", async (ClaimsPrincipal principal, Database db) =>
@@ -285,6 +291,83 @@ public static class AuthEndpoints
                 .With("@t", sid).ExecuteNonQueryAsync();
             return Results.NoContent();
         }).RequireAuthorization();
+
+        // ── Quản lý thiết bị đăng nhập ──────────────────────────────────────────────
+        // Liệt kê các thiết bị/phiên web của chính người dùng (đánh dấu thiết bị hiện tại).
+        g.MapGet("/devices", async (ClaimsPrincipal principal, Database db) =>
+        {
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+            var currentSid = principal.FindFirst("sid")?.Value ?? "";
+
+            await using var conn = await db.OpenAsync();
+            var list = new List<DeviceDto>();
+            await using var r = await conn.Cmd(
+                @"SELECT session_token, machine_name, client_kind, user_agent, started_at, last_seen, is_active, revoked
+                  FROM user_sessions
+                  WHERE username = @u AND client_kind = 'Web'
+                  ORDER BY revoked ASC, last_seen DESC")
+                .With("@u", username).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+            {
+                var sid = r.Str("session_token");
+                list.Add(new DeviceDto(sid, r.Str("machine_name"), r.Str("client_kind"), r.Str("user_agent"),
+                    r.DtNull("started_at"), r.DtNull("last_seen"), r.Bool("is_active"), r.Bool("revoked"),
+                    string.Equals(sid, currentSid, StringComparison.Ordinal)));
+            }
+            return Results.Ok(list);
+        }).RequireAuthorization();
+
+        // Thu hồi (đăng xuất từ xa) một thiết bị của chính mình. Middleware sẽ trả 401 cho token có
+        // sid này ở request kế tiếp → thiết bị đó tự đăng xuất.
+        g.MapPost("/devices/{sid}/revoke", async (string sid, ClaimsPrincipal principal, Database db) =>
+        {
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+
+            await using var conn = await db.OpenAsync();
+            var n = await conn.Cmd(
+                @"UPDATE user_sessions
+                     SET revoked = TRUE, revoked_at = CURRENT_TIMESTAMP, revoked_by = @by,
+                         is_active = FALSE, ended_at = CURRENT_TIMESTAMP, end_reason = 'Thu hồi thiết bị'
+                   WHERE session_token = @t AND username = @u")
+                .With("@t", sid).With("@u", username).With("@by", username).ExecuteNonQueryAsync();
+            if (n == 0) return Results.NotFound(new { message = "Không tìm thấy thiết bị." });
+            await db.RecordAudit(username, "Thu hồi thiết bị", "Auth", username, $"Thu hồi phiên đăng nhập từ xa (sid={sid}).");
+            return Results.NoContent();
+        }).RequireAuthorization();
+    }
+
+    // User-Agent của yêu cầu (cắt ngắn để tránh chuỗi bất thường quá dài).
+    private static string UserAgentOf(HttpContext http)
+    {
+        var ua = http.Request.Headers.UserAgent.ToString();
+        return ua.Length > 400 ? ua[..400] : ua;
+    }
+
+    // Ghi/nâng cấp một phiên thiết bị web khi đăng nhập (hiện ngay trong "Quản lý thiết bị") và
+    // gỡ mọi cờ thu hồi cũ của đúng thiết bị đó (đăng nhập lại = tin cậy lại thiết bị).
+    private static async Task RegisterDeviceSessionAsync(NpgsqlConnection conn, string username, string sid, string userAgent)
+    {
+        await conn.Cmd(
+            @"INSERT INTO user_sessions
+                  (session_token, username, machine_name, user_agent, started_at, last_seen, is_active, client_kind, revoked, revoked_at, revoked_by)
+              VALUES (@t, @u, 'Web', @ua, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, 'Web', FALSE, NULL, '')
+              ON CONFLICT (session_token) DO UPDATE SET
+                  username = EXCLUDED.username,
+                  machine_name = 'Web',
+                  user_agent = EXCLUDED.user_agent,
+                  last_seen = CURRENT_TIMESTAMP,
+                  started_at = CURRENT_TIMESTAMP,
+                  is_active = TRUE,
+                  ended_at = NULL,
+                  end_reason = '',
+                  client_kind = 'Web',
+                  revoked = FALSE,
+                  revoked_at = NULL,
+                  revoked_by = '';")
+            .With("@t", sid).With("@u", username).With("@ua", userAgent)
+            .ExecuteNonQueryAsync();
     }
 
     /// <summary>Giải mã ảnh base64 (chấp nhận cả tiền tố data URL "data:image/...;base64,").</summary>

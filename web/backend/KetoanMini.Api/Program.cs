@@ -13,9 +13,11 @@ using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var ffmpegCaptureOptions = builder.Configuration["KioskCamera:FfmpegCaptureOptions"];
-if (!string.IsNullOrWhiteSpace(ffmpegCaptureOptions))
-    Environment.SetEnvironmentVariable("OPENCV_FFMPEG_CAPTURE_OPTIONS", ffmpegCaptureOptions);
+// Bí mật (khóa JWT, chuỗi kết nối DB, khóa mã hóa…) KHÔNG để trong mã nguồn: đọc từ
+// appsettings.Local.json (đã .gitignore) rồi cho biến môi trường ghi đè lên trên cùng.
+builder.Configuration
+    .AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables();
 
 // DateOnly tuần tự hóa dạng "yyyy-MM-dd" để khớp với input date của trình duyệt.
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -28,6 +30,8 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<TokenService>();
+// Mã hóa dữ liệu nhạy cảm khi lưu trữ (embedding khuôn mặt…) — khóa từ Security:FieldEncryptionKey.
+builder.Services.AddSingleton<FieldCipher>();
 
 // Bộ máy nhận diện khuôn mặt cho chấm công: YuNet + căn chỉnh 5 điểm + AdaFace R50 ONNX Runtime.
 // Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
@@ -38,14 +42,32 @@ builder.Services.AddSignalR();
 // Định danh kết nối hub theo username để phát tín hiệu chat đúng thành viên (Clients.Users).
 builder.Services.AddSingleton<Microsoft.AspNetCore.SignalR.IUserIdProvider, NameUserIdProvider>();
 builder.Services.AddHostedService<ChangeWatcher>();
-builder.Services.AddSingleton<CameraSnapshotBridgeService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraSnapshotBridgeService>());
-builder.Services.AddSingleton<RtspAttendanceWorker>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<RtspAttendanceWorker>());
 // Dọn tệp "giữ tạm" (gửi tệp qua LAN khi người nhận offline) đã quá hạn khỏi đĩa.
 builder.Services.AddHostedService<LanFileCleanupService>();
 
 var jwt = builder.Configuration.GetSection("Jwt");
+
+// Bảo vệ: không cho chạy với khóa JWT mặc định/yếu. Production → dừng hẳn để buộc cấu hình khóa
+// thật; Development → tự sinh khóa ngẫu nhiên tạm thời (token mất hiệu lực sau mỗi lần khởi động
+// lại) kèm cảnh báo, để lập trình viên vẫn chạy được mà không rò rỉ khóa trong mã nguồn.
+{
+    const string insecureKey = "doi-chuoi-bi-mat-nay-thanh-mot-gia-tri-ngau-nhien-dai-it-nhat-32-ky-tu";
+    var key = jwt["Key"];
+    if (string.IsNullOrWhiteSpace(key) || key.Length < 32 || key == insecureKey)
+    {
+        const string msg = "Jwt:Key dang dung gia tri mac dinh/khong an toan. Hay dat khoa ngau nhien >=32 ky tu qua bien moi truong Jwt__Key hoac appsettings.Local.json.";
+        if (builder.Environment.IsProduction())
+            throw new InvalidOperationException(msg);
+        builder.Configuration["Jwt:Key"] =
+            Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48));
+        Console.Error.WriteLine("[CANH BAO BAO MAT] " + msg + " Da tao khoa tam thoi cho Development.");
+    }
+}
+
+// Ép HTTPS: cần biết cổng HTTPS để chuyển hướng đúng (mặc định 5443 theo Kestrel:Endpoints).
+var httpsPort = builder.Configuration.GetValue<int?>("Security:HttpsPort") ?? 5443;
+builder.Services.AddHttpsRedirection(o => o.HttpsPort = httpsPort);
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(o =>
     {
@@ -83,6 +105,14 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 
+// Ép HTTPS (mã hóa dữ liệu khi truyền tải). Cấu hình qua Security:RequireHttps (mặc định bật).
+// HSTS chỉ bật ngoài môi trường Development để tránh "ghim" HTTPS cho localhost của dự án khác.
+if (app.Configuration.GetValue("Security:RequireHttps", true))
+{
+    if (!app.Environment.IsDevelopment()) app.UseHsts();
+    app.UseHttpsRedirection();
+}
+
 // Phục vụ frontend đã build (wwwroot) — gộp chung 1 cổng với API.
 app.UseDefaultFiles();
 // Khai báo MIME cho tài nguyên nhận diện mặt phía client (MediaPipe): .tflite là kiểu lạ nên
@@ -109,16 +139,29 @@ app.Use(async (ctx, next) =>
         if (!string.IsNullOrEmpty(username))
         {
             var locked = false;
+            var revoked = false;
+            // sid (nếu token có) → kiểm tra thiết bị đã bị thu hồi từ xa hay chưa.
+            var sid = ctx.User.FindFirst("sid")?.Value;
             try
             {
                 var db = ctx.RequestServices.GetRequiredService<Database>();
                 await using var conn = await db.OpenAsync(ctx.RequestAborted);
-                var active = await conn.Cmd(
-                    "SELECT is_active FROM app_users WHERE username = @u AND is_deleted = FALSE LIMIT 1")
+                await using var r = await conn.Cmd(
+                    @"SELECT u.is_active, COALESCE(s.revoked, FALSE) AS revoked
+                      FROM app_users u
+                      LEFT JOIN user_sessions s ON s.session_token = @sid
+                      WHERE u.username = @u AND u.is_deleted = FALSE
+                      LIMIT 1")
                     .With("@u", username)
-                    .ExecuteScalarAsync(ctx.RequestAborted);
-                // NULL/không có dòng sống (đã xóa) hoặc is_active = 0 → coi như bị khóa.
-                locked = active is null or DBNull || !Convert.ToBoolean(active);
+                    .With("@sid", (object?)sid ?? DBNull.Value)
+                    .ExecuteReaderAsync(ctx.RequestAborted);
+                if (!await r.ReadAsync(ctx.RequestAborted))
+                    locked = true; // không còn dòng sống (đã xóa)
+                else
+                {
+                    locked = r.IsDBNull(0) || !Convert.ToBoolean(r.GetValue(0));
+                    revoked = !r.IsDBNull(1) && Convert.ToBoolean(r.GetValue(1));
+                }
             }
             catch
             {
@@ -129,6 +172,12 @@ app.Use(async (ctx, next) =>
             {
                 ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 await ctx.Response.WriteAsJsonAsync(new { message = "Tài khoản đã bị khóa." });
+                return;
+            }
+            if (revoked)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await ctx.Response.WriteAsJsonAsync(new { message = "Thiết bị này đã bị thu hồi. Vui lòng đăng nhập lại." });
                 return;
             }
         }
@@ -190,6 +239,10 @@ catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng gia c
 // Tạo bảng chấm công khuôn mặt nếu chưa có (best-effort).
 try { await ChamCongEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng chấm công lúc khởi động: {Msg}", ex.Message); }
+
+// Mã hóa AES các mẫu khuôn mặt cũ còn ở dạng thô (chạy một lần, no-op nếu đã mã hóa/thiếu khóa).
+try { await ChamCongEndpoints.EncryptExistingEmbeddings(app.Services.GetRequiredService<Database>(), app.Services.GetRequiredService<FieldCipher>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong ma hoa duoc embedding cu luc khoi dong: {Msg}", ex.Message); }
 
 try { await PreferenceEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tuy chon nguoi dung luc khoi dong: {Msg}", ex.Message); }

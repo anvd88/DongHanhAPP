@@ -373,6 +373,256 @@
   margin-top: 14px;
 }
 
+.hr-employee-card-shell {
+  display: flex;
+  justify-content: center;
+}
+
+.hr-employee-card {
+  width: min(100%, 390px);
+  overflow: hidden;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--hr-primary), #2563eb);
+  color: #fff;
+}
+
+.hr-employee-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hr-employee-card-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 12px;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  padding: 14px;
+}
+
+.hr-employee-card-info {
+  min-width: 0;
+}
+
+.hr-employee-card-info h2,
+.hr-employee-card-info p,
+.hr-employee-card-info strong {
+  display: block;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-employee-card-info h2 {
+  font-size: 1.02rem;
+  font-weight: 900;
+}
+
+.hr-employee-card-info p {
+  margin-top: 3px;
+  color: #667085;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.hr-employee-card-info strong {
+  margin-top: 5px;
+  color: var(--hr-primary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.hr-employee-card-qr {
+  display: grid;
+  width: 98px;
+  height: 98px;
+  place-items: center;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #e4e7ec;
+}
+
+.hr-employee-card-meta {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 12px 16px 14px;
+}
+
+.hr-employee-card-meta div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hr-employee-card-meta dt,
+.hr-employee-card-meta dd {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.hr-employee-card-meta dt {
+  color: rgba(255, 255, 255, 0.72);
+  font-weight: 700;
+}
+
+.hr-employee-card-meta dd {
+  overflow: hidden;
+  font-weight: 850;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-settings-profile-card,
+.hr-update-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.hr-settings-profile-card > div,
+.hr-update-card > div {
+  min-width: 0;
+}
+
+.hr-settings-profile-card h2,
+.hr-settings-profile-card p,
+.hr-settings-profile-card small,
+.hr-update-card h2,
+.hr-update-card p {
+  margin: 0;
+}
+
+.hr-settings-profile-card h2,
+.hr-update-card h2 {
+  overflow: hidden;
+  color: var(--hr-text);
+  font-size: 1rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-settings-profile-card p,
+.hr-update-card p {
+  margin-top: 3px;
+  color: var(--hr-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.hr-settings-profile-card small {
+  display: block;
+  margin-top: 4px;
+  color: var(--hr-primary-dark);
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.hr-inline-error {
+  border: 1px solid #f0c6c2;
+  border-radius: 8px;
+  background: #fff1f0;
+  color: var(--hr-danger);
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.hr-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.hr-setting-toggle {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  width: 100%;
+  border: 1px solid var(--hr-border);
+  border-radius: 8px;
+  background: var(--hr-surface);
+  color: var(--hr-text);
+  padding: 12px;
+  text-align: left;
+}
+
+.hr-setting-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--hr-surface-2);
+  color: var(--hr-primary-dark);
+}
+
+.hr-setting-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.hr-setting-copy strong,
+.hr-setting-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-setting-copy strong {
+  color: var(--hr-text);
+  font-size: 0.92rem;
+  font-weight: 900;
+}
+
+.hr-setting-copy small {
+  color: var(--hr-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.hr-setting-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 78px;
+  min-height: 34px;
+  border-radius: 8px;
+  background: var(--hr-surface-2);
+  color: var(--hr-muted);
+  padding: 0 10px;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.hr-setting-toggle[data-on="true"] .hr-setting-switch {
+  background: #e7f6ed;
+  color: var(--hr-success);
+}
+
+html[data-theme="dark"] .hr-setting-toggle[data-on="true"] .hr-setting-switch {
+  background: #173827;
+  color: #8ed8b8;
+}
+
 .hr-card-head {
   display: flex;
   align-items: center;
@@ -1459,11 +1709,6 @@ html[data-theme="dark"] .hr-salary-comp-row[data-kind="deduction"] .hr-salary-co
   padding: 0;
 }
 
-.hr-page--attendance .hr-scanner-shell .cc-source-toggle {
-  flex: 0 0 auto;
-  margin: 0 0 8px;
-}
-
 .hr-page--attendance .hr-scanner-shell .cc-video-wrap {
   flex: 1 1 auto;
   height: 100%;
@@ -1537,7 +1782,6 @@ html[data-theme="dark"] .hr-salary-comp-row[data-kind="deduction"] .hr-salary-co
 }
 
 .hr-page--attendance .hr-scanner-shell .cc-camera:has(.cc-video[data-active="true"]) .cc-camera-actions,
-.hr-page--attendance .hr-scanner-shell .cc-camera:has(.cc-video--ip[data-active="true"]) .cc-camera-actions,
 .hr-page--attendance .hr-scanner-shell .cc-camera[data-phase="warning"] .cc-camera-actions,
 .hr-page--attendance .hr-scanner-shell .cc-camera[data-phase="success"] .cc-camera-actions {
   display: none;
@@ -1596,14 +1840,26 @@ html[data-theme="dark"] .hr-attendance-sync-btn {
 
   .hr-hero-card,
   .hr-profile-card,
-  .hr-sync-card {
+  .hr-sync-card,
+  .hr-settings-profile-card,
+  .hr-update-card {
     align-items: stretch;
     flex-direction: column;
   }
 
   .hr-scan-cta,
-  .hr-sync-card .hr-button {
+  .hr-sync-card .hr-button,
+  .hr-update-card .hr-button {
     width: 100%;
+  }
+
+  .hr-employee-card-body {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .hr-employee-card-qr {
+    grid-column: 1 / -1;
+    justify-self: center;
   }
 
   .hr-grid-3,

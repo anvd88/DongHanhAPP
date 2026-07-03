@@ -218,19 +218,27 @@ public static class AccountingEndpoints
         });
 
         // ---------- Audit log (Sao lưu) ----------
-        api.MapGet("/audit", async (Database db, int? take) =>
+        // Nhật ký thao tác quản trị chứa dấu vết mọi hành động nhạy cảm → chỉ Admin được xem.
+        // Hỗ trợ lọc theo từ khóa (người dùng/hành động/đối tượng/chi tiết) để tra cứu nhanh.
+        api.MapGet("/audit", async (Database db, int? take, string? search) =>
         {
             await using var conn = await db.OpenAsync();
             var list = new List<AuditDto>();
-            await using var r = await conn.Cmd(
-                @"SELECT occurred_at, username, action, entity, entity_name, details
-                  FROM audit_logs ORDER BY occurred_at DESC LIMIT @n")
-                .With("@n", take is > 0 and <= 1000 ? take.Value : 100).ExecuteReaderAsync();
+            var hasSearch = !string.IsNullOrWhiteSpace(search);
+            var where = hasSearch
+                ? "WHERE (username ILIKE @s OR action ILIKE @s OR entity ILIKE @s OR entity_name ILIKE @s OR details ILIKE @s)"
+                : "";
+            var cmd = conn.Cmd(
+                $@"SELECT occurred_at, username, action, entity, entity_name, details
+                   FROM audit_logs {where} ORDER BY occurred_at DESC LIMIT @n")
+                .With("@n", take is > 0 and <= 1000 ? take.Value : 100);
+            if (hasSearch) cmd.With("@s", $"%{search!.Trim()}%");
+            await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
                 list.Add(new AuditDto(r.Dt("occurred_at"), r.Str("username"), r.Str("action"),
                     r.Str("entity"), r.Str("entity_name"), r.Str("details")));
             return Results.Ok(list);
-        });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
     }
 
     private static async Task<IResult> ListDocuments(Database db)

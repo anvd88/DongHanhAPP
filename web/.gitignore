@@ -8,6 +8,9 @@ build/
 # .NET / backend
 bin/
 obj/
+# Bí mật cục bộ (khóa JWT, chuỗi kết nối DB, khóa mã hóa) — KHÔNG commit
+appsettings.Local.json
+!appsettings.Local.example.json
 # Frontend build output gop vao backend (sinh ra boi `npm run build`)
 backend/KetoanMini.Api/wwwroot/
 

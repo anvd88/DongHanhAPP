@@ -151,6 +151,11 @@ public static class PostgresSchema
         );
 
         ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS client_kind varchar(20) NOT NULL DEFAULT 'Desktop';
+        -- Quản lý thiết bị đăng nhập: mô tả trình duyệt/thiết bị + cờ thu hồi từ xa.
+        ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent text NOT NULL DEFAULT '';
+        ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS revoked boolean NOT NULL DEFAULT FALSE;
+        ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS revoked_at timestamptz NULL;
+        ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS revoked_by varchar(128) NOT NULL DEFAULT '';
 
         CREATE TABLE IF NOT EXISTS app_releases (
             id bigserial NOT NULL PRIMARY KEY,

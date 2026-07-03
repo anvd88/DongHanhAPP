@@ -91,6 +91,31 @@ public static class ReleaseEndpoints
         g.MapPost("/{id:long}/publish", async (long id, PublishReleaseRequest req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
         {
             await using var conn = await db.OpenAsync();
+            if (req.IsPublished)
+            {
+                string target;
+                int versionCode;
+                bool hasApk;
+                await using (var release = await conn.Cmd(
+                    @"SELECT app_target, version_code, apk_data IS NOT NULL AS has_apk
+                      FROM app_releases
+                      WHERE id=@id")
+                    .With("@id", id)
+                    .ExecuteReaderAsync())
+                {
+                    if (!await release.ReadAsync()) return Results.NotFound(new { message = "KhÃ´ng tÃ¬m tháº¥y báº£n phÃ¡t hÃ nh." });
+                    target = release.Str("app_target");
+                    versionCode = release.Int("version_code");
+                    hasApk = release.Bool("has_apk");
+                }
+
+                if (!hasApk) return Results.BadRequest(new { message = "Ban phat hanh chua co file APK." });
+
+                var latestPublished = await ReadLatestPublishedVersionCode(conn, target, id);
+                if (versionCode <= latestPublished)
+                    return Results.BadRequest(new { message = VersionCodeMustIncreaseMessage(latestPublished) });
+            }
+
             var changed = await conn.Cmd(
                 @"UPDATE app_releases
                   SET is_published=@pub,
@@ -146,13 +171,20 @@ public static class ReleaseEndpoints
         var isMandatory = ParseBool(FormValue(form, "isMandatory"));
         var isPublished = ParseBool(FormValue(form, "isPublished"));
 
+        await using var conn = await db.OpenAsync();
+        if (isPublished)
+        {
+            var latestPublished = await ReadLatestPublishedVersionCode(conn, target);
+            if (versionCode <= latestPublished)
+                return Results.BadRequest(new { message = VersionCodeMustIncreaseMessage(latestPublished) });
+        }
+
         await using var ms = new MemoryStream();
         await file.CopyToAsync(ms);
         var apkBytes = ms.ToArray();
         var sha256 = Convert.ToHexString(SHA256.HashData(apkBytes)).ToLowerInvariant();
         var safeFileName = Path.GetFileName(file.FileName);
 
-        await using var conn = await db.OpenAsync();
         await using var r = await conn.Cmd(
             @"INSERT INTO app_releases
                 (app_target, version, version_code, release_notes, is_mandatory, is_published,
@@ -196,6 +228,27 @@ public static class ReleaseEndpoints
         r.Str("apk_file_name"),
         r.Long("apk_size"),
         r.Str("apk_sha256"));
+
+    private static async Task<int> ReadLatestPublishedVersionCode(Npgsql.NpgsqlConnection conn, string target, long? excludeId = null)
+    {
+        var sql = excludeId.HasValue
+            ? @"SELECT COALESCE(MAX(version_code), 0)
+                FROM app_releases
+                WHERE app_target=@target AND is_published=TRUE AND id<>@excludeId"
+            : @"SELECT COALESCE(MAX(version_code), 0)
+                FROM app_releases
+                WHERE app_target=@target AND is_published=TRUE";
+        using var cmd = conn.Cmd(sql).With("@target", target);
+        if (excludeId.HasValue) cmd.With("@excludeId", excludeId.Value);
+
+        var value = await cmd.ExecuteScalarAsync();
+        return value is null or DBNull ? 0 : Convert.ToInt32(value);
+    }
+
+    private static string VersionCodeMustIncreaseMessage(int latestPublished)
+        => latestPublished > 0
+            ? $"Ma ban phat hanh phai lon hon ma dang phat hanh hien tai ({latestPublished})."
+            : "Ma ban phat hanh phai lon hon 0.";
 
     private static string NormalizeTarget(string? value)
         => string.IsNullOrWhiteSpace(value) ? "hr-apk" : value.Trim().ToLowerInvariant();

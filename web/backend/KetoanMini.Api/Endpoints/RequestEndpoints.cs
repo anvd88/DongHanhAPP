@@ -21,6 +21,7 @@ public static class RequestEndpoints
     {
         ("leave", "Xin nghỉ phép", "Nghỉ"),
         ("sick", "Xin nghỉ ốm", "Nghỉ"),
+        ("business_trip", "Đăng ký công tác", "Công"),
         ("overtime", "Đăng ký tăng ca", "Công"),
         ("attendance_fix", "Điều chỉnh chấm công", "Công"),
         ("forgot_checkin", "Báo quên chấm công", "Công"),

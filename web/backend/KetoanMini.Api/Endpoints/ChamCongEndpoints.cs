@@ -1,8 +1,8 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
+using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
-using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -24,7 +24,6 @@ public static class ChamCongEndpoints
     private const double AdaptiveLearnMinSimilarity = 0.65;
     // Nhãn ở cột created_by để phân biệt mẫu hệ thống TỰ HỌC với mẫu admin đăng ký.
     private const string AutoLearnTag = "(tự học)";
-    private const string AutoAttendanceSettingKey = "KioskCamera.AutoAttendanceEnabled";
 
     // Cổng tư thế cho chấm công loạt ảnh: lệch quá ngưỡng ⇒ báo trực tiếp, KHÔNG ghi nhật ký.
     // Khớp ngưỡng phía kiosk cũ (yaw chính diện, pitch trong khoảng nhìn thẳng).
@@ -74,7 +73,12 @@ public static class ChamCongEndpoints
 
         // AdaFace R50 emits 512-float embeddings. SFace embeddings from older versions are incompatible,
         // so drop stale templates once during startup; newly registered AdaFace templates are preserved.
-        await conn.Cmd("DELETE FROM cham_cong_face WHERE octet_length(embedding) <> 2048")
+        // ⚠️ Chỉ áp cho mẫu CHƯA mã hóa (không có magic "KME1"): mẫu đã mã hóa AES có độ dài khác 2048
+        // nên phải loại trừ để không xóa nhầm (giải mã xong mới đúng 2048).
+        await conn.Cmd(
+            @"DELETE FROM cham_cong_face
+              WHERE substring(embedding FROM 1 FOR 4) <> '\x4b4d4531'::bytea
+                AND octet_length(embedding) <> 2048")
             .ExecuteNonQueryAsync();
 
         // Quyền riêng tư: hệ thống KHÔNG lưu ảnh gốc khuôn mặt nữa (chỉ giữ vector đặc trưng).
@@ -83,34 +87,29 @@ public static class ChamCongEndpoints
             .ExecuteNonQueryAsync();
     }
 
-    private static async Task SaveSystemSetting(Database db, string key, string value, string updatedBy)
+    /// <summary>
+    /// Di trú một lần: mã hóa các mẫu khuôn mặt CŨ đang lưu ở dạng chưa mã hóa (không có magic
+    /// "KME1"). Chỉ chạy khi đã cấu hình khóa (cipher.Enabled). Đọc hết vào bộ nhớ rồi cập nhật
+    /// từng dòng để không giữ reader mở khi UPDATE trên cùng kết nối. Rất nhẹ (số mẫu nhỏ).
+    /// </summary>
+    public static async Task EncryptExistingEmbeddings(Database db, FieldCipher cipher, CancellationToken ct = default)
     {
-        try
-        {
-            await using var conn = await db.OpenAsync();
-            await conn.Cmd(@"
-                CREATE TABLE IF NOT EXISTS web_system_settings (
-                    setting_key varchar(120) NOT NULL PRIMARY KEY,
-                    setting_value text NOT NULL DEFAULT '',
-                    updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_by varchar(100) NOT NULL DEFAULT ''
-                );
+        if (!cipher.Enabled) return;
+        await using var conn = await db.OpenAsync(ct);
 
-                INSERT INTO web_system_settings (setting_key, setting_value, updated_at, updated_by)
-                VALUES (@key, @value, CURRENT_TIMESTAMP, @updatedBy)
-                ON CONFLICT (setting_key) DO UPDATE SET
-                    setting_value = EXCLUDED.setting_value,
-                    updated_at = EXCLUDED.updated_at,
-                    updated_by = EXCLUDED.updated_by;")
-                .With("@key", key)
-                .With("@value", value)
-                .With("@updatedBy", updatedBy)
-                .ExecuteNonQueryAsync();
-        }
-        catch
+        var pending = new List<(long Id, byte[] Bytes)>();
+        await using (var r = await conn.Cmd(
+            @"SELECT id, embedding FROM cham_cong_face
+              WHERE substring(embedding FROM 1 FOR 4) <> '\x4b4d4531'::bytea").ExecuteReaderAsync(ct))
         {
-            // Best effort: the runtime switch still applies even if persistence is temporarily unavailable.
+            while (await r.ReadAsync(ct))
+                if (r["embedding"] is byte[] bytes && bytes.Length > 0)
+                    pending.Add((r.Long("id"), bytes));
         }
+
+        foreach (var (id, bytes) in pending)
+            await conn.Cmd("UPDATE cham_cong_face SET embedding=@e WHERE id=@id")
+                .With("@e", cipher.Encrypt(bytes)).With("@id", id).ExecuteNonQueryAsync(ct);
     }
 
     public static void MapChamCong(this IEndpointRouteBuilder app)
@@ -122,100 +121,6 @@ public static class ChamCongEndpoints
         g.MapGet("/trangthai", (IFaceEngine engine) =>
             Results.Ok(new FaceEngineStatusDto(engine.Name, engine.MatchThreshold)))
             .AllowAnonymous();
-
-        // ── Camera IP (RTSP kiosk) TẠM ẨN ──────────────────────────────────────────────
-        // Toàn bộ nhóm endpoint /rtsp/* chỉ được đăng ký khi KioskCamera:Enabled = true.
-        // Đặt KioskCamera:Enabled = false (appsettings) để ẩn hẳn API camera IP (trả 404).
-        // Bật lại tính năng: chỉ cần đổi cờ này về true rồi khởi động lại backend.
-        var cameraEnabled = app.ServiceProvider.GetService<IConfiguration>()?.GetValue("KioskCamera:Enabled", false) ?? false;
-        if (cameraEnabled)
-        {
-        g.MapGet("/rtsp/status", (RtspAttendanceWorker worker) =>
-            Results.Ok(worker.GetStatus()))
-            .RequireAuthorization(p => p.RequireRole("Admin"));
-
-        // Ảnh khung hình mới nhất của camera kiosk (snapshot do FFmpeg ghi liên tục ra latest.jpg).
-        // Frontend poll ảnh này để hiển thị "khung chấm công" camera IP cho nhân viên.
-        // Ẩn danh: màn hình kiosk chấm công (ngoài trang đăng nhập) cần xem được luồng camera.
-        g.MapGet("/rtsp/snapshot", (IConfiguration cfg, IHostEnvironment env) =>
-        {
-            var configured = cfg["KioskCamera:LatestFramePath"];
-            if (string.IsNullOrWhiteSpace(configured))
-                return Results.NotFound(new { message = "Chưa cấu hình đường dẫn ảnh camera." });
-
-            var path = Path.IsPathRooted(configured)
-                ? Path.GetFullPath(configured)
-                : Path.GetFullPath(Path.Combine(env.ContentRootPath, configured));
-
-            if (!File.Exists(path))
-                return Results.NotFound(new { message = "Chưa có ảnh camera. Đang chờ FFmpeg ghi khung hình đầu tiên." });
-
-            try
-            {
-                // FileShare.ReadWrite: FFmpeg đang ghi liên tục nên phải cho phép đọc song song.
-                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                using var ms = new MemoryStream();
-                fs.CopyTo(ms);
-                var bytes = ms.ToArray();
-                if (bytes.Length == 0)
-                    return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-
-                // Không cache: mỗi lần poll phải lấy khung mới nhất.
-                return Results.File(bytes, "image/jpeg", lastModified: File.GetLastWriteTimeUtc(path));
-            }
-            catch (IOException)
-            {
-                // Trùng nhịp ghi của FFmpeg → để client thử lại lần poll sau.
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            }
-        }).AllowAnonymous();
-
-        g.MapPost("/rtsp/reconnect", async (
-            RtspAttendanceWorker worker,
-            CameraSnapshotBridgeService bridge,
-            CancellationToken ct) =>
-        {
-            worker.RequestReconnect("Dang ket noi lai camera...");
-            await bridge.RestartAsync(ct);
-            return Results.Ok(new { message = "Da gui lenh ket noi lai camera.", status = worker.GetStatus() });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
-
-        g.MapPost("/rtsp/test-scan", ([FromBody] RtspTestScanRequest req, RtspAttendanceWorker worker) =>
-        {
-            var status = worker.SetTestScan(req.Enabled);
-            return Results.Ok(new
-            {
-                message = req.Enabled
-                    ? "Da bat che do test scan lien tuc."
-                    : "Da tat che do test scan lien tuc.",
-                status
-            });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
-
-        g.MapPost("/rtsp/auto-attendance", async (
-            [FromBody] RtspAutoAttendanceRequest req,
-            RtspAttendanceWorker worker,
-            ClaimsPrincipal u,
-            Database db) =>
-        {
-            var status = worker.SetAutoAttendance(req.Enabled);
-            await SaveSystemSetting(db, AutoAttendanceSettingKey, req.Enabled ? "true" : "false", u.Username());
-            await db.RecordAudit(u.Username(),
-                req.Enabled ? "Bật chấm công tự động" : "Tắt chấm công tự động",
-                "ChamCong",
-                "RTSP",
-                req.Enabled
-                    ? "Admin bật chấm công nhận diện tự động từ camera IP (web)."
-                    : "Admin tắt chấm công nhận diện tự động từ camera IP (web).");
-            return Results.Ok(new
-            {
-                message = req.Enabled
-                    ? "Da bat cham cong nhan dien tu dong."
-                    : "Da tat cham cong nhan dien tu dong.",
-                status
-            });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
-        } // ── hết nhóm /rtsp/* (camera IP tạm ẩn) ──
 
         // Danh sách nhân viên đã đăng ký khuôn mặt (gộp theo username).
         g.MapGet("/dadangky", async (Database db) =>
@@ -253,7 +158,7 @@ public static class ChamCongEndpoints
         }).RequireAuthorization(p => p.RequireRole("Admin"));
 
         // Đăng ký 1 mẫu khuôn mặt cho nhân viên (Admin). Gọi nhiều lần để thêm nhiều góc chụp.
-        g.MapPost("/dangky", async (DangKyKhuonMatRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine) =>
+        g.MapPost("/dangky", async (DangKyKhuonMatRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username))
                 return Results.BadRequest(new { message = "Thiếu tên đăng nhập nhân viên." });
@@ -273,7 +178,7 @@ public static class ChamCongEndpoints
                   VALUES (@u, @fn, @emb, CURRENT_TIMESTAMP, @by)")
                 .With("@u", req.Username.Trim())
                 .With("@fn", req.FullName ?? "")
-                .With("@emb", EmbeddingCodec.ToBytes(emb))
+                .With("@emb", cipher.EncryptEmbedding(emb))
                 .With("@by", u.Username())
                 .ExecuteNonQueryAsync();
 
@@ -319,7 +224,7 @@ public static class ChamCongEndpoints
 
         // Chấm công: chụp ảnh -> liveness -> trích vector -> so khớp -> ghi Vào/Ra.
         // Ẩn danh: cho phép chấm công ở kiosk màn hình đăng nhập (không cần tài khoản).
-        g.MapPost("/nhandien", async (NhanDienRequest req, Database db, IFaceEngine engine) =>
+        g.MapPost("/nhandien", async (NhanDienRequest req, Database db, IFaceEngine engine, FieldCipher cipher) =>
         {
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
                 return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
@@ -344,7 +249,7 @@ public static class ChamCongEndpoints
             {
                 while (await r.ReadAsync())
                 {
-                    var emb = EmbeddingCodec.FromBytes((byte[])r["embedding"]);
+                    var emb = cipher.DecryptEmbedding((byte[])r["embedding"]);
                     var sim = engine.Compare(probe, emb);
                     if (sim > best) { best = sim; bestUser = r.Str("username"); bestName = r.Str("full_name"); }
                 }
@@ -374,7 +279,7 @@ public static class ChamCongEndpoints
 
             // Tự học: khớp chắc + đã qua liveness → lưu thêm mẫu (tối đa 5/người, không đụng mẫu admin).
             // Là phụ trợ: lỗi ở đây tuyệt đối không được làm hỏng việc chấm công.
-            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, best); }
+            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, best, cipher); }
             catch { /* bỏ qua, chấm công vẫn thành công */ }
 
             return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, loai, DateTime.UtcNow,
@@ -384,7 +289,7 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher) =>
         {
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
@@ -458,7 +363,7 @@ public static class ChamCongEndpoints
                 while (await r.ReadAsync())
                 {
                     var uname = r.Str("username");
-                    var emb = EmbeddingCodec.FromBytes((byte[])r["embedding"]);
+                    var emb = cipher.DecryptEmbedding((byte[])r["embedding"]);
                     var sim = engine.Compare(probe, emb);
                     if (sim > bestSim) { bestSim = sim; bestUser = uname; bestName = r.Str("full_name"); }
                     if (selfOnly && sim > selfSim
@@ -519,7 +424,7 @@ public static class ChamCongEndpoints
             await db.RecordAudit(bestUser, $"Chấm công {loai}", "ChamCong", bestUser,
                 $"Độ khớp {bestSim:0.000}, chất lượng ảnh {best.Score:0.00}{(isOffline ? ", đồng bộ ngoại tuyến" : "")} (web).");
 
-            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, bestSim); }
+            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, bestSim, cipher); }
             catch { /* tự học là phụ trợ, lỗi không được làm hỏng chấm công */ }
 
             return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, loai,
@@ -558,7 +463,7 @@ public static class ChamCongEndpoints
     /// khi đã đủ 5 mẫu thì chỉ thay mẫu TỰ HỌC cũ nhất (cuốn chiếu để bám diện mạo hiện tại).
     /// </summary>
     private static async Task TryAdaptiveLearnAsync(
-        NpgsqlConnection conn, string username, string fullName, float[] embedding, double similarity)
+        NpgsqlConnection conn, string username, string fullName, float[] embedding, double similarity, FieldCipher cipher)
     {
         if (similarity < AdaptiveLearnMinSimilarity) return;
 
@@ -591,7 +496,7 @@ public static class ChamCongEndpoints
             @"INSERT INTO cham_cong_face (username, full_name, embedding, anh, created_at, created_by)
               VALUES (@u, @fn, @emb, NULL, CURRENT_TIMESTAMP, @auto)")
             .With("@u", username).With("@fn", fullName)
-            .With("@emb", EmbeddingCodec.ToBytes(embedding))
+            .With("@emb", cipher.EncryptEmbedding(embedding))
             .With("@auto", AutoLearnTag)
             .ExecuteNonQueryAsync();
     }

@@ -1,0 +1,16 @@
+/* ─── Công cụ page ───────────────────────────────────────────────────────── */
+
+.tools-page {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 18px;
+}
+
+.tools-content { min-width: 0; }
+
+/* ─── Embedded calculator ────────────────────────────────────────────────── */
+
+.calc-embedded-page { color: var(--text); }
+.calc-embedded-page .calc-hero,
+.calc-embedded-page .calc-grid { max-width: none; }
+.calc-embedded-page .calc-hero { margin-bottom: 12px; }

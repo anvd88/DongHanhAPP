@@ -12,6 +12,26 @@ export interface Department {
   employeeCount: number;
 }
 
+// Địa điểm/chi nhánh làm việc (phục vụ phân quyền theo địa điểm).
+export interface Location {
+  id: string;
+  code: string;
+  name: string;
+  address: string;
+  employeeCount: number;
+}
+
+// Vai trò truy cập (chức vụ phân quyền) của nhân viên.
+export type AccessRole = "staff" | "dept_manager" | "location_manager";
+export const ACCESS_ROLES: { value: AccessRole; label: string }[] = [
+  { value: "staff", label: "Nhân viên" },
+  { value: "dept_manager", label: "Quản lý phòng ban" },
+  { value: "location_manager", label: "Quản lý địa điểm" },
+];
+export function accessRoleLabel(role?: string | null): string {
+  return ACCESS_ROLES.find((r) => r.value === role)?.label ?? "Nhân viên";
+}
+
 export interface EmployeeCard {
   id: string;
   employeeCode: string;
@@ -24,6 +44,9 @@ export interface EmployeeCard {
   avatar?: string | null;
   departmentId?: string | null;
   departmentName: string;
+  locationId?: string | null;
+  locationName?: string;
+  accessRole?: string;
   managerName: string;
 }
 
