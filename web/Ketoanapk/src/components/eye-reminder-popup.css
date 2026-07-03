@@ -1,0 +1,177 @@
+.eye-reminder-layer {
+  z-index: 91;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(45, 212, 191, 0.22), transparent 31%),
+    linear-gradient(135deg, rgba(6, 25, 44, 0.44), rgba(20, 32, 72, 0.32));
+}
+
+.eye-reminder-popup {
+  min-height: 430px;
+  background:
+    linear-gradient(124deg, rgba(255, 255, 255, 0.76), rgba(225, 252, 242, 0.58) 42%, rgba(191, 215, 255, 0.4)),
+    radial-gradient(118% 88% at 14% 0%, rgba(255, 255, 255, 0.8), transparent 48%),
+    radial-gradient(90% 100% at 100% 0%, rgba(90, 214, 195, 0.34), transparent 58%),
+    rgba(234, 251, 247, 0.6);
+  box-shadow:
+    0 32px 90px -34px rgba(7, 72, 90, 0.56),
+    0 0 42px rgba(38, 203, 183, 0.26),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.9),
+    inset -1px -1px 0 rgba(65, 111, 174, 0.15),
+    inset 0 -28px 58px rgba(45, 212, 191, 0.09);
+  color: #0d2b45;
+}
+
+.eye-reminder-popup::before {
+  background:
+    radial-gradient(230px circle at var(--mx) var(--my), rgba(255, 255, 255, 0.44), rgba(45, 212, 191, 0.12) 42%, transparent 70%),
+    linear-gradient(96deg, transparent 0%, rgba(255, 255, 255, 0.2) 46%, transparent 72%);
+}
+
+.eye-reminder-edge-glow {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(45, 212, 191, 0.42) 28%, transparent 54%),
+    radial-gradient(180px 130px at var(--mx) var(--my), rgba(255, 255, 255, 0.95), rgba(69, 209, 188, 0.45), transparent 70%);
+}
+
+.eye-reminder-close {
+  color: #0f5f66;
+}
+
+.eye-reminder-art {
+  position: relative;
+  z-index: 3;
+  display: block;
+  width: 268px;
+  max-width: 78%;
+  margin: 24px auto 0;
+  overflow: visible;
+}
+
+.eye-reminder-rays path {
+  fill: none;
+  stroke: rgba(36, 87, 214, 0.3);
+  stroke-linecap: round;
+  stroke-width: 4;
+  animation: eyeReminderPulse 3.8s ease-in-out infinite;
+}
+
+.eye-reminder-rays path:nth-child(2),
+.eye-reminder-rays path:nth-child(4) {
+  animation-delay: -1.4s;
+}
+
+.eye-reminder-horizon {
+  fill: none;
+  stroke: url(#er-horizon);
+  stroke-linecap: round;
+  stroke-width: 8;
+}
+
+.eye-reminder-lid {
+  fill: url(#er-lid);
+  stroke: rgba(255, 255, 255, 0.82);
+  stroke-width: 3;
+}
+
+.eye-reminder-iris {
+  fill: url(#er-iris);
+  stroke: rgba(255, 255, 255, 0.78);
+  stroke-width: 4;
+}
+
+.eye-reminder-pupil {
+  fill: #102344;
+}
+
+.eye-reminder-glint {
+  fill: rgba(255, 255, 255, 0.9);
+}
+
+.eye-reminder-focus {
+  fill: none;
+  stroke: rgba(16, 185, 129, 0.72);
+  stroke-linecap: round;
+  stroke-width: 5;
+  animation: eyeReminderFocus 4.6s ease-in-out infinite;
+}
+
+.eye-reminder-kicker {
+  color: #0f766e;
+}
+
+.eye-reminder-copy h2 {
+  color: #102044;
+  text-shadow: 0 12px 34px rgba(16, 185, 129, 0.15);
+}
+
+.eye-reminder-copy p,
+.eye-reminder-meta span {
+  color: #174a5f;
+}
+
+.eye-reminder-primary {
+  background:
+    radial-gradient(180px 70px at 50% 0%, rgba(255, 255, 255, 0.54), transparent 70%),
+    linear-gradient(135deg, #16c7a7, #0f8fb4 58%, #315eea);
+  box-shadow:
+    0 18px 34px -18px rgba(15, 143, 180, 0.7),
+    0 0 28px rgba(45, 212, 191, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
+.eye-reminder-primary:hover {
+  box-shadow:
+    0 21px 38px -18px rgba(15, 143, 180, 0.82),
+    0 0 34px rgba(45, 212, 191, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.eye-reminder-secondary {
+  color: #0f766e;
+}
+
+.eye-reminder-actions button:disabled {
+  cursor: wait;
+  opacity: 0.92;
+  transform: none;
+}
+
+@keyframes eyeReminderPulse {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.82;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes eyeReminderFocus {
+  0%,
+  100% {
+    opacity: 0.62;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 560px) {
+  .eye-reminder-popup {
+    min-height: 0;
+  }
+
+  .eye-reminder-art {
+    width: 226px;
+    margin-top: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eye-reminder-rays path,
+  .eye-reminder-focus {
+    animation: none;
+  }
+}

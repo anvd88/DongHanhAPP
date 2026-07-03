@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Building2, CalendarRange, Clock, Gift, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { Building2, CalendarRange, Clock, Gift, MapPin, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
@@ -12,21 +12,25 @@ import { useAppNotifications } from "../components/AppNotifications";
 import {
   docTypeLabel,
   leaveTypeLabel,
+  ACCESS_ROLES,
+  accessRoleLabel,
   type Contract,
   type Department,
   type EmployeeCard,
   type EmployeeDoc,
   type LeaveBalance,
+  type Location,
   type Payslip,
   type PenaltyDeductions,
   type Shift,
   type ShiftAssignment,
 } from "../lib/hr";
 
-type Tab = "employees" | "departments" | "shifts" | "assignments";
+type Tab = "employees" | "departments" | "locations" | "shifts" | "assignments";
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "employees", label: "Nhân viên", icon: <Users className="h-4 w-4" /> },
   { key: "departments", label: "Phòng ban", icon: <Building2 className="h-4 w-4" /> },
+  { key: "locations", label: "Địa điểm", icon: <MapPin className="h-4 w-4" /> },
   { key: "shifts", label: "Ca làm", icon: <Clock className="h-4 w-4" /> },
   { key: "assignments", label: "Phân ca", icon: <CalendarRange className="h-4 w-4" /> },
 ];
@@ -53,6 +57,7 @@ export function QuanLyNhanSu() {
       </div>
       {tab === "employees" && <EmployeesTab />}
       {tab === "departments" && <DepartmentsTab />}
+      {tab === "locations" && <LocationsTab />}
       {tab === "shifts" && <ShiftsTab />}
       {tab === "assignments" && <AssignmentsTab />}
     </div>
@@ -73,6 +78,7 @@ function EmployeesTab() {
   const { notify, confirm } = useAppNotifications();
   const { data, loading, reload } = useApi<EmployeeCard[]>("/api/hr/employees");
   const { data: departments } = useApi<Department[]>("/api/hr/departments");
+  const { data: locations } = useApi<Location[]>("/api/hr/locations");
   const [edit, setEdit] = useState<EmployeeCard | "new" | null>(null);
   const [benefits, setBenefits] = useState<EmployeeCard | null>(null);
 
@@ -101,7 +107,8 @@ function EmployeesTab() {
           { header: "Họ tên", cell: (r) => <span className="font-semibold">{r.fullName}</span> },
           { header: "Chức vụ", cell: (r) => <span className="text-[var(--text-secondary)]">{r.position || "—"}</span> },
           { header: "Phòng ban", cell: (r) => <span>{r.departmentName || "—"}</span> },
-          { header: "Quản lý", cell: (r) => <span className="text-[var(--text-secondary)]">{r.managerName || "—"}</span> },
+          { header: "Địa điểm", cell: (r) => <span className="text-[var(--text-secondary)]">{r.locationName || "—"}</span> },
+          { header: "Phân quyền", cell: (r) => <Badge color={r.accessRole && r.accessRole !== "staff" ? "success" : "muted"}>{accessRoleLabel(r.accessRole)}</Badge> },
           { header: "Trạng thái", cell: (r) => <Badge color={r.status === "Active" ? "success" : "muted"}>{r.status === "Active" ? "Đang làm" : r.status}</Badge> },
           {
             header: "", align: "right",
@@ -119,6 +126,7 @@ function EmployeesTab() {
         <EmployeeModal
           value={edit === "new" ? null : edit}
           departments={departments ?? []}
+          locations={locations ?? []}
           employees={data ?? []}
           onClose={() => setEdit(null)}
           onSaved={() => { setEdit(null); reload({ silent: true }); notify.success("Đã lưu hồ sơ."); }}
@@ -129,8 +137,8 @@ function EmployeesTab() {
   );
 }
 
-function EmployeeModal({ value, departments, employees, onClose, onSaved }: {
-  value: EmployeeCard | null; departments: Department[]; employees: EmployeeCard[]; onClose: () => void; onSaved: () => void;
+function EmployeeModal({ value, departments, locations, employees, onClose, onSaved }: {
+  value: EmployeeCard | null; departments: Department[]; locations: Location[]; employees: EmployeeCard[]; onClose: () => void; onSaved: () => void;
 }) {
   const { notify } = useAppNotifications();
   const [detail] = useState(value);
@@ -140,6 +148,8 @@ function EmployeeModal({ value, departments, employees, onClose, onSaved }: {
     fullName: value?.fullName ?? "",
     position: value?.position ?? "",
     departmentId: value?.departmentId ?? "",
+    locationId: value?.locationId ?? "",
+    accessRole: value?.accessRole ?? "staff",
     status: value?.status ?? "Active",
     phone: value?.phone ?? "",
     email: value?.email ?? "",
@@ -159,6 +169,7 @@ function EmployeeModal({ value, departments, employees, onClose, onSaved }: {
       const body = {
         ...form,
         departmentId: form.departmentId || null,
+        locationId: form.locationId || null,
         managerId: form.managerId || null,
         hireDate: form.hireDate || null,
         dob: form.dob || null,
@@ -185,6 +196,17 @@ function EmployeeModal({ value, departments, employees, onClose, onSaved }: {
           <Select value={form.departmentId} onChange={(e) => set("departmentId", e.target.value)} className="w-full">
             <option value="">— Không —</option>
             {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Địa điểm / chi nhánh">
+          <Select value={form.locationId} onChange={(e) => set("locationId", e.target.value)} className="w-full">
+            <option value="">— Không —</option>
+            {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Vai trò truy cập (phân quyền)">
+          <Select value={form.accessRole} onChange={(e) => set("accessRole", e.target.value)} className="w-full">
+            {ACCESS_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
           </Select>
         </Field>
         <Field label="Quản lý trực tiếp">
@@ -515,6 +537,70 @@ function DepartmentModal({ value, departments, employees, onClose, onSaved }: {
             <span className="block text-xs text-[var(--text-secondary)]">Nhân viên phòng này được duyệt khoản chi hoàn tiền phạt.</span>
           </span>
         </label>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------- Địa điểm / chi nhánh ----------------
+function LocationsTab() {
+  const { notify, confirm } = useAppNotifications();
+  const { data, loading, reload } = useApi<Location[]>("/api/hr/locations");
+  const [edit, setEdit] = useState<Location | "new" | null>(null);
+
+  const remove = async (r: Location) => {
+    const ok = await confirm({ title: `Xóa địa điểm ${r.name}?`, description: "Nhân viên thuộc địa điểm này sẽ được gỡ liên kết.", confirmLabel: "Xóa", tone: "danger" });
+    if (!ok) return;
+    await api.del(`/api/hr/locations/${r.id}`);
+    reload({ silent: true });
+    notify.success("Đã xóa.");
+  };
+
+  return (
+    <GlassPanel strong className="overflow-hidden rounded-[20px]">
+      {toolbar("Địa điểm / chi nhánh", () => setEdit("new"), "Thêm địa điểm")}
+      <Table<Location> loading={loading} rows={data ?? []} keyOf={(r) => r.id} empty="Chưa có địa điểm"
+        columns={[
+          { header: "Mã", cell: (r) => <span className="font-mono text-xs">{r.code || "—"}</span> },
+          { header: "Tên", cell: (r) => <span className="font-semibold">{r.name}</span> },
+          { header: "Địa chỉ", cell: (r) => <span className="text-[var(--text-secondary)]">{r.address || "—"}</span> },
+          { header: "Nhân sự", align: "right", cell: (r) => <Badge>{r.employeeCount}</Badge> },
+          { header: "", align: "right", cell: (r) => (
+            <div className="flex justify-end gap-1.5">
+              <button onClick={() => setEdit(r)} className="rounded-lg p-2 text-[var(--accent)] hover:bg-[var(--accent-soft)]"><Pencil className="h-4 w-4" /></button>
+              <button onClick={() => remove(r)} className="rounded-lg p-2 text-red-600 hover:bg-red-500/10"><Trash2 className="h-4 w-4" /></button>
+            </div>
+          ) },
+        ]} />
+      {edit && (
+        <LocationModal value={edit === "new" ? null : edit}
+          onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload({ silent: true }); notify.success("Đã lưu."); }} />
+      )}
+    </GlassPanel>
+  );
+}
+
+function LocationModal({ value, onClose, onSaved }: { value: Location | null; onClose: () => void; onSaved: () => void }) {
+  const { notify } = useAppNotifications();
+  const [f, setF] = useState({ code: value?.code ?? "", name: value?.name ?? "", address: value?.address ?? "" });
+  const [saving, setSaving] = useState(false);
+  const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
+  const save = async () => {
+    if (!f.name.trim()) { notify.error("Nhập tên địa điểm."); return; }
+    setSaving(true);
+    try {
+      if (value) await api.put(`/api/hr/locations/${value.id}`, f);
+      else await api.post("/api/hr/locations", f);
+      onSaved();
+    } catch (e) { notify.error(e instanceof Error ? e.message : "Lỗi."); } finally { setSaving(false); }
+  };
+  return (
+    <Modal open onClose={onClose} title={value ? "Sửa địa điểm" : "Thêm địa điểm"} panel
+      footer={<><Button variant="ghost" onClick={onClose}>Hủy</Button><Button onClick={save} loading={saving}>Lưu</Button></>}>
+      <div className="space-y-3">
+        <Field label="Mã địa điểm"><Input value={f.code} onChange={(e) => set("code", e.target.value)} /></Field>
+        <Field label="Tên địa điểm *"><Input value={f.name} onChange={(e) => set("name", e.target.value)} /></Field>
+        <Field label="Địa chỉ"><Input value={f.address} onChange={(e) => set("address", e.target.value)} /></Field>
       </div>
     </Modal>
   );

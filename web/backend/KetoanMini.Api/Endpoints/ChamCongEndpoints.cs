@@ -1,8 +1,9 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
+using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -18,40 +19,97 @@ public static class ChamCongEndpoints
 {
     // Số mẫu khuôn mặt tối đa giữ cho mỗi nhân viên (mẫu admin đăng ký + mẫu tự học).
     private const int MaxFaceSamples = 5;
-    // Chỉ TỰ HỌC khi độ khớp cao hơn HẲN ngưỡng nhận diện (0.363) để chắc chắn đúng người
+    // Chỉ TỰ HỌC khi độ khớp cao hơn hẳn ngưỡng nhận diện để chắc chắn đúng người
     // → tránh "nhiễm" hồ sơ bằng một lần khớp sai. Tăng/giảm nếu cần chặt/lỏng hơn.
-    private const double AdaptiveLearnMinSimilarity = 0.5;
+    private const double AdaptiveLearnMinSimilarity = 0.65;
     // Nhãn ở cột created_by để phân biệt mẫu hệ thống TỰ HỌC với mẫu admin đăng ký.
     private const string AutoLearnTag = "(tự học)";
+
+    // Cổng tư thế cho chấm công loạt ảnh: lệch quá ngưỡng ⇒ báo trực tiếp, KHÔNG ghi nhật ký.
+    // Khớp ngưỡng phía kiosk cũ (yaw chính diện, pitch trong khoảng nhìn thẳng).
+    private const double PostureYawMax = 0.16;
+    private const double PosturePitchMin = 0.25;
+    private const double PosturePitchMax = 0.82;
+    // Điểm chất lượng tối thiểu của khung tốt nhất; thấp hơn ⇒ yêu cầu chụp lại (mờ/tối/loá).
+    private const double MinFrameQuality = 0.28;
 
     public static async Task EnsureTables(Database db)
     {
         await using var conn = await db.OpenAsync();
 
         // Mẫu khuôn mặt đã đăng ký (mỗi nhân viên có thể nhiều dòng = nhiều góc chụp).
-        await conn.Cmd(@"
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='cham_cong_face' AND xtype='U')
-            CREATE TABLE cham_cong_face (
-                id BIGINT IDENTITY(1,1) PRIMARY KEY,
-                username NVARCHAR(100) NOT NULL,
-                full_name NVARCHAR(200) NOT NULL DEFAULT '',
-                embedding VARBINARY(MAX) NOT NULL,
-                anh NVARCHAR(MAX) NULL,              -- ảnh đăng ký (base64), tùy chọn
-                created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                created_by NVARCHAR(100) NOT NULL DEFAULT '');").ExecuteNonQueryAsync();
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS cham_cong_face (
+                id bigserial PRIMARY KEY,
+                username varchar(100) NOT NULL,
+                full_name varchar(200) NOT NULL DEFAULT '',
+                embedding bytea NOT NULL,
+                anh text NULL,
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_by varchar(100) NOT NULL DEFAULT ''
+            );
 
-        // Nhật ký chấm công.
-        await conn.Cmd(@"
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='cham_cong_log' AND xtype='U')
-            CREATE TABLE cham_cong_log (
-                id BIGINT IDENTITY(1,1) PRIMARY KEY,
-                username NVARCHAR(100) NOT NULL,
-                full_name NVARCHAR(200) NOT NULL DEFAULT '',
-                loai NVARCHAR(10) NOT NULL,          -- N'Vào' / N'Ra'
-                similarity FLOAT NOT NULL DEFAULT 0,
-                anh NVARCHAR(MAX) NULL,              -- ảnh lúc chấm (base64), tùy chọn
-                occurred_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                ghi_chu NVARCHAR(500) NOT NULL DEFAULT '');").ExecuteNonQueryAsync();
+            CREATE TABLE IF NOT EXISTS cham_cong_log (
+                id bigserial PRIMARY KEY,
+                username varchar(100) NOT NULL,
+                full_name varchar(200) NOT NULL DEFAULT '',
+                loai varchar(10) NOT NULL,
+                similarity double precision NOT NULL DEFAULT 0,
+                anh text NULL,
+                occurred_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ghi_chu varchar(500) NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS web_system_settings (
+                setting_key varchar(120) NOT NULL PRIMARY KEY,
+                setting_value text NOT NULL DEFAULT '',
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_by varchar(100) NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_cham_cong_face_username ON cham_cong_face (username, created_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_cham_cong_log_username_time ON cham_cong_log (username, occurred_at DESC);
+            """).ExecuteNonQueryAsync();
+
+        // AdaFace R50 emits 512-float embeddings. SFace embeddings from older versions are incompatible,
+        // so drop stale templates once during startup; newly registered AdaFace templates are preserved.
+        // ⚠️ Chỉ áp cho mẫu CHƯA mã hóa (không có magic "KME1"): mẫu đã mã hóa AES có độ dài khác 2048
+        // nên phải loại trừ để không xóa nhầm (giải mã xong mới đúng 2048).
+        await conn.Cmd(
+            @"DELETE FROM cham_cong_face
+              WHERE substring(embedding FROM 1 FOR 4) <> '\x4b4d4531'::bytea
+                AND octet_length(embedding) <> 2048")
+            .ExecuteNonQueryAsync();
+
+        // Quyền riêng tư: hệ thống KHÔNG lưu ảnh gốc khuôn mặt nữa (chỉ giữ vector đặc trưng).
+        // Dọn mọi ảnh đăng ký cũ còn sót lại. Tự chữa: sau lần đầu sẽ là no-op (0 dòng).
+        await conn.Cmd("UPDATE cham_cong_face SET anh = NULL WHERE anh IS NOT NULL")
+            .ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Di trú một lần: mã hóa các mẫu khuôn mặt CŨ đang lưu ở dạng chưa mã hóa (không có magic
+    /// "KME1"). Chỉ chạy khi đã cấu hình khóa (cipher.Enabled). Đọc hết vào bộ nhớ rồi cập nhật
+    /// từng dòng để không giữ reader mở khi UPDATE trên cùng kết nối. Rất nhẹ (số mẫu nhỏ).
+    /// </summary>
+    public static async Task EncryptExistingEmbeddings(Database db, FieldCipher cipher, CancellationToken ct = default)
+    {
+        if (!cipher.Enabled) return;
+        await using var conn = await db.OpenAsync(ct);
+
+        var pending = new List<(long Id, byte[] Bytes)>();
+        await using (var r = await conn.Cmd(
+            @"SELECT id, embedding FROM cham_cong_face
+              WHERE substring(embedding FROM 1 FOR 4) <> '\x4b4d4531'::bytea").ExecuteReaderAsync(ct))
+        {
+            while (await r.ReadAsync(ct))
+                if (r["embedding"] is byte[] bytes && bytes.Length > 0)
+                    pending.Add((r.Long("id"), bytes));
+        }
+
+        foreach (var (id, bytes) in pending)
+            await conn.Cmd("UPDATE cham_cong_face SET embedding=@e WHERE id=@id")
+                .With("@e", cipher.Encrypt(bytes)).With("@id", id).ExecuteNonQueryAsync(ct);
     }
 
     public static void MapChamCong(this IEndpointRouteBuilder app)
@@ -83,12 +141,12 @@ public static class ChamCongEndpoints
         {
             await using var conn = await db.OpenAsync();
             var where = "WHERE 1=1";
-            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username LIKE @s OR full_name LIKE @s OR created_by LIKE @s)";
+            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username ILIKE @s OR full_name ILIKE @s OR created_by ILIKE @s)";
 
             var cmd = conn.Cmd(
-                $@"SELECT TOP 500 id, username, full_name, created_at, created_by
+                $@"SELECT id, username, full_name, created_at, created_by
                    FROM cham_cong_face {where}
-                   ORDER BY created_at DESC, id DESC");
+                   ORDER BY created_at DESC, id DESC LIMIT 500");
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
 
             var list = new List<FaceRegistrationLogDto>();
@@ -100,7 +158,7 @@ public static class ChamCongEndpoints
         }).RequireAuthorization(p => p.RequireRole("Admin"));
 
         // Đăng ký 1 mẫu khuôn mặt cho nhân viên (Admin). Gọi nhiều lần để thêm nhiều góc chụp.
-        g.MapPost("/dangky", async (DangKyKhuonMatRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine) =>
+        g.MapPost("/dangky", async (DangKyKhuonMatRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username))
                 return Results.BadRequest(new { message = "Thiếu tên đăng nhập nhân viên." });
@@ -113,13 +171,14 @@ public static class ChamCongEndpoints
                 return Results.BadRequest(new { message = "Không phát hiện được khuôn mặt trong ảnh. Hãy chụp lại rõ hơn." });
 
             await using var conn = await db.OpenAsync();
+            // CHỈ lưu vector đặc trưng, KHÔNG lưu ảnh gốc khuôn mặt (riêng tư + gọn DB). Ảnh chỉ dùng
+            // tạm để trích embedding rồi bỏ; nhận diện về sau chỉ cần vector (cột anh để mặc định NULL).
             await conn.Cmd(
-                @"INSERT INTO cham_cong_face (username, full_name, embedding, anh, created_at, created_by)
-                  VALUES (@u, @fn, @emb, @anh, SYSUTCDATETIME(), @by)")
+                @"INSERT INTO cham_cong_face (username, full_name, embedding, created_at, created_by)
+                  VALUES (@u, @fn, @emb, CURRENT_TIMESTAMP, @by)")
                 .With("@u", req.Username.Trim())
                 .With("@fn", req.FullName ?? "")
-                .With("@emb", EmbeddingCodec.ToBytes(emb))
-                .With("@anh", (object?)req.ImageBase64 ?? DBNull.Value)
+                .With("@emb", cipher.EncryptEmbedding(emb))
                 .With("@by", u.Username())
                 .ExecuteNonQueryAsync();
 
@@ -127,7 +186,7 @@ public static class ChamCongEndpoints
             return Results.Ok(new { message = "Đã lưu mẫu khuôn mặt." });
         }).RequireAuthorization(p => p.RequireRole("Admin"));
 
-        // Ước lượng hướng mặt. Kiosk dùng để nhắc người dùng nhìn thẳng trước khi nhận diện.
+        // Ước lượng hướng mặt — trình đăng ký khuôn mặt (EnrollWizard) dùng để hướng dẫn từng tư thế.
         g.MapPost("/huongmat", (NhanDienRequest req, IFaceEngine engine) =>
         {
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
@@ -151,7 +210,7 @@ public static class ChamCongEndpoints
         {
             await using var conn = await db.OpenAsync();
             var owner = "";
-            await using (var r = await conn.Cmd("SELECT TOP 1 username FROM cham_cong_face WHERE id=@id")
+            await using (var r = await conn.Cmd("SELECT username FROM cham_cong_face WHERE id=@id LIMIT 1")
                 .With("@id", id).ExecuteReaderAsync())
             {
                 if (await r.ReadAsync()) owner = r.Str("username");
@@ -165,7 +224,7 @@ public static class ChamCongEndpoints
 
         // Chấm công: chụp ảnh -> liveness -> trích vector -> so khớp -> ghi Vào/Ra.
         // Ẩn danh: cho phép chấm công ở kiosk màn hình đăng nhập (không cần tài khoản).
-        g.MapPost("/nhandien", async (NhanDienRequest req, Database db, IFaceEngine engine) =>
+        g.MapPost("/nhandien", async (NhanDienRequest req, Database db, IFaceEngine engine, FieldCipher cipher) =>
         {
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
                 return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
@@ -190,7 +249,7 @@ public static class ChamCongEndpoints
             {
                 while (await r.ReadAsync())
                 {
-                    var emb = EmbeddingCodec.FromBytes((byte[])r["embedding"]);
+                    var emb = cipher.DecryptEmbedding((byte[])r["embedding"]);
                     var sim = engine.Compare(probe, emb);
                     if (sim > best) { best = sim; bestUser = r.Str("username"); bestName = r.Str("full_name"); }
                 }
@@ -200,32 +259,18 @@ public static class ChamCongEndpoints
                 return Results.Ok(new NhanDienResult(false, null, null, best, null, null,
                     "Không nhận diện được. Khuôn mặt chưa được đăng ký hoặc ảnh chưa rõ."));
 
-            // Lần chấm gần nhất TRONG NGÀY của nhân viên (loại + thời điểm).
-            string? lastLoai = null;
-            DateTime? lastAt = null;
-            await using (var lr = await conn.Cmd(
-                @"SELECT TOP 1 loai, occurred_at FROM cham_cong_log
-                  WHERE username=@u AND CONVERT(date, occurred_at) = CONVERT(date, SYSUTCDATETIME())
-                  ORDER BY occurred_at DESC").With("@u", bestUser).ExecuteReaderAsync())
-            {
-                if (await lr.ReadAsync()) { lastLoai = lr.Str("loai"); lastAt = lr.Dt("occurred_at"); }
-            }
+            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser);
+            if (!decision.ShouldRecord)
+                return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, decision.Loai, decision.ExistingAt,
+                    decision.Message));
 
-            // Chống chấm trùng: tự động chụp bắn liên tục, nên nếu vừa chấm trong vòng
-            // COOLDOWN giây thì KHÔNG ghi thêm (tránh Vào rồi Ra ngay lập tức).
-            const int cooldownSeconds = 30;
-            if (lastAt is not null && (DateTime.UtcNow - lastAt.Value).TotalSeconds < cooldownSeconds)
-                return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, lastLoai, lastAt,
-                    $"{bestName} đã chấm công {lastLoai} rồi."));
-
-            // Quyết định Vào/Ra theo lần chấm gần nhất trong ngày.
-            var loai = lastLoai == "Vào" ? "Ra" : "Vào";
+            var loai = decision.Loai;
 
             // KHÔNG lưu ảnh vào log: cột anh không hiển thị ở bất kỳ đâu nên chỉ làm phình DB.
             // (Cột vẫn còn trong bảng để tương thích cũ; đơn giản là không ghi nữa → mặc định NULL.)
             await conn.Cmd(
                 @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at)
-                  VALUES (@u, @fn, @loai, @sim, SYSUTCDATETIME())")
+                  VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP)")
                 .With("@u", bestUser).With("@fn", bestName ?? "")
                 .With("@loai", loai).With("@sim", best)
                 .ExecuteNonQueryAsync();
@@ -234,11 +279,156 @@ public static class ChamCongEndpoints
 
             // Tự học: khớp chắc + đã qua liveness → lưu thêm mẫu (tối đa 5/người, không đụng mẫu admin).
             // Là phụ trợ: lỗi ở đây tuyệt đối không được làm hỏng việc chấm công.
-            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, best); }
+            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, best, cipher); }
             catch { /* bỏ qua, chấm công vẫn thành công */ }
 
             return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, loai, DateTime.UtcNow,
-                $"{bestName} đã chấm công {loai}."));
+                decision.Message));
+        }).AllowAnonymous();
+
+        // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
+        // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
+        // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher) =>
+        {
+            if (req?.Images is null || req.Images.Count == 0)
+                return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
+
+            // CHẶN CỨNG chế độ "chỉ chấm cho chính mình": xác định TỪ TOKEN phía server, KHÔNG tin cờ
+            // client (req.SelfOnly). Mọi tài khoản ĐÃ đăng nhập không phải admin đều bắt buộc chỉ chấm
+            // cho CHÍNH MÌNH — không thể gọi thẳng API với selfOnly=false để chấm công hộ. Admin được
+            // miễn (chấm hộ mọi người). Kiosk ẩn danh (không có token) → currentUser rỗng → so khớp mở.
+            var currentUser = u.Username();
+            var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.IsAdmin();
+
+            // 1) Lấy mọi khung CÓ MẶT, xếp theo chất lượng giảm dần (nét, đủ sáng, mặt to & chính diện).
+            var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
+            foreach (var img in req.Images)
+            {
+                if (!TryDecodeImage(img, out var bytes)) continue;
+                if (engine.AssessFrame(bytes) is not { FaceFound: true } q) continue;
+                candidates.Add((bytes, q));
+            }
+
+            if (candidates.Count == 0)
+                return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, 0,
+                    "Không thấy khuôn mặt trong ảnh.", "Đưa khuôn mặt vào giữa khung hình rồi chấm lại."));
+
+            candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
+            var bestBytes = candidates[0].Bytes;
+            var best = candidates[0].Q;
+
+            // 2) Cổng tư thế — báo trực tiếp, KHÔNG ghi nhật ký nếu sai.
+            var posture = CheckPosture(best.Pose);
+            if (posture is not null)
+                return Results.Ok(new ChamCongResult("posture", false, null, null, 0, null, null, best.Score,
+                    "Sai tư thế chấm công.", posture));
+
+            // 3) Chất lượng quá thấp (mờ/thiếu sáng/loá) → yêu cầu chụp lại.
+            if (best.Score < MinFrameQuality)
+                return Results.Ok(new ChamCongResult("lowquality", false, null, null, 0, null, null, best.Score,
+                    "Ảnh chưa đủ rõ (thiếu sáng, loá hoặc bị nhòe).",
+                    "Tìm nơi đủ sáng, giữ máy ổn định và nhìn thẳng rồi chấm lại."));
+
+            // 4) Chống giả mạo: chấm liveness trên VÀI khung tốt nhất của loạt, qua nếu CÓ khung đạt.
+            // Model 1 ảnh tĩnh dao động mạnh ngay với người thật (cùng mặt lúc 0.99 lúc 0.11), nên xét
+            // 1 khung dễ từ chối nhầm. Ảnh/màn hình giả thì thấp ở MỌI khung → vẫn bị chặn.
+            const int livenessFramesToCheck = 5;
+            double bestLive = 0;
+            foreach (var c in candidates.Take(livenessFramesToCheck))
+            {
+                bestLive = Math.Max(bestLive, engine.LivenessProbability(c.Bytes));
+                if (bestLive >= engine.LivenessThreshold) break; // đã có khung đạt → dừng sớm
+            }
+            if (bestLive < engine.LivenessThreshold)
+                return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
+                    "Nghi ngờ giả mạo (không phải người thật).", "Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình."));
+
+            var probe = engine.ExtractEmbedding(bestBytes);
+            if (probe is null)
+                return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, best.Score,
+                    "Không trích được đặc trưng khuôn mặt.", "Nhìn thẳng vào camera rồi chấm lại."));
+
+            await using var conn = await db.OpenAsync();
+
+            // 5) So khớp toàn bộ mẫu đã đăng ký. Đồng thời theo dõi độ khớp cao nhất với chính tài
+            //    khoản đang đăng nhập (phục vụ chế độ self-only bên dưới).
+            string? bestUser = null, bestName = null;
+            double bestSim = 0;
+            double selfSim = 0;
+            string? selfName = null;
+            await using (var r = await conn.Cmd(
+                "SELECT username, full_name, embedding FROM cham_cong_face").ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync())
+                {
+                    var uname = r.Str("username");
+                    var emb = cipher.DecryptEmbedding((byte[])r["embedding"]);
+                    var sim = engine.Compare(probe, emb);
+                    if (sim > bestSim) { bestSim = sim; bestUser = uname; bestName = r.Str("full_name"); }
+                    if (selfOnly && sim > selfSim
+                        && string.Equals(uname, currentUser, StringComparison.OrdinalIgnoreCase))
+                    { selfSim = sim; selfName = r.Str("full_name"); }
+                }
+            }
+
+            // 5b) Self-only: chỉ cho phép nhân viên chấm công cho CHÍNH MÌNH.
+            if (selfOnly)
+            {
+                if (selfSim >= engine.MatchThreshold)
+                {
+                    // Đúng là người đang đăng nhập → ghi công cho họ (bỏ qua mọi khớp của người khác).
+                    bestUser = currentUser;
+                    bestName = selfName ?? "";
+                    bestSim = selfSim;
+                }
+                else if (bestUser is not null && bestSim >= engine.MatchThreshold
+                         && !string.Equals(bestUser, currentUser, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Khuôn mặt khớp NHÂN VIÊN KHÁC → chặn, không cho chấm công hộ.
+                    return Results.Ok(new ChamCongResult("proxy", false, null, null, bestSim, null, null, best.Score,
+                        "Không được chấm công hộ nhân viên khác trong công ty.",
+                        "Mỗi người chỉ được chấm công bằng khuôn mặt của chính mình."));
+                }
+                else
+                {
+                    // Không khớp chính mình và cũng không rõ là ai → yêu cầu thử lại.
+                    return Results.Ok(new ChamCongResult("unknown", false, null, null, bestSim, null, null, best.Score,
+                        "Khuôn mặt không khớp. Vui lòng thử lại.", null));
+                }
+            }
+
+            if (bestUser is null || bestSim < engine.MatchThreshold)
+                return Results.Ok(new ChamCongResult("unknown", false, null, null, bestSim, null, null, best.Score,
+                    "Không nhận diện được. Khuôn mặt chưa đăng ký hoặc ảnh chưa rõ.", null));
+
+            // 6) Quyết định Vào/Ra + ghi nhật ký.
+            // Đồng bộ ngoại tuyến: dùng giờ chấm thật (req.OccurredAt) cho cả quyết định Vào/Ra lẫn log.
+            var occurredAtUtc = req.OccurredAt?.ToUniversalTime();
+            var isOffline = occurredAtUtc is not null;
+            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser, atUtc: occurredAtUtc);
+            if (!decision.ShouldRecord)
+                return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, decision.Loai,
+                    decision.ExistingAt, best.Score, decision.Message, null));
+
+            var loai = decision.Loai;
+            await conn.Cmd(
+                @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
+                  VALUES (@u, @fn, @loai, @sim, COALESCE(@at, CURRENT_TIMESTAMP), @note)")
+                .With("@u", bestUser).With("@fn", bestName ?? "")
+                .With("@loai", loai).With("@sim", bestSim)
+                .With("@at", (object?)occurredAtUtc ?? DBNull.Value)
+                .With("@note", isOffline ? "Đồng bộ ngoại tuyến" : "")
+                .ExecuteNonQueryAsync();
+
+            await db.RecordAudit(bestUser, $"Chấm công {loai}", "ChamCong", bestUser,
+                $"Độ khớp {bestSim:0.000}, chất lượng ảnh {best.Score:0.00}{(isOffline ? ", đồng bộ ngoại tuyến" : "")} (web).");
+
+            try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, bestSim, cipher); }
+            catch { /* tự học là phụ trợ, lỗi không được làm hỏng chấm công */ }
+
+            return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, loai,
+                occurredAtUtc ?? DateTime.UtcNow, best.Score, decision.Message, null));
         }).AllowAnonymous();
 
         // Nhật ký chấm công (lọc theo ngày yyyy-MM-dd và/hoặc từ khóa).
@@ -246,12 +436,12 @@ public static class ChamCongEndpoints
         {
             await using var conn = await db.OpenAsync();
             var where = "WHERE 1=1";
-            if (!string.IsNullOrWhiteSpace(date)) where += " AND CONVERT(date, occurred_at) = @d";
-            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username LIKE @s OR full_name LIKE @s)";
+            if (!string.IsNullOrWhiteSpace(date)) where += " AND occurred_at::date = @d::date";
+            if (!string.IsNullOrWhiteSpace(search)) where += " AND (username ILIKE @s OR full_name ILIKE @s)";
 
             var cmd = conn.Cmd(
-                $@"SELECT TOP 500 id, username, full_name, loai, similarity, occurred_at, ghi_chu
-                   FROM cham_cong_log {where} ORDER BY occurred_at DESC");
+                $@"SELECT id, username, full_name, loai, similarity, occurred_at, ghi_chu
+                   FROM cham_cong_log {where} ORDER BY occurred_at DESC LIMIT 500");
             if (!string.IsNullOrWhiteSpace(date)) cmd.With("@d", date);
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
 
@@ -273,15 +463,16 @@ public static class ChamCongEndpoints
     /// khi đã đủ 5 mẫu thì chỉ thay mẫu TỰ HỌC cũ nhất (cuốn chiếu để bám diện mạo hiện tại).
     /// </summary>
     private static async Task TryAdaptiveLearnAsync(
-        SqlConnection conn, string username, string fullName, float[] embedding, double similarity)
+        NpgsqlConnection conn, string username, string fullName, float[] embedding, double similarity, FieldCipher cipher)
     {
         if (similarity < AdaptiveLearnMinSimilarity) return;
 
         // Mỗi người chỉ học tối đa 1 mẫu/ngày.
         var learnedToday = await conn.Cmd(
-            @"SELECT TOP 1 1 FROM cham_cong_face
+            @"SELECT 1 FROM cham_cong_face
               WHERE username=@u AND created_by=@auto
-                AND CONVERT(date, created_at) = CONVERT(date, SYSUTCDATETIME())")
+                AND created_at::date = CURRENT_DATE
+              LIMIT 1")
             .With("@u", username).With("@auto", AutoLearnTag).ExecuteScalarAsync();
         if (learnedToday is not null and not DBNull) return;
 
@@ -293,8 +484,8 @@ public static class ChamCongEndpoints
         {
             // Hết chỗ → thay mẫu TỰ HỌC cũ nhất. Nếu cả 5 đều là mẫu admin thì thôi (không học).
             var oldestAuto = await conn.Cmd(
-                @"SELECT TOP 1 id FROM cham_cong_face
-                  WHERE username=@u AND created_by=@auto ORDER BY created_at ASC, id ASC")
+                @"SELECT id FROM cham_cong_face
+                  WHERE username=@u AND created_by=@auto ORDER BY created_at ASC, id ASC LIMIT 1")
                 .With("@u", username).With("@auto", AutoLearnTag).ExecuteScalarAsync();
             if (oldestAuto is null or DBNull) return;
             await conn.Cmd("DELETE FROM cham_cong_face WHERE id=@id")
@@ -303,11 +494,26 @@ public static class ChamCongEndpoints
 
         await conn.Cmd(
             @"INSERT INTO cham_cong_face (username, full_name, embedding, anh, created_at, created_by)
-              VALUES (@u, @fn, @emb, NULL, SYSUTCDATETIME(), @auto)")
+              VALUES (@u, @fn, @emb, NULL, CURRENT_TIMESTAMP, @auto)")
             .With("@u", username).With("@fn", fullName)
-            .With("@emb", EmbeddingCodec.ToBytes(embedding))
+            .With("@emb", cipher.EncryptEmbedding(embedding))
             .With("@auto", AutoLearnTag)
             .ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Kiểm tra tư thế khuôn mặt. Trả null nếu hợp lệ (nhìn thẳng), ngược lại trả câu hướng dẫn
+    /// cụ thể để báo trực tiếp cho người dùng. Pitch nhỏ = đang ngước lên, lớn = đang cúi xuống.
+    /// </summary>
+    private static string? CheckPosture(FacePose pose)
+    {
+        if (Math.Abs(pose.Yaw) > PostureYawMax)
+            return "Nhìn thẳng vào camera, đừng quay mặt sang bên.";
+        if (pose.Pitch < PosturePitchMin)
+            return "Hạ mặt xuống một chút và nhìn thẳng vào camera.";
+        if (pose.Pitch > PosturePitchMax)
+            return "Ngẩng mặt lên một chút và nhìn thẳng vào camera.";
+        return null;
     }
 
     /// <summary>Giải mã ảnh base64 (chấp nhận cả tiền tố data URL "data:image/...;base64,").</summary>

@@ -208,6 +208,9 @@ public static class UserEndpoints
 
                 await DeleteUserEverywhere(conn, tx, id, username);
                 await tx.CommitAsync();
+                // Ghi nhật ký hành động xóa (do admin thực hiện) — bản ghi này nằm ngoài phần
+                // audit của người bị xóa nên không bị xóa cùng, giữ dấu vết ai đã xóa tài khoản nào.
+                await db.RecordAudit(u.Username(), "Xóa tài khoản", "User", username, $"Admin xóa tài khoản (web). id={id}");
                 return Results.NoContent();
             }
             catch (NpgsqlException ex)

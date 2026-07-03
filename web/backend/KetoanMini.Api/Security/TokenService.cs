@@ -10,7 +10,7 @@ public sealed class TokenService(IConfiguration config)
 {
     private readonly IConfigurationSection _jwt = config.GetSection("Jwt");
 
-    public string CreateToken(UserDto user)
+    public string CreateToken(UserDto user, string? sid = null)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwt["Key"]!));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -22,6 +22,9 @@ public sealed class TokenService(IConfiguration config)
             new(ClaimTypes.Role, user.Role),
             new("fullName", user.FullName),
         };
+        // Gắn định danh phiên/thiết bị (sid) vào token để có thể thu hồi từ xa (đăng xuất thiết bị).
+        if (!string.IsNullOrWhiteSpace(sid))
+            claims.Add(new Claim("sid", sid.Trim()));
 
         var hours = int.TryParse(_jwt["ExpireHours"], out var h) ? h : 12;
         var token = new JwtSecurityToken(

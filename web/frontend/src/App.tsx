@@ -39,6 +39,7 @@ import {
   HRPenaltyPage,
   HRProfilePage,
   HRRequestsPage,
+  HRSystemSettingsPage,
   HRTimesheetPage,
 } from "./pages/hr/HRPages";
 import { BaoCao } from "./pages/BaoCao";
@@ -49,12 +50,13 @@ import { PhanHoi } from "./pages/PhanHoi";
 import { StubPage } from "./pages/StubPage";
 import { SystemSettings } from "./pages/SystemSettings";
 import { isAdmin } from "./lib/types";
-import { DEFAULT_AUTH_PATH, IS_HR_APK } from "./lib/appConfig";
+import { DEFAULT_AUTH_PATH, IS_HR_APK, isHrModulePath } from "./lib/appConfig";
 import { Loader2 } from "lucide-react";
 
 function Protected({ children, admin }: { children: React.ReactNode; admin?: boolean }) {
   const { user, loading } = useAuth();
   const loc = useLocation();
+  const suppressMainWebSystem = IS_HR_APK || isHrModulePath(loc.pathname);
   if (loading)
     return (
       <div className="flex h-screen items-center justify-center">
@@ -63,16 +65,16 @@ function Protected({ children, admin }: { children: React.ReactNode; admin?: boo
     );
   if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;
   if (admin && !isAdmin(user)) return <Navigate to={DEFAULT_AUTH_PATH} replace />;
-  return (
+  const content = (
     <>
-      <ChatNotificationProvider>
-        <FeedbackResolvedToasts />
-        <Layout>{children}</Layout>
-        <WaterReminderPopup user={user} />
-        <EyeReminderPopup user={user} />
-      </ChatNotificationProvider>
+      {!suppressMainWebSystem && <FeedbackResolvedToasts />}
+      <Layout suppressMainWebSystem={suppressMainWebSystem}>{children}</Layout>
+      {!suppressMainWebSystem && <WaterReminderPopup user={user} />}
+      {!suppressMainWebSystem && <EyeReminderPopup user={user} />}
     </>
   );
+  if (suppressMainWebSystem) return content;
+  return <ChatNotificationProvider>{content}</ChatNotificationProvider>;
 }
 
 function FeedbackResolvedToasts() {
@@ -135,7 +137,7 @@ export default function App() {
             <Route path="/khachhang" element={<Protected><KhachHang /></Protected>} />
             <Route path="/giacong" element={<Protected><GiaCongPage /></Protected>} />
             <Route path="/baocao" element={<Protected><BaoCao /></Protected>} />
-            <Route path="/saoluu" element={<Protected><SaoLuu /></Protected>} />
+            <Route path="/saoluu" element={<Protected admin><SaoLuu /></Protected>} />
             <Route path="/chamcong" element={<Protected>{IS_HR_APK ? <HRAttendancePage /> : <ChamCongScannerPage />}</Protected>} />
             <Route path="/ql-chamcong" element={<Protected admin>{IS_HR_APK ? <HRAttendanceAdminPage /> : <ChamCongPage />}</Protected>} />
             <Route path="/tinhtoan" element={<Protected><CongCu /></Protected>} />
@@ -159,7 +161,7 @@ export default function App() {
             <Route path="/congno" element={<Protected><StubPage title="Công nợ" /></Protected>} />
             <Route path="/nganhang" element={<Protected><StubPage title="Ngân hàng" /></Protected>} />
             <Route path="/chiphi" element={<Protected><StubPage title="Chi phí" /></Protected>} />
-            <Route path="/caidat" element={<Protected><SystemSettings /></Protected>} />
+            <Route path="/caidat" element={<Protected>{IS_HR_APK ? <HRSystemSettingsPage /> : <SystemSettings />}</Protected>} />
             <Route path="/lichhen" element={<Protected><StubPage title="Lịch hẹn" /></Protected>} />
             <Route path="/tichhop" element={<Protected><StubPage title="Tích hợp" /></Protected>} />
 

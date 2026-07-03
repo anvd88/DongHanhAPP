@@ -1,0 +1,335 @@
+.hr-app-shell,
+.hr-app-shell * {
+  box-sizing: border-box;
+}
+
+.hr-app-shell {
+  --hr-bg: #f4f6f8;
+  --hr-surface: #ffffff;
+  --hr-surface-2: #eef2f5;
+  --hr-border: #d9e0e8;
+  --hr-text: #172033;
+  --hr-muted: #667085;
+  --hr-primary: #1f5f4a;
+  --hr-primary-dark: #164733;
+  --hr-danger: #b42318;
+  --hr-warning: #b7791f;
+  --hr-success: #14804a;
+  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--hr-bg);
+  color: var(--hr-text);
+}
+
+html[data-theme="dark"] .hr-app-shell {
+  --hr-bg: #0f141b;
+  --hr-surface: #171d26;
+  --hr-surface-2: #222b36;
+  --hr-border: #2b3442;
+  --hr-text: #f2f4f7;
+  --hr-muted: #a6afbd;
+  --hr-primary: #3e8f70;
+  --hr-primary-dark: #8ed8b8;
+}
+
+.hr-app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  min-height: 62px;
+  padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+  border-bottom: 1px solid var(--hr-border);
+  background: var(--hr-surface);
+}
+
+.hr-icon-button,
+.hr-top-avatar,
+.hr-drawer-avatar {
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+}
+
+.hr-icon-button {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--hr-border);
+  background: var(--hr-surface);
+  color: var(--hr-text);
+}
+
+.hr-app-title {
+  min-width: 0;
+  text-align: center;
+}
+
+.hr-app-title span,
+.hr-app-title strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-app-title span {
+  color: var(--hr-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hr-app-title strong {
+  margin-top: 2px;
+  color: var(--hr-text);
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.hr-top-avatar,
+.hr-drawer-avatar {
+  background: var(--hr-surface-2);
+  color: var(--hr-primary-dark);
+  font-weight: 850;
+}
+
+.hr-top-avatar {
+  width: 42px;
+  height: 42px;
+  justify-self: end;
+}
+
+.hr-app-main {
+  height: calc(100dvh - 62px);
+  overflow-y: auto;
+  padding: 12px 12px calc(86px + env(safe-area-inset-bottom));
+}
+
+.hr-app-main--attendance {
+  overflow: hidden;
+  padding-bottom: calc(82px + env(safe-area-inset-bottom));
+}
+
+.hr-bottom-nav {
+  position: fixed;
+  left: max(10px, env(safe-area-inset-left));
+  right: max(10px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  z-index: 25;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  min-height: 64px;
+  border: 1px solid var(--hr-border);
+  border-radius: 10px;
+  background: var(--hr-surface);
+  box-shadow: 0 14px 32px rgba(23, 32, 51, 0.12);
+  padding: 5px;
+}
+
+.hr-bottom-link {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  gap: 3px;
+  border-radius: 8px;
+  color: var(--hr-muted);
+  font-size: 0.61rem;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.hr-bottom-link span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-bottom-link.is-active {
+  background: #e8f2ed;
+  color: var(--hr-primary-dark);
+}
+
+html[data-theme="dark"] .hr-bottom-link.is-active {
+  background: #20342c;
+}
+
+.hr-drawer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.hr-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.hr-drawer {
+  position: relative;
+  display: flex;
+  width: min(86vw, 320px);
+  height: 100%;
+  flex-direction: column;
+  border-right: 1px solid var(--hr-border);
+  background: var(--hr-surface);
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+}
+
+.hr-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--hr-border);
+}
+
+.hr-profile-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.hr-drawer-avatar {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+}
+
+.hr-profile-line strong,
+.hr-profile-line span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-profile-line strong {
+  color: var(--hr-text);
+  font-size: 0.95rem;
+}
+
+.hr-profile-line span {
+  margin-top: 2px;
+  color: var(--hr-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.hr-drawer-links {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+}
+
+.hr-drawer-link,
+.hr-logout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  border-radius: 8px;
+  color: var(--hr-text);
+  padding: 0 10px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.hr-drawer-link.is-active {
+  background: #e8f2ed;
+  color: var(--hr-primary-dark);
+}
+
+html[data-theme="dark"] .hr-drawer-link.is-active {
+  background: #20342c;
+}
+
+.hr-logout {
+  width: 100%;
+  margin-top: auto;
+  border: 1px solid #f0c6c2;
+  background: #fff1f0;
+  color: var(--hr-danger);
+}
+
+html[data-theme="dark"] .hr-logout {
+  border-color: #5b2b28;
+  background: #2c1a1a;
+}
+
+@media (min-width: 900px) {
+  .hr-app-shell {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+
+  .hr-app-topbar {
+    display: none;
+  }
+
+  .hr-app-main {
+    height: 100dvh;
+    padding: 24px;
+  }
+
+  .hr-app-main--attendance {
+    overflow: hidden;
+    padding: 18px 24px;
+  }
+
+  .hr-bottom-nav {
+    position: static;
+    display: flex;
+    min-height: auto;
+    border: 0;
+    border-right: 1px solid var(--hr-border);
+    border-radius: 0;
+    box-shadow: none;
+    padding: 18px;
+  }
+
+  .hr-bottom-nav {
+    grid-row: 1;
+    grid-column: 1;
+    flex-direction: column;
+    background: var(--hr-surface);
+  }
+
+  .hr-bottom-nav::before {
+    content: "Ketoanapk";
+    display: block;
+    margin: 4px 4px 18px;
+    color: var(--hr-text);
+    font-size: 1.05rem;
+    font-weight: 900;
+  }
+
+  .hr-bottom-link {
+    display: flex;
+    min-height: 48px;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 0 12px;
+    font-size: 0.92rem;
+  }
+
+  .hr-bottom-link span {
+    white-space: normal;
+  }
+
+  .hr-drawer-layer {
+    display: none;
+  }
+}
