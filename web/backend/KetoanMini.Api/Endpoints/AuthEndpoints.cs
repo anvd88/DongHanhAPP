@@ -44,6 +44,11 @@ public static class AuthEndpoints
                 return Results.Json(new { message = "Tài khoản đã bị khóa. Liên hệ quản trị viên." }, statusCode: 403);
 
             await reader.CloseAsync();
+
+            // Cờ "tắt đăng nhập trên web": chỉ áp cho trình duyệt web, app native vẫn đăng nhập được.
+            if (!IsNativeClient(req.Client) && !await IsWebLoginEnabledAsync(conn, user.Username))
+                return Results.Json(new { message = "Đăng nhập trên web đã bị tắt cho tài khoản này. Hãy dùng ứng dụng để đăng nhập." }, statusCode: 403);
+
             user = user with
             {
                 AvatarUrl = await LoadAvatarUrl(conn, user.Id),
@@ -59,13 +64,41 @@ public static class AuthEndpoints
             return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
         });
 
-        // Đăng nhập bằng KHUÔN MẶT: client gửi một loạt ảnh; server chọn khung tốt nhất, kiểm tra
-        // chống giả mạo (liveness) rồi so khớp với mẫu đã đăng ký (bảng cham_cong_face). Khuôn mặt
-        // được đăng ký theo username trùng với app_users, nên khớp xong là tra thẳng ra tài khoản.
-        g.MapPost("/login-face", async (FaceLoginRequest req, Database db, TokenService tokens, IFaceEngine engine, FieldCipher cipher, HttpContext http) =>
+        // Quên mật khẩu bằng khuôn mặt: client nhập username + mật khẩu mới, quét loạt ảnh như
+        // chấm công. Server CHỈ so khớp với mẫu đã đăng ký của username đó (1:1 theo tài khoản),
+        // không quét toàn bộ nhân viên như luồng đăng nhập khuôn mặt cũ.
+        g.MapPost("/forgot-password-face", async (FacePasswordResetRequest req, Database db, IFaceEngine engine, FieldCipher cipher) =>
         {
+            var username = (req?.Username ?? "").Trim();
+            var newPass = (req?.NewPassword ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(username))
+                return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập." });
+            if (newPass.Length < 6)
+                return Results.BadRequest(new { message = "Mật khẩu mới cần ít nhất 6 ký tự." });
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh khuôn mặt." });
+
+            await using var conn = await db.OpenAsync();
+            var user = await ReadUserByUsername(conn, username);
+            if (user is null)
+                return Results.Json(new { message = "Không tìm thấy tài khoản." }, statusCode: 404);
+            if (user.IsPending)
+                return Results.Json(new { message = "Tài khoản đang chờ quản trị viên phê duyệt." }, statusCode: 403);
+            if (!user.IsActive)
+                return Results.Json(new { message = "Tài khoản đã bị khóa. Liên hệ quản trị viên." }, statusCode: 403);
+
+            // Lấy sẵn mẫu của đúng username. Đây là điểm tối ưu và đúng nghiệp vụ: reset mật khẩu
+            // là xác minh 1:1, không nhận diện 1:N.
+            var enrolled = new List<float[]>();
+            await using (var r = await conn.Cmd(
+                "SELECT embedding FROM cham_cong_face WHERE username = @u ORDER BY created_at DESC")
+                .With("@u", user.Username).ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync())
+                    enrolled.Add(cipher.DecryptEmbedding((byte[])r["embedding"]));
+            }
+            if (enrolled.Count == 0)
+                return Results.Json(new { message = "Tài khoản này chưa đăng ký khuôn mặt chấm công." }, statusCode: 400);
 
             // 1) Lấy mọi khung CÓ MẶT, xếp theo chất lượng giảm dần để chọn khung tốt nhất.
             var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
@@ -96,56 +129,22 @@ public static class AuthEndpoints
             if (probe is null)
                 return Results.Json(new { message = "Không trích được đặc trưng khuôn mặt. Vui lòng thử lại." }, statusCode: 400);
 
-            await using var conn = await db.OpenAsync();
-
-            // 3) So khớp toàn bộ mẫu đã đăng ký.
-            string? bestUser = null;
+            // 3) So 1:1 với các mẫu của CHÍNH tài khoản này.
             double bestSim = 0;
-            await using (var r = await conn.Cmd(
-                "SELECT username, embedding FROM cham_cong_face").ExecuteReaderAsync())
+            foreach (var emb in enrolled)
             {
-                while (await r.ReadAsync())
-                {
-                    var emb = cipher.DecryptEmbedding((byte[])r["embedding"]);
-                    var sim = engine.Compare(probe, emb);
-                    if (sim > bestSim) { bestSim = sim; bestUser = r.Str("username"); }
-                }
+                var sim = engine.Compare(probe, emb);
+                if (sim > bestSim) bestSim = sim;
             }
-            if (bestUser is null || bestSim < engine.MatchThreshold)
-                return Results.Json(new { message = "Không nhận diện được khuôn mặt. Khuôn mặt chưa được đăng ký hoặc ảnh chưa rõ." }, statusCode: 401);
+            if (bestSim < engine.MatchThreshold)
+                return Results.Json(new { message = "Khuôn mặt không khớp với tài khoản này. Vui lòng thử lại." }, statusCode: 401);
 
-            // 4) Khuôn mặt khớp → tra tài khoản tương ứng (phải tồn tại, đã duyệt và còn hoạt động).
-            await using var reader = await conn.Cmd(
-                @"SELECT id, username, full_name, email, role, is_active, approval_status, created_at
-                  FROM app_users
-                  WHERE username = @u AND is_deleted = FALSE")
-                .With("@u", bestUser).ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return Results.Json(new { message = "Khuôn mặt khớp nhưng không tìm thấy tài khoản tương ứng." }, statusCode: 401);
+            await conn.Cmd("UPDATE app_users SET password_hash = @ph WHERE username = @u AND is_deleted = FALSE")
+                .With("@ph", PasswordHasher.Hash(newPass)).With("@u", user.Username).ExecuteNonQueryAsync();
+            await db.RecordAudit(user.Username, "Quên mật khẩu (khuôn mặt)", "Auth", user.Username,
+                $"Đặt lại mật khẩu bằng xác thực khuôn mặt 1:1 (độ khớp {bestSim:0.000}).");
 
-            var user = new UserDto(
-                reader.Guid("id"), reader.Str("username"), reader.Str("full_name"),
-                reader.Str("email"), reader.Str("role"), reader.Bool("is_active"), reader.Str("approval_status"),
-                reader.DtNull("created_at"));
-
-            if (user.IsPending)
-                return Results.Json(new { message = "Tài khoản đang chờ quản trị viên phê duyệt." }, statusCode: 403);
-            if (!user.IsActive)
-                return Results.Json(new { message = "Tài khoản đã bị khóa. Liên hệ quản trị viên." }, statusCode: 403);
-
-            await reader.CloseAsync();
-            user = user with
-            {
-                AvatarUrl = await LoadAvatarUrl(conn, user.Id),
-                Verified = await LoadVerified(conn, user.Username, user.Role),
-                IsDiamond = await LoadDiamond(conn, user.Username, user.Role)
-            };
-            var sid = WebSessionId(req.Sid, user.Username);
-            await RegisterDeviceSessionAsync(conn, user.Username, sid, UserAgentOf(http));
-            await db.RecordAudit(user.Username, "Đăng nhập web (khuôn mặt)", "Auth", user.Username,
-                $"Đăng nhập bản web bằng khuôn mặt (độ khớp {bestSim:0.000}).");
-
-            return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
+            return Results.NoContent();
         });
 
         g.MapGet("/me", async (ClaimsPrincipal principal, Database db) =>
@@ -336,6 +335,63 @@ public static class AuthEndpoints
             await db.RecordAudit(username, "Thu hồi thiết bị", "Auth", username, $"Thu hồi phiên đăng nhập từ xa (sid={sid}).");
             return Results.NoContent();
         }).RequireAuthorization();
+
+        // ── Cài đặt đăng nhập (bật/tắt đăng nhập trên web cho chính tài khoản) ───────────
+        g.MapGet("/account-settings", async (ClaimsPrincipal principal, Database db) =>
+        {
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+            await using var conn = await db.OpenAsync();
+            var enabled = await IsWebLoginEnabledAsync(conn, username);
+            return Results.Ok(new AccountLoginSettingsDto(enabled));
+        }).RequireAuthorization();
+
+        g.MapPut("/account-settings", async (AccountLoginSettingsPatch req, ClaimsPrincipal principal, Database db) =>
+        {
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+            await using var conn = await db.OpenAsync();
+            await EnsureLoginSettingsTableAsync(conn);
+            await conn.Cmd(
+                @"INSERT INTO web_login_settings (username, web_login_enabled, updated_at)
+                  VALUES (@u, @e, CURRENT_TIMESTAMP)
+                  ON CONFLICT (username) DO UPDATE SET
+                      web_login_enabled = EXCLUDED.web_login_enabled,
+                      updated_at = CURRENT_TIMESTAMP;")
+                .With("@u", username).With("@e", req.WebLoginEnabled).ExecuteNonQueryAsync();
+            await db.RecordAudit(username, req.WebLoginEnabled ? "Bật đăng nhập web" : "Tắt đăng nhập web",
+                "Auth", username, "Cập nhật cài đặt đăng nhập web từ ứng dụng.");
+            return Results.Ok(new AccountLoginSettingsDto(req.WebLoginEnabled));
+        }).RequireAuthorization();
+    }
+
+    // Xác định client native (app) — client này KHÔNG bị chặn bởi cờ tắt đăng nhập web.
+    private static bool IsNativeClient(string? client)
+    {
+        if (string.IsNullOrWhiteSpace(client)) return false;
+        var c = client.Trim().ToLowerInvariant();
+        return c is "apk" or "android" or "native" or "app";
+    }
+
+    // Tạo bảng web-only (không đụng schema dùng chung với app desktop) lưu cờ đăng nhập web mỗi tài khoản.
+    private static async Task EnsureLoginSettingsTableAsync(NpgsqlConnection conn)
+    {
+        await conn.Cmd(
+            @"CREATE TABLE IF NOT EXISTS web_login_settings (
+                  username varchar(150) PRIMARY KEY,
+                  web_login_enabled boolean NOT NULL DEFAULT TRUE,
+                  updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP);")
+            .ExecuteNonQueryAsync();
+    }
+
+    // Mặc định BẬT (chưa có bản ghi = cho phép đăng nhập web); chỉ trả FALSE khi tài khoản đã tắt.
+    private static async Task<bool> IsWebLoginEnabledAsync(NpgsqlConnection conn, string username)
+    {
+        await EnsureLoginSettingsTableAsync(conn);
+        var value = await conn.Cmd(
+            "SELECT web_login_enabled FROM web_login_settings WHERE username = @u LIMIT 1")
+            .With("@u", username).ExecuteScalarAsync();
+        return value is not bool b || b;
     }
 
     // User-Agent của yêu cầu (cắt ngắn để tránh chuỗi bất thường quá dài).

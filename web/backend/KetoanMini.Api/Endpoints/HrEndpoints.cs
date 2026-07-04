@@ -131,6 +131,33 @@ public static class HrEndpoints
             );
             CREATE INDEX IF NOT EXISTS ix_hr_documents_emp ON hr_documents (employee_id, doc_type);
             """).ExecuteNonQueryAsync(ct);
+
+        await BackfillMissingDepartments(conn, ct);
+    }
+
+    /// <summary>
+    /// Mọi nhân viên phải thuộc một phòng ban. Với dữ liệu cũ còn nhân viên chưa gán phòng ban,
+    /// gán tạm về "Phòng Kế Toán" (tạo phòng này nếu chưa tồn tại).
+    /// </summary>
+    private static async Task BackfillMissingDepartments(NpgsqlConnection conn, CancellationToken ct)
+    {
+        const string accountingName = "Phòng Kế Toán";
+        var hasOrphans = await conn.Cmd("SELECT EXISTS(SELECT 1 FROM hr_employees WHERE department_id IS NULL)")
+            .ExecuteScalarAsync(ct) is bool b && b;
+        if (!hasOrphans) return;
+
+        var deptId = await conn.Cmd("SELECT id FROM hr_departments WHERE name = @n LIMIT 1")
+            .With("@n", accountingName).ExecuteScalarAsync(ct) as Guid?;
+        if (deptId is null)
+        {
+            var newId = Guid.NewGuid();
+            await conn.Cmd("INSERT INTO hr_departments (id, code, name, is_accounting) VALUES (@id, @c, @n, true)")
+                .With("@id", newId).With("@c", "KT").With("@n", accountingName).ExecuteNonQueryAsync(ct);
+            deptId = newId;
+        }
+
+        await conn.Cmd("UPDATE hr_employees SET department_id = @d WHERE department_id IS NULL")
+            .With("@d", deptId.Value).ExecuteNonQueryAsync(ct);
     }
 
     // ---- Cầu nối tài khoản → hồ sơ nhân viên (tự tạo hồ sơ tối thiểu ở lần truy cập đầu) ----
@@ -388,6 +415,7 @@ public static class HrEndpoints
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.FullName)) return Results.BadRequest(new { message = "Vui lòng nhập họ tên." });
+            if (req.DepartmentId is null) return Results.BadRequest(new { message = "Vui lòng chọn phòng ban cho nhân viên." });
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
             var code = string.IsNullOrWhiteSpace(req.EmployeeCode) ? await NextEmployeeCode(conn) : req.EmployeeCode!.Trim();
@@ -424,6 +452,9 @@ public static class HrEndpoints
             var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", id).ExecuteScalarAsync() as string;
             var isSelf = string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase);
             if (!u.IsAdmin() && !isSelf) return Results.Forbid();
+
+            if (u.IsAdmin() && req.DepartmentId is null)
+                return Results.BadRequest(new { message = "Vui lòng chọn phòng ban cho nhân viên." });
 
             NpgsqlCommand cmd;
             if (u.IsAdmin())
@@ -720,7 +751,6 @@ public static class HrEndpoints
                 month = period,
                 headcount = await ReadManagerHeadcount(conn, u, day),
                 departments = await ReadManagerDepartments(conn, day),
-                trend = await ReadManagerTrend(conn, day.AddDays(-6), day),
             });
         });
 
@@ -1004,88 +1034,6 @@ public static class HrEndpoints
                 leave = r.Int("leave_count"),
                 business = r.Int("business_count"),
                 absent = r.Int("absent"),
-            });
-        }
-        return list;
-    }
-
-    private static async Task<List<object>> ReadManagerTrend(NpgsqlConnection conn, DateOnly from, DateOnly to)
-    {
-        var list = new List<object>();
-        await using var r = await conn.Cmd("""
-            WITH days AS (
-                SELECT generate_series(@from::date, @to::date, INTERVAL '1 day')::date AS d
-            )
-            SELECT d.d,
-                   (
-                     SELECT COUNT(DISTINCT e.id)
-                     FROM cham_cong_log l
-                     JOIN hr_employees e ON e.username=l.username AND e.status='Active'
-                     WHERE (l.occurred_at AT TIME ZONE @tz)::date=d.d
-                   ) AS present,
-                   (
-                     SELECT COUNT(DISTINCT e.id)
-                     FROM cham_cong_log l
-                     JOIN hr_employees e ON e.username=l.username AND e.status='Active'
-                     JOIN hr_shift_assignments a ON a.employee_id=e.id AND a.work_date=d.d
-                     JOIN hr_shifts s ON s.id=a.shift_id
-                     WHERE (l.occurred_at AT TIME ZONE @tz)::date=d.d
-                       AND (l.occurred_at AT TIME ZONE @tz)::time > s.start_time + (s.late_grace_minutes * INTERVAL '1 minute')
-                   ) AS late,
-                   (
-                     SELECT COUNT(DISTINCT r.employee_id)
-                     FROM hr_requests r JOIN hr_employees e ON e.id=r.employee_id AND e.status='Active'
-                     WHERE r.status='Approved' AND r.req_type IN ('leave','sick')
-                       AND COALESCE(
-                         CASE WHEN r.payload->>'fromDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'fromDate')::date END,
-                         CASE WHEN r.payload->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'date')::date END,
-                         (r.created_at AT TIME ZONE @tz)::date
-                       ) <= d.d
-                       AND COALESCE(
-                         CASE WHEN r.payload->>'toDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'toDate')::date END,
-                         CASE WHEN r.payload->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'date')::date END,
-                         (r.created_at AT TIME ZONE @tz)::date
-                       ) >= d.d
-                   ) AS leave_count,
-                   (
-                     SELECT COUNT(DISTINCT r.employee_id)
-                     FROM hr_requests r JOIN hr_employees e ON e.id=r.employee_id AND e.status='Active'
-                     WHERE r.status='Approved' AND r.req_type IN ('business_trip','work_trip','booking')
-                       AND COALESCE(
-                         CASE WHEN r.payload->>'fromDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'fromDate')::date END,
-                         CASE WHEN r.payload->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'date')::date END,
-                         (r.created_at AT TIME ZONE @tz)::date
-                       ) <= d.d
-                       AND COALESCE(
-                         CASE WHEN r.payload->>'toDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'toDate')::date END,
-                         CASE WHEN r.payload->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'date')::date END,
-                         (r.created_at AT TIME ZONE @tz)::date
-                       ) >= d.d
-                   ) AS business_count,
-                   (
-                     SELECT COUNT(DISTINCT a.employee_id)
-                     FROM hr_shift_assignments a
-                     JOIN hr_employees e ON e.id=a.employee_id AND e.status='Active'
-                     WHERE a.work_date=d.d
-                       AND NOT EXISTS (
-                         SELECT 1 FROM cham_cong_log l
-                         WHERE l.username=e.username AND (l.occurred_at AT TIME ZONE @tz)::date=d.d
-                       )
-                   ) AS assigned_without_log
-            FROM days d
-            ORDER BY d.d
-            """).With("@tz", Tz).With("@from", from).With("@to", to).ExecuteReaderAsync();
-        while (await r.ReadAsync())
-        {
-            list.Add(new
-            {
-                date = r.DateOnly("d"),
-                label = r.DateOnly("d").ToString("dd/MM"),
-                present = r.Int("present"),
-                late = r.Int("late"),
-                leave = r.Int("leave_count"),
-                business = r.Int("business_count"),
-                absent = r.Int("assigned_without_log"),
             });
         }
         return list;

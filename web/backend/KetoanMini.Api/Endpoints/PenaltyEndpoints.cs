@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Realtime;
+using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
@@ -208,7 +209,7 @@ public static class PenaltyEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/", async (SavePenaltyReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/", async (SavePenaltyReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (req.EmployeeId == Guid.Empty) return Results.BadRequest(new { message = "Vui lòng chọn nhân viên." });
@@ -232,6 +233,8 @@ public static class PenaltyEndpoints
                 .ExecuteNonQueryAsync();
 
             await SignalEmployee(hub, db, conn, u, req.EmployeeId, "Lập quyết định phạt", no);
+            await push.SendToEmployeeAsync(conn, req.EmployeeId, "Quyết định phạt mới",
+                $"{no} · {req.Reason!.Trim()}", $"pen:{id}", "Penalty");
             return Results.Ok(new { id, penaltyNo = no });
         });
 

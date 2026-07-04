@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Android release signing (KHÔNG commit khóa ký / mật khẩu — sao lưu riêng!)
+android/keystore.properties
+*.jks
+*.keystore

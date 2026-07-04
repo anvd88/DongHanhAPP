@@ -1,19 +1,21 @@
 import { useState } from "react";
-import { Trash2, UserPlus } from "lucide-react";
+import { Check, MapPin, ShieldAlert, Trash2, UserPlus, Wifi, WifiOff, X } from "lucide-react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
 import type {
   ChamCongLog,
+  ChamCongOffline,
   FaceRegistrationLog,
   FaceNguoiDung,
+  OfflineConfig,
   UserAdmin,
 } from "../../lib/types";
 import { CameraPanel } from "./CameraPanel";
 import { EnrollWizard } from "./EnrollWizard";
 import "./chamcong.css";
 
-type Tab = "dangky" | "khuonmat" | "nhatky";
+type Tab = "dangky" | "khuonmat" | "nhatky" | "ngoaituyen";
 
 interface FaceDeleteConfirm {
   title: string;
@@ -46,11 +48,227 @@ export function ChamCongPage() {
         <button className="cc-tab" data-on={tab === "nhatky"} onClick={() => setTab("nhatky")} type="button">
           Nhật ký chấm công
         </button>
+        <button className="cc-tab" data-on={tab === "ngoaituyen"} onClick={() => setTab("ngoaituyen")} type="button">
+          <ShieldAlert className="h-4 w-4" /> Ngoại tuyến chờ duyệt
+        </button>
       </div>
 
       {tab === "dangky" && <RegisterTab />}
       {tab === "khuonmat" && <FaceDataTab />}
       {tab === "nhatky" && <LogTab />}
+      {tab === "ngoaituyen" && <OfflineTab />}
+    </div>
+  );
+}
+
+/* ------------------ Tab: Chấm công ngoại tuyến chờ duyệt ------------------ */
+function OfflineTab() {
+  const [showAll, setShowAll] = useState(false);
+  const { data: rows, reload } = useApi<ChamCongOffline[]>(
+    `/api/chamcong/offline?status=${showAll ? "all" : "pending"}`,
+  );
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [reject, setReject] = useState<ChamCongOffline | null>(null);
+
+  const approve = async (r: ChamCongOffline) => {
+    setBusyId(r.id);
+    try {
+      await api.post(`/api/chamcong/offline/${r.id}/approve`, {});
+      reload();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const doReject = async () => {
+    if (!reject) return;
+    await api.post(`/api/chamcong/offline/${reject.id}/reject`, {});
+    reload();
+  };
+
+  const list = rows ?? [];
+
+  return (
+    <>
+      <OfflineConfigPanel />
+
+      <div className="cc-result glass">
+        <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <ShieldAlert className="h-4 w-4" />
+          Chấm công ngoại tuyến {showAll ? "(tất cả)" : "chờ duyệt"} ({list.length})
+          <button className="cc-tab" style={{ marginLeft: "auto" }} onClick={() => setShowAll((v) => !v)} type="button">
+            {showAll ? "Chỉ chờ duyệt" : "Hiện tất cả"}
+          </button>
+        </div>
+        <p className="cc-subtitle" style={{ margin: "4px 0 10px" }}>
+          Bản chấm khi mất mạng/điện — chưa tính vào bảng công. Kiểm tra cờ rủi ro rồi duyệt hoặc từ chối.
+        </p>
+        <table className="cc-table">
+          <thead>
+            <tr>
+              <th>Nhân viên</th>
+              <th>Loại</th>
+              <th>Giờ chấm</th>
+              <th>Đồng bộ</th>
+              <th>Lùi giờ</th>
+              <th>LAN</th>
+              <th>Vị trí</th>
+              <th>Cờ rủi ro</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((r) => (
+              <tr key={r.id}>
+                <td>{r.fullName || r.username}</td>
+                <td><span className="cc-result-badge" data-loai={r.loai}>{r.loai}</span></td>
+                <td>{new Date(r.occurredAt).toLocaleString("vi-VN")}</td>
+                <td>{new Date(r.syncedAt).toLocaleString("vi-VN")}</td>
+                <td>{r.backdateMinutes} phút</td>
+                <td>
+                  {r.onCompanyLan
+                    ? <Wifi className="h-4 w-4" style={{ color: "#16a34a" }} />
+                    : <WifiOff className="h-4 w-4" style={{ color: "#dc2626" }} />}
+                </td>
+                <td>
+                  {r.gpsLat == null || r.gpsLng == null ? (
+                    "—"
+                  ) : (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: r.inGeofence === false ? "#dc2626" : undefined }}>
+                      <MapPin className="h-3.5 w-3.5" />
+                      {r.distanceM != null ? `${Math.round(r.distanceM)} m` : `${r.gpsLat.toFixed(4)}, ${r.gpsLng.toFixed(4)}`}
+                    </span>
+                  )}
+                </td>
+                <td style={{ maxWidth: 220, color: r.flags ? "#dc2626" : "#16a34a", fontSize: 12 }}>
+                  {r.flags || "Không có bất thường"}
+                </td>
+                <td>
+                  {r.status === "pending" ? (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="cc-icon-btn" title="Duyệt" type="button" disabled={busyId === r.id} onClick={() => approve(r)}>
+                        <Check className="h-4 w-4" style={{ color: "#16a34a" }} />
+                      </button>
+                      <button className="cc-icon-btn" title="Từ chối" type="button" onClick={() => setReject(r)}>
+                        <X className="h-4 w-4" style={{ color: "#dc2626" }} />
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="cc-list-sub">{r.status === "approved" ? "Đã duyệt" : "Đã từ chối"}</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {list.length === 0 && (
+              <tr>
+                <td colSpan={9} className="cc-empty-cell">Không có bản chấm công ngoại tuyến.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <ConfirmDialog
+        open={Boolean(reject)}
+        title="Từ chối chấm công ngoại tuyến?"
+        description={reject ? `Bản chấm ${reject.loai} của "${reject.fullName || reject.username}" lúc ${new Date(reject.occurredAt).toLocaleString("vi-VN")} sẽ KHÔNG được ghi công.` : ""}
+        detail="Nhân viên cần chấm công lại khi có mặt tại công ty."
+        confirmLabel="Từ chối"
+        busyLabel="Đang xử lý..."
+        tone="danger"
+        icon={<X className="h-6 w-6" />}
+        onClose={() => setReject(null)}
+        onConfirm={doReject}
+      />
+    </>
+  );
+}
+
+/* -------- Cấu hình geofence + ngưỡng lùi giờ cho chấm công ngoại tuyến -------- */
+function OfflineConfigPanel() {
+  const { data, reload } = useApi<OfflineConfig>("/api/chamcong/offline-config");
+  const [form, setForm] = useState<OfflineConfig | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const cfg = form ?? data;
+
+  const set = (patch: Partial<OfflineConfig>) => cfg && setForm({ ...cfg, ...patch });
+
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setMsg("Trình duyệt không hỗ trợ định vị.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => set({ geofenceLat: +pos.coords.latitude.toFixed(6), geofenceLng: +pos.coords.longitude.toFixed(6) }),
+      () => setMsg("Không lấy được vị trí. Hãy cho phép truy cập vị trí."),
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
+
+  const save = async () => {
+    if (!cfg) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.put("/api/chamcong/offline-config", cfg);
+      setMsg("Đã lưu cấu hình.");
+      setForm(null);
+      reload();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Lỗi lưu cấu hình.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const num = (v: number | null | undefined) => (v == null ? "" : String(v));
+  const parse = (s: string): number | null => (s.trim() === "" ? null : Number(s));
+
+  return (
+    <div className="cc-result glass" style={{ marginBottom: 12 }}>
+      <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <MapPin className="h-4 w-4" /> Cấu hình chấm công ngoại tuyến
+      </div>
+      <div className="cc-note" style={{ marginBottom: 10 }}>
+        💡 Khuyến nghị: cắm <b>máy chủ + router WiFi vào một UPS (bộ lưu điện)</b> để LAN luôn sống khi mất điện
+        → chấm công luôn trực tuyến, không cần offline. Offline chỉ là phương án dự phòng có kiểm soát bên dưới.
+      </div>
+      {cfg && (
+        <>
+          <div className="cc-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 12 }}>
+            <label className="cc-field">
+              <span>Vĩ độ công ty (lat)</span>
+              <input className="cc-select" inputMode="decimal" placeholder="Bỏ trống = tắt geofence"
+                value={num(cfg.geofenceLat)} onChange={(e) => set({ geofenceLat: parse(e.target.value) })} />
+            </label>
+            <label className="cc-field">
+              <span>Kinh độ công ty (lng)</span>
+              <input className="cc-select" inputMode="decimal" placeholder="Bỏ trống = tắt geofence"
+                value={num(cfg.geofenceLng)} onChange={(e) => set({ geofenceLng: parse(e.target.value) })} />
+            </label>
+            <label className="cc-field">
+              <span>Bán kính cho phép (mét)</span>
+              <input className="cc-select" inputMode="numeric"
+                value={num(cfg.geofenceRadiusM)} onChange={(e) => set({ geofenceRadiusM: Number(e.target.value) || 0 })} />
+            </label>
+            <label className="cc-field">
+              <span>Lùi giờ tối đa (phút)</span>
+              <input className="cc-select" inputMode="numeric"
+                value={num(cfg.maxBackdateMinutes)} onChange={(e) => set({ maxBackdateMinutes: Number(e.target.value) || 0 })} />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button className="cc-tab" type="button" onClick={useCurrentLocation}>
+              <MapPin className="h-4 w-4" /> Dùng vị trí hiện tại
+            </button>
+            <button className="cc-tab" type="button" data-on onClick={save} disabled={busy}>
+              {busy ? "Đang lưu…" : "Lưu cấu hình"}
+            </button>
+            {msg && <span className="cc-note" style={{ alignSelf: "center" }}>{msg}</span>}
+          </div>
+        </>
+      )}
     </div>
   );
 }

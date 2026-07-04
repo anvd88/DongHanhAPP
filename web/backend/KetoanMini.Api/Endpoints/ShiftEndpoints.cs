@@ -41,6 +41,18 @@ public static class ShiftEndpoints
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_shift_assignments ON hr_shift_assignments (employee_id, work_date);
             CREATE INDEX IF NOT EXISTS ix_hr_shift_assignments_date ON hr_shift_assignments (work_date);
+
+            CREATE TABLE IF NOT EXISTS hr_holidays (
+                id uuid PRIMARY KEY,
+                holiday_date date NOT NULL,
+                name varchar(160) NOT NULL DEFAULT '',
+                holiday_type varchar(24) NOT NULL DEFAULT 'company',
+                note text NOT NULL DEFAULT '',
+                created_by varchar(100) NOT NULL DEFAULT '',
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_holidays_date_type ON hr_holidays (holiday_date, holiday_type);
+            CREATE INDEX IF NOT EXISTS ix_hr_holidays_date ON hr_holidays (holiday_date);
             """).ExecuteNonQueryAsync(ct);
 
         // Seed 1 ca hành chính mặc định để dùng ngay.
@@ -188,6 +200,73 @@ public static class ShiftEndpoints
             await Signal(hub, db, u, "Hủy phân ca", "ShiftAssignment", id.ToString());
             return Results.NoContent();
         });
+
+        // ---------------- Ngay nghi le / nghi cong ty ----------------
+        g.MapGet("/holidays", async (Database db, DateOnly? from, DateOnly? to) =>
+        {
+            var now = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+            var start = from ?? new DateOnly(now.Year, 1, 1);
+            var end = to ?? new DateOnly(now.Year, 12, 31);
+            if (end < start) (start, end) = (end, start);
+
+            await using var conn = await db.OpenAsync();
+            var list = new List<object>();
+            await using var r = await conn.Cmd("""
+                SELECT id, holiday_date, name, holiday_type, note, created_by, created_at
+                FROM hr_holidays
+                WHERE holiday_date BETWEEN @from AND @to
+                ORDER BY holiday_date, holiday_type, name
+                """)
+                .With("@from", start).With("@to", end)
+                .ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new
+                {
+                    id = r.Guid("id"),
+                    holidayDate = r.DateOnly("holiday_date"),
+                    name = r.Str("name"),
+                    holidayType = r.Str("holiday_type"),
+                    note = r.Str("note"),
+                    createdBy = r.Str("created_by"),
+                    createdAt = r.Dt("created_at"),
+                });
+            return Results.Ok(list);
+        });
+
+        g.MapPost("/holidays", async (SaveHolidayReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        {
+            if (!u.IsAdmin()) return Results.Forbid();
+            var holidayType = NormalizeHolidayType(req.HolidayType);
+            var name = string.IsNullOrWhiteSpace(req.Name)
+                ? (holidayType == "public" ? "Ngày nghỉ lễ" : "Ngày nghỉ công ty")
+                : req.Name.Trim();
+
+            await using var conn = await db.OpenAsync();
+            var id = Guid.NewGuid();
+            await conn.Cmd("""
+                INSERT INTO hr_holidays (id, holiday_date, name, holiday_type, note, created_by)
+                VALUES (@id, @date, @name, @type, @note, @by)
+                ON CONFLICT (holiday_date, holiday_type) DO UPDATE
+                SET name=@name, note=@note, created_by=@by
+                """)
+                .With("@id", id).With("@date", req.HolidayDate).With("@name", name)
+                .With("@type", holidayType).With("@note", req.Note ?? "").With("@by", u.Username())
+                .ExecuteNonQueryAsync();
+            await Signal(hub, db, u, "Cap nhat ngay nghi", "Holiday", req.HolidayDate.ToString("yyyy-MM-dd"));
+            return Results.Ok(new { id });
+        });
+
+        g.MapDelete("/holidays/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        {
+            if (!u.IsAdmin()) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            var name = await conn.Cmd("SELECT holiday_date::text FROM hr_holidays WHERE id=@id")
+                .With("@id", id).ExecuteScalarAsync() as string ?? id.ToString();
+            var n = await conn.Cmd("DELETE FROM hr_holidays WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
+            if (n == 0) return Results.NotFound();
+            await Signal(hub, db, u, "Xoa ngay nghi", "Holiday", name);
+            return Results.NoContent();
+        });
     }
 
     public static void MapTimesheet(this WebApplication app)
@@ -286,6 +365,25 @@ public static class ShiftEndpoints
         }
 
         // 3) Duyệt từng ngày có dữ liệu.
+        var holidays = new Dictionary<DateOnly, HolidayInfo>();
+        await using (var r = await conn.Cmd("""
+            SELECT holiday_date,
+                   string_agg(name, ', ' ORDER BY holiday_type, name) AS holiday_name,
+                   CASE WHEN BOOL_OR(holiday_type='public') THEN 'public' ELSE 'company' END AS holiday_type
+            FROM hr_holidays
+            WHERE holiday_date BETWEEN @from AND @to
+            GROUP BY holiday_date
+            """).With("@from", from).With("@to", to).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+                holidays[r.DateOnly("holiday_date")] = new HolidayInfo(r.Str("holiday_name"), r.Str("holiday_type"));
+        }
+        for (var d = from; d <= to; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek == DayOfWeek.Sunday && !holidays.ContainsKey(d))
+                holidays[d] = new HolidayInfo("Chủ nhật", "weekly");
+        }
+
         var days = new List<object>();
         int workedDays = 0, lateDays = 0, earlyDays = 0, absentDays = 0;
         int totalLate = 0, totalEarly = 0, totalOt = 0;
@@ -293,11 +391,13 @@ public static class ShiftEndpoints
 
         var allDates = new SortedSet<DateOnly>(logs.Keys);
         foreach (var d in shifts.Keys) allDates.Add(d);
+        foreach (var d in holidays.Keys) allDates.Add(d);
 
         foreach (var d in allDates)
         {
             shifts.TryGetValue(d, out var shift);
             var hasLog = logs.TryGetValue(d, out var log);
+            holidays.TryGetValue(d, out var holiday);
             string status;
             int lateMin = 0, earlyMin = 0, otMin = 0;
             double workedH = 0;
@@ -335,6 +435,8 @@ public static class ShiftEndpoints
                     workedH = hasOut ? Math.Round(workedMinutes / 60.0, 2) : 0;
                     status = hasOut ? "Không phân ca" : "Thiếu giờ ra";
                 }
+                if (holiday is not null && shift is null)
+                    status = WorkedHolidayStatus(holiday);
                 workedDays++;
                 if (lateMin > 0) lateDays++;
                 if (earlyMin > 0) earlyDays++;
@@ -346,10 +448,18 @@ public static class ShiftEndpoints
                 absentDays++;
             }
 
+            if (!hasLog && holiday is not null)
+            {
+                status = OffHolidayStatus(holiday);
+                absentDays = Math.Max(0, absentDays - 1);
+            }
+
             days.Add(new
             {
                 date = d,
                 shiftName = shift?.Name ?? "",
+                holidayName = holiday?.Name ?? "",
+                holidayType = holiday?.Type ?? "",
                 checkIn,
                 checkOut,
                 lateMinutes = lateMin,
@@ -367,6 +477,26 @@ public static class ShiftEndpoints
     }
 
     private sealed record ShiftInfo(string Name, TimeOnly Start, TimeOnly End, int Break, int Grace, decimal StandardHours);
+    private sealed record HolidayInfo(string Name, string Type);
+
+    private static string NormalizeHolidayType(string? type)
+        => string.Equals(type, "public", StringComparison.OrdinalIgnoreCase) ? "public" : "company";
+
+    private static string OffHolidayStatus(HolidayInfo holiday)
+        => holiday.Type switch
+        {
+            "public" => "Nghỉ lễ",
+            "weekly" => "Nghỉ chủ nhật",
+            _ => "Nghỉ công ty",
+        };
+
+    private static string WorkedHolidayStatus(HolidayInfo holiday)
+        => holiday.Type switch
+        {
+            "public" => "Làm ngày nghỉ lễ",
+            "weekly" => "Làm ngày chủ nhật",
+            _ => "Làm ngày nghỉ công ty",
+        };
 
     private static TimeOnly ReadTime(NpgsqlDataReader r, string col)
     {
@@ -395,4 +525,5 @@ public static class ShiftEndpoints
     public record SaveShiftReq(string? Code, string? Name, string? StartTime, string? EndTime,
         int BreakMinutes, int LateGraceMinutes, decimal StandardHours, bool IsOvernight);
     public record AssignShiftReq(Guid EmployeeId, Guid ShiftId, DateOnly WorkDate, string? Note);
+    public record SaveHolidayReq(DateOnly HolidayDate, string? Name, string? HolidayType, string? Note);
 }

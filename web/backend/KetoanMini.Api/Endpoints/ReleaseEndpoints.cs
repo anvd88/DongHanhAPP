@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Realtime;
+using KetoanMini.Api.Services;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.SignalR;
 
 namespace KetoanMini.Api.Endpoints;
@@ -88,16 +90,17 @@ public static class ReleaseEndpoints
 
         g.MapPost("/", UploadRelease).DisableAntiforgery();
 
-        g.MapPost("/{id:long}/publish", async (long id, PublishReleaseRequest req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:long}/publish", async (long id, PublishReleaseRequest req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
         {
             await using var conn = await db.OpenAsync();
+            string version = "", notes = "";
+            int versionCode = 0;
             if (req.IsPublished)
             {
                 string target;
-                int versionCode;
                 bool hasApk;
                 await using (var release = await conn.Cmd(
-                    @"SELECT app_target, version_code, apk_data IS NOT NULL AS has_apk
+                    @"SELECT app_target, version, version_code, release_notes, apk_data IS NOT NULL AS has_apk
                       FROM app_releases
                       WHERE id=@id")
                     .With("@id", id)
@@ -105,7 +108,9 @@ public static class ReleaseEndpoints
                 {
                     if (!await release.ReadAsync()) return Results.NotFound(new { message = "KhÃ´ng tÃ¬m tháº¥y báº£n phÃ¡t hÃ nh." });
                     target = release.Str("app_target");
+                    version = release.Str("version");
                     versionCode = release.Int("version_code");
+                    notes = release.Str("release_notes");
                     hasApk = release.Bool("has_apk");
                 }
 
@@ -132,6 +137,7 @@ public static class ReleaseEndpoints
 
             if (changed == 0) return Results.NotFound(new { message = "Không tìm thấy bản phát hành." });
             await NotifyReleaseChanged(hub);
+            if (req.IsPublished) await SendReleasePush(push, version, versionCode, notes);
             await db.RecordAudit(u.Username(), req.IsPublished ? "Phát hành APK" : "Gỡ phát hành APK", "Release", id.ToString(), "");
             return Results.NoContent();
         });
@@ -149,10 +155,16 @@ public static class ReleaseEndpoints
         });
     }
 
-    private static async Task<IResult> UploadRelease(HttpRequest request, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub)
+    private static async Task<IResult> UploadRelease(HttpRequest request, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push)
     {
         if (!request.HasFormContentType)
             return Results.BadRequest(new { message = "Vui lòng gửi multipart/form-data kèm file APK." });
+
+        // Bỏ giới hạn dung lượng body cho RIÊNG endpoint tải APK (Kestrel mặc định ~28MB, còn APK
+        // thường 40–100MB) — nếu không request sẽ bị hủy giữa chừng và trình duyệt báo "Failed to fetch".
+        var maxBodySize = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (maxBodySize is { IsReadOnly: false })
+            maxBodySize.MaxRequestBodySize = null;
 
         var form = await request.ReadFormAsync();
         var file = form.Files.GetFile("apk") ?? form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
@@ -211,6 +223,7 @@ public static class ReleaseEndpoints
         await r.ReadAsync();
         var dto = ReadRelease(r);
         await NotifyReleaseChanged(hub);
+        if (isPublished) await SendReleasePush(push, dto.Version, dto.VersionCode, notes);
         await db.RecordAudit(u.Username(), isPublished ? "Đăng bản cập nhật APK" : "Tạo bản cập nhật APK", "Release", dto.Version, safeFileName);
         return Results.Created($"/api/releases/{dto.Id}", dto);
     }
@@ -264,6 +277,18 @@ public static class ReleaseEndpoints
 
     private static Task NotifyReleaseChanged(IHubContext<ChangesHub> hub)
         => hub.Clients.All.SendAsync("changed", "release");
+
+    /// <summary>
+    /// Đẩy thông báo tới MỌI thiết bị khi admin phát hành bản mới. "Chữ ký" <c>release:{versionCode}</c>
+    /// ổn định để chống bắn trùng; target <c>AppUpdate</c> để app mở hộp thoại cập nhật khi bấm vào.
+    /// </summary>
+    private static async Task SendReleasePush(PushService push, string version, int versionCode, string notes)
+    {
+        var body = string.IsNullOrWhiteSpace(notes)
+            ? "Bản cập nhật mới đã sẵn sàng. Nhấn để cập nhật."
+            : notes.Trim();
+        await push.SendToAllAsync($"Đã có bản cập nhật {version}", body, $"release:{versionCode}", "AppUpdate");
+    }
 
     public record PublishReleaseRequest(bool IsPublished, bool? IsMandatory);
 }

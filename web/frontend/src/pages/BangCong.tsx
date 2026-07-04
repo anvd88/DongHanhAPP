@@ -70,6 +70,7 @@ function calendarDays(month: string): CalendarCell[] {
 
 function toneOfDay(day?: TimesheetDay): CalendarTone {
   if (!day) return "empty";
+  if (day.holidayType) return "off";
   if (day.status === "Vắng") return "absent";
   if (day.overtimeMinutes > 0) return "overtime";
   if (day.lateMinutes > 0 || day.earlyMinutes > 0 || day.status.includes("muộn") || day.status.includes("sớm") || day.status.includes("Thiếu")) {
@@ -83,6 +84,7 @@ function toneOfDay(day?: TimesheetDay): CalendarTone {
 function toneLabel(day?: TimesheetDay) {
   const tone = toneOfDay(day);
   if (!day) return "Chưa có dữ liệu";
+  if (day.holidayType) return day.holidayName || (day.holidayType === "public" ? "Nghỉ lễ" : day.holidayType === "weekly" ? "Nghỉ chủ nhật" : "Nghỉ công ty");
   if (tone === "worked") return "Đi làm";
   if (tone === "absent") return "Nghỉ / vắng";
   if (tone === "overtime") return "Tăng ca";
@@ -228,6 +230,7 @@ export function BangCong() {
               <DetailItem label="Đi muộn" value={fmtMinutes(selectedDay.lateMinutes)} tone={selectedDay.lateMinutes ? "text-amber-600 dark:text-amber-300" : undefined} />
               <DetailItem label="Về sớm" value={fmtMinutes(selectedDay.earlyMinutes)} tone={selectedDay.earlyMinutes ? "text-orange-600 dark:text-orange-300" : undefined} />
               <DetailItem label="Phân loại" value={toneLabel(selectedDay)} />
+              {selectedDay.holidayType && <DetailItem label="Ngày nghỉ" value={selectedDay.holidayName || toneLabel(selectedDay)} />}
               <DetailItem label="Ca làm" value={selectedDay.shiftName || "—"} />
             </div>
           ) : (

@@ -1,2 +1,5 @@
 /build/*
 !/build/.npmkeep
+
+# Firebase config (bí mật theo dự án — không commit)
+google-services.json

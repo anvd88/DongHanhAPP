@@ -1,9 +1,12 @@
 namespace KetoanMini.Api.Models;
 
 // ----- Auth -----
-public record LoginRequest(string Username, string Password, string? Sid = null);
-// Đăng nhập bằng khuôn mặt: client gửi một loạt ảnh (data URL base64), server tự chọn khung tốt nhất.
-public record FaceLoginRequest(List<string> Images, string? Sid = null);
+// Client: "apk"/"android"/"native" = đăng nhập từ app native (KHÔNG bị chặn bởi cờ tắt đăng nhập web).
+// Bỏ trống/null = trình duyệt web (chịu ràng buộc cờ "bật/tắt đăng nhập trên web" của tài khoản).
+public record LoginRequest(string Username, string Password, string? Sid = null, string? Client = null);
+// Quên mật khẩu bằng khuôn mặt: username + mật khẩu mới + loạt ảnh quét.
+// Backend so 1:1 với mẫu khuôn mặt đã đăng ký của đúng username này.
+public record FacePasswordResetRequest(string Username, string NewPassword, List<string> Images, string? Client = null);
 public record LoginResponse(string Token, UserDto User);
 public record HeartbeatRequest(string? Sid);
 // Thiết bị/phiên đăng nhập của một tài khoản (phục vụ màn "Quản lý thiết bị đăng nhập").
@@ -12,6 +15,9 @@ public record DeviceDto(string Sid, string MachineName, string ClientKind, strin
 public record UpdateProfileRequest(string FullName, string Email);
 public record UpdateAvatarRequest(string ImageDataUrl);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+// Cài đặt đăng nhập của tài khoản: cho phép đăng nhập bản web hay không (app native luôn dùng được).
+public record AccountLoginSettingsDto(bool WebLoginEnabled);
+public record AccountLoginSettingsPatch(bool WebLoginEnabled);
 public record UserPreferencesDto(bool WaterReminderEnabled, bool EyeReminderEnabled, bool KeepCreateVoucherOpen,
     bool MessagePreviewEnabled);
 public record UserPreferencePatchRequest(bool? WaterReminderEnabled, bool? EyeReminderEnabled, bool? KeepCreateVoucherOpen,
@@ -136,8 +142,12 @@ public record NhanDienResult(bool Matched, string? Username, string? FullName, d
 /// thay vì giờ nhận. Null (mặc định) = chấm trực tuyến bình thường, dùng giờ server.
 /// <see cref="SelfOnly"/> = true: CHỈ chấm công cho chính tài khoản đang đăng nhập (trang HR Nhân sự).
 /// Khuôn mặt khớp nhân viên KHÁC ⇒ chặn (status "proxy"), không cho chấm công hộ.
+/// <see cref="PreviewOnly"/> = true: CHỈ nhận diện (ai + Vào/Ra dự kiến), KHÔNG ghi nhật ký. Dùng cho
+/// luồng sinh trắc học trên app: quét → xem trước "Nhân viên / Giờ vào" → người dùng bấm Xác nhận thì
+/// mới gửi lại cùng loạt ảnh với PreviewOnly=false để ghi công thật.
 /// </summary>
-public record ChamCongBurstRequest(List<string> Images, DateTime? OccurredAt = null, bool SelfOnly = false);
+public record ChamCongBurstRequest(List<string> Images, DateTime? OccurredAt = null, bool SelfOnly = false,
+    bool PreviewOnly = false, double? GpsLat = null, double? GpsLng = null);
 
 /// <summary>
 /// Kết quả chấm công theo loạt ảnh. <see cref="Status"/>:
@@ -148,6 +158,17 @@ public record ChamCongResult(string Status, bool Matched, string? Username, stri
     double Similarity, string? Loai, DateTime? OccurredAt, double Quality, string Message, string? Guidance);
 public record ChamCongLogDto(long Id, string Username, string FullName, string Loai, double Similarity,
     DateTime OccurredAt, string GhiChu);
+
+/// <summary>Bản chấm công ngoại tuyến chờ duyệt (kèm cờ rủi ro) hiển thị ở màn quản lý web.</summary>
+public record ChamCongOfflineDto(long Id, string Username, string FullName, string Loai, double Similarity,
+    double Quality, DateTime OccurredAt, DateTime SyncedAt, int BackdateMinutes, string ClientIp,
+    bool OnCompanyLan, double? GpsLat, double? GpsLng, double? DistanceM, bool? InGeofence, string Flags,
+    string Status, string ReviewedBy, DateTime? ReviewedAt, string ReviewNote);
+
+public record OfflineReviewRequest(string? Note = null);
+
+/// <summary>Cấu hình chính sách chấm công ngoại tuyến: geofence công ty + ngưỡng lùi giờ.</summary>
+public record OfflineConfigDto(double? GeofenceLat, double? GeofenceLng, double GeofenceRadiusM, int MaxBackdateMinutes);
 
 // ----- Releases (Cập nhật) -----
 public record ReleaseDto(long Id, string AppTarget, string Version, int VersionCode, string ReleaseNotes,

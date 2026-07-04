@@ -222,7 +222,7 @@ public static class RequestEndpoints
             return Results.Ok(new { request = head, approvals });
         });
 
-        g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
         {
             if (string.IsNullOrWhiteSpace(req.Type) || Array.FindIndex(Types, t => t.Type == req.Type) < 0)
                 return Results.BadRequest(new { message = "Loại đơn không hợp lệ." });
@@ -284,14 +284,23 @@ public static class RequestEndpoints
             await db.RecordAudit(me, "Gửi đơn từ", "Request", no, $"{TypeLabel(req.Type)} (web).");
             await hub.Clients.All.SendAsync("changed", "data");
             await hub.Clients.All.SendAsync("changed", "hr");
+
+            // Đẩy thông báo tới người sẽ duyệt bước đầu tiên (quản lý trực tiếp, hoặc quản trị).
+            var pushBody = $"{me} · {TypeLabel(req.Type)}";
+            var inboxSig = $"inbox:{reqId}";
+            if (!string.IsNullOrWhiteSpace(mgrUsername) && !string.Equals(mgrUsername, me, StringComparison.OrdinalIgnoreCase))
+                await push.SendToUserAsync(mgrUsername, "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
+            else
+                await push.SendToAdminsAsync("Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
+
             return Results.Ok(new { id = reqId, requestNo = no });
         });
 
-        g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
-            await Decide(id, req, u, db, hub, approve: true));
+        g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+            await Decide(id, req, u, db, hub, push, approve: true));
 
-        g.MapPost("/{id:guid}/reject", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
-            await Decide(id, req, u, db, hub, approve: false));
+        g.MapPost("/{id:guid}/reject", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+            await Decide(id, req, u, db, hub, push, approve: false));
 
         g.MapPost("/{id:guid}/cancel", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
         {
@@ -318,7 +327,7 @@ public static class RequestEndpoints
         }.ExecuteNonQueryAsync();
     }
 
-    private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, bool approve)
+    private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push, bool approve)
     {
         await using var conn = await db.OpenAsync();
         var me = u.Username();
@@ -369,10 +378,12 @@ public static class RequestEndpoints
             .With("@sig", (object?)req.Signature ?? DBNull.Value).With("@id", stepId)
             .ExecuteNonQueryAsync();
 
+        var pushBody = $"{TypeLabel(reqType)} · {requestNo}";
         if (!approve)
         {
             await conn.Cmd("UPDATE hr_requests SET status='Rejected', updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                 .With("@id", id).ExecuteNonQueryAsync();
+            await push.SendToUserAsync(requester, "Đơn bị từ chối", pushBody, $"req:{id}:rejected", "Requests");
         }
         else
         {
@@ -383,12 +394,26 @@ public static class RequestEndpoints
             {
                 await conn.Cmd("UPDATE hr_requests SET current_step=@s, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                     .With("@s", nextStep).With("@id", id).ExecuteNonQueryAsync();
+
+                // Đẩy thông báo tới người duyệt của bước kế tiếp.
+                string nextRole = "", nextUser = "";
+                await using (var r = await conn.Cmd("SELECT approver_role, approver_username FROM hr_request_approvals WHERE request_id=@id AND step_no=@s")
+                    .With("@id", id).With("@s", nextStep).ExecuteReaderAsync())
+                {
+                    if (await r.ReadAsync()) { nextRole = r.Str("approver_role"); nextUser = r.Str("approver_username"); }
+                }
+                var nextSig = $"inbox:{id}";
+                if (!string.IsNullOrWhiteSpace(nextUser))
+                    await push.SendToUserAsync(nextUser, "Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
+                else if (nextRole == "Admin")
+                    await push.SendToAdminsAsync("Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
             }
             else
             {
                 await conn.Cmd("UPDATE hr_requests SET status='Approved', updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                     .With("@id", id).ExecuteNonQueryAsync();
                 await ApplyApprovedEffects(conn, reqType, employeeId, payloadJson, req, requestNo, me);
+                await push.SendToUserAsync(requester, "Đơn đã được duyệt", pushBody, $"req:{id}:approved", "Requests");
             }
         }
 

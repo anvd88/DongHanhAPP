@@ -8,6 +8,7 @@ using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 
@@ -28,10 +29,20 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new UtcDateTimeConverter());
 });
 
+// Cho phép form multipart lớn (tải APK 40–150MB qua trang cập nhật ứng dụng). Giới hạn body cứng
+// của Kestrel đã được gỡ riêng cho endpoint tải APK trong ReleaseEndpoints.UploadRelease.
+builder.Services.Configure<FormOptions>(o =>
+{
+    o.MultipartBodyLengthLimit = 512L * 1024 * 1024; // 512MB
+});
+
 builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<TokenService>();
 // Mã hóa dữ liệu nhạy cảm khi lưu trữ (embedding khuôn mặt…) — khóa từ Security:FieldEncryptionKey.
 builder.Services.AddSingleton<FieldCipher>();
+
+// Thông báo đẩy tức thì qua Firebase Cloud Messaging (tắt an toàn nếu chưa cấu hình Firebase:CredentialsPath).
+builder.Services.AddSingleton<PushService>();
 
 // Bộ máy nhận diện khuôn mặt cho chấm công: YuNet + căn chỉnh 5 điểm + AdaFace R50 ONNX Runtime.
 // Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
@@ -218,6 +229,7 @@ app.MapChat();
 app.MapFeedback();
 app.MapHr();
 app.MapRequests();
+app.MapNotifications();
 app.MapShifts();
 app.MapTimesheet();
 app.MapPenalties();
@@ -262,6 +274,9 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang nhan su luc kh
 
 try { await RequestEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang don tu luc khoi dong: {Msg}", ex.Message); }
+
+try { await NotificationEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang token thiet bi luc khoi dong: {Msg}", ex.Message); }
 
 try { await ShiftEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang ca lam luc khoi dong: {Msg}", ex.Message); }
