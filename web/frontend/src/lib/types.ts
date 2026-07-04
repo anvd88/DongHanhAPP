@@ -294,7 +294,32 @@ export type ChamCongStatus =
   | "spoof"
   | "unknown"
   | "proxy" // khớp khuôn mặt nhân viên KHÁC khi chấm công cho chính mình → bị chặn
-  | "offline";
+  | "offline"
+  | "pending"; // đồng bộ ngoại tuyến → chờ quản lý duyệt
+
+/** Bản chấm công ngoại tuyến chờ duyệt (kèm cờ rủi ro) — màn quản lý. */
+export interface ChamCongOffline {
+  id: number;
+  username: string;
+  fullName: string;
+  loai: string;
+  similarity: number;
+  quality: number;
+  occurredAt: string;
+  syncedAt: string;
+  backdateMinutes: number;
+  clientIp: string;
+  onCompanyLan: boolean;
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  distanceM?: number | null;
+  inGeofence?: boolean | null;
+  flags: string;
+  status: "pending" | "approved" | "rejected";
+  reviewedBy: string;
+  reviewedAt?: string | null;
+  reviewNote: string;
+}
 
 /** Kết quả chấm công theo loạt ảnh (server tự chọn khung tốt nhất). */
 export interface ChamCongResult {
@@ -308,6 +333,14 @@ export interface ChamCongResult {
   quality: number;
   message: string;
   guidance?: string;
+}
+
+/** Cấu hình chính sách chấm công ngoại tuyến (geofence công ty + ngưỡng lùi giờ). */
+export interface OfflineConfig {
+  geofenceLat: number | null;
+  geofenceLng: number | null;
+  geofenceRadiusM: number;
+  maxBackdateMinutes: number;
 }
 
 export interface Release {

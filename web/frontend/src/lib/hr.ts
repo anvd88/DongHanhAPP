@@ -193,6 +193,21 @@ export interface ShiftAssignment {
   note: string;
 }
 
+export type HolidayType = "public" | "company";
+
+export interface Holiday {
+  id: string;
+  holidayDate: string;
+  name: string;
+  holidayType: HolidayType | string;
+  note: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export const holidayTypeLabel = (type: string) =>
+  ({ public: "Lịch nhà nước", company: "Nghỉ công ty", weekly: "Chủ nhật" } as Record<string, string>)[type] ?? type;
+
 export interface RequestType {
   type: string;
   label: string;
@@ -403,6 +418,8 @@ export const groupAccountNumber = (num: string): string =>
 export interface TimesheetDay {
   date: string;
   shiftName: string;
+  holidayName?: string;
+  holidayType?: string;
   checkIn?: string | null;
   checkOut?: string | null;
   lateMinutes: number;
@@ -436,6 +453,8 @@ export const requestStatusColor = (s: string) =>
   ({ Pending: "warning", Approved: "success", Rejected: "danger", Cancelled: "muted" } as Record<string, string>)[s] ?? "muted";
 
 export const timesheetStatusColor = (s: string) => {
+  const normalized = (s || "").toLowerCase();
+  if (normalized.includes("nghỉ") || normalized.includes("nghi ")) return "muted";
   if (s.includes("Đủ") || s === "Không phân ca") return "success";
   if (s.includes("muộn") || s.includes("sớm") || s.includes("Thiếu")) return "warning";
   if (s === "Vắng") return "danger";

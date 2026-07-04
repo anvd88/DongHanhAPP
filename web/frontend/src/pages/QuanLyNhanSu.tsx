@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Building2, CalendarRange, Clock, Gift, MapPin, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { Building2, CalendarDays, CalendarRange, Clock, Gift, MapPin, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
@@ -11,6 +11,7 @@ import { useApi } from "../lib/useApi";
 import { useAppNotifications } from "../components/AppNotifications";
 import {
   docTypeLabel,
+  holidayTypeLabel,
   leaveTypeLabel,
   ACCESS_ROLES,
   accessRoleLabel,
@@ -18,6 +19,7 @@ import {
   type Department,
   type EmployeeCard,
   type EmployeeDoc,
+  type Holiday,
   type LeaveBalance,
   type Location,
   type Payslip,
@@ -26,13 +28,14 @@ import {
   type ShiftAssignment,
 } from "../lib/hr";
 
-type Tab = "employees" | "departments" | "locations" | "shifts" | "assignments";
+type Tab = "employees" | "departments" | "locations" | "shifts" | "assignments" | "holidays";
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "employees", label: "Nhân viên", icon: <Users className="h-4 w-4" /> },
   { key: "departments", label: "Phòng ban", icon: <Building2 className="h-4 w-4" /> },
   { key: "locations", label: "Địa điểm", icon: <MapPin className="h-4 w-4" /> },
   { key: "shifts", label: "Ca làm", icon: <Clock className="h-4 w-4" /> },
   { key: "assignments", label: "Phân ca", icon: <CalendarRange className="h-4 w-4" /> },
+  { key: "holidays", label: "Ngày nghỉ", icon: <CalendarDays className="h-4 w-4" /> },
 ];
 
 export function QuanLyNhanSu() {
@@ -60,6 +63,7 @@ export function QuanLyNhanSu() {
       {tab === "locations" && <LocationsTab />}
       {tab === "shifts" && <ShiftsTab />}
       {tab === "assignments" && <AssignmentsTab />}
+      {tab === "holidays" && <HolidaysTab />}
     </div>
   );
 }
@@ -71,6 +75,20 @@ function toolbar(title: string, onAdd: () => void, addLabel: string) {
       <Button onClick={onAdd}><Plus className="h-4 w-4" /> {addLabel}</Button>
     </div>
   );
+}
+
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthRange(month: string) {
+  const [year, mon] = month.split("-").map(Number);
+  const safe = year && mon ? new Date(year, mon - 1, 1) : new Date();
+  const from = `${safe.getFullYear()}-${String(safe.getMonth() + 1).padStart(2, "0")}-01`;
+  const last = new Date(safe.getFullYear(), safe.getMonth() + 1, 0);
+  const to = `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, "0")}-${String(last.getDate()).padStart(2, "0")}`;
+  return { from, to };
 }
 
 // ---------------- Nhân viên ----------------
@@ -164,6 +182,7 @@ function EmployeeModal({ value, departments, locations, employees, onClose, onSa
 
   const save = async () => {
     if (!form.fullName.trim()) { notify.error("Vui lòng nhập họ tên."); return; }
+    if (!form.departmentId) { notify.error("Vui lòng chọn phòng ban cho nhân viên."); return; }
     setSaving(true);
     try {
       const body = {
@@ -192,9 +211,9 @@ function EmployeeModal({ value, departments, locations, employees, onClose, onSa
         <Field label="Tài khoản đăng nhập"><Input value={form.username} onChange={(e) => set("username", e.target.value)} placeholder="username (để chấm công/đơn từ)" /></Field>
         <Field label="Họ tên *"><Input value={form.fullName} onChange={(e) => set("fullName", e.target.value)} /></Field>
         <Field label="Chức vụ"><Input value={form.position} onChange={(e) => set("position", e.target.value)} /></Field>
-        <Field label="Phòng ban">
+        <Field label="Phòng ban *">
           <Select value={form.departmentId} onChange={(e) => set("departmentId", e.target.value)} className="w-full">
-            <option value="">— Không —</option>
+            <option value="">— Chọn phòng ban —</option>
             {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </Select>
         </Field>
@@ -603,6 +622,106 @@ function LocationModal({ value, onClose, onSaved }: { value: Location | null; on
         <Field label="Địa chỉ"><Input value={f.address} onChange={(e) => set("address", e.target.value)} /></Field>
       </div>
     </Modal>
+  );
+}
+
+// ---------------- Ngày nghỉ ----------------
+function HolidaysTab() {
+  const { notify, confirm } = useAppNotifications();
+  const [month, setMonth] = useState(currentMonthKey());
+  const range = monthRange(month);
+  const { data, loading, reload } = useApi<Holiday[]>(`/api/shifts/holidays?from=${range.from}&to=${range.to}`, [range.from, range.to]);
+  const [f, setF] = useState({ holidayDate: range.from, holidayType: "public", name: "", note: "" });
+  const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
+
+  const save = async () => {
+    if (!f.holidayDate) { notify.error("Chọn ngày nghỉ."); return; }
+    try {
+      await api.post("/api/shifts/holidays", {
+        holidayDate: f.holidayDate,
+        holidayType: f.holidayType,
+        name: f.name.trim(),
+        note: f.note.trim(),
+      });
+      setF((s) => ({ ...s, name: "", note: "" }));
+      reload({ silent: true });
+      notify.success("Đã lưu ngày nghỉ.");
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không lưu được ngày nghỉ.");
+    }
+  };
+
+  const remove = async (r: Holiday) => {
+    const ok = await confirm({
+      title: `Xóa ${r.name || "ngày nghỉ"}?`,
+      description: `${date(r.holidayDate)} · ${holidayTypeLabel(r.holidayType)}`,
+      confirmLabel: "Xóa",
+      tone: "danger",
+    });
+    if (!ok) return;
+    await api.del(`/api/shifts/holidays/${r.id}`);
+    reload({ silent: true });
+    notify.success("Đã xóa ngày nghỉ.");
+  };
+
+  return (
+    <div className="space-y-4">
+      <GlassPanel strong className="rounded-[20px] p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-bold text-[var(--text)]">Lịch nghỉ nhà nước & công ty</h2>
+          <Field label="Tháng hiển thị">
+            <Input
+              type="month"
+              value={month}
+              onChange={(e) => {
+                const next = e.target.value;
+                setMonth(next);
+                setF((s) => ({ ...s, holidayDate: monthRange(next).from }));
+              }}
+              className="w-auto"
+            />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
+          <Field label="Ngày nghỉ">
+            <Input type="date" value={f.holidayDate} onChange={(e) => set("holidayDate", e.target.value)} />
+          </Field>
+          <Field label="Loại lịch">
+            <Select value={f.holidayType} onChange={(e) => set("holidayType", e.target.value)} className="w-full">
+              <option value="public">Lịch nhà nước</option>
+              <option value="company">Nghỉ công ty</option>
+            </Select>
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Tên ngày nghỉ">
+              <Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Ví dụ: Quốc khánh, nghỉ du lịch công ty" />
+            </Field>
+          </div>
+          <div className="flex items-end">
+            <Button onClick={save} className="w-full"><Plus className="h-4 w-4" /> Thêm / cập nhật</Button>
+          </div>
+          <div className="sm:col-span-5">
+            <Field label="Ghi chú">
+              <Input value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Thông tin thêm nếu cần" />
+            </Field>
+          </div>
+        </div>
+      </GlassPanel>
+
+      <GlassPanel strong className="overflow-hidden rounded-[20px]">
+        <div className="border-b border-[var(--gc-border)] px-5 py-4">
+          <h2 className="font-bold text-[var(--text)]">Danh sách ngày nghỉ trong tháng</h2>
+        </div>
+        <Table<Holiday> loading={loading} rows={data ?? []} keyOf={(r) => r.id} empty="Chưa có ngày nghỉ trong tháng này"
+          columns={[
+            { header: "Ngày", cell: (r) => <span className="font-semibold">{date(r.holidayDate)}</span> },
+            { header: "Loại", cell: (r) => <Badge color={r.holidayType === "public" ? "purple" : "accent"}>{holidayTypeLabel(r.holidayType)}</Badge> },
+            { header: "Tên ngày nghỉ", cell: (r) => <span>{r.name || "—"}</span> },
+            { header: "Ghi chú", cell: (r) => <span className="text-[var(--text-secondary)]">{r.note || "—"}</span> },
+            { header: "", align: "right", cell: (r) => <button onClick={() => remove(r)} className="rounded-lg p-2 text-red-600 hover:bg-red-500/10"><Trash2 className="h-4 w-4" /></button> },
+          ]} />
+      </GlassPanel>
+    </div>
   );
 }
 

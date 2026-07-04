@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Màu nền cho theme AppCompat/splash (đỏ VNeID). Trước đây do Capacitor cung cấp. -->
+    <color name="colorPrimary">#C62828</color>
+    <color name="colorPrimaryDark">#8E1B1B</color>
+    <color name="colorAccent">#C62828</color>
+</resources>

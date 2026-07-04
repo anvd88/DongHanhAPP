@@ -33,6 +33,15 @@ public static class ChamCongEndpoints
     // Điểm chất lượng tối thiểu của khung tốt nhất; thấp hơn ⇒ yêu cầu chụp lại (mờ/tối/loá).
     private const double MinFrameQuality = 0.28;
 
+    // ── Chính sách chấm công NGOẠI TUYẾN (chờ duyệt) — có thể ghi đè bằng khóa cấu hình trong
+    //    web_system_settings (attendance.offline.*). Mặc định đủ dùng nếu chưa cấu hình.
+    private const string CfgMaxBackdate = "attendance.offline.maxBackdateMinutes";
+    private const string CfgGeofenceLat = "attendance.offline.geofenceLat";
+    private const string CfgGeofenceLng = "attendance.offline.geofenceLng";
+    private const string CfgGeofenceRadius = "attendance.offline.geofenceRadiusM";
+    private const int DefaultMaxBackdateMinutes = 20;   // lùi giờ quá mức này ⇒ gắn cờ rủi ro
+    private const double DefaultGeofenceRadiusM = 300;  // bán kính geofence mặc định (mét)
+
     public static async Task EnsureTables(Database db)
     {
         await using var conn = await db.OpenAsync();
@@ -69,6 +78,36 @@ public static class ChamCongEndpoints
 
             CREATE INDEX IF NOT EXISTS ix_cham_cong_face_username ON cham_cong_face (username, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_cham_cong_log_username_time ON cham_cong_log (username, occurred_at DESC);
+            """).ExecuteNonQueryAsync();
+
+        // Chấm công NGOẠI TUYẾN chờ duyệt: khi mất điện/mất mạng, app xếp hàng rồi đồng bộ sau. Những
+        // bản này KHÔNG ghi thẳng vào cham_cong_log (vì không chứng minh được có mặt tại công ty) mà
+        // vào đây chờ quản lý duyệt, kèm các cờ rủi ro (lùi giờ, không ở LAN công ty, ngoài geofence).
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS cham_cong_offline (
+                id bigserial PRIMARY KEY,
+                username varchar(100) NOT NULL,
+                full_name varchar(200) NOT NULL DEFAULT '',
+                loai varchar(10) NOT NULL,
+                similarity double precision NOT NULL DEFAULT 0,
+                quality double precision NOT NULL DEFAULT 0,
+                occurred_at timestamptz NOT NULL,
+                synced_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                backdate_minutes integer NOT NULL DEFAULT 0,
+                client_ip varchar(64) NOT NULL DEFAULT '',
+                on_company_lan boolean NOT NULL DEFAULT FALSE,
+                gps_lat double precision NULL,
+                gps_lng double precision NULL,
+                distance_m double precision NULL,
+                in_geofence boolean NULL,
+                flags varchar(400) NOT NULL DEFAULT '',
+                status varchar(20) NOT NULL DEFAULT 'pending',
+                reviewed_by varchar(100) NOT NULL DEFAULT '',
+                reviewed_at timestamptz NULL,
+                review_note varchar(500) NOT NULL DEFAULT '',
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_cham_cong_offline_status ON cham_cong_offline (status, synced_at DESC);
             """).ExecuteNonQueryAsync();
 
         // AdaFace R50 emits 512-float embeddings. SFace embeddings from older versions are incompatible,
@@ -289,7 +328,7 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, HttpContext http) =>
         {
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
@@ -407,6 +446,29 @@ public static class ChamCongEndpoints
             var occurredAtUtc = req.OccurredAt?.ToUniversalTime();
             var isOffline = occurredAtUtc is not null;
             var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser, atUtc: occurredAtUtc);
+
+            // Chế độ XEM TRƯỚC: đã nhận diện chắc chắn + đã qua liveness, nhưng CHƯA ghi nhật ký.
+            // Trả về ai + Vào/Ra dự kiến + giờ dự kiến để app hiện form xác nhận. App bấm "Xác nhận"
+            // sẽ gọi lại đúng loạt ảnh này với PreviewOnly=false để ghi công thật.
+            if (req.PreviewOnly)
+            {
+                var previewAt = decision.ShouldRecord ? (occurredAtUtc ?? DateTime.UtcNow) : decision.ExistingAt;
+                return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, decision.Loai,
+                    previewAt, best.Score, decision.Message, null));
+            }
+
+            // ĐỒNG BỘ NGOẠI TUYẾN: KHÔNG ghi thẳng vào bảng công (không chứng minh được có mặt tại công
+            // ty lúc chấm) → tạo bản CHỜ DUYỆT + gắn cờ rủi ro để quản lý soi và duyệt/từ chối trên web.
+            if (isOffline)
+            {
+                await CreateOfflinePendingAsync(conn, http, bestUser, bestName ?? "", decision,
+                    bestSim, best.Score, occurredAtUtc!.Value, req.GpsLat, req.GpsLng);
+                await db.RecordAudit(bestUser, "Chấm công ngoại tuyến (chờ duyệt)", "ChamCong", bestUser,
+                    $"Chờ duyệt · độ khớp {bestSim:0.000} · giờ chấm {occurredAtUtc:yyyy-MM-dd HH:mm} (UTC).");
+                return Results.Ok(new ChamCongResult("pending", true, bestUser, bestName, bestSim, decision.Loai,
+                    occurredAtUtc, best.Score, "Đã đồng bộ — chờ quản lý duyệt.", null));
+            }
+
             if (!decision.ShouldRecord)
                 return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, decision.Loai,
                     decision.ExistingAt, best.Score, decision.Message, null));
@@ -453,6 +515,201 @@ public static class ChamCongEndpoints
                     r.Dt("occurred_at"), r.Str("ghi_chu")));
             return Results.Ok(list);
         }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        // ── Chấm công ngoại tuyến chờ duyệt (Admin) ─────────────────────────────
+        // Danh sách bản chờ duyệt (mặc định status=pending; truyền status=all để xem cả đã xử lý).
+        g.MapGet("/offline", async (Database db, string? status) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var where = status is null or "pending" ? "WHERE status = 'pending'"
+                : status == "all" ? "" : "WHERE status = @st";
+            var cmd = conn.Cmd(
+                $@"SELECT id, username, full_name, loai, similarity, quality, occurred_at, synced_at,
+                          backdate_minutes, client_ip, on_company_lan, gps_lat, gps_lng, distance_m,
+                          in_geofence, flags, status, reviewed_by, reviewed_at, review_note
+                   FROM cham_cong_offline {where}
+                   ORDER BY (status = 'pending') DESC, synced_at DESC LIMIT 500");
+            if (where.Contains("@st")) cmd.With("@st", status!);
+
+            var list = new List<ChamCongOfflineDto>();
+            await using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new ChamCongOfflineDto(
+                    r.Long("id"), r.Str("username"), r.Str("full_name"), r.Str("loai"),
+                    r.GetDouble(r.GetOrdinal("similarity")), r.GetDouble(r.GetOrdinal("quality")),
+                    r.Dt("occurred_at"), r.Dt("synced_at"), r.Int("backdate_minutes"),
+                    r.Str("client_ip"), r.Bool("on_company_lan"),
+                    r.IsDBNull(r.GetOrdinal("gps_lat")) ? null : r.GetDouble(r.GetOrdinal("gps_lat")),
+                    r.IsDBNull(r.GetOrdinal("gps_lng")) ? null : r.GetDouble(r.GetOrdinal("gps_lng")),
+                    r.IsDBNull(r.GetOrdinal("distance_m")) ? null : r.GetDouble(r.GetOrdinal("distance_m")),
+                    r.IsDBNull(r.GetOrdinal("in_geofence")) ? null : r.Bool("in_geofence"),
+                    r.Str("flags"), r.Str("status"), r.Str("reviewed_by"), r.DtNull("reviewed_at"), r.Str("review_note")));
+            return Results.Ok(list);
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        // Duyệt: ghi bản ngoại tuyến vào bảng công (đúng giờ chấm thật) rồi đánh dấu approved.
+        g.MapPost("/offline/{id:long}/approve", async (long id, OfflineReviewRequest? body, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            string? username = null, fullName = null, loai = null; DateTime occurredAt = default; double sim = 0; string curStatus = "";
+            await using (var r = await conn.Cmd(
+                "SELECT username, full_name, loai, occurred_at, similarity, status FROM cham_cong_offline WHERE id=@id")
+                .With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await r.ReadAsync()) return Results.NotFound();
+                username = r.Str("username"); fullName = r.Str("full_name"); loai = r.Str("loai");
+                occurredAt = r.Dt("occurred_at"); sim = r.GetDouble(r.GetOrdinal("similarity")); curStatus = r.Str("status");
+            }
+            if (curStatus != "pending")
+                return Results.BadRequest(new { message = "Bản này đã được xử lý." });
+
+            await conn.Cmd(
+                @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
+                  VALUES (@u, @fn, @loai, @sim, @at, @note)")
+                .With("@u", username!).With("@fn", fullName ?? "")
+                .With("@loai", loai!).With("@sim", sim)
+                .With("@at", occurredAt)
+                .With("@note", "Ngoại tuyến (đã duyệt)")
+                .ExecuteNonQueryAsync();
+
+            await conn.Cmd(
+                @"UPDATE cham_cong_offline SET status='approved', reviewed_by=@by, reviewed_at=CURRENT_TIMESTAMP,
+                    review_note=@note WHERE id=@id")
+                .With("@by", u.Username()).With("@note", body?.Note ?? "").With("@id", id)
+                .ExecuteNonQueryAsync();
+
+            await db.RecordAudit(u.Username(), "Duyệt chấm công ngoại tuyến", "ChamCong", username!,
+                $"Duyệt bản #{id} · {loai} · {occurredAt:yyyy-MM-dd HH:mm} (UTC).");
+            return Results.Ok(new { message = "Đã duyệt và ghi công." });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        // Từ chối: đánh dấu rejected, KHÔNG ghi công.
+        g.MapPost("/offline/{id:long}/reject", async (long id, OfflineReviewRequest? body, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var n = await conn.Cmd(
+                @"UPDATE cham_cong_offline SET status='rejected', reviewed_by=@by, reviewed_at=CURRENT_TIMESTAMP,
+                    review_note=@note WHERE id=@id AND status='pending'")
+                .With("@by", u.Username()).With("@note", body?.Note ?? "").With("@id", id)
+                .ExecuteNonQueryAsync();
+            if (n == 0) return Results.BadRequest(new { message = "Không tìm thấy bản chờ duyệt." });
+            await db.RecordAudit(u.Username(), "Từ chối chấm công ngoại tuyến", "ChamCong", "", $"Từ chối bản #{id}.");
+            return Results.Ok(new { message = "Đã từ chối." });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        // Cấu hình chính sách chấm công ngoại tuyến (Admin): geofence công ty + ngưỡng lùi giờ.
+        g.MapGet("/offline-config", async (Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            return Results.Ok(new OfflineConfigDto(
+                await GetSettingDoubleAsync(conn, CfgGeofenceLat),
+                await GetSettingDoubleAsync(conn, CfgGeofenceLng),
+                await GetSettingDoubleAsync(conn, CfgGeofenceRadius) ?? DefaultGeofenceRadiusM,
+                (int)(await GetSettingDoubleAsync(conn, CfgMaxBackdate) ?? DefaultMaxBackdateMinutes)));
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        g.MapPut("/offline-config", async (OfflineConfigDto cfg, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            // Toạ độ rỗng ("") = tắt geofence (GetSettingDoubleAsync trả null → không kiểm tra khoảng cách).
+            await SetSettingAsync(conn, CfgGeofenceLat, cfg.GeofenceLat?.ToString(inv) ?? "", u.Username());
+            await SetSettingAsync(conn, CfgGeofenceLng, cfg.GeofenceLng?.ToString(inv) ?? "", u.Username());
+            await SetSettingAsync(conn, CfgGeofenceRadius, cfg.GeofenceRadiusM.ToString(inv), u.Username());
+            await SetSettingAsync(conn, CfgMaxBackdate, cfg.MaxBackdateMinutes.ToString(inv), u.Username());
+            await db.RecordAudit(u.Username(), "Cập nhật cấu hình chấm công ngoại tuyến", "ChamCong", "",
+                $"Geofence bán kính {cfg.GeofenceRadiusM:0}m · lùi giờ tối đa {cfg.MaxBackdateMinutes} phút.");
+            return Results.Ok(new { message = "Đã lưu cấu hình." });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+    }
+
+    private static async Task SetSettingAsync(NpgsqlConnection conn, string key, string value, string by)
+    {
+        await conn.Cmd(
+            @"INSERT INTO web_system_settings (setting_key, setting_value, updated_at, updated_by)
+              VALUES (@k, @v, CURRENT_TIMESTAMP, @by)
+              ON CONFLICT (setting_key) DO UPDATE SET setting_value=@v, updated_at=CURRENT_TIMESTAMP, updated_by=@by")
+            .With("@k", key).With("@v", value).With("@by", by).ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Tạo bản chấm công ngoại tuyến CHỜ DUYỆT + tính các cờ rủi ro: lùi giờ (occurred so với lúc nhận),
+    /// có ở LAN công ty không (IP riêng/khớp cấu hình), có trong geofence không (nếu đã cấu hình toạ độ).
+    /// </summary>
+    private static async Task CreateOfflinePendingAsync(
+        NpgsqlConnection conn, HttpContext http, string username, string fullName,
+        AttendanceDecision decision, double similarity, double quality, DateTime occurredAtUtc,
+        double? gpsLat, double? gpsLng)
+    {
+        var nowUtc = DateTime.UtcNow;
+        var backdateMinutes = Math.Max(0, (int)(nowUtc - occurredAtUtc).TotalMinutes);
+        var ip = (http.Connection.RemoteIpAddress?.MapToIPv4() ?? http.Connection.RemoteIpAddress)?.ToString() ?? "";
+        var onLan = IsPrivateIp(http.Connection.RemoteIpAddress);
+
+        var maxBackdate = (int)(await GetSettingDoubleAsync(conn, CfgMaxBackdate) ?? DefaultMaxBackdateMinutes);
+        var geoLat = await GetSettingDoubleAsync(conn, CfgGeofenceLat);
+        var geoLng = await GetSettingDoubleAsync(conn, CfgGeofenceLng);
+        var geoRadius = await GetSettingDoubleAsync(conn, CfgGeofenceRadius) ?? DefaultGeofenceRadiusM;
+
+        double? distanceM = null;
+        bool? inGeofence = null;
+        if (geoLat is { } gla && geoLng is { } glo && gpsLat is { } pla && gpsLng is { } plo)
+        {
+            distanceM = HaversineMeters(gla, glo, pla, plo);
+            inGeofence = distanceM <= geoRadius;
+        }
+
+        var flags = new List<string>();
+        if (backdateMinutes > maxBackdate) flags.Add($"Lùi giờ {backdateMinutes} phút (> {maxBackdate})");
+        if (!onLan) flags.Add("Không ở mạng LAN công ty");
+        if (inGeofence == false) flags.Add($"Ngoài phạm vi công ty ({distanceM:0} m)");
+        if (gpsLat is null || gpsLng is null) flags.Add("Không có vị trí GPS");
+        if (!decision.ShouldRecord) flags.Add("Có thể trùng: đã có bản chấm công");
+
+        await conn.Cmd(
+            @"INSERT INTO cham_cong_offline
+                (username, full_name, loai, similarity, quality, occurred_at, synced_at, backdate_minutes,
+                 client_ip, on_company_lan, gps_lat, gps_lng, distance_m, in_geofence, flags, status)
+              VALUES (@u, @fn, @loai, @sim, @q, @at, CURRENT_TIMESTAMP, @bd, @ip, @lan, @la, @lo, @dist, @inf, @flags, 'pending')")
+            .With("@u", username).With("@fn", fullName).With("@loai", decision.Loai)
+            .With("@sim", similarity).With("@q", quality).With("@at", occurredAtUtc)
+            .With("@bd", backdateMinutes).With("@ip", ip).With("@lan", onLan)
+            .With("@la", (object?)gpsLat ?? DBNull.Value).With("@lo", (object?)gpsLng ?? DBNull.Value)
+            .With("@dist", (object?)distanceM ?? DBNull.Value).With("@inf", (object?)inGeofence ?? DBNull.Value)
+            .With("@flags", string.Join("; ", flags))
+            .ExecuteNonQueryAsync();
+    }
+
+    private static async Task<double?> GetSettingDoubleAsync(NpgsqlConnection conn, string key)
+    {
+        var v = await conn.Cmd("SELECT setting_value FROM web_system_settings WHERE setting_key=@k LIMIT 1")
+            .With("@k", key).ExecuteScalarAsync();
+        return v is string s && double.TryParse(s, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : null;
+    }
+
+    /// <summary>IP riêng (RFC1918/loopback/link-local) — coi như đang trong mạng LAN công ty.</summary>
+    private static bool IsPrivateIp(System.Net.IPAddress? addr)
+    {
+        if (addr is null) return false;
+        if (System.Net.IPAddress.IsLoopback(addr)) return true;
+        var v4 = addr.MapToIPv4().GetAddressBytes();
+        return v4[0] == 10
+            || (v4[0] == 192 && v4[1] == 168)
+            || (v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31)
+            || (v4[0] == 169 && v4[1] == 254); // link-local
+    }
+
+    /// <summary>Khoảng cách hai điểm GPS theo mét (công thức haversine).</summary>
+    private static double HaversineMeters(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double r = 6371000;
+        double ToRad(double d) => d * Math.PI / 180;
+        var dLat = ToRad(lat2 - lat1);
+        var dLon = ToRad(lon2 - lon1);
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
+              + Math.Cos(ToRad(lat1)) * Math.Cos(ToRad(lat2)) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+        return r * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
     }
 
     /// <summary>

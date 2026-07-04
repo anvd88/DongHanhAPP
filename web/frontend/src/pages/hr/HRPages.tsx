@@ -280,6 +280,7 @@ function timesheetCalendarDays(month: string): TimesheetCalendarCell[] {
 
 function timesheetCalendarTone(day?: TimesheetDay): TimesheetCalendarTone {
   if (!day) return "empty";
+  if (day.holidayType) return "off";
   if (day.status === "Vắng") return "absent";
   if (day.overtimeMinutes > 0) return "overtime";
   if (day.lateMinutes > 0 || day.earlyMinutes > 0 || day.status.includes("muộn") || day.status.includes("sớm") || day.status.includes("Thiếu")) {
@@ -293,6 +294,7 @@ function timesheetCalendarTone(day?: TimesheetDay): TimesheetCalendarTone {
 function timesheetCalendarLabel(day?: TimesheetDay) {
   const tone = timesheetCalendarTone(day);
   if (!day) return "Chưa có dữ liệu";
+  if (day.holidayType) return day.holidayName || (day.holidayType === "public" ? "Nghỉ lễ" : day.holidayType === "weekly" ? "Nghỉ chủ nhật" : "Nghỉ công ty");
   if (tone === "worked") return "Đi làm";
   if (tone === "absent") return "Nghỉ / vắng";
   if (tone === "overtime") return "Tăng ca";
@@ -676,6 +678,7 @@ function TimesheetRow({ day, detailed = false }: { day: TimesheetDay; detailed?:
         <TimesheetDetailCell label="Đi muộn" value={fmtMinutes(day.lateMinutes)} tone={day.lateMinutes ? "warning" : undefined} />
         <TimesheetDetailCell label="Về sớm" value={fmtMinutes(day.earlyMinutes)} tone={day.earlyMinutes ? "warning" : undefined} />
         <TimesheetDetailCell label="Phân loại" value={timesheetCalendarLabel(day)} />
+        {day.holidayType && <TimesheetDetailCell label="Ngày nghỉ" value={day.holidayName || timesheetCalendarLabel(day)} />}
         <TimesheetDetailCell label="Ca làm" value={day.shiftName || "--"} />
       </div>
     );
