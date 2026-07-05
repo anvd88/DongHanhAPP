@@ -1,5 +1,7 @@
 package com.ketoanapk.hr.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -7,18 +9,29 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Inbox
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PersonOff
+import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -32,41 +45,92 @@ import com.ketoanapk.hr.data.ManagerDepartmentStatus
 import com.ketoanapk.hr.data.Penalty
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.SalaryListItem
+import com.ketoanapk.hr.ui.theme.Danger
+import com.ketoanapk.hr.ui.theme.InfoBlue
+import com.ketoanapk.hr.ui.theme.Success
+import com.ketoanapk.hr.ui.theme.Warning as WarningColor
 
+/**
+ * Màn theo dõi đơn của nhân sự (CHỈ ĐỌC). App không phê duyệt nữa — việc duyệt thực hiện trên bản web.
+ * Người quản lý/admin xem nhanh các đơn đang chờ mình, bấm vào để xem chi tiết + tiến trình.
+ */
 @Composable
-fun ApprovalScreen(state: HomeUiState, onApprove: (String) -> Unit, onReject: (String) -> Unit) {
+fun StaffRequestsScreen(vm: HrViewModel) {
+    val detail = vm.requestDetailState
+    if (detail.id != null) {
+        BackHandler { vm.closeRequestDetail() }
+        RequestDetailView(
+            state = detail,
+            onBack = vm::closeRequestDetail,
+            onCancel = {}, // đơn của nhân sự khác: chỉ đọc, không có thao tác
+        )
+        return
+    }
+
+    val state = vm.homeState
     val pending = state.inbox.filter { it.status.equals("Pending", true) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHead("Phê duyệt", "${pending.size} đơn chờ xử lý") }
+        item { PageHeader(Icons.Filled.Inbox, "Đơn chờ duyệt", "${pending.size} đơn của nhân sự đang chờ", Tone.Warning) }
+        item { WebApprovalNotice() }
         if (state.loading && state.inbox.isEmpty()) item { LoadingBlock() }
         if (state.inbox.isEmpty()) {
-            item { EmptyState("Hộp thư trống", state.error ?: "Không có đơn nào cần bạn duyệt.") }
+            item { EmptyState("Không có đơn chờ", state.error ?: "Hiện không có đơn nào của nhân sự chờ bạn xử lý.") }
         } else {
-            items(state.inbox, key = { it.id }) { req -> ApprovalCard(req, onApprove, onReject) }
+            items(state.inbox, key = { it.id }) { req -> StaffRequestCard(req) { vm.openStaffDetail(req.id) } }
+        }
+    }
+}
+
+/** Nhắc rằng việc phê duyệt được thực hiện trên bản web (app chỉ để xem/theo dõi). */
+@Composable
+private fun WebApprovalNotice() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Filled.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text(
+                "Xem nhanh trạng thái tại đây. Việc phê duyệt đơn được thực hiện trên bản web.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         }
     }
 }
 
 @Composable
-private fun ApprovalCard(req: RequestListItem, onApprove: (String) -> Unit, onReject: (String) -> Unit) {
-    HrCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
+private fun StaffRequestCard(req: RequestListItem, onOpen: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shadowElevation = 1.dp,
+        onClick = onOpen,
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(req.typeLabel.ifBlank { req.title }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("${req.employeeName} · ${req.employeeCode}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${req.requestNo} · Bước ${req.currentStep}/${req.totalSteps} · ${formatIsoDateTime(req.createdAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Bấm để xem chi tiết", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
             StatusChip(requestStatusLabel(req.status), requestTone(req.status))
-        }
-        Text("${req.requestNo} · Bước ${req.currentStep}/${req.totalSteps} · ${formatIsoDateTime(req.createdAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (req.status.equals("Pending", true)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onApprove(req.id) }, modifier = Modifier.weight(1f)) { Text("Duyệt") }
-                OutlinedButton(onClick = { onReject(req.id) }, modifier = Modifier.weight(1f)) { Text("Từ chối") }
-            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -78,7 +142,7 @@ fun PenaltyScreen(user: HrUser, state: HomeUiState) {
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHead("Phạt / kỷ luật", if (user.isAdmin) "Toàn công ty" else "Của tôi") }
+        item { PageHeader(Icons.Filled.Gavel, "Kỷ luật", if (user.isAdmin) "Toàn công ty" else "Của tôi", Tone.Warning) }
         if (state.loading && state.penalties.isEmpty()) item { LoadingBlock() }
         if (state.penalties.isEmpty()) {
             item { EmptyState("Không có quyết định phạt", state.error ?: "Danh sách hiện đang trống.") }
@@ -114,21 +178,27 @@ fun ManagerScreen(state: ManagerUiState) {
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHead("Quản lý nhân sự", "Quân số, phòng ban, nhân viên") }
+        item { PageHeader(Icons.Filled.People, "Quản lý nhân sự", "Quân số, phòng ban, nhân viên", Tone.Neutral) }
         if (state.loading && state.summary == null) item { LoadingBlock() }
         state.error?.let { item { EmptyState("Không tải được dữ liệu", it) } }
 
         item { WorkTodayCard(h) }
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    KpiCard(Icons.Filled.Groups, "Quân số", "${h?.active ?: 0}", "Đang làm việc", modifier = Modifier.weight(1f))
-                    KpiCard(Icons.Filled.Face, "Có mặt", "${h?.present ?: 0}", "${h?.late ?: 0} đi muộn", Tone.Success, modifier = Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    KpiCard(Icons.Filled.Inbox, "Chờ duyệt", "${h?.pendingApprovals ?: 0}", "Đơn cần xử lý", Tone.Warning, modifier = Modifier.weight(1f))
-                    KpiCard(Icons.Filled.Warning, "Cảnh báo", "${h?.alerts ?: 0}", "Cần rà soát", if ((h?.alerts ?: 0) > 0) Tone.Danger else Tone.Neutral, modifier = Modifier.weight(1f))
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(Icons.Filled.Groups, "Quân số", "${h?.active ?: 0}", InfoBlue, Modifier.weight(1f))
+                StatTile(Icons.Filled.CheckCircle, "Có mặt", "${h?.present ?: 0}", Success, Modifier.weight(1f))
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(Icons.Filled.FlightTakeoff, "Nghỉ / công tác", "${(h?.leave ?: 0) + (h?.business ?: 0)}", WarningColor, Modifier.weight(1f))
+                StatTile(Icons.Filled.PersonOff, "Vắng", "${h?.absent ?: 0}", Danger, Modifier.weight(1f))
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(Icons.Filled.WatchLater, "Đi muộn", "${h?.late ?: 0}", WarningColor, Modifier.weight(1f))
+                StatTile(Icons.Filled.Inbox, "Đơn chờ duyệt", "${h?.pendingApprovals ?: 0}", InfoBlue, Modifier.weight(1f))
             }
         }
 
@@ -183,11 +253,18 @@ fun PayrollScreen(state: HomeUiState) {
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHead("Bảng lương", "Mức lương nhân viên") }
+        item { PageHeader(Icons.Filled.Payments, "Bảng lương", "Mức lương nhân viên", Tone.Success) }
         if (state.loading && state.salaries.isEmpty()) item { LoadingBlock() }
         if (state.salaries.isEmpty()) {
             item { EmptyState("Không có dữ liệu lương", state.error ?: "Chưa có cấu trúc lương hoặc không có quyền xem.") }
         } else {
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatTile(Icons.Filled.People, "Nhân viên", "${state.salaries.size}", InfoBlue, Modifier.weight(1f))
+                    StatTile(Icons.Filled.CheckCircle, "Đã thiết lập", "${state.salaries.count { it.hasSalary }}", Success, Modifier.weight(1f))
+                }
+            }
+            item { SectionTitle("Danh sách lương") }
             items(state.salaries, key = { it.employeeId }) { s -> SalaryCard(s) }
         }
     }

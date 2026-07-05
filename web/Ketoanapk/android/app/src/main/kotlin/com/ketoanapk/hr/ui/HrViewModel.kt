@@ -30,6 +30,7 @@ import com.ketoanapk.hr.data.AppNotification
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.data.ChamCongResult
+import com.ketoanapk.hr.data.CreateRequestBody
 import com.ketoanapk.hr.data.Department
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.EmployeeCard
@@ -41,6 +42,7 @@ import com.ketoanapk.hr.data.NotificationCenter
 import com.ketoanapk.hr.data.NotificationWorker
 import com.ketoanapk.hr.data.Penalty
 import com.ketoanapk.hr.data.ReleaseInfo
+import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
 import com.ketoanapk.hr.data.SalaryListItem
@@ -48,6 +50,7 @@ import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.network.ApiException
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.Job
+import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -70,8 +73,9 @@ enum class HrDestination(
     Scan("Chấm công", "Chấm công", Icons.Filled.Face),
     Timesheet("Bảng công", "Bảng công", Icons.Filled.CalendarMonth),
     Requests("Đơn từ", "Đơn từ", Icons.Filled.Description),
-    Approval("Phê duyệt", "Duyệt", Icons.Filled.Inbox),
-    Penalty("Phạt / kỷ luật", "Phạt", Icons.Filled.Gavel),
+    // Chỉ để XEM trạng thái đơn của nhân sự (không duyệt trong app — duyệt trên bản web).
+    Approval("Đơn chờ duyệt", "Chờ duyệt", Icons.Filled.Inbox),
+    Penalty("Kỷ luật", "Kỷ luật", Icons.Filled.Gavel),
     People("Quản lý nhân sự", "Quản lý", Icons.Filled.People, adminOnly = true),
     Payroll("Bảng lương", "Lương", Icons.Filled.Payments, adminOnly = true),
     Audit("Nhật ký hệ thống", "Nhật ký", Icons.Filled.History, adminOnly = true),
@@ -91,6 +95,19 @@ data class HomeUiState(
     val penalties: List<Penalty> = emptyList(),
     val salaries: List<SalaryListItem> = emptyList(),
     val requestTypes: List<RequestType> = emptyList(),
+)
+
+/**
+ * Trạng thái xem chi tiết một đơn (mở khi id != null). canCancel = đơn của chính mình còn chờ duyệt
+ * → cho phép hủy. Với đơn của nhân sự khác thì mở ở chế độ CHỈ ĐỌC (canCancel=false); việc phê duyệt
+ * được thực hiện trên bản web.
+ */
+data class RequestDetailUiState(
+    val id: String? = null,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val detail: RequestDetail? = null,
+    val canCancel: Boolean = false,
 )
 
 data class TimesheetUiState(
@@ -161,6 +178,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var timesheetState by mutableStateOf(TimesheetUiState(loading = true))
         private set
+    var requestDetailState by mutableStateOf(RequestDetailUiState())
+        private set
+    var creatingRequest by mutableStateOf(false)
+        private set
     var managerState by mutableStateOf(ManagerUiState())
         private set
     var settingsState by mutableStateOf(SettingsUiState())
@@ -187,6 +208,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     private var dismissedUpdateVersionCode = 0 // mã bản người dùng đã bấm "Để sau" (không nhắc lại)
 
     val unreadCount: Int get() = notifications.count { !it.read }
+
+    /** Số đơn đang chờ tôi duyệt (hộp thư đã lọc sẵn ở máy chủ theo người duyệt/quản trị). */
+    val pendingApprovalCount: Int get() = homeState.inbox.count { it.status.equals("Pending", true) }
 
     val bottomDestinations = listOf(
         HrDestination.Home,
@@ -449,6 +473,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
         if (destination.adminOnly && !user.isAdmin) return
         selected = destination
+        closeRequestDetail() // đóng chi tiết đơn đang mở (nếu có) khi chuyển màn để vào trạng thái sạch
         when (destination) {
             HrDestination.People -> if (managerState.summary == null) refreshManager(silent = false)
             HrDestination.Scan -> { resetCapture(); checkAttendanceServer(); refreshPendingCount() }
@@ -472,13 +497,54 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 loadSettings()
                 loadPushNotificationSetting()
             }
-            else -> refreshHome(user, silent = false)
+            else -> {
+                refreshHome(user, silent = false)
+                if (user.isAdmin) refreshManager(silent = true)
+            }
         }
     }
 
-    fun approve(id: String) = decide { repo.approveRequest(id, "Đã duyệt trên ứng dụng."); "Đã duyệt đơn." }
-    fun reject(id: String) = decide { repo.rejectRequest(id, "Từ chối trên ứng dụng."); "Đã từ chối đơn." }
     fun cancel(id: String) = decide { repo.cancelRequest(id); "Đã hủy đơn." }
+
+    // ── Tạo đơn từ + xem chi tiết ────────────────────────────────────────────────
+    /** Gửi một đơn mới (payload đã được màn hình dựng từ các trường nhập). */
+    fun submitRequest(type: String, title: String, payload: JsonObject, onDone: (Boolean) -> Unit) {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return
+        viewModelScope.launch {
+            creatingRequest = true
+            runCatching { repo.createRequest(CreateRequestBody(type = type, title = title.trim(), payload = payload)) }
+                .onSuccess {
+                    actionMessage = "Đã gửi đơn ${it.requestNo}. Bạn có thể theo dõi trạng thái ở đây."
+                    refreshHome(user, silent = true)
+                    onDone(true)
+                }
+                .onFailure { actionMessage = readable(it); onDone(false) }
+            creatingRequest = false
+        }
+    }
+
+    /** Xem chi tiết đơn của CHÍNH MÌNH — cho phép hủy khi còn chờ duyệt. */
+    fun openRequestDetail(id: String) = loadRequestDetail(id, canCancel = true)
+
+    /** Xem chi tiết đơn của nhân sự khác ở chế độ CHỈ ĐỌC (phê duyệt thực hiện trên bản web). */
+    fun openStaffDetail(id: String) = loadRequestDetail(id, canCancel = false)
+
+    private fun loadRequestDetail(id: String, canCancel: Boolean) {
+        requestDetailState = RequestDetailUiState(id = id, loading = true, canCancel = canCancel)
+        viewModelScope.launch {
+            runCatching { repo.requestDetail(id) }
+                .onSuccess { requestDetailState = RequestDetailUiState(id = id, detail = it, canCancel = canCancel) }
+                .onFailure { requestDetailState = requestDetailState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    fun closeRequestDetail() { requestDetailState = RequestDetailUiState() }
+
+    /** Hủy đơn ngay trong màn chi tiết rồi đóng lại. */
+    fun cancelFromDetail(id: String) {
+        closeRequestDetail()
+        cancel(id)
+    }
 
     private fun decide(block: suspend () -> String) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
@@ -553,7 +619,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     employee = runCatching { repo.myProfile() }.getOrNull(),
                     timesheet = runCatching { repo.myTimesheet(month) }.getOrNull(),
                     requests = runCatching { repo.requests("mine") }.getOrDefault(emptyList()),
-                    inbox = if (user.isAdmin) runCatching { repo.requests("inbox") }.getOrDefault(emptyList()) else emptyList(),
+                    // Hộp thư duyệt cho MỌI người: máy chủ đã lọc theo người duyệt (quản lý trực tiếp) hoặc quản trị.
+                    inbox = runCatching { repo.requests("inbox") }.getOrDefault(emptyList()),
                     penalties = runCatching { repo.penalties(if (user.isAdmin) "all" else "mine", if (user.isAdmin) month else null) }.getOrDefault(emptyList()),
                     salaries = if (user.isAdmin) runCatching { repo.salaries() }.getOrDefault(emptyList()) else emptyList(),
                     requestTypes = runCatching { repo.requestTypes() }.getOrDefault(emptyList()),

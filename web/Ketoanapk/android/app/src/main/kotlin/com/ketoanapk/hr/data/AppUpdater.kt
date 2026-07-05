@@ -43,10 +43,26 @@ object AppUpdater {
         context.startActivity(intent)
     }
 
-    /** File đích trong cacheDir (đã khai báo <cache-path> trong file_paths.xml cho FileProvider). */
+    /**
+     * File đích trong cacheDir (đã khai báo <cache-path> trong file_paths.xml cho FileProvider).
+     *
+     * Dọn SẠCH mọi file .apk cũ còn sót trong cacheDir trước khi tải bản mới. Nếu không, mỗi lần
+     * cập nhật tải về một file mang tên khác (tên do admin đặt, thường kèm phiên bản) nên các APK cũ
+     * (mỗi cái vài chục MB) tích lại mãi → dung lượng ứng dụng phình dần sau nhiều lần cập nhật.
+     */
     fun apkCacheFile(context: Context, fileName: String): File {
-        val safe = fileName.substringAfterLast('/').substringAfterLast('\\').ifBlank { "ketoan-hr-update.apk" }
+        purgeCachedApks(context)
+        val safe = fileName.substringAfterLast('/').substringAfterLast('\\')
+            .takeIf { it.endsWith(".apk", ignoreCase = true) } ?: "ketoan-hr-update.apk"
         return File(context.cacheDir, safe).also { if (it.exists()) it.delete() }
+    }
+
+    /** Xóa mọi APK cũ trong cacheDir (bản cập nhật lần trước đã cài xong, không còn cần giữ). */
+    fun purgeCachedApks(context: Context) {
+        runCatching {
+            context.cacheDir.listFiles { f -> f.isFile && f.name.endsWith(".apk", ignoreCase = true) }
+                ?.forEach { it.delete() }
+        }
     }
 
     @Suppress("DEPRECATION")

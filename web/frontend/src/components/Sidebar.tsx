@@ -103,8 +103,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       const dt = state.lastTime ? Math.min((time - state.lastTime) / 1000, 0.032) : 0.016;
       state.lastTime = time;
 
-      const stiffness = 92;
-      const damping = 18;
+      const stiffness = 170;
+      const damping = 26;
       const stepSpring = (current: number, target: number, velocity: number) => {
         const acceleration = (target - current) * stiffness - velocity * damping;
         const nextVelocity = velocity + acceleration * dt;
@@ -129,7 +129,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       state.vh = h.velocity;
 
       const direction = state.targetY >= state.y ? 1 : -1;
-      const stretch = 1 + Math.min(Math.abs(state.vy) * 0.00013, 0.04);
+      const stretch = 1 + Math.min(Math.abs(state.vy) * 0.00008, 0.022);
       paintIndicator(stretch, direction);
 
       const settled =

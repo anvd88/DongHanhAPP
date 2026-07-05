@@ -22,6 +22,11 @@ val BrandGradientBottom = Color(0xFF9E1B1B)
 val Success = Color(0xFF15803D)
 val Warning = Color(0xFFB7791F)
 val Danger = Color(0xFFB42318)
+val InfoBlue = Color(0xFF2563EB)
+
+// Nền tối gradient dùng chung cho các thẻ "hero" (Trang chủ, Hồ sơ).
+val HeroTop = Color(0xFF1B2A41)
+val HeroBottom = Color(0xFF0E1826)
 
 private val LightColors = lightColorScheme(
     primary = BrandRed,

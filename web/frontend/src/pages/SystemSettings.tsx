@@ -4,6 +4,7 @@ import {
   Droplet,
   Eye,
   FilePlus2,
+  Gauge,
   HardDrive,
   MessageCircle,
   MessageSquare,
@@ -45,6 +46,7 @@ import {
   subscribeWaterReminderEnabled,
 } from "../lib/waterReminderClock";
 import { loadUserPreferences, saveUserPreferencesPatch } from "../lib/userPreferences";
+import { isLiteMode, isPerfModeExplicit, setLiteMode, subscribePerfMode } from "../lib/perfMode";
 import {
   isMessagePreviewEnabled,
   subscribeMessagePreviewEnabled,
@@ -206,6 +208,11 @@ export function SystemSettings() {
       setPreferenceError("Không lưu được tuỳ chọn đọc trước tin nhắn theo tài khoản.");
     }
   };
+
+  // Chế độ nhẹ cho máy yếu (lưu theo thiết bị, không đồng bộ tài khoản).
+  const [liteMode, setLiteModeState] = useState(isLiteMode());
+  useEffect(() => subscribePerfMode(() => setLiteModeState(isLiteMode())), []);
+  const liteAuto = !isPerfModeExplicit();
 
   return (
     <div className="system-settings-page gc-root">
@@ -454,6 +461,57 @@ export function SystemSettings() {
               </span>
               <span className="reminder-toggle-countdown" aria-hidden="true">
                 {messagePreviewEnabled ? "XEM" : "\u1ea8N"}
+              </span>
+              <span className="water-toggle-track">
+                <span className="water-toggle-thumb" />
+              </span>
+            </button>
+          </div>
+
+          <div className="system-settings-row">
+            <div className="flex min-w-0 gap-4">
+              <div className="system-settings-icon is-perf">
+                <Gauge className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-black text-[var(--text)]">Chế độ nhẹ (máy yếu)</h2>
+                  <Badge color={liteMode ? "success" : "muted"}>
+                    {liteMode ? "Đang bật" : "Đang tắt"}
+                    {liteAuto ? " · tự động" : ""}
+                  </Badge>
+                  <TooltipProvider delayDuration={120}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button className="system-rules-hint" type="button" aria-label="Quy tắc chế độ nhẹ">
+                          <ShieldCheck className="h-4 w-4" />
+                          <span>Hiệu năng</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" align="start" className="system-rules-tooltip">
+                        Khi bật, giao diện bỏ hiệu ứng kính mờ (blur) và các chuyển động nền trang trí để chạy
+                        mượt hơn trên máy cấu hình yếu; nền các thẻ chuyển sang màu đục. Mặc định hệ thống tự bật
+                        cho máy ít RAM/CPU; bạn có thể ép bật/tắt tại đây (lưu riêng cho thiết bị này).
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </div>
+            </div>
+
+            <button
+              className={`water-toggle perf-toggle ${liteMode ? "is-on" : ""}`}
+              type="button"
+              role="switch"
+              aria-checked={liteMode}
+              aria-label={`${liteMode ? "Tắt" : "Bật"} chế độ nhẹ cho máy yếu`}
+              onClick={() => setLiteMode(!liteMode)}
+            >
+              <span className="water-toggle-icon">
+                <Power className="h-4 w-4" />
+              </span>
+              <span className="reminder-toggle-countdown" aria-hidden="true">
+                {liteMode ? "NHẸ" : "ĐẦY ĐỦ"}
               </span>
               <span className="water-toggle-track">
                 <span className="water-toggle-thumb" />

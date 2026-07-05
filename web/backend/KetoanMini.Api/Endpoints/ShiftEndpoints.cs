@@ -297,6 +297,16 @@ public static class ShiftEndpoints
     public static async Task<TimesheetSummary> ComputeSummaryAsync(NpgsqlConnection conn, Guid employeeId, string? month)
         => (await ComputeCore(conn, employeeId, month)).Summary;
 
+    /// <summary>Bảng công chi tiết theo ngày (kiểu dữ liệu tường minh) — dùng khi xuất Excel.</summary>
+    public static Task<(TimesheetSummary Summary, List<TimesheetDayInfo> Days)> ComputeDaysAsync(NpgsqlConnection conn, Guid employeeId, string? month)
+        => ComputeCore(conn, employeeId, month);
+
+    /// <summary>Một dòng bảng công (một ngày).</summary>
+    public sealed record TimesheetDayInfo(
+        DateOnly Date, string ShiftName, string HolidayName, string HolidayType,
+        string? CheckIn, string? CheckOut, int LateMinutes, int EarlyMinutes,
+        int OvertimeMinutes, double WorkedHours, string Status);
+
     private static async Task<object> BuildTimesheet(NpgsqlConnection conn, Guid employeeId, string? month)
     {
         var (s, days) = await ComputeCore(conn, employeeId, month);
@@ -314,11 +324,24 @@ public static class ShiftEndpoints
                 totalOvertimeMinutes = s.TotalOvertimeMinutes,
                 totalWorkedHours = s.TotalWorkedHours,
             },
-            days,
+            days = days.ConvertAll(d => new
+            {
+                date = d.Date,
+                shiftName = d.ShiftName,
+                holidayName = d.HolidayName,
+                holidayType = d.HolidayType,
+                checkIn = d.CheckIn,
+                checkOut = d.CheckOut,
+                lateMinutes = d.LateMinutes,
+                earlyMinutes = d.EarlyMinutes,
+                overtimeMinutes = d.OvertimeMinutes,
+                workedHours = d.WorkedHours,
+                status = d.Status,
+            }),
         };
     }
 
-    private static async Task<(TimesheetSummary Summary, List<object> Days)> ComputeCore(NpgsqlConnection conn, Guid employeeId, string? month)
+    private static async Task<(TimesheetSummary Summary, List<TimesheetDayInfo> Days)> ComputeCore(NpgsqlConnection conn, Guid employeeId, string? month)
     {
         // month: yyyy-MM (mặc định tháng hiện tại).
         var now = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
@@ -384,7 +407,7 @@ public static class ShiftEndpoints
                 holidays[d] = new HolidayInfo("Chủ nhật", "weekly");
         }
 
-        var days = new List<object>();
+        var days = new List<TimesheetDayInfo>();
         int workedDays = 0, lateDays = 0, earlyDays = 0, absentDays = 0;
         int totalLate = 0, totalEarly = 0, totalOt = 0;
         double totalWorkedHours = 0;
@@ -454,20 +477,18 @@ public static class ShiftEndpoints
                 absentDays = Math.Max(0, absentDays - 1);
             }
 
-            days.Add(new
-            {
-                date = d,
-                shiftName = shift?.Name ?? "",
-                holidayName = holiday?.Name ?? "",
-                holidayType = holiday?.Type ?? "",
+            days.Add(new TimesheetDayInfo(
+                d,
+                shift?.Name ?? "",
+                holiday?.Name ?? "",
+                holiday?.Type ?? "",
                 checkIn,
                 checkOut,
-                lateMinutes = lateMin,
-                earlyMinutes = earlyMin,
-                overtimeMinutes = otMin,
-                workedHours = workedH,
-                status,
-            });
+                lateMin,
+                earlyMin,
+                otMin,
+                workedH,
+                status));
         }
 
         var summary = new TimesheetSummary(

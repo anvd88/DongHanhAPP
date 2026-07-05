@@ -4,6 +4,8 @@ import com.ketoanapk.hr.data.AccountLoginSettings
 import com.ketoanapk.hr.data.ChamCongBurstRequest
 import com.ketoanapk.hr.data.ChamCongResult
 import com.ketoanapk.hr.data.ChangePasswordBody
+import com.ketoanapk.hr.data.CreateRequestBody
+import com.ketoanapk.hr.data.CreatedRequest
 import com.ketoanapk.hr.data.Department
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.EmployeeCard
@@ -18,6 +20,7 @@ import com.ketoanapk.hr.data.Penalty
 import com.ketoanapk.hr.data.PushTokenBody
 import com.ketoanapk.hr.data.RegisterTokenBody
 import com.ketoanapk.hr.data.ReleaseInfo
+import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
 import com.ketoanapk.hr.data.SalaryListItem
@@ -64,6 +67,12 @@ interface HrApi {
 
     @GET("api/requests/types")
     suspend fun requestTypes(): List<RequestType>
+
+    @GET("api/requests/{id}")
+    suspend fun requestDetail(@Path("id") id: String): RequestDetail
+
+    @POST("api/requests")
+    suspend fun createRequest(@Body body: CreateRequestBody): CreatedRequest
 
     @POST("api/requests/{id}/approve")
     suspend fun approveRequest(@Path("id") id: String, @Body body: DecisionBody): retrofit2.Response<Unit>

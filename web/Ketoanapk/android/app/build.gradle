@@ -19,8 +19,8 @@ android {
         applicationId "com.ketoanapk.hr"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 15
-        versionName "1.2.9"
+        versionCode 16
+        versionName "1.2.10"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Địa chỉ API backend (LAN). Đổi tại đây khi máy chủ đổi IP.
         buildConfigField "String", "API_BASE_URL", "\"https://192.168.1.88:5443\""

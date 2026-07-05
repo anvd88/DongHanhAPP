@@ -58,6 +58,8 @@ class HrRepository(context: Context) {
     suspend fun requests(scope: String, status: String? = null): List<RequestListItem> =
         call { api.requests(scope, status) }
     suspend fun requestTypes(): List<RequestType> = call { api.requestTypes() }
+    suspend fun requestDetail(id: String): RequestDetail = call { api.requestDetail(id) }
+    suspend fun createRequest(body: CreateRequestBody): CreatedRequest = call { api.createRequest(body) }
     suspend fun penalties(scope: String, month: String? = null): List<Penalty> =
         call { api.penalties(scope, month) }
     suspend fun salaries(): List<SalaryListItem> = call { api.salaries() }

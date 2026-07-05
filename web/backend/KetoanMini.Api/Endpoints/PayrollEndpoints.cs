@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Security.Claims;
 using System.Text.Json;
+using ClosedXML.Excel;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Realtime;
 using Microsoft.AspNetCore.SignalR;
@@ -154,6 +155,20 @@ public static class PayrollEndpoints
 
             await Signal(hub, db, conn, u, req.EmployeeId, "Lập phiếu lương", "Payslip");
             return Results.Ok(new { id = pid, netPay = result.NetPay });
+        });
+
+        // ---------------- Xuất Excel toàn công ty ----------------
+        // Một file .xlsx: sheet "Tổng hợp" + mỗi nhân viên một sheet bảng công tháng +
+        // sheet "Phiếu lương" xếp 6 phiếu/khổ A4 để in.
+        g.MapGet("/export", async (ClaimsPrincipal u, Database db, string? month) =>
+        {
+            if (!u.IsAdmin()) return Results.Forbid();
+            var period = NormalizePeriod(month);
+            await using var conn = await db.OpenAsync();
+            var bytes = await BuildExportWorkbook(conn, period);
+            var fileName = $"BangCong_PhieuLuong_{period}.xlsx";
+            return Results.File(bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
         });
     }
 
@@ -327,6 +342,295 @@ public static class PayrollEndpoints
             await hub.Clients.User(target).SendAsync("changed", "data");
             await hub.Clients.User(target).SendAsync("changed", "hr");
         }
+    }
+
+    // ---- Xuất Excel ----
+
+    private static string NormalizePeriod(string? month)
+    {
+        if (ValidPeriod(month)) return month![..7];
+        var now = DateTime.UtcNow.AddHours(7);
+        return $"{now.Year:D4}-{now.Month:D2}";
+    }
+
+    private sealed record ExportEmp(Guid Id, string Name, string Code, string Dept);
+
+    /// <summary>Dựng workbook: Tổng hợp + 1 sheet/nhân viên (bảng công) + sheet Phiếu lương (6/A4).</summary>
+    private static async Task<byte[]> BuildExportWorkbook(NpgsqlConnection conn, string period)
+    {
+        var (year, mon) = (int.Parse(period[..4]), int.Parse(period.Substring(5, 2)));
+        var monthStart = new DateOnly(year, mon, 1);
+        var daysInMonth = DateTime.DaysInMonth(year, mon);
+        var periodLabel = $"{mon:D2}/{year}";
+
+        // Danh sách nhân viên đang làm việc.
+        var emps = new List<ExportEmp>();
+        await using (var r = await conn.Cmd("""
+            SELECT e.id, e.full_name, e.employee_code, COALESCE(d.name,'') AS dept_name
+            FROM hr_employees e
+            LEFT JOIN hr_departments d ON d.id = e.department_id
+            WHERE e.status = 'Active'
+            ORDER BY d.name NULLS FIRST, e.full_name
+            """).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+                emps.Add(new ExportEmp(r.Guid("id"), r.Str("full_name"), r.Str("employee_code"), r.Str("dept_name")));
+        }
+
+        using var wb = new XLWorkbook();
+        var overview = wb.Worksheets.Add("Tổng hợp");
+        var payrolls = new List<PayrollResult>();
+        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // ----- Sheet bảng công từng nhân viên -----
+        var overviewRows = new List<object[]>();
+        foreach (var e in emps)
+        {
+            var (summary, days) = await ShiftEndpoints.ComputeDaysAsync(conn, e.Id, period);
+            var payroll = await ComputePayroll(conn, e.Id, period, null);
+            if (payroll is not null) payrolls.Add(payroll);
+
+            var ws = wb.Worksheets.Add(UniqueSheetName(e.Name, usedNames));
+            BuildTimesheetSheet(ws, e, periodLabel, monthStart, daysInMonth, summary, days);
+
+            overviewRows.Add(new object[]
+            {
+                e.Code, e.Name, e.Dept,
+                summary.WorkedDays, summary.AbsentDays, summary.LateDays, summary.EarlyDays,
+                Math.Round(summary.TotalOvertimeMinutes / 60.0, 2), summary.TotalWorkedHours,
+                payroll?.NetPay ?? 0m,
+            });
+        }
+
+        BuildOverviewSheet(overview, periodLabel, overviewRows);
+
+        // ----- Sheet phiếu lương: 6 phiếu / khổ A4 -----
+        BuildPayslipSheet(wb.Worksheets.Add("Phiếu lương"), periodLabel, payrolls);
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    private static void BuildOverviewSheet(IXLWorksheet ws, string periodLabel, List<object[]> rows)
+    {
+        ws.Cell(1, 1).Value = $"TỔNG HỢP CÔNG & LƯƠNG THÁNG {periodLabel}";
+        ws.Range(1, 1, 1, 10).Merge().Style.Font.SetBold().Font.SetFontSize(14)
+            .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
+
+        var headers = new[] { "STT", "Mã NV", "Họ tên", "Phòng ban", "Ngày công", "Vắng",
+            "Đi muộn (lần)", "Về sớm (lần)", "Tăng ca (giờ)", "Lương thực nhận" };
+        var hr = 3;
+        for (var c = 0; c < headers.Length; c++)
+        {
+            var cell = ws.Cell(hr, c + 1);
+            cell.Value = headers[c];
+            cell.Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#E8EEF7"));
+            cell.Style.Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
+            cell.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+        }
+
+        var row = hr + 1;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var d = rows[i];
+            ws.Cell(row, 1).Value = i + 1;
+            ws.Cell(row, 2).Value = (string)d[0];
+            ws.Cell(row, 3).Value = (string)d[1];
+            ws.Cell(row, 4).Value = (string)d[2];
+            ws.Cell(row, 5).Value = Convert.ToDouble(d[3]);
+            ws.Cell(row, 6).Value = Convert.ToDouble(d[4]);
+            ws.Cell(row, 7).Value = Convert.ToDouble(d[5]);
+            ws.Cell(row, 8).Value = Convert.ToDouble(d[6]);
+            ws.Cell(row, 9).Value = Convert.ToDouble(d[7]);
+            ws.Cell(row, 10).Value = Convert.ToDecimal(d[9]);
+            ws.Cell(row, 10).Style.NumberFormat.Format = "#,##0";
+            ws.Range(row, 1, row, 10).Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+            row++;
+        }
+        ws.Columns(1, 10).AdjustToContents();
+        ws.Column(3).Width = Math.Max(ws.Column(3).Width, 22);
+        ws.SheetView.FreezeRows(hr);
+    }
+
+    private static void BuildTimesheetSheet(IXLWorksheet ws, ExportEmp e, string periodLabel,
+        DateOnly monthStart, int daysInMonth, ShiftEndpoints.TimesheetSummary s,
+        List<ShiftEndpoints.TimesheetDayInfo> days)
+    {
+        var byDate = days.ToDictionary(d => d.Date);
+
+        ws.Cell(1, 1).Value = $"BẢNG CÔNG THÁNG {periodLabel}";
+        ws.Range(1, 1, 1, 10).Merge().Style.Font.SetBold().Font.SetFontSize(13)
+            .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
+        ws.Cell(2, 1).Value = $"{e.Name}  ·  Mã: {e.Code}  ·  {e.Dept}";
+        ws.Range(2, 1, 2, 10).Merge().Style.Font.SetItalic()
+            .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
+
+        var headers = new[] { "Ngày", "Thứ", "Ca làm", "Giờ vào", "Giờ ra", "Giờ làm",
+            "Đi muộn (phút)", "Về sớm (phút)", "Tăng ca (phút)", "Trạng thái" };
+        var hr = 4;
+        for (var c = 0; c < headers.Length; c++)
+        {
+            var cell = ws.Cell(hr, c + 1);
+            cell.Value = headers[c];
+            cell.Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#E8EEF7"));
+            cell.Style.Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
+            cell.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+        }
+
+        var row = hr + 1;
+        for (var day = 1; day <= daysInMonth; day++)
+        {
+            var date = new DateOnly(monthStart.Year, monthStart.Month, day);
+            byDate.TryGetValue(date, out var info);
+            var isSunday = date.DayOfWeek == DayOfWeek.Sunday;
+
+            ws.Cell(row, 1).Value = date.ToString("dd/MM");
+            ws.Cell(row, 2).Value = WeekdayVi(date.DayOfWeek);
+            ws.Cell(row, 3).Value = info?.ShiftName ?? "";
+            ws.Cell(row, 4).Value = info?.CheckIn ?? "";
+            ws.Cell(row, 5).Value = info?.CheckOut ?? "";
+            if (info is { WorkedHours: > 0 } wi) ws.Cell(row, 6).Value = wi.WorkedHours;
+            if (info is { LateMinutes: > 0 } li) ws.Cell(row, 7).Value = li.LateMinutes;
+            if (info is { EarlyMinutes: > 0 } ei) ws.Cell(row, 8).Value = ei.EarlyMinutes;
+            if (info is { OvertimeMinutes: > 0 } oi) ws.Cell(row, 9).Value = oi.OvertimeMinutes;
+            ws.Cell(row, 10).Value = info?.Status ?? (isSunday ? "Nghỉ chủ nhật" : "");
+
+            var rng = ws.Range(row, 1, row, 10);
+            rng.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+            if (isSunday) rng.Style.Fill.SetBackgroundColor(XLColor.FromHtml("#F3F4F6"));
+            if (info is { Status: "Vắng" }) ws.Cell(row, 10).Style.Font.SetFontColor(XLColor.FromHtml("#B91C1C")).Font.SetBold();
+            row++;
+        }
+
+        // Dòng tổng kết.
+        ws.Cell(row + 1, 1).Value = "TỔNG KẾT";
+        ws.Cell(row + 1, 1).Style.Font.SetBold();
+        ws.Cell(row + 1, 3).Value = $"Ngày công: {s.WorkedDays}";
+        ws.Cell(row + 1, 5).Value = $"Vắng: {s.AbsentDays}";
+        ws.Cell(row + 1, 7).Value = $"Đi muộn: {s.LateDays} lần";
+        ws.Cell(row + 1, 8).Value = $"Về sớm: {s.EarlyDays} lần";
+        ws.Cell(row + 1, 9).Value = $"Tăng ca: {Math.Round(s.TotalOvertimeMinutes / 60.0, 2)} giờ";
+        ws.Range(row + 1, 1, row + 1, 10).Style.Font.SetBold();
+
+        ws.Columns(1, 10).AdjustToContents();
+        ws.Column(10).Width = Math.Max(ws.Column(10).Width, 18);
+        ws.SheetView.FreezeRows(hr);
+        ws.PageSetup.PaperSize = XLPaperSize.A4Paper;
+        ws.PageSetup.PageOrientation = XLPageOrientation.Portrait;
+        ws.PageSetup.FitToPages(1, 0);
+        ws.PageSetup.SetRowsToRepeatAtTop(hr, hr);
+    }
+
+    private static void BuildPayslipSheet(IXLWorksheet ws, string periodLabel, List<PayrollResult> payrolls)
+    {
+        // Bố cục: 2 cột phiếu × 3 hàng phiếu = 6 phiếu / trang A4.
+        // Cột sheet:  A(đệm) B(nhãn) C(số tiền) D(đệm) E(nhãn) F(số tiền) G(đệm)
+        // Mỗi phiếu cao 13 dòng (12 nội dung + 1 đệm).
+        const int blockRows = 13;
+        const int rowsPerPage = blockRows * 3; // 3 hàng phiếu mỗi trang
+
+        ws.Column(1).Width = 2;
+        ws.Column(2).Width = 22; ws.Column(3).Width = 15;
+        ws.Column(4).Width = 3;
+        ws.Column(5).Width = 22; ws.Column(6).Width = 15;
+        ws.Column(7).Width = 2;
+
+        for (var i = 0; i < payrolls.Count; i++)
+        {
+            var page = i / 6;
+            var idxInPage = i % 6;      // 0..5
+            var blockRow = idxInPage / 2; // 0..2 (hàng phiếu trong trang)
+            var blockCol = idxInPage % 2; // 0..1 (cột trái/phải)
+            var startRow = page * rowsPerPage + blockRow * blockRows + 1;
+            var labelCol = blockCol == 0 ? 2 : 5;
+            DrawPayslip(ws, startRow, labelCol, periodLabel, payrolls[i]);
+        }
+
+        // Ngắt trang ngang sau mỗi 3 hàng phiếu để mỗi trang in đúng 6 phiếu.
+        var totalPages = (payrolls.Count + 5) / 6;
+        for (var p = 1; p < totalPages; p++)
+            ws.PageSetup.AddHorizontalPageBreak(p * rowsPerPage);
+
+        ws.PageSetup.PaperSize = XLPaperSize.A4Paper;
+        ws.PageSetup.PageOrientation = XLPageOrientation.Portrait;
+        ws.PageSetup.PagesWide = 1;
+        ws.PageSetup.Margins.SetTop(0.4).SetBottom(0.4).SetLeft(0.4).SetRight(0.4);
+    }
+
+    private static void DrawPayslip(IXLWorksheet ws, int startRow, int labelCol, string periodLabel, PayrollResult p)
+    {
+        var amtCol = labelCol + 1;
+        var r = startRow;
+
+        void Line(string label, decimal? amount, bool bold = false, bool money = true)
+        {
+            ws.Cell(r, labelCol).Value = label;
+            if (bold) ws.Cell(r, labelCol).Style.Font.SetBold();
+            if (amount is not null)
+            {
+                ws.Cell(r, amtCol).Value = amount.Value;
+                if (money) ws.Cell(r, amtCol).Style.NumberFormat.Format = "#,##0";
+                ws.Cell(r, amtCol).Style.Alignment.SetHorizontal(XLAlignmentHorizontalValues.Right);
+                if (bold) ws.Cell(r, amtCol).Style.Font.SetBold();
+            }
+            r++;
+        }
+
+        // Tiêu đề
+        ws.Range(startRow, labelCol, startRow, amtCol).Merge();
+        ws.Cell(startRow, labelCol).Value = "PHIẾU LƯƠNG";
+        ws.Cell(startRow, labelCol).Style.Font.SetBold().Font.SetFontSize(11)
+            .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center)
+            .Fill.SetBackgroundColor(XLColor.FromHtml("#E8EEF7"));
+        r++;
+        ws.Range(r, labelCol, r, amtCol).Merge();
+        ws.Cell(r, labelCol).Value = $"{p.EmployeeName} ({p.EmployeeCode}) · Kỳ {periodLabel}";
+        ws.Cell(r, labelCol).Style.Font.SetItalic().Font.SetFontSize(9);
+        r++;
+
+        Line("Lương cơ bản", p.BaseSalary);
+        Line("Phụ cấp", p.Allowance);
+        Line($"Tăng ca ({p.OvertimeHours} giờ)", p.OvertimePay);
+        var otherEarn = p.TotalEarnings - p.BaseSalary - p.Allowance - p.OvertimePay;
+        Line("Thu nhập khác", otherEarn);
+        Line("Tổng thu nhập", p.TotalEarnings, bold: true);
+        Line("Tổng khấu trừ", p.TotalDeductions);
+        Line($"Ngày công / vắng", null);
+        ws.Cell(r - 1, amtCol).Value = $"{p.WorkedDays} / {p.AbsentDays}";
+        ws.Cell(r - 1, amtCol).Style.Alignment.SetHorizontal(XLAlignmentHorizontalValues.Right);
+        Line("THỰC NHẬN", p.NetPay, bold: true);
+        ws.Cell(r - 1, labelCol).Style.Fill.SetBackgroundColor(XLColor.FromHtml("#FEF3C7"));
+        ws.Cell(r - 1, amtCol).Style.Fill.SetBackgroundColor(XLColor.FromHtml("#FEF3C7"));
+
+        // Viền quanh phiếu (12 dòng nội dung).
+        ws.Range(startRow, labelCol, startRow + 11, amtCol).Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
+    }
+
+    private static string WeekdayVi(DayOfWeek d) => d switch
+    {
+        DayOfWeek.Monday => "T2",
+        DayOfWeek.Tuesday => "T3",
+        DayOfWeek.Wednesday => "T4",
+        DayOfWeek.Thursday => "T5",
+        DayOfWeek.Friday => "T6",
+        DayOfWeek.Saturday => "T7",
+        _ => "CN",
+    };
+
+    private static string UniqueSheetName(string name, HashSet<string> used)
+    {
+        var clean = new string((name ?? "NV").Where(ch => !"[]:*?/\\".Contains(ch)).ToArray()).Trim();
+        if (string.IsNullOrWhiteSpace(clean)) clean = "NV";
+        if (clean.Length > 28) clean = clean[..28];
+        var candidate = clean;
+        var i = 2;
+        while (!used.Add(candidate))
+        {
+            var suffix = $" ({i++})";
+            candidate = clean.Length + suffix.Length > 31 ? clean[..(31 - suffix.Length)] + suffix : clean + suffix;
+        }
+        return candidate;
     }
 
     // ---- DTO ----

@@ -42,7 +42,7 @@ function visibleChatConversations(conversations: ChatConversation[], admin: bool
   return admin ? conversations.filter((c) => !c.supportConversation) : conversations;
 }
 
-export function ChatNotificationProvider({ children }: { children: ReactNode }) {
+export function ChatNotificationProvider({ children, suppress = false }: { children: ReactNode; suppress?: boolean }) {
   const { user } = useAuth();
   const admin = user?.role?.toLowerCase() === "admin";
   const navigate = useNavigate();
@@ -143,20 +143,24 @@ export function ChatNotificationProvider({ children }: { children: ReactNode }) 
   return (
     <ChatNotificationContext.Provider value={value}>
       {children}
-      <FileTransferPrompts />
-      <div className="km-chat-toast-host" aria-live="polite">
-        {toast && (
-          <ChatMessageToast
-            key={toast.id}
-            toast={toast}
-            onClose={() => setToast(null)}
-            onOpen={() => {
-              setToast(null);
-              navigate(`/chats?conversation=${encodeURIComponent(toast.conversationId)}`);
-            }}
-          />
-        )}
-      </div>
+      {/* Trên trang module nhân sự (suppress) chỉ giữ context (để sidebar/badge hoạt động và
+          KHÔNG remount layout), nhưng ẩn phần nổi: lời nhắc gửi tệp + toast tin nhắn. */}
+      {!suppress && <FileTransferPrompts />}
+      {!suppress && (
+        <div className="km-chat-toast-host" aria-live="polite">
+          {toast && (
+            <ChatMessageToast
+              key={toast.id}
+              toast={toast}
+              onClose={() => setToast(null)}
+              onOpen={() => {
+                setToast(null);
+                navigate(`/chats?conversation=${encodeURIComponent(toast.conversationId)}`);
+              }}
+            />
+          )}
+        </div>
+      )}
     </ChatNotificationContext.Provider>
   );
 }

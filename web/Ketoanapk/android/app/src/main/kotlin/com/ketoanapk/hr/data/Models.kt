@@ -1,6 +1,7 @@
 package com.ketoanapk.hr.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Các model dữ liệu ánh xạ 1-1 với JSON của backend KetoanMini (đặt tên trường theo camelCase
@@ -155,6 +156,58 @@ data class RequestListItem(
     val currentStep: Int = 0,
     val totalSteps: Int = 0,
     val createdAt: String = "",
+)
+
+// Thân yêu cầu tạo đơn mới: type = mã loại đơn, payload = các trường chi tiết (jsonb linh hoạt).
+// title để trống → backend tự đặt theo nhãn loại đơn.
+@Serializable
+data class CreateRequestBody(
+    val type: String,
+    val title: String = "",
+    val payload: JsonObject = JsonObject(emptyMap()),
+)
+
+@Serializable
+data class CreatedRequest(
+    val id: String = "",
+    val requestNo: String = "",
+)
+
+// Chi tiết một đơn: phần đầu (thông tin + payload) + tiến trình phê duyệt nhiều bước.
+@Serializable
+data class RequestDetail(
+    val request: RequestHead = RequestHead(),
+    val approvals: List<RequestApproval> = emptyList(),
+)
+
+@Serializable
+data class RequestHead(
+    val id: String = "",
+    val requestNo: String = "",
+    val type: String = "",
+    val typeLabel: String = "",
+    val title: String = "",
+    val requesterUsername: String = "",
+    val employeeName: String = "",
+    val employeeCode: String = "",
+    val departmentName: String = "",
+    val payload: JsonObject = JsonObject(emptyMap()),
+    val status: String = "",
+    val currentStep: Int = 0,
+    val createdAt: String = "",
+)
+
+@Serializable
+data class RequestApproval(
+    val stepNo: Int = 0,
+    val approverRole: String = "",
+    val approverUsername: String = "",
+    val approverName: String = "",
+    val status: String = "",
+    val decidedAt: String? = null,
+    val decidedBy: String = "",
+    val comment: String = "",
+    val hasSignature: Boolean = false,
 )
 
 @Serializable

@@ -26,7 +26,9 @@ import { NhanSu } from "./pages/NhanSu";
 import { HoSo } from "./pages/HoSo";
 import { DonTu } from "./pages/DonTu";
 import { PheDuyet } from "./pages/PheDuyet";
+import { QuanLyDonTu } from "./pages/QuanLyDonTu";
 import { BangCong } from "./pages/BangCong";
+import { QuanLyBangCong } from "./pages/QuanLyBangCong";
 import { QuanLyNhanSu } from "./pages/QuanLyNhanSu";
 import { TaiKhoanNganHang } from "./pages/TaiKhoanNganHang";
 import {
@@ -73,8 +75,11 @@ function Protected({ children, admin }: { children: React.ReactNode; admin?: boo
       {!suppressMainWebSystem && <EyeReminderPopup user={user} />}
     </>
   );
-  if (suppressMainWebSystem) return content;
-  return <ChatNotificationProvider>{content}</ChatNotificationProvider>;
+  // Giữ ChatNotificationProvider mount ổn định cho toàn web chính (kể cả trang module nhân sự)
+  // để Layout/Sidebar KHÔNG bị remount khi chuyển giữa trang HR và trang thường (gây "nháy như F5"
+  // + reset khung chọn sidebar). Trên HR chỉ ẩn phần nổi qua prop suppress. APK vẫn không dùng provider.
+  if (IS_HR_APK) return content;
+  return <ChatNotificationProvider suppress={suppressMainWebSystem}>{content}</ChatNotificationProvider>;
 }
 
 function FeedbackResolvedToasts() {
@@ -148,7 +153,9 @@ export default function App() {
             <Route path="/hoso" element={<Protected>{IS_HR_APK ? <HRProfilePage /> : <HoSo />}</Protected>} />
             <Route path="/dontu" element={<Protected>{IS_HR_APK ? <HRRequestsPage /> : <DonTu />}</Protected>} />
             <Route path="/pheduyet" element={<Protected>{IS_HR_APK ? <HRApprovalPage /> : <PheDuyet />}</Protected>} />
+            <Route path="/quanly-dontu" element={<Protected admin><QuanLyDonTu /></Protected>} />
             <Route path="/bangcong" element={<Protected>{IS_HR_APK ? <HRTimesheetPage /> : <BangCong />}</Protected>} />
+            <Route path="/quanly-bangcong" element={<Protected admin><QuanLyBangCong /></Protected>} />
             <Route path="/quanly-nhansu" element={<Protected admin>{IS_HR_APK ? <HRManagerPage /> : <QuanLyNhanSu />}</Protected>} />
             <Route path="/phat" element={<Protected><HRPenaltyPage /></Protected>} />
             <Route path="/tai-khoan-ngan-hang" element={<Protected><TaiKhoanNganHang /></Protected>} />
