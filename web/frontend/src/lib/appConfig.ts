@@ -19,6 +19,7 @@ const HR_MODULE_PATHS = [
   "/pheduyet",
   "/bangcong",
   "/quanly-nhansu",
+  "/quanly-dontu",
   "/phat",
   "/tai-khoan-ngan-hang",
   "/bang-luong",

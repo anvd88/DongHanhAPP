@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.ketoanapk.hr.data.AppNotifier
+import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.ui.HrApp
 import com.ketoanapk.hr.ui.HrViewModel
 
@@ -20,6 +21,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         AppNotifier.ensureChannel(this)
+        // Dọn các APK cập nhật cũ còn sót trong cache (đã cài xong) để app không phình dung lượng.
+        AppUpdater.purgeCachedApks(this)
         handleDeepLink(intent)
 
         setContent {

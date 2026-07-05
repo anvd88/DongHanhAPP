@@ -22,20 +22,34 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PersonOff
+import androidx.compose.material.icons.filled.PostAdd
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -55,111 +69,336 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.HrUser
+import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.data.RequestListItem
+import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
+import com.ketoanapk.hr.ui.theme.BrandRed
 import com.ketoanapk.hr.ui.theme.Danger
+import com.ketoanapk.hr.ui.theme.InfoBlue
 import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 @Composable
-fun HomeScreen(user: HrUser, state: HomeUiState, onSelect: (HrDestination) -> Unit) {
+fun HomeScreen(
+    user: HrUser,
+    state: HomeUiState,
+    manager: ManagerUiState,
+    onSelect: (HrDestination) -> Unit,
+) {
     val today = state.timesheet?.days?.firstOrNull { it.date.take(10) == todayKey() }
     val name = state.employee?.fullName?.ifBlank { user.displayName } ?: user.displayName
-    val latest = state.requests.firstOrNull()
+    val position = buildString {
+        append(state.employee?.position?.ifBlank { "Nhân viên" } ?: "Nhân viên")
+        val dept = state.employee?.departmentName
+        if (!dept.isNullOrBlank()) append(" · $dept")
+    }
+    val summary = state.timesheet?.summary
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item {
-            HrCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    UserAvatar(name, 52)
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            buildString {
-                                append(state.employee?.position?.ifBlank { "Nhân viên" } ?: "Nhân viên")
-                                val dept = state.employee?.departmentName
-                                if (!dept.isNullOrBlank()) append(" · $dept")
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(state.employee?.employeeCode?.ifBlank { user.username } ?: user.username, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                Button(
-                    onClick = { onSelect(HrDestination.Scan) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.Face, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Chấm công", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                StatCard("Hôm nay", today?.status?.ifBlank { "Chưa chấm" } ?: "Chưa chấm", "Vào ${today?.checkIn ?: "--:--"}", timesheetTone(today?.status), modifier = Modifier.weight(1f))
-                StatCard("Ngày công", "${state.timesheet?.summary?.workedDays ?: 0.0}", "Vắng ${state.timesheet?.summary?.absentDays ?: 0.0}", modifier = Modifier.weight(1f))
-            }
-        }
-
-        item { SectionTitle("Cá nhân") }
-        item {
-            MenuGroupCard {
-                MenuRow(Icons.Filled.AccountCircle, "Hồ sơ của tôi", "Thông tin, hợp đồng, lương") { onSelect(HrDestination.Profile) }
-                MenuDivider()
-                MenuRow(Icons.Filled.CalendarMonth, "Bảng công", "Công, đi muộn, tăng ca") { onSelect(HrDestination.Timesheet) }
-                MenuDivider()
-                MenuRow(
-                    Icons.Filled.Description,
-                    "Đơn từ",
-                    latest?.let { "Gần nhất: ${it.typeLabel} · ${requestStatusLabel(it.status)}" } ?: "Nghỉ phép, tăng ca, quên chấm công",
-                ) { onSelect(HrDestination.Requests) }
-            }
-        }
-
-        item { SectionTitle("Công việc") }
-        item {
-            val pending = state.inbox.count { it.status.equals("Pending", true) }
-            MenuGroupCard {
-                MenuRow(Icons.Filled.Inbox, "Phê duyệt", if (user.isAdmin) "$pending đơn chờ xử lý" else "Hộp thư duyệt của bạn") { onSelect(HrDestination.Approval) }
-                MenuDivider()
-                MenuRow(Icons.Filled.Gavel, "Phạt / kỷ luật", if (user.isAdmin) "Quản lý quyết định phạt" else "Xem các lần bị phạt") { onSelect(HrDestination.Penalty) }
-            }
-        }
+        item { HomeHeroCard(name, position, today) { onSelect(HrDestination.Scan) } }
 
         if (user.isAdmin) {
-            item { SectionTitle("Quản trị") }
+            item { AdminDashboardCard(manager.summary?.headcount) { onSelect(HrDestination.Approval) } }
+        } else {
             item {
-                MenuGroupCard {
-                    MenuRow(Icons.Filled.People, "Quản lý nhân sự", "Quân số, phòng ban, nhân viên") { onSelect(HrDestination.People) }
-                    MenuDivider()
-                    MenuRow(Icons.Filled.Payments, "Bảng lương", "Mức lương nhân viên") { onSelect(HrDestination.Payroll) }
-                    MenuDivider()
-                    MenuRow(Icons.Filled.History, "Nhật ký hệ thống", "Lịch sử thao tác") { onSelect(HrDestination.Audit) }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatTile(Icons.Filled.EventAvailable, "Ngày công", trimNum(summary?.workedDays ?: 0.0), Success, Modifier.weight(1f))
+                    StatTile(Icons.Filled.Schedule, "Tăng ca", formatMinutes(summary?.totalOvertimeMinutes ?: 0), InfoBlue, Modifier.weight(1f))
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatTile(Icons.Filled.WatchLater, "Đi muộn", "${summary?.lateDays ?: 0}", Warning, Modifier.weight(1f))
+                    StatTile(Icons.Filled.PersonOff, "Vắng", trimNum(summary?.absentDays ?: 0.0), Danger, Modifier.weight(1f))
                 }
             }
         }
 
-        item { SectionTitle("Hệ thống") }
-        item {
-            MenuGroupCard {
-                MenuRow(Icons.Filled.Settings, "Cài đặt", "Tài khoản, đăng xuất") { onSelect(HrDestination.Settings) }
-            }
+        item { QuickActionsCard(onSelect) }
+
+        if (!user.isAdmin) {
+            item { MiniWeekCard(state.timesheet) { onSelect(HrDestination.Timesheet) } }
         }
+
+        item { AttentionCard(state.requests) { onSelect(HrDestination.Requests) } }
 
         state.error?.let { item { ErrorText(it) } }
     }
+}
+
+/** Thẻ tiêu đề tối: avatar + tên + trạng thái ca + Vào/Ra + nút Chấm công ngay. */
+@Composable
+private fun HomeHeroCard(name: String, position: String, today: TimesheetDay?, onScan: () -> Unit) {
+    val checkedIn = !today?.checkIn.isNullOrBlank()
+    val checkedOut = !today?.checkOut.isNullOrBlank()
+    val statusText = when {
+        checkedIn && !checkedOut -> "Đã vào ca"
+        checkedIn && checkedOut -> "Đã tan ca"
+        else -> "Chưa vào ca"
+    }
+    val statusColor = when {
+        checkedIn && !checkedOut -> Color(0xFF34D399)
+        checkedIn && checkedOut -> Color(0xFF60A5FA)
+        else -> Color(0xFF94A3B8)
+    }
+    HeroContainer {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            UserAvatar(name, 56)
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(name, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(position, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C0CE), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                HeroBadge(statusText, statusColor)
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0x1FFFFFFF))
+                .padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HeroPunch(Icons.AutoMirrored.Filled.Login, "Vào", today?.checkIn ?: "--:--", Color(0xFF22C55E), Modifier.weight(1f))
+            Box(
+                Modifier
+                    .width(1.dp)
+                    .height(38.dp)
+                    .background(Color(0x26FFFFFF)),
+            )
+            HeroPunch(Icons.AutoMirrored.Filled.Logout, "Ra", today?.checkOut ?: "--:--", Color(0xFF64748B), Modifier.weight(1f))
+        }
+        Button(
+            onClick = onScan,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = BrandRed, contentColor = Color.White),
+        ) {
+            Icon(Icons.Filled.CenterFocusStrong, contentDescription = null, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("Chấm công ngay", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        }
+    }
+}
+
+@Composable
+private fun HeroPunch(icon: ImageVector, label: String, value: String, accent: Color, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(accent),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = Color(0xFF94A3B8))
+            Text(value, style = MaterialTheme.typography.titleMedium, color = Color.White)
+        }
+    }
+}
+
+/** Tác vụ nhanh: 4 phím tắt tròn màu. */
+@Composable
+private fun QuickActionsCard(onSelect: (HrDestination) -> Unit) {
+    HrCard {
+        CardHeader("Tác vụ nhanh")
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            QuickAction(Icons.Filled.PostAdd, "Tạo đơn", BrandRed, Modifier.weight(1f)) { onSelect(HrDestination.Requests) }
+            QuickAction(Icons.Filled.CalendarMonth, "Bảng công", Success, Modifier.weight(1f)) { onSelect(HrDestination.Timesheet) }
+            QuickAction(Icons.Filled.Folder, "Hồ sơ", InfoBlue, Modifier.weight(1f)) { onSelect(HrDestination.Profile) }
+            QuickAction(Icons.Filled.Gavel, "Kỷ luật", Warning, Modifier.weight(1f)) { onSelect(HrDestination.Penalty) }
+        }
+    }
+}
+
+@Composable
+private fun QuickAction(icon: ImageVector, label: String, accent: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(accent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(26.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+    }
+}
+
+/** Bảng công mini: dải tuần hiện tại + số ngày đủ công + số lần đi muộn + nút xem đầy đủ. */
+@Composable
+private fun MiniWeekCard(ts: Timesheet?, onView: () -> Unit) {
+    val today = LocalDate.now()
+    val monday = today.minusDays((today.dayOfWeek.value - 1).toLong())
+    val daysByDate = ts?.days?.associateBy { it.date.take(10) } ?: emptyMap()
+    val labels = listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN")
+    HrCard {
+        CardHeader("Bảng công tuần này")
+        Text(weekRangeLabel(monday), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (i in 0..6) {
+                val date = monday.plusDays(i.toLong())
+                MiniDayCell(
+                    label = labels[i],
+                    dayNumber = date.dayOfMonth,
+                    day = daysByDate[date.toString()],
+                    isToday = date == today,
+                    isFuture = date.isAfter(today),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            MiniSummaryStat(trimNum(ts?.summary?.workedDays ?: 0.0), "ngày đủ công", Success, Modifier.weight(1f))
+            MiniSummaryStat("${ts?.summary?.lateDays ?: 0}", "lần đi muộn", Warning, Modifier.weight(1f))
+        }
+        OutlinedButton(onClick = onView, modifier = Modifier.fillMaxWidth()) {
+            Text("Xem bảng công", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+private fun MiniDayCell(
+    label: String,
+    dayNumber: Int,
+    day: TimesheetDay?,
+    isToday: Boolean,
+    isFuture: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val dotColor = if (isFuture || day == null) {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+    } else {
+        timesheetCalendarColor(timesheetCalendarTone(day))
+    }
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isToday) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("$dayNumber", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+        Box(
+            Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(dotColor),
+        )
+    }
+}
+
+@Composable
+private fun MiniSummaryStat(value: String, label: String, accent: Color, modifier: Modifier = Modifier) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(value, style = MaterialTheme.typography.headlineSmall, color = accent)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Việc cần chú ý: số đơn của tôi đang chờ + đơn gần nhất. */
+@Composable
+private fun AttentionCard(requests: List<RequestListItem>, onOpen: () -> Unit) {
+    val pending = requests.count { it.status.equals("Pending", true) }
+    val latest = requests.firstOrNull()
+    HrCard {
+        CardHeader("Việc cần chú ý", onMore = onOpen)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onOpen),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(Warning.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.AssignmentLate, contentDescription = null, tint = Warning, modifier = Modifier.size(24.dp))
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    if (pending > 0) "$pending đơn chờ duyệt" else "Không có đơn chờ duyệt",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (pending > 0) Warning else MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    latest?.let { "Đơn gần nhất: ${it.typeLabel} · ${requestStatusLabel(it.status)}" } ?: "Bạn chưa gửi đơn nào",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** Dashboard quản trị trên Trang chủ: quân số, có mặt, nghỉ/công tác, vắng, đi muộn, đơn chờ duyệt. */
+@Composable
+private fun AdminDashboardCard(h: ManagerHeadcount?, onApprovals: () -> Unit) {
+    val onLeave = (h?.leave ?: 0) + (h?.business ?: 0)
+    HrCard {
+        CardHeader("Tổng quan hôm nay")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            StatTile(Icons.Filled.Groups, "Quân số", "${h?.active ?: 0}", InfoBlue, Modifier.weight(1f))
+            StatTile(Icons.Filled.CheckCircle, "Có mặt", "${h?.present ?: 0}", Success, Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            StatTile(Icons.Filled.FlightTakeoff, "Nghỉ / công tác", "$onLeave", Warning, Modifier.weight(1f))
+            StatTile(Icons.Filled.PersonOff, "Vắng", "${h?.absent ?: 0}", Danger, Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            StatTile(Icons.Filled.WatchLater, "Đi muộn", "${h?.late ?: 0}", Warning, Modifier.weight(1f))
+            StatTile(Icons.Filled.Inbox, "Đơn chờ duyệt", "${h?.pendingApprovals ?: 0}", InfoBlue, Modifier.weight(1f), onClick = onApprovals)
+        }
+    }
+}
+
+/** Bỏ đuôi ".0" cho số ngày công (18.0 → 18, 18.5 → 18.5). */
+private fun trimNum(v: Double): String =
+    if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+
+private fun weekRangeLabel(monday: LocalDate): String {
+    val fmt = DateTimeFormatter.ofPattern("dd/MM")
+    return "${monday.format(fmt)} - ${monday.plusDays(6).format(fmt)}"
 }
 
 @Composable
@@ -167,30 +406,47 @@ fun ProfileScreen(state: HomeUiState) {
     val e = state.employee
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { PageHead("Hồ sơ của tôi", e?.employeeCode?.ifBlank { "Nhân viên" } ?: "Nhân viên") }
-        if (state.loading && e == null) item { LoadingBlock() }
         if (e == null) {
+            item { PageHeader(Icons.Filled.AccountCircle, "Hồ sơ của tôi", "Nhân viên", Tone.Neutral) }
+            if (state.loading) item { LoadingBlock() }
             item { EmptyState("Chưa có hồ sơ", state.error ?: "Không tải được hồ sơ nhân viên.") }
         } else {
             item {
-                HrCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        UserAvatar(e.fullName.ifBlank { e.username }, 56)
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(e.fullName.ifBlank { e.username }, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(e.position.ifBlank { "Nhân viên" }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                IdentityHero(
+                    name = e.fullName.ifBlank { e.username },
+                    subtitle = buildString {
+                        append(e.position.ifBlank { "Nhân viên" })
+                        if (e.departmentName.isNotBlank()) append(" · ${e.departmentName}")
+                    },
+                    statusText = if (e.status == "Active") "Đang làm việc" else e.status,
+                    statusColor = if (e.status == "Active") Color(0xFF34D399) else Color(0xFF94A3B8),
+                    footer = {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0x1FFFFFFF))
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            HeroFooterStat("Mã nhân viên", e.employeeCode.ifBlank { "--" }, Modifier.weight(1f))
+                            Box(
+                                Modifier
+                                    .width(1.dp)
+                                    .height(30.dp)
+                                    .background(Color(0x26FFFFFF)),
+                            )
+                            HeroFooterStat("Ngày vào làm", formatIsoDate(e.hireDate), Modifier.weight(1f))
                         }
-                        StatusChip(if (e.status == "Active") "Đang làm" else e.status, if (e.status == "Active") Tone.Success else Tone.Muted)
-                    }
-                }
+                    },
+                )
             }
             item {
                 HrCard {
-                    SectionTitle("Thông tin")
+                    CardHeader("Thông tin nhân sự")
                     LabelValue("Phòng ban", e.departmentName.ifBlank { "Chưa gán" })
                     LabelValue("Quản lý", e.managerName.ifBlank { "--" })
                     LabelValue("Ngày vào làm", formatIsoDate(e.hireDate))
@@ -200,13 +456,26 @@ fun ProfileScreen(state: HomeUiState) {
             }
             item {
                 HrCard {
-                    SectionTitle("Liên hệ")
+                    CardHeader("Liên hệ")
                     LabelValue("Điện thoại", e.phone.ifBlank { "--" })
                     LabelValue("Email", e.email.ifBlank { "--" })
                     LabelValue("Địa chỉ", e.address.ifBlank { "--" })
                 }
             }
         }
+    }
+}
+
+/** Ô số liệu nhỏ trên nền hero tối (canh giữa) — dùng cho footer Hồ sơ. */
+@Composable
+private fun HeroFooterStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = Color(0xFF94A3B8), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(value, style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -223,7 +492,7 @@ fun TimesheetScreen(
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHead("Bảng công", formatTimesheetPeriod(ts?.period ?: state.month)) }
+        item { PageHeader(Icons.Filled.CalendarMonth, "Bảng công", formatTimesheetPeriod(ts?.period ?: state.month), Tone.Neutral) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(onClick = { onMonthOffset(-1) }, modifier = Modifier.weight(1f)) { Text("Trước") }
@@ -249,16 +518,23 @@ fun TimesheetScreen(
             if (selectedDate != null) {
                 item { TimesheetDayDetailCard(selectedDate.orEmpty(), selectedDay) }
             }
+            item { SectionTitle("Tổng hợp tháng", modifier = Modifier.padding(start = 4.dp)) }
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        StatCard("Ngày công", "${ts.summary.workedDays}", "Vắng ${ts.summary.absentDays} ngày", modifier = Modifier.weight(1f))
-                        StatCard("Đi muộn", "${ts.summary.lateDays}", formatMinutes(ts.summary.totalLateMinutes), Tone.Warning, modifier = Modifier.weight(1f))
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        StatCard("Tăng ca", formatMinutes(ts.summary.totalOvertimeMinutes), "${ts.summary.totalWorkedHours} giờ", Tone.Success, modifier = Modifier.weight(1f))
-                        StatCard("Về sớm", "${ts.summary.earlyDays}", formatMinutes(ts.summary.totalEarlyMinutes), Tone.Warning, modifier = Modifier.weight(1f))
-                    }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatTile(Icons.Filled.EventAvailable, "Ngày công", trimNum(ts.summary.workedDays), Success, Modifier.weight(1f))
+                    StatTile(Icons.Filled.Schedule, "Tăng ca", formatMinutes(ts.summary.totalOvertimeMinutes), InfoBlue, Modifier.weight(1f))
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatTile(Icons.Filled.WatchLater, "Đi muộn", "${ts.summary.lateDays}", Warning, Modifier.weight(1f))
+                    StatTile(Icons.AutoMirrored.Filled.Logout, "Về sớm", "${ts.summary.earlyDays}", Warning, Modifier.weight(1f))
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatTile(Icons.Filled.PersonOff, "Vắng", trimNum(ts.summary.absentDays), Danger, Modifier.weight(1f))
+                    StatTile(Icons.Filled.Timer, "Giờ làm", "${trimNum(ts.summary.totalWorkedHours)}h", Color(0xFF0D9488), Modifier.weight(1f))
                 }
             }
         }
@@ -606,46 +882,13 @@ private fun timesheetCalendarColor(tone: TimesheetCalendarTone): Color = when (t
 }
 
 @Composable
-fun RequestsScreen(state: HomeUiState, onCancel: (String) -> Unit) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item { PageHead("Đơn từ của tôi", "${state.requests.size} đơn") }
-        if (state.loading && state.requests.isEmpty()) item { LoadingBlock() }
-        if (state.requests.isEmpty()) {
-            item { EmptyState("Chưa có đơn", "Bạn chưa gửi đơn từ nào.") }
-        } else {
-            items(state.requests, key = { it.id }) { req -> RequestCard(req, onCancel) }
-        }
-    }
-}
-
-@Composable
-private fun RequestCard(req: RequestListItem, onCancel: (String) -> Unit) {
-    HrCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(req.typeLabel.ifBlank { req.title }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${req.requestNo} · ${formatIsoDateTime(req.createdAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            StatusChip(requestStatusLabel(req.status), requestTone(req.status))
-        }
-        if (req.status.equals("Pending", true)) {
-            OutlinedButton(onClick = { onCancel(req.id) }) { Text("Hủy đơn") }
-        }
-    }
-}
-
-@Composable
 fun SimpleScreen(title: String, message: String) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHead(title, "Thông tin") }
+        item { PageHeader(Icons.Filled.History, title, "Thông tin", Tone.Neutral) }
         item { EmptyState(title, message) }
     }
 }

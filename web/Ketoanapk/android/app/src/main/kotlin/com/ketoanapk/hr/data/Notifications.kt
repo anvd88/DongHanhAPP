@@ -183,21 +183,20 @@ class NotificationCenter(context: Context) {
             }
         }
 
-        // 2) Đơn mới chờ duyệt (chỉ quản trị / người có hộp thư duyệt).
-        if (isAdmin) {
-            for (r in inbox) {
-                if (!r.status.equals("Pending", true)) continue
-                val sig = "inbox:${r.id}"
-                if (seen.add(sig) && !firstRun) {
-                    fresh += AppNotification(
-                        id = sig,
-                        kind = NotificationKind.Approval,
-                        title = "Đơn mới chờ duyệt",
-                        body = "${r.employeeName.ifBlank { r.requesterUsername }} · ${r.typeLabel.ifBlank { r.title }}",
-                        createdAt = now,
-                        target = "Approval",
-                    )
-                }
+        // 2) Đơn mới chờ duyệt — cho MỌI người có trong hộp thư (đã lọc sẵn ở máy chủ theo
+        //    người duyệt: quản lý trực tiếp hoặc quản trị). Nhờ đó quản lý không phải admin cũng được nhắc.
+        for (r in inbox) {
+            if (!r.status.equals("Pending", true)) continue
+            val sig = "inbox:${r.id}"
+            if (seen.add(sig) && !firstRun) {
+                fresh += AppNotification(
+                    id = sig,
+                    kind = NotificationKind.Approval,
+                    title = "Đơn mới chờ duyệt",
+                    body = "${r.employeeName.ifBlank { r.requesterUsername }} · ${r.typeLabel.ifBlank { r.title }}",
+                    createdAt = now,
+                    target = "Approval",
+                )
             }
         }
 

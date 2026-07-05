@@ -30,6 +30,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.ui.theme.Danger
+import com.ketoanapk.hr.ui.theme.HeroBottom
+import com.ketoanapk.hr.ui.theme.HeroTop
 import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning
 
@@ -377,4 +381,142 @@ fun Gap(height: Int) {
 @Composable
 fun HWidth(width: Int) {
     Spacer(Modifier.width(width.dp))
+}
+
+// ─────────────────────── Hệ thiết kế dùng chung (giống Trang chủ) ───────────────────────
+
+/**
+ * Ô thống kê trắng: icon nền màu ở trái, nhãn nhỏ + số lớn màu. Dùng cho lưới KPI ở Trang chủ,
+ * Bảng công, Quản lý nhân sự… để mọi màn nhìn nhất quán.
+ */
+@Composable
+fun StatTile(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    Surface(
+        modifier = if (onClick != null) modifier.clickable(onClick = onClick) else modifier,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shadowElevation = 1.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(accent.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(24.dp))
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(value, style = MaterialTheme.typography.headlineSmall, color = accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+/** Tiêu đề trong thẻ (đậm, có thể kèm chevron mở rộng). */
+@Composable
+fun CardHeader(title: String, onMore: (() -> Unit)? = null) {
+    Row(
+        modifier = if (onMore != null) Modifier.fillMaxWidth().clickable(onClick = onMore) else Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+        if (onMore != null) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Đầu trang cho các màn danh sách: icon nền màu + tiêu đề lớn + phụ đề. Nhẹ hơn hero tối. */
+@Composable
+fun PageHeader(icon: ImageVector, title: String, subtitle: String, tone: Tone = Tone.Neutral) {
+    val accent = toneColor(tone)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(accent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(26.dp))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** Khung "hero" nền tối gradient bo góc — dùng cho thẻ đầu Trang chủ & Hồ sơ. */
+@Composable
+fun HeroContainer(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .shadow(4.dp, RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .background(Brush.verticalGradient(listOf(HeroTop, HeroBottom)))
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        content = content,
+    )
+}
+
+/** Nhãn trạng thái viên thuốc trên nền tối (chấm + chữ cùng màu sáng). */
+@Composable
+fun HeroBadge(text: String, color: Color) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(color.copy(alpha = 0.18f))
+            .padding(horizontal = 11.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        Text(text, style = MaterialTheme.typography.labelMedium, color = color, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** Thẻ danh tính nền tối (avatar + tên + phụ đề + badge trạng thái) — dùng cho Hồ sơ. */
+@Composable
+fun IdentityHero(
+    name: String,
+    subtitle: String,
+    statusText: String,
+    statusColor: Color,
+    footer: (@Composable () -> Unit)? = null,
+) {
+    HeroContainer {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            UserAvatar(name, 64)
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(name, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C0CE), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                HeroBadge(statusText, statusColor)
+            }
+        }
+        footer?.invoke()
+    }
 }

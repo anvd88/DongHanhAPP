@@ -60,16 +60,12 @@ fun NotificationsScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Thông báo", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
-                    Text(
-                        if (unread > 0) "$unread thông báo chưa đọc" else "Bạn đã đọc hết thông báo",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            PageHeader(
+                Icons.Filled.NotificationsNone,
+                "Thông báo",
+                if (unread > 0) "$unread thông báo chưa đọc" else "Bạn đã đọc hết thông báo",
+                Tone.Neutral,
+            )
         }
 
         if (notifications.isNotEmpty()) {

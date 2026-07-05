@@ -1127,12 +1127,12 @@ html[data-theme="dark"] .glass-strong {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0 10px 12px;
-  animation: kmPageIn 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: kmPageIn 0.16s ease-out both;
 }
 
 @keyframes kmPageIn {
-  from { opacity: 0; transform: translateY(10px); filter: blur(6px); }
-  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .km-sidebar {
@@ -2335,14 +2335,64 @@ html[data-theme="dark"] .km-chat-toast {
   .km-page,
   .liquid-bg::before,
   .liquid-bg::after,
-  .liquid-bg .orb {
-    animation: none;
+  .liquid-bg .orb,
+  .liquid-active-indicator::before,
+  .liquid-active-indicator::after,
+  .km-skeleton {
+    animation: none !important;
   }
 
   .km-stat-card,
   .liquid-sidebar-link {
     transition: none;
   }
+}
+
+/* ═══════════════ Chế độ nhẹ cho máy yếu (html.perf-lite) ═══════════════
+   Bỏ blur kính (nặng nhất với GPU/CPU yếu) → chuyển nền kính sang màu ĐỤC để
+   vẫn đọc rõ; ẩn các quả cầu nền động + tắt animation trang trí lặp vô hạn. */
+html.perf-lite *,
+html.perf-lite *::before,
+html.perf-lite *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Nền: bỏ các quả cầu blur động (tiết kiệm repaint liên tục) */
+html.perf-lite .liquid-bg::before,
+html.perf-lite .liquid-bg::after,
+html.perf-lite .liquid-bg .orb {
+  display: none !important;
+}
+
+/* Kính → đục để bù cho việc bỏ blur */
+html.perf-lite {
+  --glass-bg: #eef2f8 !important;
+  --glass-bg-strong: #ffffff !important;
+}
+html.perf-lite .gc-root {
+  --gc-surface: #eef2f8 !important;
+  --gc-surface-strong: #ffffff !important;
+}
+html[data-theme="dark"].perf-lite {
+  --glass-bg: #141c28 !important;
+  --glass-bg-strong: #18212f !important;
+}
+html[data-theme="dark"].perf-lite .gc-root {
+  --gc-surface: #141c28 !important;
+  --gc-surface-strong: #18212f !important;
+}
+
+/* Tắt animation trang trí lặp vô hạn (glint/sheen); giữ chuyển động chức năng */
+html.perf-lite .liquid-active-indicator::before,
+html.perf-lite .liquid-active-indicator::after {
+  animation: none !important;
+}
+/* Skeleton: bỏ shimmer chạy liên tục, dùng nền tĩnh */
+html.perf-lite .km-skeleton,
+html.perf-lite .gc-skeleton {
+  animation: none !important;
+  background: rgba(120, 140, 170, 0.16) !important;
 }
 
 /* ─────────────── Liquid Glass tabs ─────────────── */

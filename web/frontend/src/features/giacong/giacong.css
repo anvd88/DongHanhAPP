@@ -728,19 +728,13 @@ html[data-theme="dark"] .gc-icon-btn:hover {
   height: 40px;
   width: 100%;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(224, 238, 255, 0.2)),
-    rgba(255, 255, 255, 0.28);
+  border: 1px solid #d3ddec;
+  background: #ffffff;
   padding: 0 14px;
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--gc-text);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.7),
-    inset 0 -1px 0 rgba(120, 165, 230, 0.1);
-  backdrop-filter: blur(8px) saturate(140%);
-  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   outline: none;
   transition: border-color 0.22s ease, box-shadow 0.22s ease, background 0.22s ease;
 }
@@ -751,23 +745,18 @@ html[data-theme="dark"] .gc-icon-btn:hover {
 .gc-input:focus,
 .gc-input:focus-visible {
   border-color: rgba(84, 180, 255, 0.86);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(224, 238, 255, 0.26)),
-    rgba(255, 255, 255, 0.4);
+  background: #ffffff;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.85),
     0 0 0 3px rgba(62, 155, 255, 0.16),
     0 8px 22px -14px rgba(44, 116, 214, 0.3);
 }
 html[data-theme="dark"] .gc-input {
-  border-color: rgba(255, 255, 255, 0.12);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(40, 208, 230, 0.04)),
-    rgba(20, 30, 48, 0.42);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: #141d2c;
 }
 html[data-theme="dark"] .gc-input:focus {
   border-color: rgba(40, 208, 230, 0.6);
-  background: rgba(20, 30, 48, 0.56);
+  background: #18233a;
 }
 select.gc-input {
   cursor: pointer;
@@ -1063,14 +1052,9 @@ html[data-theme="dark"] .gc-dialog-content {
 .gc-editor-dialog .gc-input {
   min-height: 46px;
   border-radius: 15px;
-  border-color: rgba(158, 193, 239, 0.5);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(230, 242, 255, 0.5)),
-    rgba(255, 255, 255, 0.38);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(96, 132, 188, 0.08),
-    0 12px 24px -20px rgba(42, 94, 168, 0.42);
+  border-color: #c9d8ef;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
   color: #09265f;
 }
 
@@ -1083,7 +1067,7 @@ html[data-theme="dark"] .gc-dialog-content {
 .gc-editor-dialog .gc-input:focus-visible,
 .gc-editor-dialog .gc-cell:focus {
   border-color: rgba(63, 139, 255, 0.52);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(232, 244, 255, 0.62));
+  background: #ffffff;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.94),
     0 0 0 3px rgba(52, 134, 255, 0.12),
@@ -1094,9 +1078,7 @@ html[data-theme="dark"] .gc-dialog-content {
   cursor: not-allowed;
   opacity: 1;
   color: #12336f;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(223, 238, 255, 0.6)),
-    rgba(255, 255, 255, 0.48);
+  background: #eef3fb;
   border-color: rgba(157, 194, 241, 0.44);
 }
 
@@ -1147,13 +1129,11 @@ html[data-theme="dark"] .gc-dialog-content {
 
 .gc-editor-linetable .gc-cell {
   min-height: 42px;
-  border: 1px solid rgba(157, 194, 241, 0.38);
+  border: 1px solid #c9d8ef;
   border-radius: 13px;
-  background: rgba(255, 255, 255, 0.56);
+  background: #ffffff;
   padding: 9px 12px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.76),
-    0 10px 20px -18px rgba(46, 92, 166, 0.45);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
 }
 
 .gc-editor-linetable tfoot tr {

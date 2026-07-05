@@ -151,6 +151,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                 user = user,
                 selected = vm.selected,
                 groups = vm.visibleNavGroups(user),
+                approvalCount = vm.pendingApprovalCount,
                 onSelect = {
                     vm.select(it)
                     scope.launch { drawerState.close() }
@@ -165,9 +166,27 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
             topBar = {
                 TopAppBar(
                     title = {
-                        Column {
-                            Text("KETOANAPK", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(vm.selected.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "KETOANAPK",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.ExtraBold,
+                            )
+                            Box(
+                                Modifier
+                                    .padding(horizontal = 10.dp)
+                                    .width(1.dp)
+                                    .height(20.dp)
+                                    .background(MaterialTheme.colorScheme.outline),
+                            )
+                            Text(
+                                vm.selected.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     },
                     navigationIcon = {
@@ -199,12 +218,12 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                     .background(MaterialTheme.colorScheme.background),
             ) {
                 when (vm.selected) {
-                    HrDestination.Home -> HomeScreen(user, vm.homeState, vm::select)
+                    HrDestination.Home -> HomeScreen(user, vm.homeState, vm.managerState, vm::select)
                     HrDestination.Profile -> ProfileScreen(vm.homeState)
                     HrDestination.Scan -> AttendanceScreen(vm)
                     HrDestination.Timesheet -> TimesheetScreen(vm.timesheetState, vm::changeTimesheetMonth, vm::resetTimesheetMonth)
-                    HrDestination.Requests -> RequestsScreen(vm.homeState, vm::cancel)
-                    HrDestination.Approval -> ApprovalScreen(vm.homeState, vm::approve, vm::reject)
+                    HrDestination.Requests -> RequestsScreen(vm)
+                    HrDestination.Approval -> StaffRequestsScreen(vm)
                     HrDestination.Penalty -> PenaltyScreen(user, vm.homeState)
                     HrDestination.People -> ManagerScreen(vm.managerState)
                     HrDestination.Payroll -> PayrollScreen(vm.homeState)
@@ -405,6 +424,7 @@ private fun DrawerContent(
     user: HrUser,
     selected: HrDestination,
     groups: List<NavGroup>,
+    approvalCount: Int,
     onSelect: (HrDestination) -> Unit,
     onClose: () -> Unit,
     onLogout: () -> Unit,
@@ -442,6 +462,14 @@ private fun DrawerContent(
                         label = { Text(dest.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         selected = selected == dest,
                         icon = { Icon(dest.icon, contentDescription = null) },
+                        badge = {
+                            if (dest == HrDestination.Approval && approvalCount > 0) {
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError,
+                                ) { Text(if (approvalCount > 99) "99+" else "$approvalCount") }
+                            }
+                        },
                         onClick = { onSelect(dest) },
                         colors = NavigationDrawerItemDefaults.colors(
                             selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,

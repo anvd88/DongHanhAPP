@@ -105,6 +105,13 @@
     linear-gradient(135deg, rgba(96, 165, 250, 0.24), rgba(14, 165, 233, 0.14));
 }
 
+.system-settings-icon.is-perf {
+  color: #7c3aed;
+  background:
+    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.68), transparent 32%),
+    linear-gradient(135deg, rgba(139, 92, 246, 0.24), rgba(59, 130, 246, 0.14));
+}
+
 .system-rules-hint {
   display: inline-flex;
   align-items: center;

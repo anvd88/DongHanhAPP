@@ -39,7 +39,7 @@ export function Input({ className = "", ...rest }: InputHTMLAttributes<HTMLInput
   return (
     <input
       {...rest}
-      className={`w-full rounded-xl border border-[var(--glass-border)] bg-white/55 dark:bg-white/5 px-3.5 py-2.5 text-sm text-[var(--text)] outline-none transition-all placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)] ${className}`}
+      className={`w-full rounded-xl border border-[#d3ddec] bg-white dark:border-white/12 dark:bg-[#141d2c] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none transition-all placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)] ${className}`}
     />
   );
 }
@@ -48,7 +48,7 @@ export function Select({ className = "", children, ...rest }: SelectHTMLAttribut
   return (
     <select
       {...rest}
-      className={`rounded-xl border border-[var(--glass-border)] bg-white/55 dark:bg-white/5 px-3.5 py-2.5 text-sm text-[var(--text)] outline-none transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)] ${className}`}
+      className={`rounded-xl border border-[#d3ddec] bg-white dark:border-white/12 dark:bg-[#141d2c] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)] ${className}`}
     >
       {children}
     </select>
