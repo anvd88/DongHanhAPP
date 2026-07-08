@@ -1443,7 +1443,6 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
   const { notify } = useAppNotifications();
   const { data, loading } = useApi<SalaryDetail>(`/api/payroll/salaries/${item.employeeId}`);
   const [base, setBase] = useState("");
-  const [allowance, setAllowance] = useState("");
   const [overtimeRate, setOvertimeRate] = useState("");
   const [components, setComponents] = useState<SalaryComponent[]>([]);
   const [note, setNote] = useState("");
@@ -1453,9 +1452,11 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
   useEffect(() => {
     if (!data || ready) return;
     setBase(String(data.baseSalary ?? 0));
-    setAllowance(String(data.allowance ?? 0));
     setOvertimeRate(String(data.overtimeRate ?? 0));
-    setComponents(data.components ?? []);
+    // Gộp "Phụ cấp" cũ (nếu có) thành một khoản tự nhập để mọi khoản ngoài lương cứng nằm chung một chỗ.
+    const extra: SalaryComponent[] = [...(data.components ?? [])];
+    if ((data.allowance ?? 0) !== 0) extra.unshift({ label: "Phụ cấp", amount: data.allowance, kind: "earning" });
+    setComponents(extra);
     setNote(data.note ?? "");
     setReady(true);
   }, [data, ready]);
@@ -1465,16 +1466,19 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
     setComponents((s) => s.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
   const removeComponent = (i: number) => setComponents((s) => s.filter((_, idx) => idx !== i));
 
+  const cleanComponents = components.filter((c) => c.label.trim());
+  const extraEarn = cleanComponents.filter((c) => c.kind === "earning").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const extraDeduct = cleanComponents.filter((c) => c.kind === "deduction").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const monthly = (Number(base) || 0) + extraEarn - extraDeduct;
+
   const submit = async () => {
     setSaving(true);
     try {
       await api.put(`/api/payroll/salaries/${item.employeeId}`, {
         baseSalary: Number(base) || 0,
-        allowance: Number(allowance) || 0,
+        allowance: 0, // Phụ cấp giờ là một khoản tự nhập trong "components" → không dùng ô riêng nữa.
         overtimeRate: Number(overtimeRate) || 0,
-        components: components
-          .filter((c) => c.label.trim())
-          .map((c) => ({ label: c.label.trim(), amount: Number(c.amount) || 0, kind: c.kind })),
+        components: cleanComponents.map((c) => ({ label: c.label.trim(), amount: Number(c.amount) || 0, kind: c.kind })),
         note: note.trim(),
       });
       notify.success("Đã lưu mức lương.");
@@ -1494,28 +1498,40 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
     >
       {loading && !data ? <HrEmpty text="Đang tải..." /> : (
         <div className="hr-form-stack">
-          <Field label="Lương cơ bản (₫)"><MoneyInput value={base} onChange={setBase} /></Field>
-          <Field label="Phụ cấp (₫)"><MoneyInput value={allowance} onChange={setAllowance} /></Field>
-          <Field label="Đơn giá tăng ca (₫/giờ)"><MoneyInput value={overtimeRate} onChange={setOvertimeRate} /></Field>
+          <Field label="Lương cứng (₫/tháng)"><MoneyInput value={base} onChange={setBase} /></Field>
+          <p className="hr-salary-empty">Lương cố định hằng tháng, chưa gồm các khoản khác bên dưới.</p>
 
           <div className="hr-salary-components">
             <div className="hr-salary-components-head">
-              <strong>Khoản khác</strong>
+              <strong>Các khoản khác (tự nhập)</strong>
               <div>
-                <button type="button" onClick={() => addComponent("earning")}><Plus className="h-3.5 w-3.5" /> Cộng</button>
-                <button type="button" onClick={() => addComponent("deduction")}><Plus className="h-3.5 w-3.5" /> Trừ</button>
+                <button type="button" onClick={() => addComponent("earning")}><Plus className="h-3.5 w-3.5" /> Khoản cộng</button>
+                <button type="button" onClick={() => addComponent("deduction")}><Plus className="h-3.5 w-3.5" /> Khoản trừ</button>
               </div>
             </div>
-            {components.length === 0 && <p className="hr-salary-empty">Chưa có khoản cộng/trừ cố định nào.</p>}
+            {components.length === 0 && <p className="hr-salary-empty">Chưa có khoản nào. Bấm “Khoản cộng” (vd: phụ cấp, thưởng) hoặc “Khoản trừ” (vd: BHXH) để thêm.</p>}
             {components.map((c, i) => (
               <div key={i} className="hr-salary-comp-row" data-kind={c.kind}>
-                <Input value={c.label} placeholder={c.kind === "earning" ? "Tên khoản cộng" : "Tên khoản trừ"} onChange={(e) => updateComponent(i, { label: e.target.value })} />
+                <Input value={c.label} placeholder={c.kind === "earning" ? "Tên khoản cộng (vd: Phụ cấp ăn trưa)" : "Tên khoản trừ (vd: BHXH)"} onChange={(e) => updateComponent(i, { label: e.target.value })} />
                 <MoneyInput value={c.amount} onChange={(raw) => updateComponent(i, { amount: Number(raw) || 0 })} />
                 <span className="hr-salary-comp-tag">{c.kind === "earning" ? "Cộng" : "Trừ"}</span>
                 <button type="button" className="hr-icon-btn" onClick={() => removeComponent(i)} aria-label="Xóa"><Trash2 className="h-4 w-4" /></button>
               </div>
             ))}
           </div>
+
+          <div className="hr-payslip-net">
+            <span>Tạm tính mỗi tháng (chưa gồm tăng ca / phạt)</span>
+            <strong>{moneyVnd(monthly)}</strong>
+          </div>
+
+          <details className="hr-salary-advanced">
+            <summary>Nâng cao · tăng ca</summary>
+            <Field label="Đơn giá tăng ca (₫/giờ)">
+              <MoneyInput value={overtimeRate} onChange={setOvertimeRate} />
+            </Field>
+            <p className="hr-salary-empty">Tiền mỗi giờ tăng ca. App tự tính theo số giờ tăng ca của bảng công.</p>
+          </details>
 
           <Field label="Ghi chú"><textarea className="hr-textarea" rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         </div>
@@ -1531,6 +1547,7 @@ function PayslipMaker() {
   const [period, setPeriod] = useState(currentMonth());
   const [published, setPublished] = useState(true);
   const [adjustments, setAdjustments] = useState<SalaryComponent[]>([]);
+  const [otSelected, setOtSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const canQuery = Boolean(employeeId && period);
   const { data: compute, loading } = useApi<PayrollCompute>(
@@ -1538,13 +1555,35 @@ function PayslipMaker() {
     [employeeId, period],
   );
 
+  // Khi tính xong: mặc định DUYỆT tất cả ngày tăng ca phát hiện được (admin có thể bỏ chọn từng ngày).
+  // Chỉ reset khi TẬP ngày đổi (đổi nhân viên/kỳ), không reset khi dữ liệu chỉ được nạp lại ngầm.
+  const otDayKey = (compute?.overtimeDays ?? []).map((d) => d.date).join(",");
+  useEffect(() => {
+    setOtSelected(new Set(otDayKey ? otDayKey.split(",") : []));
+  }, [otDayKey]);
+
   const addAdj = (kind: "earning" | "deduction") => setAdjustments((s) => [...s, { label: "", amount: 0, kind }]);
   const updateAdj = (i: number, patch: Partial<SalaryComponent>) => setAdjustments((s) => s.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
   const removeAdj = (i: number) => setAdjustments((s) => s.filter((_, idx) => idx !== i));
+  const toggleOt = (dateKey: string) => setOtSelected((s) => {
+    const next = new Set(s);
+    if (next.has(dateKey)) next.delete(dateKey); else next.add(dateKey);
+    return next;
+  });
+
+  const otDays = compute?.overtimeDays ?? [];
+  const otRate = compute?.overtimeRate ?? 0;
+  const otMinutes = otDays.filter((d) => otSelected.has(d.date)).reduce((s, d) => s + d.minutes, 0);
+  const otHours = Math.round((otMinutes / 60) * 100) / 100;
+  const otPay = Math.round((otMinutes / 60) * otRate);
 
   const adjEarnings = adjustments.filter((a) => a.kind === "earning" && a.label.trim());
   const adjDeductions = adjustments.filter((a) => a.kind === "deduction" && a.label.trim());
-  const earnings: PayLine[] = [...(compute?.earnings ?? []), ...adjEarnings.map((a) => ({ label: a.label.trim(), amount: Number(a.amount) || 0 }))];
+  const earnings: PayLine[] = [
+    ...(compute?.earnings ?? []),
+    ...(otPay !== 0 ? [{ label: `Tăng ca (${otHours} giờ)`, amount: otPay }] : []),
+    ...adjEarnings.map((a) => ({ label: a.label.trim(), amount: Number(a.amount) || 0 })),
+  ];
   const deductions: PayLine[] = [...(compute?.deductions ?? []), ...adjDeductions.map((a) => ({ label: a.label.trim(), amount: Number(a.amount) || 0 }))];
   const totalEarnings = earnings.reduce((s, e) => s + e.amount, 0);
   const totalDeductions = deductions.reduce((s, e) => s + e.amount, 0);
@@ -1559,6 +1598,7 @@ function PayslipMaker() {
         period,
         published,
         adjustments: adjustments.filter((a) => a.label.trim()).map((a) => ({ label: a.label.trim(), amount: Number(a.amount) || 0, kind: a.kind })),
+        approvedOvertimeDates: otDays.filter((d) => otSelected.has(d.date)).map((d) => d.date),
       });
       notify.success("Đã lập phiếu lương.");
       setAdjustments([]);
@@ -1591,9 +1631,39 @@ function PayslipMaker() {
         <>
           <div className="hr-grid-3">
             <HrStat label="Ngày công" value={`${compute.workedDays}`} hint={`Vắng ${compute.absentDays}`} />
-            <HrStat label="Tăng ca" value={`${compute.overtimeHours} giờ`} hint={moneyVnd(compute.overtimePay)} />
+            <HrStat label="Tăng ca duyệt" value={`${otHours} giờ`} hint={moneyVnd(otPay)} />
             <HrStat label="Đi muộn" value={`${compute.lateDays}`} tone={compute.lateDays > 0 ? "warning" : "neutral"} />
           </div>
+
+          <HrCard>
+            <div className="hr-salary-components-head">
+              <strong>Duyệt tăng ca theo ngày</strong>
+              {otDays.length > 0 && (
+                <div>
+                  <button type="button" onClick={() => setOtSelected(new Set(otDays.map((d) => d.date)))}>Chọn tất cả</button>
+                  <button type="button" onClick={() => setOtSelected(new Set())}>Bỏ chọn</button>
+                </div>
+              )}
+            </div>
+            {otDays.length === 0 ? (
+              <p className="hr-salary-empty">Không có ngày nào tăng ca (giờ ra sau 17:20) trong kỳ này.</p>
+            ) : (
+              <div className="hr-ot-list">
+                {otDays.map((d) => (
+                  <label key={d.date} className="hr-ot-row" data-on={otSelected.has(d.date)}>
+                    <input type="checkbox" checked={otSelected.has(d.date)} onChange={() => toggleOt(d.date)} />
+                    <span className="hr-ot-date">{date(d.date)}</span>
+                    <span className="hr-ot-out">Ra {d.checkOut}</span>
+                    <span className="hr-ot-min">{Math.round((d.minutes / 60) * 100) / 100} giờ</span>
+                    <b>{moneyVnd(Math.round((d.minutes / 60) * otRate))}</b>
+                  </label>
+                ))}
+              </div>
+            )}
+            {otDays.length > 0 && otRate === 0 && (
+              <p className="hr-salary-empty">Chưa đặt “Đơn giá tăng ca” cho nhân viên này nên tiền tăng ca = 0. Đặt ở tab Mức lương.</p>
+            )}
+          </HrCard>
 
           <HrCard>
             <div className="hr-payslip-lines">

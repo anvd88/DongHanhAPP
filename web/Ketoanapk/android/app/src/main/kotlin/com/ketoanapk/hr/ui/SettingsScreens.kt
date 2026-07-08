@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
@@ -77,11 +78,25 @@ import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.HrUser
 
-private enum class SettingsRoute { Home, WebLogin, ChangePassword, Devices, Notifications, Version, Terms, Privacy }
+enum class SettingsRoute { Home, WebLogin, ChangePassword, Devices, Notifications, FaceEnroll, Version, Terms, Privacy }
+
+private data class LegalSection(
+    val title: String,
+    val paragraphs: List<String>,
+)
 
 @Composable
 fun SettingsScreen(user: HrUser, vm: HrViewModel, onLogout: () -> Unit) {
-    var route by rememberSaveable { mutableStateOf(SettingsRoute.Home) }
+    // Màn con hiện tại lấy từ ViewModel để nút Back của điện thoại lùi được về Cài đặt gốc.
+    val route = vm.settingsRoute
+
+    // Bấm "Đăng ký ngay" từ banner nhắc → tự mở thẳng màn Đăng ký khuôn mặt.
+    LaunchedEffect(vm.openFaceEnroll) {
+        if (vm.openFaceEnroll) {
+            vm.settingsRoute = SettingsRoute.FaceEnroll
+            vm.clearOpenFaceEnroll()
+        }
+    }
 
     AnimatedContent(
         targetState = route,
@@ -95,15 +110,17 @@ fun SettingsScreen(user: HrUser, vm: HrViewModel, onLogout: () -> Unit) {
         },
         label = "settings",
     ) { target ->
+        val goHome = { vm.settingsRoute = SettingsRoute.Home }
         when (target) {
-            SettingsRoute.Home -> SettingsHome(user, vm, onOpen = { route = it }, onLogout = onLogout)
-            SettingsRoute.WebLogin -> WebLoginSettings(vm) { route = SettingsRoute.Home }
-            SettingsRoute.ChangePassword -> ChangePasswordScreen(vm) { route = SettingsRoute.Home }
-            SettingsRoute.Devices -> DeviceManagerScreen(vm) { route = SettingsRoute.Home }
-            SettingsRoute.Notifications -> NotificationSettings(vm) { route = SettingsRoute.Home }
-            SettingsRoute.Version -> AppVersionScreen(vm) { route = SettingsRoute.Home }
-            SettingsRoute.Terms -> ComingSoonScreen("Điều khoản sử dụng") { route = SettingsRoute.Home }
-            SettingsRoute.Privacy -> ComingSoonScreen("Chính sách quyền riêng tư") { route = SettingsRoute.Home }
+            SettingsRoute.Home -> SettingsHome(user, vm, onOpen = { vm.settingsRoute = it }, onLogout = onLogout)
+            SettingsRoute.WebLogin -> WebLoginSettings(vm, goHome)
+            SettingsRoute.ChangePassword -> ChangePasswordScreen(vm, goHome)
+            SettingsRoute.Devices -> DeviceManagerScreen(vm, goHome)
+            SettingsRoute.Notifications -> NotificationSettings(vm, goHome)
+            SettingsRoute.FaceEnroll -> FaceEnrollScreen(vm, goHome)
+            SettingsRoute.Version -> AppVersionScreen(vm, goHome)
+            SettingsRoute.Terms -> TermsScreen(goHome)
+            SettingsRoute.Privacy -> PrivacyPolicyScreen(goHome)
         }
     }
 }
@@ -115,13 +132,15 @@ private fun SettingsHome(
     onOpen: (SettingsRoute) -> Unit,
     onLogout: () -> Unit,
 ) {
+    LaunchedEffect(Unit) { vm.loadFaceStatus() }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            HrCard {
+            // Bấm vào thẻ tên → mở trang Hồ sơ cá nhân.
+            HrCard(modifier = Modifier.clickable { vm.select(HrDestination.Profile) }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     UserAvatar(user.displayName, 52)
                     Spacer(Modifier.width(12.dp))
@@ -130,6 +149,8 @@ private fun SettingsHome(
                         Text(user.username, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     StatusChip(if (user.isAdmin) "Quản trị" else "Nhân viên", if (user.isAdmin) Tone.Neutral else Tone.Muted)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Xem hồ sơ", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -142,6 +163,16 @@ private fun SettingsHome(
                 SettingsRow(Icons.Filled.Lock, "Đổi mật khẩu", "Cập nhật mật khẩu tài khoản") { onOpen(SettingsRoute.ChangePassword) }
                 SettingsDivider()
                 SettingsRow(Icons.Filled.Devices, "Quản lý thiết bị", "Phiên đăng nhập & thu hồi từ xa") { onOpen(SettingsRoute.Devices) }
+                SettingsDivider()
+                SettingsRow(
+                    Icons.Filled.Face,
+                    "Đăng ký khuôn mặt",
+                    when (vm.faceRegistered) {
+                        true -> "Đã đăng ký · dùng cho chấm công và đăng nhập"
+                        false -> "Quét khuôn mặt để chấm công & đăng nhập"
+                        null -> "Chấm công và đăng nhập bằng khuôn mặt"
+                    },
+                ) { onOpen(SettingsRoute.FaceEnroll) }
                 SettingsDivider()
                 SettingsRow(Icons.Filled.Notifications, "Cài đặt thông báo", "Bật/tắt thông báo push của ứng dụng") { onOpen(SettingsRoute.Notifications) }
             }
@@ -475,11 +506,174 @@ private fun AppVersionScreen(vm: HrViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun ComingSoonScreen(title: String, onBack: () -> Unit) {
+private fun TermsScreen(onBack: () -> Unit) {
+    LegalDocumentScreen(
+        title = "Điều khoản sử dụng",
+        updatedAt = "Cập nhật: 08/07/2026",
+        lead = "Các điều khoản này áp dụng khi bạn đăng nhập hoặc sử dụng Ketoan - Nhân sự để quản lý hồ sơ nhân sự, chấm công, đơn từ, phê duyệt, thông báo và các chức năng liên quan do đơn vị vận hành cung cấp.",
+        sections = termsSections(),
+        onBack = onBack,
+    )
+}
+
+@Composable
+private fun PrivacyPolicyScreen(onBack: () -> Unit) {
+    LegalDocumentScreen(
+        title = "Chính sách quyền riêng tư",
+        updatedAt = "Cập nhật: 08/07/2026",
+        lead = "Chính sách này giải thích cách Ketoan - Nhân sự thu thập, sử dụng, lưu trữ và bảo vệ dữ liệu khi bạn dùng ứng dụng nội bộ phục vụ quản lý nhân sự và chấm công.",
+        sections = privacySections(),
+        onBack = onBack,
+    )
+}
+
+@Composable
+private fun LegalDocumentScreen(
+    title: String,
+    updatedAt: String,
+    lead: String,
+    sections: List<LegalSection>,
+    onBack: () -> Unit,
+) {
     SubScreen(title, onBack) {
-        item { EmptyState(title, "Nội dung đang được cập nhật. Vui lòng quay lại sau.") }
+        item {
+            SettingsGroup(padded = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    Text(updatedAt, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(lead, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        items(sections) { section ->
+            SettingsGroup(padded = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(section.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    section.paragraphs.forEach { paragraph ->
+                        Text(paragraph, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
     }
 }
+
+private fun termsSections(): List<LegalSection> = listOf(
+    LegalSection(
+        "1. Tài khoản và quyền truy cập",
+        listOf(
+            "Bạn chỉ được sử dụng tài khoản được cấp cho chính mình và phải bảo mật mật khẩu, thiết bị đăng nhập, mã phiên và các phương thức xác thực khuôn mặt nếu đã đăng ký.",
+            "Mọi thao tác phát sinh từ tài khoản của bạn có thể được ghi nhận để phục vụ vận hành, kiểm tra bảo mật, chấm công, xử lý đơn từ và quản trị nhân sự. Nếu nghi ngờ tài khoản bị truy cập trái phép, bạn cần đổi mật khẩu và thông báo ngay cho người quản trị.",
+        ),
+    ),
+    LegalSection(
+        "2. Mục đích sử dụng",
+        listOf(
+            "Ứng dụng được cung cấp cho mục đích nội bộ gồm xem thông tin nhân sự, bảng công, lương/phụ cấp nếu được phân quyền, gửi và xử lý đơn từ, nhận thông báo, đăng ký khuôn mặt, chấm công trực tuyến hoặc đồng bộ bản chấm công ngoại tuyến.",
+            "Bạn không được dùng ứng dụng để truy cập dữ liệu không thuộc thẩm quyền, giả mạo danh tính, can thiệp hệ thống, trích xuất dữ liệu trái phép, vô hiệu hóa cơ chế bảo mật hoặc thực hiện hành vi vi phạm nội quy, hợp đồng lao động hay pháp luật.",
+        ),
+    ),
+    LegalSection(
+        "3. Chấm công và xác thực khuôn mặt",
+        listOf(
+            "Khi dùng chức năng đăng ký khuôn mặt, đặt lại mật khẩu bằng khuôn mặt hoặc chấm công, ứng dụng có thể sử dụng camera để ghi nhận ảnh/khuôn mặt, kiểm tra chất lượng ảnh, gửi dữ liệu cần thiết tới máy chủ và nhận kết quả đối chiếu.",
+            "Kết quả chấm công chỉ có giá trị khi được hệ thống tiếp nhận hoặc đồng bộ thành công. Trường hợp mất mạng, dữ liệu chấm công có thể được lưu tạm trên thiết bị và gửi lại khi có kết nối; bản ghi ngoại tuyến có thể kèm thời điểm phát sinh và vị trí nếu bạn cấp quyền.",
+        ),
+    ),
+    LegalSection(
+        "4. Thông báo, thiết bị và cập nhật",
+        listOf(
+            "Khi bật thông báo, ứng dụng có thể đăng ký mã thông báo push của thiết bị để gửi thông tin về đơn từ, phê duyệt, kỷ luật/phạt, chấm công, cập nhật hệ thống và nội dung vận hành liên quan.",
+            "Ứng dụng có thể kiểm tra phiên bản mới, tải gói cập nhật APK từ máy chủ được cấu hình và yêu cầu xác nhận cài đặt theo cơ chế của Android. Bạn nên chỉ cài đặt bản cập nhật phát hành từ kênh chính thức của đơn vị vận hành.",
+        ),
+    ),
+    LegalSection(
+        "5. Dữ liệu, bảo mật và trách nhiệm",
+        listOf(
+            "Bạn đồng ý cung cấp dữ liệu chính xác khi gửi đơn từ, chấm công, cập nhật thông tin hoặc thực hiện phê duyệt. Dữ liệu sai lệch, gian lận hoặc sử dụng sai chức năng có thể bị xử lý theo quy định nội bộ và pháp luật áp dụng.",
+            "Đơn vị vận hành áp dụng các biện pháp kỹ thuật và tổ chức phù hợp để bảo vệ hệ thống, nhưng việc sử dụng ứng dụng vẫn phụ thuộc vào thiết bị, kết nối mạng, dịch vụ máy chủ và cấu hình bảo mật của từng môi trường.",
+        ),
+    ),
+    LegalSection(
+        "6. Tạm ngừng, chấm dứt và thay đổi",
+        listOf(
+            "Quyền truy cập của bạn có thể bị tạm ngừng, thu hồi hoặc giới hạn khi tài khoản không còn thuộc phạm vi sử dụng, có rủi ro bảo mật, vi phạm điều khoản hoặc theo yêu cầu quản trị nhân sự.",
+            "Các điều khoản này có thể được cập nhật để phù hợp với thay đổi của ứng dụng, quy trình nội bộ hoặc yêu cầu pháp luật. Việc tiếp tục sử dụng ứng dụng sau khi nội dung được cập nhật được hiểu là bạn đã biết và chấp nhận phiên bản mới.",
+        ),
+    ),
+    LegalSection(
+        "7. Liên hệ",
+        listOf(
+            "Nếu có câu hỏi về tài khoản, dữ liệu, chấm công, đơn từ hoặc việc áp dụng điều khoản này, vui lòng liên hệ bộ phận nhân sự, quản trị hệ thống hoặc đầu mối được đơn vị vận hành chỉ định.",
+        ),
+    ),
+)
+
+private fun privacySections(): List<LegalSection> = listOf(
+    LegalSection(
+        "1. Dữ liệu chúng tôi xử lý",
+        listOf(
+            "Ứng dụng có thể xử lý thông tin tài khoản như tên đăng nhập, họ tên, email, vai trò, trạng thái tài khoản, mã nhân viên, phòng ban, chức vụ, người quản lý và thông tin hồ sơ nhân sự được phân quyền.",
+            "Ứng dụng cũng có thể xử lý bảng công, ca làm, thời điểm vào/ra, đơn từ, nội dung phê duyệt, dữ liệu lương/phụ cấp nếu tài khoản có quyền xem, thông báo, phiên đăng nhập, mã thiết bị, mã push notification và nhật ký hoạt động cần thiết cho bảo mật/vận hành.",
+        ),
+    ),
+    LegalSection(
+        "2. Camera, khuôn mặt và vị trí",
+        listOf(
+            "Khi bạn sử dụng chức năng khuôn mặt, ứng dụng cần quyền camera để chụp ảnh hoặc khung hình phục vụ đăng ký, xác thực, đặt lại mật khẩu hoặc chấm công. Máy chủ có thể tạo và lưu dữ liệu đối chiếu khuôn mặt hoặc bản ghi liên quan theo cấu hình của hệ thống.",
+            "Khi chấm công ngoại tuyến hoặc chức năng yêu cầu kiểm tra phạm vi làm việc, ứng dụng có thể xin quyền vị trí chính xác hoặc tương đối. Dữ liệu vị trí chỉ được gửi kèm bản chấm công khi chức năng đó cần thiết và bạn đã cấp quyền trên thiết bị.",
+        ),
+    ),
+    LegalSection(
+        "3. Mục đích sử dụng dữ liệu",
+        listOf(
+            "Dữ liệu được dùng để xác thực đăng nhập, duy trì phiên làm việc, quản lý hồ sơ nhân sự, tính và hiển thị bảng công, xử lý đơn từ/phê duyệt, gửi thông báo, hỗ trợ chấm công khuôn mặt, đồng bộ dữ liệu ngoại tuyến, phát hiện lỗi và bảo vệ hệ thống.",
+            "Chúng tôi không bán dữ liệu cá nhân. Dữ liệu không được dùng cho quảng cáo hành vi trong ứng dụng này.",
+        ),
+    ),
+    LegalSection(
+        "4. Chia sẻ dữ liệu",
+        listOf(
+            "Dữ liệu có thể được truy cập bởi người dùng nội bộ được phân quyền như nhân viên, quản lý, nhân sự, kế toán hoặc quản trị viên hệ thống tùy theo chức năng và vai trò.",
+            "Ứng dụng có thể sử dụng dịch vụ bên thứ ba cần thiết cho vận hành, ví dụ Firebase Cloud Messaging của Google để gửi thông báo push và thư viện xử lý khuôn mặt trên thiết bị. Việc chia sẻ, nếu có, chỉ nhằm cung cấp chức năng ứng dụng, bảo mật, bảo trì hoặc đáp ứng yêu cầu pháp luật.",
+        ),
+    ),
+    LegalSection(
+        "5. Lưu trữ và bảo vệ",
+        listOf(
+            "Trên thiết bị, ứng dụng có thể lưu mã đăng nhập, mã phiên, tên đăng nhập đã ghi nhớ, cài đặt thông báo, thông báo cục bộ và hàng đợi chấm công ngoại tuyến. Ứng dụng không lưu mật khẩu đăng nhập dưới dạng ghi nhớ.",
+            "Trên máy chủ, dữ liệu được lưu trong thời gian cần thiết cho mục đích nhân sự, chấm công, kế toán, kiểm toán nội bộ, bảo mật hoặc theo quy định pháp luật. Dữ liệu chấm công ngoại tuyến lưu tạm trên thiết bị sẽ được đồng bộ hoặc xử lý theo cơ chế của ứng dụng.",
+        ),
+    ),
+    LegalSection(
+        "6. Quyền của bạn",
+        listOf(
+            "Bạn có thể yêu cầu xem, cập nhật, chỉnh sửa, hạn chế xử lý, rút lại đồng ý đối với các chức năng không bắt buộc, hoặc yêu cầu xóa dữ liệu theo phạm vi pháp luật và quy định nội bộ cho phép.",
+            "Một số dữ liệu có thể cần tiếp tục được lưu để thực hiện nghĩa vụ lao động, kế toán, chấm công, giải quyết tranh chấp, bảo mật hoặc yêu cầu pháp luật. Việc tắt quyền camera, vị trí hoặc thông báo trên thiết bị có thể làm một số chức năng không hoạt động đầy đủ.",
+        ),
+    ),
+    LegalSection(
+        "7. An toàn thiết bị và tài khoản",
+        listOf(
+            "Bạn nên đặt khóa màn hình, không chia sẻ thiết bị/tài khoản, không cài ứng dụng từ nguồn không tin cậy và đăng xuất hoặc thu hồi phiên khi không còn sử dụng thiết bị.",
+            "Nếu phát hiện dữ liệu sai, mất thiết bị, rò rỉ tài khoản hoặc nghi ngờ truy cập trái phép, vui lòng thông báo ngay cho người quản trị hoặc bộ phận nhân sự để được hỗ trợ.",
+        ),
+    ),
+    LegalSection(
+        "8. Trẻ em và người không thuộc phạm vi sử dụng",
+        listOf(
+            "Ứng dụng được thiết kế cho nhân sự, quản lý và người dùng nội bộ được cấp tài khoản. Ứng dụng không hướng tới trẻ em hoặc người không được đơn vị vận hành cấp quyền truy cập.",
+        ),
+    ),
+    LegalSection(
+        "9. Thay đổi chính sách và liên hệ",
+        listOf(
+            "Chính sách này có thể được cập nhật khi chức năng, hạ tầng, quy trình xử lý dữ liệu hoặc yêu cầu pháp luật thay đổi. Phiên bản mới sẽ được hiển thị trong ứng dụng hoặc thông báo qua kênh phù hợp.",
+            "Mọi yêu cầu về dữ liệu cá nhân, quyền riêng tư hoặc bảo mật vui lòng gửi tới bộ phận nhân sự, quản trị hệ thống hoặc đầu mối bảo vệ dữ liệu do đơn vị vận hành chỉ định.",
+        ),
+    ),
+)
 
 // ── Thành phần dùng chung ────────────────────────────────────────────────────
 @Composable

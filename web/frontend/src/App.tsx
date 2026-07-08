@@ -8,6 +8,7 @@ import { ThemeProvider } from "./lib/theme";
 import { Layout } from "./components/Layout";
 import { ChatNotificationProvider } from "./components/ChatNotifications";
 import { AppNotificationProvider, useAppNotifications } from "./components/AppNotifications";
+import { NAV } from "./components/nav";
 import { AppUpdatePrompt } from "./components/AppUpdatePrompt";
 import { WaterReminderPopup } from "./components/WaterReminderPopup";
 import { EyeReminderPopup } from "./components/EyeReminderPopup";
@@ -15,6 +16,7 @@ import { Login } from "./pages/Login";
 import { KioskPage } from "./pages/KioskPage";
 import { FarewellPage } from "./pages/FarewellPage";
 import { TinhToan } from "./pages/TinhToan";
+import { ApkDownload } from "./pages/ApkDownload";
 import { Dashboard } from "./pages/Dashboard";
 import { KeToan } from "./pages/KeToan";
 import { KhachHang } from "./pages/KhachHang";
@@ -55,17 +57,81 @@ import { isAdmin } from "./lib/types";
 import { DEFAULT_AUTH_PATH, IS_HR_APK, isHrModulePath } from "./lib/appConfig";
 import { Loader2 } from "lucide-react";
 
-function Protected({ children, admin }: { children: React.ReactNode; admin?: boolean }) {
+const APP_TITLE = "KetoanMini";
+
+const EXTRA_PAGE_TITLES: Record<string, string> = {
+  "/": "Bản web",
+  "/login": "Đăng nhập",
+  "/kiosk": "Kiosk chấm công",
+  "/tam-biet": "Tạm biệt",
+  "/tinh-toan": "Tính toán",
+  "/tai-apk": "Tải APK",
+  "/nhan-su": "Nhân sự",
+  "/nhansu": "Tài khoản",
+  "/hoso": "Hồ sơ",
+  "/dontu": "Đơn từ",
+  "/pheduyet": "Phê duyệt",
+  "/quanly-dontu": "Quản lý đơn từ",
+  "/bangcong": "Bảng công",
+  "/phat": "Phạt",
+  "/tai-khoan-ngan-hang": "Tài khoản ngân hàng",
+  "/lichhen": "Lịch hẹn",
+  "/tichhop": "Tích hợp",
+};
+
+const NAV_PAGE_TITLES = Object.fromEntries(
+  NAV.flatMap((section) => section.items).map((item) => [item.path, item.label]),
+) as Record<string, string>;
+
+const PAGE_TITLES = { ...NAV_PAGE_TITLES, ...EXTRA_PAGE_TITLES };
+
+function titleForPath(pathname: string) {
+  const normalized = (pathname.split(/[?#]/)[0] || "/").replace(/\/+$/, "") || "/";
+  const exact = PAGE_TITLES[normalized];
+  if (exact) return exact;
+
+  const match = Object.entries(PAGE_TITLES)
+    .filter(([path]) => path !== "/" && normalized.startsWith(`${path}/`))
+    .sort((a, b) => b[0].length - a[0].length)[0];
+  return match?.[1] ?? "Bản web";
+}
+
+function DocumentTitle() {
+  const location = useLocation();
+
+  useEffect(() => {
+    document.title = `${titleForPath(location.pathname)} · ${APP_TITLE}`;
+  }, [location.pathname]);
+
+  return null;
+}
+
+function Protected({
+  children,
+  admin,
+  publicFallback,
+}: {
+  children: React.ReactNode;
+  admin?: boolean;
+  /** Nếu có: khi chưa đăng nhập (hoặc đang tải) sẽ render nội dung công khai này thay vì
+   *  chuyển hướng về /login — dùng cho trang vừa công khai vừa nằm trong app (vd Tải APK). */
+  publicFallback?: React.ReactNode;
+}) {
   const { user, loading } = useAuth();
   const loc = useLocation();
   const suppressMainWebSystem = IS_HR_APK || isHrModulePath(loc.pathname);
-  if (loading)
+  if (loading) {
+    if (publicFallback !== undefined) return <>{publicFallback}</>;
     return (
       <div className="flex h-screen items-center justify-center">
         <Loader2 className="h-7 w-7 animate-spin text-[var(--accent)]" />
       </div>
     );
-  if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;
+  }
+  if (!user) {
+    if (publicFallback !== undefined) return <>{publicFallback}</>;
+    return <Navigate to="/login" state={{ from: loc }} replace />;
+  }
   if (admin && !isAdmin(user)) return <Navigate to={DEFAULT_AUTH_PATH} replace />;
   const content = (
     <>
@@ -129,6 +195,7 @@ export default function App() {
       <AppNotificationProvider>
         <div className={`liquid-bg ${IS_HR_APK ? "liquid-bg--plain" : ""}`}><div className="orb" /></div>
         <Router>
+        <DocumentTitle />
         <RealtimeBoot />
         <AuthProvider>
           <AppUpdatePrompt />
@@ -137,6 +204,7 @@ export default function App() {
             <Route path="/kiosk" element={<KioskPage />} />
             <Route path="/tam-biet" element={<FarewellPage />} />
             <Route path="/tinh-toan" element={<TinhToan />} />
+            <Route path="/tai-apk" element={<Protected publicFallback={<ApkDownload standalone />}><ApkDownload /></Protected>} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/ketoan" element={<Protected><KeToan /></Protected>} />
             <Route path="/khachhang" element={<Protected><KhachHang /></Protected>} />

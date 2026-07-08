@@ -8,6 +8,7 @@ import android.os.Build
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Description
@@ -26,6 +27,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.ketoanapk.hr.data.AppConfig
+import com.ketoanapk.hr.data.AppEvents
 import com.ketoanapk.hr.data.AppNotification
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
@@ -35,18 +38,22 @@ import com.ketoanapk.hr.data.Department
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.EmployeeCard
 import com.ketoanapk.hr.data.EmployeeDetail
+import com.ketoanapk.hr.data.FaceEnrollPose
 import com.ketoanapk.hr.data.HrRepository
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerSummary
 import com.ketoanapk.hr.data.NotificationCenter
 import com.ketoanapk.hr.data.NotificationWorker
 import com.ketoanapk.hr.data.Penalty
+import com.ketoanapk.hr.data.RealtimeClient
 import com.ketoanapk.hr.data.ReleaseInfo
 import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
+import com.ketoanapk.hr.data.PayEstimate
 import com.ketoanapk.hr.data.SalaryListItem
 import com.ketoanapk.hr.data.Timesheet
+import com.ketoanapk.hr.data.TokenStore
 import com.ketoanapk.hr.network.ApiException
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.Job
@@ -73,6 +80,8 @@ enum class HrDestination(
     Scan("Chấm công", "Chấm công", Icons.Filled.Face),
     Timesheet("Bảng công", "Bảng công", Icons.Filled.CalendarMonth),
     Requests("Đơn từ", "Đơn từ", Icons.Filled.Description),
+    // Nhân viên tự xem lương dự tính tháng hiện tại (gồm phạt nếu có).
+    MySalary("Lương của tôi", "Lương", Icons.Filled.AccountBalanceWallet),
     // Chỉ để XEM trạng thái đơn của nhân sự (không duyệt trong app — duyệt trên bản web).
     Approval("Đơn chờ duyệt", "Chờ duyệt", Icons.Filled.Inbox),
     Penalty("Kỷ luật", "Kỷ luật", Icons.Filled.Gavel),
@@ -125,6 +134,13 @@ data class ManagerUiState(
     val departments: List<Department> = emptyList(),
 )
 
+/** Lương dự tính của chính nhân viên (tháng hiện tại). */
+data class PayEstimateUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val data: PayEstimate? = null,
+)
+
 data class SettingsUiState(
     val loading: Boolean = false,
     val webLoginEnabled: Boolean? = null,
@@ -156,10 +172,24 @@ sealed interface AttendanceCapture {
     data class Done(val result: ChamCongResult) : AttendanceCapture
 }
 
+/** Trạng thái luồng TỰ ĐĂNG KÝ khuôn mặt (quét nhiều góc → gửi máy chủ lưu mẫu). */
+sealed interface FaceEnrollCapture {
+    data object Idle : FaceEnrollCapture
+    data object Capturing : FaceEnrollCapture   // camera đang quét lần lượt các góc (toàn màn hình)
+    data object Submitting : FaceEnrollCapture   // đang gửi mẫu lên máy chủ để lưu
+    data class Done(val success: Boolean, val message: String) : FaceEnrollCapture
+}
+
 class HrViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = HrRepository(application)
     private val notificationCenter = NotificationCenter(application)
+    // Client SignalR (realtime tức thì khi app đang mở, như bản web). Bật/tắt theo foreground.
+    private val realtime = RealtimeClient(TokenStore(application))
     private var heartbeatJob: Job? = null
+    // Vòng làm mới nhẹ khi app đang mở (foreground): tự cập nhật trạng thái đơn từ khi admin duyệt
+    // trên web mà không cần người dùng kéo làm mới. Dừng khi app xuống nền để tiết kiệm pin
+    // (nền đã có WorkManager + push FCM lo thông báo).
+    private var foregroundPollJob: Job? = null
     private var pendingTarget: HrDestination? = null
     private var pushToken: String? = null
     private var captureOffline = false   // lượt chấm hiện tại là ngoại tuyến (mất mạng) hay trực tuyến
@@ -178,6 +208,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var timesheetState by mutableStateOf(TimesheetUiState(loading = true))
         private set
+    var payEstimateState by mutableStateOf(PayEstimateUiState())
+        private set
     var requestDetailState by mutableStateOf(RequestDetailUiState())
         private set
     var creatingRequest by mutableStateOf(false)
@@ -186,12 +218,33 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var settingsState by mutableStateOf(SettingsUiState())
         private set
+    // Màn con đang mở trong tab Cài đặt. Đặt ở ViewModel để nút Back của điện thoại lùi về đúng cấp
+    // (từ màn con → Cài đặt gốc) thay vì nhảy thẳng về Trang chủ.
+    var settingsRoute by mutableStateOf(SettingsRoute.Home)
     var attendanceServer: AttendanceServerState by mutableStateOf(AttendanceServerState.Checking)
         private set
     var attendanceCapture: AttendanceCapture by mutableStateOf(AttendanceCapture.Idle)
         private set
     var attendancePending by mutableStateOf(0)   // số bản chấm ngoại tuyến đang chờ đồng bộ
         private set
+    // Đăng ký khuôn mặt: trạng thái đã đăng ký (null = chưa biết) + luồng quét đăng ký.
+    var faceRegistered: Boolean? by mutableStateOf(null)
+        private set
+    var faceStatusLoading by mutableStateOf(false)
+        private set
+    var faceEnroll: FaceEnrollCapture by mutableStateOf(FaceEnrollCapture.Idle)
+        private set
+    // Tín hiệu "mở thẳng màn Đăng ký khuôn mặt" (bấm từ banner nhắc) — màn Cài đặt đọc rồi tự nhảy vào.
+    var openFaceEnroll by mutableStateOf(false)
+        private set
+    // Cấu hình điều khiển từ xa (admin đổi mà không cần ra APK): thông báo trong app, bật/tắt banner
+    // khuôn mặt, nhịp tự làm mới. Nạp lúc đăng nhập + mỗi lần quay lại foreground (có tiết chế).
+    var appConfig by mutableStateOf(AppConfig())
+        private set
+    private var lastConfigFetchAt = 0L
+
+    /** Chỉ hiện banner nhắc khuôn mặt khi CHẮC CHẮN chưa đăng ký VÀ admin không tắt từ xa. */
+    val showFaceEnrollBanner: Boolean get() = faceRegistered == false && appConfig.faceEnrollBannerEnabled
     var rememberedUsername by mutableStateOf("")
         private set
     var actionMessage: String? by mutableStateOf(null)
@@ -220,7 +273,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private val navGroups = listOf(
-        NavGroup("Cá nhân", listOf(HrDestination.Home, HrDestination.Profile, HrDestination.Scan, HrDestination.Timesheet, HrDestination.Requests)),
+        NavGroup("Cá nhân", listOf(HrDestination.Home, HrDestination.Profile, HrDestination.Scan, HrDestination.Timesheet, HrDestination.MySalary, HrDestination.Requests)),
         NavGroup("Công việc", listOf(HrDestination.Approval, HrDestination.Penalty)),
         NavGroup("Quản trị", listOf(HrDestination.People, HrDestination.Payroll, HrDestination.Audit)),
         NavGroup("Hệ thống", listOf(HrDestination.Settings)),
@@ -228,6 +281,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch { rememberedUsername = repo.rememberedUsername() }
+        // FCM báo có dữ liệu đổi từ máy chủ → làm mới NGAY màn đang xem (đơn từ tức thì, không chờ poll).
+        viewModelScope.launch {
+            AppEvents.dataChanged.collect {
+                if (authState is AuthState.SignedIn) pollLiveData()
+            }
+        }
         restoreSession()
     }
 
@@ -290,11 +349,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         authState = AuthState.SignedIn(user)
         selected = HrDestination.Home
         startHeartbeat()
+        startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
+        realtime.start()      // realtime tức thì như web (app đang mở lúc đăng nhập)
         loadNotifications()
         syncPushDelivery()
         refreshHome(user, silent = false)
         loadTimesheet(currentMonthKey(), silent = false)
         if (user.isAdmin) refreshManager(silent = true)
+        faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
+        loadAppConfig(force = true)
         consumePendingTarget(user)
         autoCheckForUpdate(force = true)
     }
@@ -404,6 +467,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             pushToken = null
             repo.logout()
             stopHeartbeat()
+            onAppPaused() // dừng vòng poll foreground
             NotificationWorker.cancel(getApplication<Application>())
             notificationCenter.reset()
             notifications = emptyList()
@@ -411,10 +475,16 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             selected = HrDestination.Home
             homeState = HomeUiState()
             timesheetState = TimesheetUiState()
+            payEstimateState = PayEstimateUiState()
             managerState = ManagerUiState()
             settingsState = SettingsUiState()
             attendanceServer = AttendanceServerState.Checking
             attendanceCapture = AttendanceCapture.Idle
+            faceRegistered = null
+            faceEnroll = FaceEnrollCapture.Idle
+            openFaceEnroll = false
+            appConfig = AppConfig()
+            lastConfigFetchAt = 0L
             availableUpdate = null
             updatePromptVisible = false
             dismissedUpdateVersionCode = 0
@@ -478,7 +548,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.People -> if (managerState.summary == null) refreshManager(silent = false)
             HrDestination.Scan -> { resetCapture(); checkAttendanceServer(); refreshPendingCount() }
             HrDestination.Timesheet -> if (timesheetState.timesheet == null && !timesheetState.loading) loadTimesheet(timesheetState.month, silent = false)
+            HrDestination.MySalary -> if (payEstimateState.data == null && !payEstimateState.loading) loadMyEstimate()
             HrDestination.Settings -> {
+                settingsRoute = SettingsRoute.Home // vào tab Cài đặt luôn bắt đầu ở màn gốc
                 if (settingsState.webLoginEnabled == null) loadSettings()
                 if (settingsState.pushNotificationsEnabled == null) loadPushNotificationSetting()
             }
@@ -493,6 +565,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.People -> refreshManager(silent = false)
             HrDestination.Scan -> checkAttendanceServer()
             HrDestination.Timesheet -> loadTimesheet(timesheetState.month, silent = false)
+            HrDestination.MySalary -> loadMyEstimate()
             HrDestination.Settings -> {
                 loadSettings()
                 loadPushNotificationSetting()
@@ -502,6 +575,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 if (user.isAdmin) refreshManager(silent = true)
             }
         }
+        // Nếu đang mở chi tiết một đơn thì làm mới luôn (kéo để xem tiến trình duyệt mới nhất).
+        requestDetailState.id?.let { refreshOpenDetail(it) }
     }
 
     fun cancel(id: String) = decide { repo.cancelRequest(id); "Đã hủy đơn." }
@@ -567,6 +642,21 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         loadTimesheet(currentMonthKey(), silent = false)
     }
 
+    /** Nhảy tới đúng tháng/năm người dùng chọn từ bộ chọn tháng (định dạng "yyyy-MM"). */
+    fun setTimesheetMonth(month: String) {
+        loadTimesheet(month, silent = false)
+    }
+
+    /** Tải lương dự tính (tháng hiện tại) của chính nhân viên đang đăng nhập. */
+    fun loadMyEstimate() {
+        viewModelScope.launch {
+            payEstimateState = payEstimateState.copy(loading = true, error = null)
+            runCatching { repo.myEstimate() }
+                .onSuccess { payEstimateState = PayEstimateUiState(loading = false, data = it) }
+                .onFailure { payEstimateState = payEstimateState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
     private fun loadTimesheet(month: String, silent: Boolean) {
         viewModelScope.launch {
             if (!silent) timesheetState = timesheetState.copy(loading = true, error = null, month = month, timesheet = null)
@@ -594,11 +684,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { user ->
                     authState = AuthState.SignedIn(user)
                     startHeartbeat()
+                    startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
+                    realtime.start()      // realtime tức thì như web (app đang mở lúc khôi phục phiên)
                     loadNotifications()
                     syncPushDelivery()
                     refreshHome(user, silent = false)
                     loadTimesheet(currentMonthKey(), silent = false)
                     if (user.isAdmin) refreshManager(silent = true)
+                    faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
+                    loadAppConfig(force = true)
                     consumePendingTarget(user)
                 }
                 .onFailure {
@@ -661,6 +755,81 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = null
+    }
+
+    // ── Tự làm mới khi app đang mở (thay cho "phải kéo/F5" mỗi lần admin duyệt) ──────────
+    /** Activity gọi khi app quay lại foreground: làm mới ngay + bật vòng poll nhẹ. */
+    fun onAppResumed() {
+        if (authState !is AuthState.SignedIn) return
+        pollLiveData()          // cập nhật ngay khi vừa mở lại app
+        loadAppConfig()         // lấy remote config mới (tiết chế 60s)
+        startForegroundPoll()
+        realtime.start()        // realtime tức thì như web khi app đang mở
+    }
+
+    /** Activity gọi khi app xuống nền: dừng poll + SignalR (nền đã có WorkManager + push FCM). */
+    fun onAppPaused() {
+        foregroundPollJob?.cancel()
+        foregroundPollJob = null
+        realtime.stop()
+    }
+
+    private fun startForegroundPoll() {
+        if (foregroundPollJob?.isActive == true) return
+        foregroundPollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(pollIntervalMs()) // nhịp lấy từ remote config (admin chỉnh được), chặn 5–3600s
+                if (authState is AuthState.SignedIn) pollLiveData()
+            }
+        }
+    }
+
+    /** Nhịp tự làm mới foreground (mili-giây) theo remote config, có chặn biên an toàn. */
+    private fun pollIntervalMs(): Long = appConfig.foregroundPollSeconds.coerceIn(5, 3600) * 1000L
+
+    /** Nạp remote config (tiết chế 60s trừ khi ép). Lỗi mạng → giữ cấu hình cũ, im lặng. */
+    private fun loadAppConfig(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastConfigFetchAt < 60_000L) return
+        lastConfigFetchAt = now
+        viewModelScope.launch {
+            runCatching { repo.appConfig() }.onSuccess { appConfig = it }
+        }
+    }
+
+    /**
+     * Làm mới im lặng các dữ liệu hay đổi từ nơi khác (admin duyệt trên web): danh sách "Đơn của tôi",
+     * hộp thư "Chờ duyệt", và chi tiết đơn đang mở. Chỉ ghi đè khi tải được (giữ nguyên dữ liệu cũ nếu
+     * một nhịp mạng lỗi) để không nhấp nháy/mất danh sách.
+     */
+    private fun pollLiveData() {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return
+        viewModelScope.launch {
+            val mine = runCatching { repo.requests("mine") }.getOrNull()
+            val inbox = runCatching { repo.requests("inbox") }.getOrNull()
+            if (mine != null || inbox != null) {
+                val next = homeState.copy(
+                    requests = mine ?: homeState.requests,
+                    inbox = inbox ?: homeState.inbox,
+                )
+                homeState = next
+                syncNotifications(user, next) // cập nhật chuông (đơn được duyệt/từ chối) — đã tự chống trùng
+            }
+        }
+        // Đang xem chi tiết một đơn → làm mới để thấy kết quả duyệt/tiến trình ngay.
+        requestDetailState.id?.let { refreshOpenDetail(it) }
+    }
+
+    /** Làm mới im lặng chi tiết đơn đang mở (không hiện lại vòng quay tải, không đụng nếu đã đóng/đổi đơn). */
+    private fun refreshOpenDetail(id: String) {
+        viewModelScope.launch {
+            runCatching { repo.requestDetail(id) }
+                .onSuccess { detail ->
+                    if (requestDetailState.id == id) {
+                        requestDetailState = requestDetailState.copy(detail = detail, loading = false, error = null)
+                    }
+                }
+        }
     }
 
     // ── Cài đặt ─────────────────────────────────────────────────────────────────
@@ -917,6 +1086,56 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Tự đăng ký khuôn mặt (mỗi tài khoản một lần, quét nhiều góc) ─────────────
+    /** Nạp trạng thái đã đăng ký khuôn mặt của chính tài khoản (để làm mờ nút đăng ký). */
+    fun loadFaceStatus(force: Boolean = false) {
+        if (!force && faceRegistered != null) return
+        viewModelScope.launch {
+            faceStatusLoading = true
+            runCatching { repo.myFaceStatus() }
+                .onSuccess { faceRegistered = it.registered }
+                .onFailure { /* im lặng: giữ null, người dùng vẫn có thể thử đăng ký */ }
+            faceStatusLoading = false
+        }
+    }
+
+    /** Banner nhắc "Đăng ký ngay" → sang màn Cài đặt và ra tín hiệu tự mở màn Đăng ký khuôn mặt. */
+    fun requestFaceEnroll() {
+        openFaceEnroll = true
+        select(HrDestination.Settings)
+    }
+
+    /** Màn Cài đặt gọi sau khi đã nhảy vào Đăng ký khuôn mặt để không lặp lại. */
+    fun clearOpenFaceEnroll() { openFaceEnroll = false }
+
+    /** Bắt đầu quét đăng ký khuôn mặt (chặn nếu đã đăng ký rồi). */
+    fun startFaceEnroll() {
+        if (faceRegistered == true) return
+        faceEnroll = FaceEnrollCapture.Capturing
+    }
+
+    /** Hủy quét đăng ký (bấm Đóng / nút Back). */
+    fun cancelFaceEnroll() { faceEnroll = FaceEnrollCapture.Idle }
+
+    /** Bỏ kết quả đăng ký (thành công/thất bại) để quay về trạng thái nghỉ. */
+    fun resetFaceEnroll() { faceEnroll = FaceEnrollCapture.Idle }
+
+    /** Camera đã quét đủ các góc → gửi lên máy chủ lưu mẫu. */
+    fun submitFaceEnroll(poses: List<FaceEnrollPose>) {
+        if (poses.isEmpty()) { faceEnroll = FaceEnrollCapture.Idle; return }
+        faceEnroll = FaceEnrollCapture.Submitting
+        viewModelScope.launch {
+            runCatching { repo.enrollFace(poses) }
+                .onSuccess {
+                    faceRegistered = true
+                    faceEnroll = FaceEnrollCapture.Done(true, it.message.ifBlank { "Đăng ký khuôn mặt thành công." })
+                }
+                .onFailure {
+                    faceEnroll = FaceEnrollCapture.Done(false, readable(it))
+                }
+        }
+    }
+
     /** Đọc vị trí GPS gần nhất (nỗ lực tốt nhất) nếu đã có quyền — dùng cho kiểm tra geofence khi duyệt. */
     @android.annotation.SuppressLint("MissingPermission")
     private fun readLastLocation(): Pair<Double, Double>? {
@@ -945,6 +1164,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         stopHeartbeat()
+        onAppPaused()
         super.onCleared()
     }
 

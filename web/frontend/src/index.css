@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
 /* =========================================================================
    KetoanMini Web — Hệ thiết kế "Liquid Glass"
    Bảng màu lấy từ app desktop (WpfTheme.cs): accent sáng #2563EB, tối #11C5BF.
@@ -20,6 +22,12 @@
   --text: #0f172a;
   --text-secondary: #475569;
   --text-muted: #7c899c;
+
+  --km-control-bg: #ffffff;
+  --km-control-border: #d3ddec;
+  --km-control-file-bg: rgba(37, 99, 235, 0.1);
+  --km-control-file-text: #1d4ed8;
+  --km-select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23647589' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* Tấm kính */
   --glass-bg: rgba(255, 255, 255, 0.62);
@@ -56,6 +64,12 @@ html[data-theme="dark"] {
   --text: #f5f7fa;
   --text-secondary: #b4bcc9;
   --text-muted: #8a95a6;
+
+  --km-control-bg: #141d2c;
+  --km-control-border: rgba(255, 255, 255, 0.12);
+  --km-control-file-bg: rgba(255, 255, 255, 0.09);
+  --km-control-file-text: #f1f5fc;
+  --km-select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   --glass-bg: rgba(15, 20, 28, 0.82);
   --glass-bg-strong: rgba(18, 24, 33, 0.9);
@@ -565,6 +579,50 @@ html[data-theme="dark"] .chat-conversation-list .chat-conversation-menu-button:f
 
 input, select, textarea, button { font-family: inherit; }
 ::placeholder { color: var(--text-muted); }
+
+.km-form-control {
+  background-color: var(--km-control-bg);
+  border-color: var(--km-control-border);
+  color: var(--text);
+  color-scheme: light;
+}
+
+html[data-theme="dark"] .km-form-control {
+  color-scheme: dark;
+}
+
+.km-form-control::placeholder {
+  color: var(--text-muted);
+}
+
+select.km-form-control {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: var(--km-select-arrow);
+  background-position: right 0.85rem center;
+  background-repeat: no-repeat;
+  background-size: 1rem;
+  padding-right: 2.5rem;
+}
+
+input[type="file"].km-form-control {
+  min-height: 42px;
+  padding-bottom: 0.45rem;
+  padding-top: 0.45rem;
+}
+
+input[type="file"].km-form-control::file-selector-button {
+  margin: 0 0.85rem 0 -0.35rem;
+  border: 0;
+  border-radius: 9px;
+  background: var(--km-control-file-bg);
+  color: var(--km-control-file-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 0.5rem 0.75rem;
+}
 
 /* ---------- Sidebar selected item: Liquid Glass indicator ---------- */
 .liquid-sidebar-nav {
@@ -1828,6 +1886,36 @@ html[data-theme="dark"] .km-chat-toast {
   height: 16px;
   padding: 0 4px;
   font-size: 0.56rem;
+}
+
+/* --- Thu gọn: căn giữa icon/logo/avatar trong đúng bề rộng rail nhìn thấy
+   (sidebar rộng 230px nhưng bị clip-path chỉ chừa 70px bên trái), nên phải
+   ràng buộc chiều rộng hàng về bằng rail rồi mới căn giữa — nếu không icon sẽ
+   bị đẩy vào vùng bị cắt và biến mất. Thu nhãn chữ về 0 để rail gọn gàng,
+   không còn cảm giác bị "cắt xén" (icon dồn trái, khoảng trống lệch phải). --- */
+.km-sidebar-rail .km-sidebar:not(:hover):not(:focus-within) .liquid-sidebar-link,
+.km-sidebar-rail .km-sidebar:not(:hover):not(:focus-within) .km-sidebar-brand,
+.km-sidebar-rail .km-sidebar:not(:hover):not(:focus-within) .km-sidebar-profile-card {
+  /* 18px = padding trái+phải của .km-sidebar (9px mỗi bên) → hàng trùng khít rail */
+  width: calc(var(--sidebar-rail-w) - 18px);
+  justify-content: center;
+  gap: 0;
+  padding-left: 0;
+  padding-right: 0;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.km-sidebar-rail .km-sidebar:not(:hover):not(:focus-within) .liquid-sidebar-link > span:not(.km-sidebar-icon):not(.km-notification-badge--sidebar),
+.km-sidebar-rail .km-sidebar:not(:hover):not(:focus-within) .km-sidebar-brand > div:not(.km-sidebar-logo),
+.km-sidebar-rail .km-sidebar:not(:hover):not(:focus-within) .km-sidebar-profile-copy,
+.km-sidebar-rail .km-sidebar:not(:hover):not(:focus-within) .km-sidebar-profile-arrow {
+  width: 0;
+  min-width: 0;
+  flex: 0 0 0;
+  margin-left: 0;
+  margin-right: 0;
+  overflow: hidden;
 }
 
 @media (max-height: 820px) {

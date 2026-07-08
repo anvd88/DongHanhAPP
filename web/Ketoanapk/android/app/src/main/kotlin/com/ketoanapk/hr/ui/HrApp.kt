@@ -30,6 +30,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
@@ -62,12 +64,16 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -82,28 +88,37 @@ import kotlinx.coroutines.launch
 @Composable
 fun HrApp(vm: HrViewModel) {
     KetoanTheme {
+        // Intro mở app chạy 1 lần mỗi phiên (không lặp lại khi xoay màn hình).
+        var showIntro by rememberSaveable { mutableStateOf(true) }
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            // Chuyển cảnh mượt khi vào ứng dụng (Loading → Đăng nhập / Trang chủ).
-            AnimatedContent(
-                targetState = vm.authState,
-                transitionSpec = {
-                    (fadeIn(tween(400)) + scaleIn(tween(400), initialScale = 0.94f)) togetherWith fadeOut(tween(250))
-                },
-                label = "auth",
-            ) { state ->
-                when (state) {
-                    AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            Box(Modifier.fillMaxSize()) {
+                // Chuyển cảnh mượt khi vào ứng dụng (Loading → Đăng nhập / Trang chủ).
+                AnimatedContent(
+                    targetState = vm.authState,
+                    transitionSpec = {
+                        (fadeIn(tween(400)) + scaleIn(tween(400), initialScale = 0.94f)) togetherWith fadeOut(tween(250))
+                    },
+                    label = "auth",
+                ) { state ->
+                    when (state) {
+                        AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        }
+                        AuthState.SignedOut -> LoginScreen(
+                            loading = vm.loginLoading,
+                            error = vm.loginError,
+                            resetLoading = vm.resetPasswordLoading,
+                            rememberedUsername = vm.rememberedUsername,
+                            onLogin = vm::login,
+                            onResetPasswordWithFace = vm::resetPasswordWithFace,
+                        )
+                        is AuthState.SignedIn -> HrShell(state.user, vm)
                     }
-                    AuthState.SignedOut -> LoginScreen(
-                        loading = vm.loginLoading,
-                        error = vm.loginError,
-                        resetLoading = vm.resetPasswordLoading,
-                        rememberedUsername = vm.rememberedUsername,
-                        onLogin = vm::login,
-                        onResetPasswordWithFace = vm::resetPasswordWithFace,
-                    )
-                    is AuthState.SignedIn -> HrShell(state.user, vm)
+                }
+
+                // Lớp phủ intro (vẽ logo bằng vector) nằm trên cùng, tự mờ dần rồi biến mất.
+                if (showIntro) {
+                    IntroOverlay(onFinished = { showIntro = false })
                 }
             }
         }
@@ -116,6 +131,10 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    // Đóng banner nhắc đăng ký khuôn mặt cho hết phiên (không nhắc lại tới khi mở lại app).
+    var faceBannerDismissed by rememberSaveable { mutableStateOf(false) }
+    // Thông báo (remote config) đã đóng — lưu theo nội dung để admin đổi nội dung thì hiện lại.
+    var dismissedAnnouncement by rememberSaveable { mutableStateOf<String?>(null) }
 
     LaunchedEffect(vm.actionMessage) {
         vm.actionMessage?.let {
@@ -127,10 +146,15 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
     // Xử lý nút Back của điện thoại: ưu tiên đóng ngăn kéo → thoát camera đang quét → về Trang chủ.
     // Chỉ bật khi có việc để lùi; khi đang ở Trang chủ (không mở gì) thì để hệ thống thoát app như thường.
     val inScanFlow = vm.selected == HrDestination.Scan && vm.attendanceCapture != AttendanceCapture.Idle
-    BackHandler(enabled = drawerState.isOpen || inScanFlow || vm.selected != HrDestination.Home) {
+    val inFaceEnroll = vm.faceEnroll == FaceEnrollCapture.Capturing
+    // Đang ở một màn con của tab Cài đặt (Đổi mật khẩu, Thiết bị, ...) → Back lùi về Cài đặt gốc trước.
+    val inSettingsSub = vm.selected == HrDestination.Settings && vm.settingsRoute != SettingsRoute.Home
+    BackHandler(enabled = drawerState.isOpen || inScanFlow || inFaceEnroll || inSettingsSub || vm.selected != HrDestination.Home) {
         when {
             drawerState.isOpen -> scope.launch { drawerState.close() }
+            inFaceEnroll -> vm.cancelFaceEnroll()
             inScanFlow -> vm.resetCapture()
+            inSettingsSub -> vm.settingsRoute = SettingsRoute.Home
             else -> vm.select(HrDestination.Home)
         }
     }
@@ -140,6 +164,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
         HrDestination.Settings -> vm.settingsState.loading
         HrDestination.Scan -> vm.attendanceServer is AttendanceServerState.Checking
         HrDestination.Timesheet -> vm.timesheetState.loading
+        HrDestination.MySalary -> vm.payEstimateState.loading
         else -> vm.homeState.loading
     }
 
@@ -209,19 +234,42 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                 )
             },
         ) { padding ->
-            PullToRefreshBox(
-                isRefreshing = isRefreshing,
-                onRefresh = vm::refreshCurrent,
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
                     .background(MaterialTheme.colorScheme.background),
             ) {
-                when (vm.selected) {
+                // Thông báo điều khiển từ xa (admin đặt ở trang Hệ thống → Cập nhật). Ẩn khi để trống.
+                val announcement = vm.appConfig.announcement
+                if (announcement.isNotBlank() && announcement != dismissedAnnouncement) {
+                    AnnouncementBanner(
+                        text = announcement,
+                        level = vm.appConfig.announcementLevel,
+                        onDismiss = { dismissedAnnouncement = announcement },
+                    )
+                }
+                // Banner nhắc đăng ký khuôn mặt: chỉ hiện khi CHẮC CHẮN chưa đăng ký (cờ đi kèm đăng nhập),
+                // admin không tắt từ xa, chưa bị đóng, và không phải đang ở màn Cài đặt.
+                if (vm.showFaceEnrollBanner && !faceBannerDismissed && vm.selected != HrDestination.Settings) {
+                    FaceEnrollBanner(
+                        onEnroll = vm::requestFaceEnroll,
+                        onDismiss = { faceBannerDismissed = true },
+                    )
+                }
+                PullToRefreshBox(
+                    isRefreshing = isRefreshing,
+                    onRefresh = vm::refreshCurrent,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                ) {
+                    when (vm.selected) {
                     HrDestination.Home -> HomeScreen(user, vm.homeState, vm.managerState, vm::select)
                     HrDestination.Profile -> ProfileScreen(vm.homeState)
                     HrDestination.Scan -> AttendanceScreen(vm)
-                    HrDestination.Timesheet -> TimesheetScreen(vm.timesheetState, vm::changeTimesheetMonth, vm::resetTimesheetMonth)
+                    HrDestination.Timesheet -> TimesheetScreen(vm.timesheetState, vm::changeTimesheetMonth, vm::setTimesheetMonth)
+                    HrDestination.MySalary -> MySalaryScreen(vm.payEstimateState)
                     HrDestination.Requests -> RequestsScreen(vm)
                     HrDestination.Approval -> StaffRequestsScreen(vm)
                     HrDestination.Penalty -> PenaltyScreen(user, vm.homeState)
@@ -237,12 +285,18 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                     )
                 }
             }
+            }
         }
     }
 
         // Camera quét khuôn mặt phủ TOÀN MÀN HÌNH (ngoài Scaffold) → không dính thanh tiêu đề/điều hướng.
         if (vm.selected == HrDestination.Scan && vm.attendanceCapture == AttendanceCapture.Collecting) {
             FullScreenCameraScan(onCaptured = vm::onFramesCaptured, onCancel = vm::resetCapture)
+        }
+
+        // Camera ĐĂNG KÝ khuôn mặt (quét nhiều góc) cũng phủ toàn màn hình như trên.
+        if (vm.faceEnroll == FaceEnrollCapture.Capturing) {
+            FaceEnrollCameraScan(onCompleted = vm::submitFaceEnroll, onCancel = vm::cancelFaceEnroll)
         }
 
         // Nhắc cập nhật ngay khi phát hiện bản mới (kiểm tra ngầm lúc đăng nhập/quay lại app).
@@ -299,6 +353,98 @@ private fun UpdateDialog(
             { TextButton(onClick = onDismiss) { Text("Để sau") } }
         },
     )
+}
+
+/**
+ * Banner thông báo điều khiển từ xa (remote config), ngay dưới header. Màu theo mức độ:
+ * info = phụ, warning = nhấn, critical = báo lỗi. Đóng được (ẩn theo nội dung).
+ */
+@Composable
+private fun AnnouncementBanner(text: String, level: String, onDismiss: () -> Unit) {
+    val bg: Color
+    val fg: Color
+    when (level.lowercase()) {
+        "critical" -> { bg = MaterialTheme.colorScheme.errorContainer; fg = MaterialTheme.colorScheme.onErrorContainer }
+        "warning" -> { bg = MaterialTheme.colorScheme.tertiaryContainer; fg = MaterialTheme.colorScheme.onTertiaryContainer }
+        else -> { bg = MaterialTheme.colorScheme.secondaryContainer; fg = MaterialTheme.colorScheme.onSecondaryContainer }
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 2.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = bg,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Filled.Info, contentDescription = null, tint = fg, modifier = Modifier.size(22.dp))
+            Text(text, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = fg)
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Filled.Close, contentDescription = "Ẩn thông báo", tint = fg.copy(alpha = 0.7f))
+            }
+        }
+    }
+}
+
+/**
+ * Banner nhắc đăng ký khuôn mặt, nằm ngay dưới header. Hiện khi tài khoản CHƯA đăng ký (biết từ 1 lần
+ * hỏi máy chủ lúc đăng nhập — không dò lại liên tục). Bấm "Đăng ký" mở thẳng luồng quét; bấm X thì ẩn
+ * đến khi mở lại app.
+ */
+@Composable
+private fun FaceEnrollBanner(onEnroll: () -> Unit, onDismiss: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 2.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.Face, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "Bạn chưa đăng ký khuôn mặt",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Text(
+                    "Đăng ký để chấm công và đăng nhập nhanh bằng khuôn mặt.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                )
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = onEnroll,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Filled.Face, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Đăng ký ngay", fontWeight = FontWeight.Bold)
+                }
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Filled.Close, contentDescription = "Ẩn nhắc nhở", tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+            }
+        }
+    }
 }
 
 @Composable

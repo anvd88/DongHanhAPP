@@ -18,6 +18,8 @@ import java.util.Locale
 class HrRepository(context: Context) {
     private val tokenStore = TokenStore(context.applicationContext)
     private val api: HrApi = ApiClient.create(tokenStore)
+    // API chấm công đi RIÊNG qua máy chủ LAN (không qua Internet). Xem ApiClient.createAttendance.
+    private val attendanceApi: HrApi = ApiClient.createAttendance(tokenStore)
     private val offlineStore = OfflineAttendanceStore(context.applicationContext)
 
     suspend fun savedToken(): String? = tokenStore.token()
@@ -53,6 +55,7 @@ class HrRepository(context: Context) {
         }
     }
 
+    suspend fun appConfig(): AppConfig = call { api.appConfig() }
     suspend fun myProfile(): EmployeeDetail = call { api.myProfile() }
     suspend fun myTimesheet(month: String): Timesheet = call { api.myTimesheet(month) }
     suspend fun requests(scope: String, status: String? = null): List<RequestListItem> =
@@ -63,6 +66,7 @@ class HrRepository(context: Context) {
     suspend fun penalties(scope: String, month: String? = null): List<Penalty> =
         call { api.penalties(scope, month) }
     suspend fun salaries(): List<SalaryListItem> = call { api.salaries() }
+    suspend fun myEstimate(): PayEstimate = call { api.myEstimate() }
     suspend fun managerSummary(date: String, month: String): ManagerSummary =
         call { api.managerSummary(date, month) }
     suspend fun employees(): List<EmployeeCard> = call { api.employees() }
@@ -160,10 +164,17 @@ class HrRepository(context: Context) {
     }
 
     // --- Chấm công: kiểm tra kết nối máy chủ LAN qua trạng thái engine khuôn mặt ---
-    suspend fun faceEngineStatus(): FaceEngineStatus = call { api.faceEngineStatus() }
+    // Dùng attendanceApi → gọi thẳng máy chủ LAN, nên đây cũng là phép thử "có trong mạng LAN không".
+    suspend fun faceEngineStatus(): FaceEngineStatus = call { attendanceApi.faceEngineStatus() }
 
     suspend fun chamCong(images: List<String>, previewOnly: Boolean = false): ChamCongResult =
-        call { api.chamCong(ChamCongBurstRequest(images, selfOnly = true, previewOnly = previewOnly)) }
+        call { attendanceApi.chamCong(ChamCongBurstRequest(images, selfOnly = true, previewOnly = previewOnly)) }
+
+    // --- Tự đăng ký khuôn mặt (đi qua máy chủ LAN như chấm công) ---
+    suspend fun myFaceStatus(): SelfFaceStatus = call { attendanceApi.myFaceStatus() }
+
+    suspend fun enrollFace(poses: List<FaceEnrollPose>): SelfFaceEnrollResult =
+        call { attendanceApi.enrollFace(SelfFaceEnrollRequest(poses)) }
 
     // ── Chấm công ngoại tuyến (mất điện/mất mạng) ───────────────────────────────
     /** Lưu tạm lượt chấm vào hàng đợi trên máy để đồng bộ sau. */
@@ -181,7 +192,7 @@ class HrRepository(context: Context) {
         var synced = 0
         for (item in offlineStore.all()) {
             val ok = runCatching {
-                api.chamCong(
+                attendanceApi.chamCong(
                     ChamCongBurstRequest(
                         images = item.frames,
                         selfOnly = true,

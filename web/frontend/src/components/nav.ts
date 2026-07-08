@@ -7,6 +7,7 @@ import {
   CalendarCheck,
   CircleDollarSign,
   ClipboardCheck,
+  Download,
   MessageCircle,
   ClipboardList,
   FileText,
@@ -59,6 +60,7 @@ export const NAV: NavSection[] = [
     items: [
       { key: "congcu", label: "Công cụ", icon: Calculator, path: "/tinhtoan", ready: true },
       { key: "chats", label: "Trò chuyện", icon: MessageCircle, path: "/chats", ready: true },
+      { key: "tai-apk", label: "Tải APK", icon: Download, path: "/tai-apk", ready: true },
     ],
   },
   {

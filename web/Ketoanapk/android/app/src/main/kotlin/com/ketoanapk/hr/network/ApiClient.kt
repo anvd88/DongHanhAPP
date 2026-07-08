@@ -22,9 +22,23 @@ object ApiClient {
         coerceInputValues = true
         explicitNulls = false
         isLenient = true
+        // Luôn ghi cả trường trùng giá trị mặc định khi GỬI request. Vì mọi DTO đều đặt default
+        // (để giải mã an toàn), nếu tắt cờ này thì giá trị đúng-bằng-default sẽ bị bỏ khỏi JSON:
+        // vd gạt "Bật đăng nhập web" = true (đúng default) → body rỗng → backend nhận false → bật không được.
+        encodeDefaults = true
     }
 
-    fun create(tokenStore: TokenStore): HrApi {
+    /** API chính (công khai qua Cloudflare Tunnel). Dùng cho MỌI tính năng TRỪ chấm công. */
+    fun create(tokenStore: TokenStore): HrApi = build(BuildConfig.API_BASE_URL, tokenStore)
+
+    /**
+     * API chấm công — LUÔN đi thẳng máy chủ trong LAN ([BuildConfig.ATTENDANCE_BASE_URL]), KHÔNG qua
+     * Internet/Cloudflare. Bắt buộc thiết bị cùng mạng LAN với máy chủ mới chấm được (chống gian lận
+     * "chấm từ xa" + không đẩy ảnh khuôn mặt ra ngoài). Token JWT dùng chung vì cùng một backend.
+     */
+    fun createAttendance(tokenStore: TokenStore): HrApi = build(BuildConfig.ATTENDANCE_BASE_URL, tokenStore)
+
+    private fun build(baseUrl: String, tokenStore: TokenStore): HrApi {
         val auth = Interceptor { chain ->
             val token = runBlocking { tokenStore.token() }
             val request = if (!token.isNullOrBlank()) {
@@ -49,7 +63,7 @@ object ApiClient {
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
 
-        val base = BuildConfig.API_BASE_URL.trimEnd('/') + "/"
+        val base = baseUrl.trimEnd('/') + "/"
         return Retrofit.Builder()
             .baseUrl(base)
             .client(client)

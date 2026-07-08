@@ -973,7 +973,7 @@ private fun softFlashColor(heldMs: Long): Color {
 }
 
 /** Tìm Activity chứa để chỉnh độ sáng cửa sổ. */
-private fun Context.findActivity(): Activity? {
+internal fun Context.findActivity(): Activity? {
     var ctx: Context? = this
     while (ctx is ContextWrapper) {
         if (ctx is Activity) return ctx
@@ -983,7 +983,7 @@ private fun Context.findActivity(): Activity? {
 }
 
 /** Chuyển 1 khung camera (YUV_420_888) thành data URL JPEG đã xoay đúng chiều. */
-private fun ImageProxy.toJpegDataUrl(quality: Int = 80): String {
+internal fun ImageProxy.toJpegDataUrl(quality: Int = 80): String {
     val nv21 = toNv21()
     val yuv = YuvImage(nv21, ImageFormat.NV21, width, height, null)
     val jpegOut = ByteArrayOutputStream()
@@ -1002,7 +1002,7 @@ private fun ImageProxy.toJpegDataUrl(quality: Int = 80): String {
 }
 
 /** YUV_420_888 → NV21 (xử lý đúng rowStride/pixelStride của từng plane). */
-private fun ImageProxy.toNv21(): ByteArray {
+internal fun ImageProxy.toNv21(): ByteArray {
     val nv21 = ByteArray(width * height * 3 / 2)
     val yPlane = planes[0]
     val uPlane = planes[1]

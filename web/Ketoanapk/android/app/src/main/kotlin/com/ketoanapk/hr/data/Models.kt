@@ -21,10 +21,21 @@ data class HrUser(
     val avatarUrl: String? = null,
     val verified: Boolean = false,
     val isDiamond: Boolean = false,
+    // Đã đăng ký khuôn mặt chưa (máy chủ trả kèm lúc đăng nhập/me) → quyết định hiện banner nhắc.
+    val faceRegistered: Boolean = false,
 ) {
     val isAdmin: Boolean get() = role.equals("admin", ignoreCase = true)
     val displayName: String get() = fullName.ifBlank { username }.ifBlank { "Nhân viên" }
 }
+
+// Cấu hình ứng dụng điều khiển từ xa (khớp AppConfigDto của backend) — admin đổi mà không cần ra APK.
+@Serializable
+data class AppConfig(
+    val announcement: String = "",
+    val announcementLevel: String = "info",
+    val faceEnrollBannerEnabled: Boolean = true,
+    val foregroundPollSeconds: Int = 20,
+)
 
 @Serializable
 data class LoginRequest(
@@ -240,6 +251,33 @@ data class SalaryListItem(
     val extraCount: Int = 0,
 )
 
+/** Một dòng lương (khoản cộng hoặc khoản trừ) trong phiếu/ước tính lương. */
+@Serializable
+data class PayLine(
+    val label: String = "",
+    val amount: Double = 0.0,
+)
+
+/** Lương dự tính của chính nhân viên cho tháng hiện tại (gồm khấu trừ phạt nếu có). */
+@Serializable
+data class PayEstimate(
+    val employeeName: String = "",
+    val employeeCode: String = "",
+    val period: String = "",
+    val baseSalary: Double = 0.0,
+    val overtimeHours: Double = 0.0,
+    val overtimePay: Double = 0.0,
+    val workedDays: Int = 0,
+    val absentDays: Int = 0,
+    val lateDays: Int = 0,
+    val earnings: List<PayLine> = emptyList(),
+    val deductions: List<PayLine> = emptyList(),
+    val totalEarnings: Double = 0.0,
+    val totalDeductions: Double = 0.0,
+    val netPay: Double = 0.0,
+    val hasSalary: Boolean = false,
+)
+
 @Serializable
 data class ManagerHeadcount(
     val total: Int = 0,
@@ -344,6 +382,28 @@ data class ChamCongBurstRequest(
     val occurredAt: String? = null,
     val gpsLat: Double? = null,
     val gpsLng: Double? = null,
+)
+
+// ----- Tự đăng ký khuôn mặt (mỗi tài khoản một lần, nhiều góc) -----
+// Một góc quét = nhãn tư thế ("front" | "side1" | "side2") + loạt ảnh của góc đó.
+@Serializable
+data class FaceEnrollPose(val pose: String, val images: List<String>)
+
+@Serializable
+data class SelfFaceEnrollRequest(val poses: List<FaceEnrollPose>)
+
+// Trạng thái đã đăng ký khuôn mặt của chính tài khoản (để làm mờ nút "Đăng ký khuôn mặt").
+@Serializable
+data class SelfFaceStatus(
+    val registered: Boolean = false,
+    val sampleCount: Int = 0,
+    val createdAt: String? = null,
+)
+
+@Serializable
+data class SelfFaceEnrollResult(
+    val message: String = "",
+    val sampleCount: Int = 0,
 )
 
 // Một bản chấm công ngoại tuyến đang chờ đồng bộ (lưu trong hàng đợi trên máy).

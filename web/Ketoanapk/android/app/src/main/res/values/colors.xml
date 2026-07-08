@@ -4,4 +4,6 @@
     <color name="colorPrimary">#C62828</color>
     <color name="colorPrimaryDark">#8E1B1B</color>
     <color name="colorAccent">#C62828</color>
+    <!-- Nền splash = IntroBg (#F4F4F2) để OS splash nối liền mạch vào màn intro. -->
+    <color name="splash_background">#F4F4F2</color>
 </resources>

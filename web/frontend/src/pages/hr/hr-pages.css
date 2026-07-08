@@ -1169,6 +1169,37 @@ html[data-theme="dark"] .hr-status[data-tone="danger"] { background: #3b211f; co
 .hr-salary-comp-row[data-kind="earning"] .hr-salary-comp-tag { background: #e7f6ed; color: #137a46; }
 .hr-salary-comp-row[data-kind="deduction"] .hr-salary-comp-tag { background: #ffebe9; color: var(--hr-danger); }
 
+.hr-salary-advanced {
+  border: 1px solid var(--hr-border, #e5e7eb);
+  border-radius: 10px;
+  padding: 4px 12px;
+}
+.hr-salary-advanced > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--hr-muted);
+  padding: 8px 0;
+  user-select: none;
+}
+.hr-salary-advanced[open] > summary { margin-bottom: 6px; }
+
+.hr-ot-list { display: grid; gap: 6px; margin-top: 8px; }
+.hr-ot-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--hr-border, #e5e7eb);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.hr-ot-row[data-on="true"] { background: #f0fdf4; border-color: #86efac; }
+.hr-ot-row .hr-ot-out { color: var(--hr-muted); font-size: 0.82rem; }
+.hr-ot-row .hr-ot-min { color: var(--hr-muted); font-size: 0.82rem; }
+.hr-ot-row b { text-align: right; }
+
 .hr-payslip-lines {
   display: grid;
   gap: 14px;

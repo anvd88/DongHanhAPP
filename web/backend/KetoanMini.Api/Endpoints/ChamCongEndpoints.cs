@@ -24,6 +24,8 @@ public static class ChamCongEndpoints
     private const double AdaptiveLearnMinSimilarity = 0.65;
     // Nhãn ở cột created_by để phân biệt mẫu hệ thống TỰ HỌC với mẫu admin đăng ký.
     private const string AutoLearnTag = "(tự học)";
+    // Nhãn created_by cho mẫu do NHÂN VIÊN tự đăng ký trên app (phân biệt với mẫu admin/ tự học).
+    private const string SelfEnrollTag = "(tự đăng ký)";
 
     // Cổng tư thế cho chấm công loạt ảnh: lệch quá ngưỡng ⇒ báo trực tiếp, KHÔNG ghi nhật ký.
     // Khớp ngưỡng phía kiosk cũ (yaw chính diện, pitch trong khoảng nhìn thẳng).
@@ -224,6 +226,111 @@ public static class ChamCongEndpoints
             await db.RecordAudit(u.Username(), "Đăng ký khuôn mặt", "ChamCong", req.Username, "Thêm mẫu khuôn mặt (web).");
             return Results.Ok(new { message = "Đã lưu mẫu khuôn mặt." });
         }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        // ── Tự đăng ký khuôn mặt (nhân viên tự làm trên app) ────────────────────────
+        // Trạng thái đã đăng ký của CHÍNH tài khoản đang đăng nhập → app dùng để làm mờ nút "Đăng ký
+        // khuôn mặt" (mỗi tài khoản chỉ đăng ký một lần). Xác định người TỪ TOKEN.
+        g.MapGet("/dangky/cua-toi", async (ClaimsPrincipal u, Database db) =>
+        {
+            var me = u.Username();
+            if (string.IsNullOrWhiteSpace(me)) return Results.Unauthorized();
+
+            await using var conn = await db.OpenAsync();
+            var count = 0;
+            DateTime? first = null;
+            await using var r = await conn.Cmd(
+                "SELECT COUNT(*) AS c, MIN(created_at) AS f FROM cham_cong_face WHERE username=@u")
+                .With("@u", me).ExecuteReaderAsync();
+            if (await r.ReadAsync()) { count = r.Int("c"); first = r.DtNull("f"); }
+            return Results.Ok(new SelfFaceStatusDto(count > 0, count, first));
+        });
+
+        // Tự đăng ký khuôn mặt: quét NHIỀU góc (nhìn thẳng + nghiêng 2 bên), mỗi góc là một loạt ảnh.
+        // Server chọn khung tốt nhất mỗi góc, kiểm tra chất lượng + liveness rồi lưu 1 mẫu/góc.
+        // CHẶN CỨNG: mỗi tài khoản chỉ đăng ký MỘT lần (đã có mẫu ⇒ từ chối) — xác định người TỪ TOKEN,
+        // KHÔNG tin client. Nhờ vậy không thể tự đăng ký khuôn mặt của mình đè lên tài khoản khác.
+        g.MapPost("/dangky/tu", async (SelfFaceEnrollRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher) =>
+        {
+            var me = u.Username();
+            if (string.IsNullOrWhiteSpace(me)) return Results.Unauthorized();
+            if (req?.Poses is null || req.Poses.Count == 0)
+                return Results.BadRequest(new { message = "Thiếu ảnh khuôn mặt." });
+
+            await using var conn = await db.OpenAsync();
+
+            // Đã đăng ký rồi → chặn (mỗi tài khoản chỉ đăng ký một lần).
+            var existing = Convert.ToInt32(await conn.Cmd(
+                "SELECT COUNT(*) FROM cham_cong_face WHERE username=@u").With("@u", me).ExecuteScalarAsync());
+            if (existing > 0)
+                return Results.BadRequest(new { message = "Bạn đã đăng ký khuôn mặt rồi. Mỗi tài khoản chỉ được đăng ký một lần." });
+
+            var fullName = u.FindFirstValue("fullName") ?? "";
+
+            // Xử lý từng góc → chọn khung tốt nhất, kiểm tra chất lượng + liveness, trích embedding.
+            var samples = new List<float[]>();
+            var frontOk = false;
+            foreach (var pose in req.Poses)
+            {
+                if (pose?.Images is null || pose.Images.Count == 0) continue;
+                var isFront = string.Equals(pose.Pose, "front", StringComparison.OrdinalIgnoreCase);
+
+                var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
+                foreach (var img in pose.Images)
+                {
+                    if (!TryDecodeImage(img, out var bytes)) continue;
+                    if (engine.AssessFrame(bytes) is not { FaceFound: true } q) continue;
+                    candidates.Add((bytes, q));
+                }
+                if (candidates.Count == 0) continue;
+                candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
+                var best = candidates[0];
+
+                // Chất lượng tối thiểu (nới nhẹ cho góc nghiêng vì mặt nhỏ hơn/khó nét hơn chính diện).
+                var minQuality = isFront ? MinFrameQuality : MinFrameQuality * 0.8;
+                if (best.Q.Score < minQuality) continue;
+
+                // Mẫu CHÍNH DIỆN phải thực sự nhìn thẳng (chấm công vốn ép chính diện nên đây là mẫu chuẩn).
+                if (isFront && CheckPosture(best.Q.Pose) is not null) continue;
+
+                // Chống giả mạo trên vài khung tốt nhất của góc này (ảnh/màn hình giả thấp ở mọi khung).
+                double bestLive = 0;
+                foreach (var c in candidates.Take(5))
+                {
+                    bestLive = Math.Max(bestLive, engine.LivenessProbability(c.Bytes));
+                    if (bestLive >= engine.LivenessThreshold) break;
+                }
+                if (bestLive < engine.LivenessThreshold)
+                    return Results.BadRequest(new { message = "Nghi ngờ giả mạo (không phải người thật). Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình." });
+
+                var emb = engine.ExtractEmbedding(best.Bytes);
+                if (emb is null) continue;
+                samples.Add(emb);
+                if (isFront) frontOk = true;
+            }
+
+            if (!frontOk)
+                return Results.BadRequest(new { message = "Chưa lấy được ảnh chính diện rõ nét. Hãy đăng ký lại ở nơi đủ sáng và nhìn thẳng vào camera." });
+            if (samples.Count < 2)
+                return Results.BadRequest(new { message = "Chưa đủ mẫu khuôn mặt. Vui lòng quét lại đủ các góc theo hướng dẫn." });
+
+            // Kiểm tra lại lần cuối rồi chèn tất cả mẫu (tránh đăng ký hai lần nếu bấm dồn).
+            var existing2 = Convert.ToInt32(await conn.Cmd(
+                "SELECT COUNT(*) FROM cham_cong_face WHERE username=@u").With("@u", me).ExecuteScalarAsync());
+            if (existing2 > 0)
+                return Results.BadRequest(new { message = "Bạn đã đăng ký khuôn mặt rồi." });
+
+            foreach (var emb in samples)
+                await conn.Cmd(
+                    @"INSERT INTO cham_cong_face (username, full_name, embedding, created_at, created_by)
+                      VALUES (@u, @fn, @emb, CURRENT_TIMESTAMP, @by)")
+                    .With("@u", me).With("@fn", fullName)
+                    .With("@emb", cipher.EncryptEmbedding(emb))
+                    .With("@by", SelfEnrollTag)
+                    .ExecuteNonQueryAsync();
+
+            await db.RecordAudit(me, "Đăng ký khuôn mặt", "ChamCong", me, $"Tự đăng ký {samples.Count} mẫu (app).");
+            return Results.Ok(new SelfFaceEnrollResult("Đăng ký khuôn mặt thành công.", samples.Count));
+        });
 
         // Ước lượng hướng mặt — trình đăng ký khuôn mặt (EnrollWizard) dùng để hướng dẫn từng tư thế.
         g.MapPost("/huongmat", (NhanDienRequest req, IFaceEngine engine) =>

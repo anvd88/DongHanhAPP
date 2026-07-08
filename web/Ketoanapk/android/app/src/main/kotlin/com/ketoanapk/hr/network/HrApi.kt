@@ -1,6 +1,7 @@
 package com.ketoanapk.hr.network
 
 import com.ketoanapk.hr.data.AccountLoginSettings
+import com.ketoanapk.hr.data.AppConfig
 import com.ketoanapk.hr.data.ChamCongBurstRequest
 import com.ketoanapk.hr.data.ChamCongResult
 import com.ketoanapk.hr.data.ChangePasswordBody
@@ -24,6 +25,9 @@ import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
 import com.ketoanapk.hr.data.SalaryListItem
+import com.ketoanapk.hr.data.SelfFaceEnrollRequest
+import com.ketoanapk.hr.data.SelfFaceEnrollResult
+import com.ketoanapk.hr.data.SelfFaceStatus
 import com.ketoanapk.hr.data.SessionPing
 import com.ketoanapk.hr.data.Timesheet
 import okhttp3.ResponseBody
@@ -46,6 +50,9 @@ interface HrApi {
 
     @GET("api/auth/me")
     suspend fun me(): HrUser
+
+    @GET("api/app-config")
+    suspend fun appConfig(): AppConfig
 
     @POST("api/auth/heartbeat")
     suspend fun heartbeat(@Body body: SessionPing): retrofit2.Response<Unit>
@@ -91,6 +98,9 @@ interface HrApi {
 
     @GET("api/payroll/salaries")
     suspend fun salaries(): List<SalaryListItem>
+
+    @GET("api/payroll/my-estimate")
+    suspend fun myEstimate(): com.ketoanapk.hr.data.PayEstimate
 
     @GET("api/hr/manager/summary")
     suspend fun managerSummary(
@@ -145,6 +155,13 @@ interface HrApi {
 
     @POST("api/chamcong/cham")
     suspend fun chamCong(@Body body: ChamCongBurstRequest): ChamCongResult
+
+    // --- Tự đăng ký khuôn mặt (mỗi tài khoản một lần, nhiều góc) ---
+    @GET("api/chamcong/dangky/cua-toi")
+    suspend fun myFaceStatus(): SelfFaceStatus
+
+    @POST("api/chamcong/dangky/tu")
+    suspend fun enrollFace(@Body body: SelfFaceEnrollRequest): SelfFaceEnrollResult
 }
 
 @kotlinx.serialization.Serializable
