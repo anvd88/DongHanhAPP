@@ -1,0 +1,20 @@
+# Mẫu cấu hình Cloudflare Tunnel cho KetoanMini.
+# Copy sang %USERPROFILE%\.cloudflared\config.yml và thay <DOMAIN>, <TUNNEL_ID>.
+# Xem hướng dẫn đầy đủ: docs/cloudflare-tunnel-setup.md
+
+tunnel: ketoanmini
+credentials-file: C:\Users\Admin\.cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  # Web + API + SignalR hub, tất cả cùng origin trên Kestrel :5443
+  - hostname: <DOMAIN>
+    service: https://localhost:5443
+    originRequest:
+      # Kestrel dùng cert tự ký (mkcert) cho 192.168.1.88/localhost.
+      # Chặng localhost này vẫn mã hóa nhưng bỏ verify tên miền cho khỏi lỗi cert.
+      noTLSVerify: true
+      connectTimeout: 30s
+      # SignalR/WebSocket (/hubs) cần kết nối sống lâu.
+      keepAliveTimeout: 90s
+  # Bắt buộc có rule chốt cuối.
+  - service: http_status:404

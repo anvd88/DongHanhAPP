@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Bánh răng xoay một vòng rồi lắng về đúng chỗ (giảm tốc), khớp mạch với pha "bánh răng
+  xoay về vị trí" của IntroOverlay. Chỉ hoạt họa trên Android 12+; đời cũ hiện khung tĩnh.
+-->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:drawable="@drawable/ic_splash_gear">
+    <target android:name="gear">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="rotation"
+                android:duration="1000"
+                android:valueFrom="360"
+                android:valueTo="0"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_quint" />
+        </aapt:attr>
+    </target>
+</animated-vector>

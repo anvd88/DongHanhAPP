@@ -34,6 +34,9 @@ public record UserDto(Guid Id, string Username, string FullName, string Email, s
     /// <summary>Tích xanh (giống Facebook): Admin luôn có, hoặc được admin cấp thủ công.</summary>
     public bool Verified { get; init; }
     public bool IsDiamond { get; init; }
+
+    /// <summary>Đã đăng ký khuôn mặt (có mẫu trong cham_cong_face) — app dùng để hiện banner nhắc đăng ký.</summary>
+    public bool FaceRegistered { get; init; }
 }
 
 // ----- Dashboard -----
@@ -132,6 +135,13 @@ public record FaceNguoiDungDto(string Username, string FullName, int SoMau, Date
 public record FaceRegistrationLogDto(long Id, string Username, string FullName, DateTime CreatedAt, string CreatedBy);
 public record NhanDienRequest(string ImageBase64);
 public record FacePoseDto(bool Found, double Yaw, double Pitch);
+
+// Tự đăng ký khuôn mặt (app): mỗi tài khoản chỉ đăng ký MỘT lần, gồm nhiều tư thế (góc) để mẫu bền.
+// Mỗi góc là một loạt ảnh; server chọn khung tốt nhất, kiểm tra chất lượng + liveness rồi lưu 1 mẫu/góc.
+public record FaceEnrollPose(string Pose, List<string> Images);
+public record SelfFaceEnrollRequest(List<FaceEnrollPose> Poses);
+public record SelfFaceStatusDto(bool Registered, int SampleCount, DateTime? CreatedAt);
+public record SelfFaceEnrollResult(string Message, int SampleCount);
 public record NhanDienResult(bool Matched, string? Username, string? FullName, double Similarity,
     string? Loai, DateTime? OccurredAt, string Message);
 

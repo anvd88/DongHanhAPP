@@ -147,6 +147,13 @@ export interface PayrollCompute {
   totalEarnings: number;
   totalDeductions: number;
   netPay: number;
+  overtimeDays: OvertimeDay[];
+}
+
+export interface OvertimeDay {
+  date: string;
+  checkOut: string;
+  minutes: number;
 }
 
 export interface LeaveBalance {

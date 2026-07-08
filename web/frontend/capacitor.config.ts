@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: ".android-wwwroot",
   server: {
     androidScheme: "https",
-    allowNavigation: ["192.168.1.88"],
+    allowNavigation: ["app.ketoancp.click", "ketoancp.click", "192.168.1.88"],
   },
 };
 

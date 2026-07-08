@@ -35,6 +35,11 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
+        <!-- Nhận kết quả cài đặt từ PackageInstaller (Session API) — mở xác nhận cài / báo lỗi. -->
+        <receiver
+            android:name=".data.InstallResultReceiver"
+            android:exported="false" />
+
         <!-- Firebase Cloud Messaging: nhận thông báo đẩy tức thì. -->
         <service
             android:name=".data.HrMessagingService"

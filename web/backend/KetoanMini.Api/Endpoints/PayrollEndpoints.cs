@@ -108,6 +108,33 @@ public static class PayrollEndpoints
             return Results.NoContent();
         });
 
+        // Nhân viên tự xem LƯƠNG DỰ TÍNH của chính mình cho THÁNG HIỆN TẠI (gồm khấu trừ phạt nếu có).
+        // Dùng chung bộ tính ComputePayroll như admin nên số liệu khớp phiếu lương sẽ lập.
+        g.MapGet("/my-estimate", async (ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            if (await conn.Cmd("SELECT id FROM hr_employees WHERE username=@u").With("@u", u.Username()).ExecuteScalarAsync() is not Guid employeeId)
+                return Results.NotFound(new { message = "Tài khoản chưa gắn hồ sơ nhân sự." });
+            var now = DateTime.UtcNow.AddHours(7);
+            var period = $"{now.Year:D4}-{now.Month:D2}";
+            var salary = await ReadSalary(conn, employeeId);
+            var result = await ComputePayroll(conn, employeeId, period, null); // null = dự tính tất cả ngày tăng ca
+            if (result is null) return Results.NotFound();
+            // Earnings ở result không chứa tăng ca → thêm dòng tăng ca (dự tính) để nhân viên thấy đầy đủ.
+            var earnings = result.Earnings.Select(e => new { label = e.Label, amount = e.Amount }).ToList();
+            if (result.OvertimePay != 0)
+                earnings.Add(new { label = $"Tăng ca ({result.OvertimeHours} giờ)", amount = result.OvertimePay });
+            return Results.Ok(new
+            {
+                result.EmployeeName, result.EmployeeCode, result.Period,
+                result.BaseSalary, result.OvertimeHours, result.OvertimePay,
+                result.WorkedDays, result.AbsentDays, result.LateDays,
+                earnings, deductions = result.Deductions,
+                result.TotalEarnings, result.TotalDeductions, result.NetPay,
+                hasSalary = salary.HasSalary,
+            });
+        });
+
         // ---------------- Tính & lập phiếu lương ----------------
 
         // Xem trước phiếu lương (chưa lưu): lấy mức lương + bảng công + phạt của kỳ.
@@ -128,7 +155,13 @@ public static class PayrollEndpoints
             if (req.EmployeeId == Guid.Empty || !ValidPeriod(req.Period))
                 return Results.BadRequest(new { message = "Thiếu nhân viên hoặc kỳ lương (yyyy-MM)." });
             await using var conn = await db.OpenAsync();
-            var result = await ComputePayroll(conn, req.EmployeeId, req.Period, req.Adjustments);
+            // Ngày tăng ca admin đã duyệt (yyyy-MM-dd). null = duyệt tất cả; mảng rỗng = không duyệt ngày nào.
+            HashSet<DateOnly>? approvedOt = req.ApprovedOvertimeDates is null
+                ? null
+                : req.ApprovedOvertimeDates
+                    .Select(s => DateOnly.TryParse(s, out var dd) ? (DateOnly?)dd : null)
+                    .Where(x => x.HasValue).Select(x => x!.Value).ToHashSet();
+            var result = await ComputePayroll(conn, req.EmployeeId, req.Period, req.Adjustments, approvedOt);
             if (result is null) return Results.NotFound();
 
             var pid = Guid.NewGuid();
@@ -176,16 +209,44 @@ public static class PayrollEndpoints
 
     private sealed record PayLine(string Label, decimal Amount);
 
+    /// <summary>Một ngày có tăng ca (giờ ra sau 17:20) — để admin duyệt từng ngày khi lập phiếu.</summary>
+    private sealed record OtDay(DateOnly Date, string CheckOut, int Minutes);
+
+    // Quy tắc tăng ca theo giờ RA: tính từ 17:00, nhưng chỉ tính khi tan làm SAU 17:20 (đệm 20').
+    private static readonly TimeOnly OtStart = new(17, 0);
+    private static readonly TimeOnly OtQualify = new(17, 20);
+
+    private static List<OtDay> DetectOvertimeDays(List<ShiftEndpoints.TimesheetDayInfo> days)
+    {
+        var list = new List<OtDay>();
+        foreach (var d in days)
+        {
+            if (string.IsNullOrWhiteSpace(d.CheckOut)) continue;
+            if (!TimeOnly.TryParse(d.CheckOut, out var outTod)) continue;
+            if (outTod <= OtQualify) continue; // ra ≤ 17:20 → không tính tăng ca
+            var minutes = (int)(outTod - OtStart).TotalMinutes; // tính từ 17:00
+            if (minutes > 0) list.Add(new OtDay(d.Date, d.CheckOut!, minutes));
+        }
+        return list;
+    }
+
     private sealed record PayrollResult(
         Guid EmployeeId, string EmployeeName, string EmployeeCode, string Period,
         decimal BaseSalary, decimal Allowance, decimal OvertimeRate, decimal OvertimePay,
         int WorkedDays, int AbsentDays, int LateDays, decimal OvertimeHours,
         List<PayLine> Earnings, List<PayLine> Deductions,
         decimal TotalEarnings, decimal TotalDeductions, decimal NetPay,
-        object Details);
+        List<OtDay> OvertimeDays, object Details);
 
-    /// <summary>Tính toàn bộ phiếu lương cho (nhân viên, kỳ). Trả null nếu không tìm thấy nhân viên.</summary>
-    private static async Task<PayrollResult?> ComputePayroll(NpgsqlConnection conn, Guid employeeId, string period, SalaryComponentDto[]? adjustments)
+    /// <summary>
+    /// Tính toàn bộ phiếu lương cho (nhân viên, kỳ). Trả null nếu không tìm thấy nhân viên.
+    /// <paramref name="approvedOtDates"/>: các ngày tăng ca được admin duyệt; null = tính TẤT CẢ ngày phát hiện
+    /// (dùng cho lương dự tính của nhân viên và bản xem trước).
+    /// Lưu ý: <c>Earnings</c> KHÔNG chứa dòng tăng ca (để giao diện admin cộng theo ngày đã duyệt);
+    /// tổng <c>TotalEarnings</c> và <c>Details.earnings</c> thì ĐÃ gồm tăng ca đã duyệt.
+    /// </summary>
+    private static async Task<PayrollResult?> ComputePayroll(NpgsqlConnection conn, Guid employeeId, string period,
+        SalaryComponentDto[]? adjustments, HashSet<DateOnly>? approvedOtDates = null)
     {
         string empName = "", empCode = "";
         await using (var r = await conn.Cmd("SELECT full_name, employee_code FROM hr_employees WHERE id=@id")
@@ -197,16 +258,22 @@ public static class PayrollEndpoints
         }
 
         var salary = await ReadSalary(conn, employeeId);
-        var ts = await ShiftEndpoints.ComputeSummaryAsync(conn, employeeId, period);
-        var overtimeHours = Math.Round(ts.TotalOvertimeMinutes / 60m, 2);
-        var overtimePay = Math.Round(salary.OvertimeRate * ts.TotalOvertimeMinutes / 60m, 0);
+        var (ts, tsDays) = await ShiftEndpoints.ComputeDaysAsync(conn, employeeId, period);
 
+        // Tăng ca theo giờ ra (17:00, đệm tới 17:20). null = tính tất cả; ngược lại chỉ các ngày đã duyệt.
+        var otCandidates = DetectOvertimeDays(tsDays);
+        var otMinutes = otCandidates
+            .Where(o => approvedOtDates is null || approvedOtDates.Contains(o.Date))
+            .Sum(o => o.Minutes);
+        var overtimeHours = Math.Round(otMinutes / 60m, 2);
+        var overtimePay = Math.Round(salary.OvertimeRate * otMinutes / 60m, 0);
+
+        // Earnings KHÔNG gồm tăng ca (giao diện admin sẽ tự cộng theo ngày duyệt).
         var earnings = new List<PayLine>
         {
             new("Lương cơ bản", salary.BaseSalary),
         };
         if (salary.Allowance != 0) earnings.Add(new("Phụ cấp", salary.Allowance));
-        if (overtimePay != 0) earnings.Add(new($"Tăng ca ({overtimeHours} giờ)", overtimePay));
 
         var deductions = new List<PayLine>();
         foreach (var c in salary.Components)
@@ -244,13 +311,22 @@ public static class PayrollEndpoints
                 earnings.Add(new($"Hoàn tiền phạt {rr.Str("penalty_no")}", rr.Dec("amount")));
         }
 
-        var totalEarnings = earnings.Sum(e => e.Amount);
+        var totalEarnings = earnings.Sum(e => e.Amount) + overtimePay;
         var totalDeductions = deductions.Sum(e => e.Amount);
         var net = totalEarnings - totalDeductions;
 
+        // Dòng lương đầy đủ để LƯU/HIỂN THỊ phiếu: gồm cả tăng ca (chèn ngay sau Phụ cấp/Lương cơ bản).
+        var detailEarnings = new List<PayLine>(earnings);
+        if (overtimePay != 0)
+        {
+            var otLine = new PayLine($"Tăng ca ({overtimeHours} giờ)", overtimePay);
+            var insertAt = salary.Allowance != 0 ? 2 : 1;
+            detailEarnings.Insert(Math.Min(insertAt, detailEarnings.Count), otLine);
+        }
+
         var details = new
         {
-            earnings = earnings.ConvertAll(e => new { label = e.Label, amount = e.Amount }),
+            earnings = detailEarnings.ConvertAll(e => new { label = e.Label, amount = e.Amount }),
             deductions = deductions.ConvertAll(e => new { label = e.Label, amount = e.Amount }),
             timesheet = new
             {
@@ -260,6 +336,8 @@ public static class PayrollEndpoints
                 overtimeHours,
                 totalWorkedHours = ts.TotalWorkedHours,
             },
+            overtimeDays = otCandidates.ConvertAll(o => new { date = o.Date, checkOut = o.CheckOut, minutes = o.Minutes }),
+            overtimeRate = salary.OvertimeRate,
             penaltyTotal,
             totalEarnings,
             totalDeductions,
@@ -270,7 +348,7 @@ public static class PayrollEndpoints
             employeeId, empName, empCode, period,
             salary.BaseSalary, salary.Allowance, salary.OvertimeRate, overtimePay,
             ts.WorkedDays, ts.AbsentDays, ts.LateDays, overtimeHours,
-            earnings, deductions, totalEarnings, totalDeductions, net, details);
+            earnings, deductions, totalEarnings, totalDeductions, net, otCandidates, details);
     }
 
     // ---- Mức lương ----
@@ -638,5 +716,5 @@ public static class PayrollEndpoints
     public record SaveSalaryReq(decimal BaseSalary, decimal Allowance, decimal OvertimeRate,
         SalaryComponentDto[]? Components, string? Note);
     public record CreatePayslipReq(Guid EmployeeId, string Period, bool Published,
-        SalaryComponentDto[]? Adjustments, string? Note);
+        SalaryComponentDto[]? Adjustments, string? Note, string[]? ApprovedOvertimeDates = null);
 }

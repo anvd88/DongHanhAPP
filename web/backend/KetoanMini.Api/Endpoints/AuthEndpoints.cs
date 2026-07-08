@@ -53,7 +53,8 @@ public static class AuthEndpoints
             {
                 AvatarUrl = await LoadAvatarUrl(conn, user.Id),
                 Verified = await LoadVerified(conn, user.Username, user.Role),
-                IsDiamond = await LoadDiamond(conn, user.Username, user.Role)
+                IsDiamond = await LoadDiamond(conn, user.Username, user.Role),
+                FaceRegistered = await LoadFaceRegistered(conn, user.Username)
             };
             // Ghi nhận thiết bị đăng nhập ngay để hiện trong "Quản lý thiết bị" + gắn sid vào token
             // (phục vụ thu hồi từ xa). Đăng nhập mới luôn gỡ cờ thu hồi cũ của chính thiết bị đó.
@@ -152,7 +153,12 @@ public static class AuthEndpoints
             await using var conn = await db.OpenAsync();
             var user = await ReadUserByUsername(conn, principal.Username());
             if (user is null) return Results.Unauthorized();
-            return Results.Ok(user with { AvatarUrl = await LoadAvatarUrl(conn, user.Id), IsDiamond = await LoadDiamond(conn, user.Username, user.Role) });
+            return Results.Ok(user with
+            {
+                AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                IsDiamond = await LoadDiamond(conn, user.Username, user.Role),
+                FaceRegistered = await LoadFaceRegistered(conn, user.Username)
+            });
         }).RequireAuthorization();
 
         // Sửa hồ sơ của chính mình (web): đổi tên hiển thị. (Ảnh đại diện trên desktop lưu cục bộ
@@ -484,6 +490,19 @@ public static class AuthEndpoints
         {
             var r = await conn.Cmd(
                 "SELECT 1 FROM web_diamond_members WHERE username = @u LIMIT 1")
+                .With("@u", username).ExecuteScalarAsync();
+            return r is not null and not DBNull;
+        }
+        catch { return false; }
+    }
+
+    // Đã đăng ký khuôn mặt chưa (có ít nhất 1 mẫu trong cham_cong_face) → app hiện/ẩn banner nhắc.
+    private static async Task<bool> LoadFaceRegistered(NpgsqlConnection conn, string username)
+    {
+        try
+        {
+            var r = await conn.Cmd(
+                "SELECT 1 FROM cham_cong_face WHERE username = @u LIMIT 1")
                 .With("@u", username).ExecuteScalarAsync();
             return r is not null and not DBNull;
         }

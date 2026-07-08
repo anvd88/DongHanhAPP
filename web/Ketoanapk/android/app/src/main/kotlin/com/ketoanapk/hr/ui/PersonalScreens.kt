@@ -21,10 +21,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CenterFocusStrong
@@ -46,11 +48,13 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.WatchLater
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -72,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerHeadcount
+import com.ketoanapk.hr.data.PayEstimate
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
@@ -483,10 +488,12 @@ private fun HeroFooterStat(label: String, value: String, modifier: Modifier = Mo
 fun TimesheetScreen(
     state: TimesheetUiState,
     onMonthOffset: (Int) -> Unit,
-    onCurrentMonth: () -> Unit,
+    onSelectMonth: (String) -> Unit,
 ) {
     val ts = state.timesheet
     var selectedDate by rememberSaveable(ts?.period ?: "") { mutableStateOf<String?>(null) }
+    var pickerOpen by rememberSaveable { mutableStateOf(false) }
+    val currentStart = timesheetMonthStart(ts?.period ?: state.month)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
@@ -494,11 +501,12 @@ fun TimesheetScreen(
     ) {
         item { PageHeader(Icons.Filled.CalendarMonth, "Bảng công", formatTimesheetPeriod(ts?.period ?: state.month), Tone.Neutral) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = { onMonthOffset(-1) }, modifier = Modifier.weight(1f)) { Text("Trước") }
-                Button(onClick = onCurrentMonth, modifier = Modifier.weight(1f)) { Text("Tháng này") }
-                OutlinedButton(onClick = { onMonthOffset(1) }, modifier = Modifier.weight(1f)) { Text("Sau") }
-            }
+            MonthSelectorBar(
+                label = formatTimesheetPeriod(ts?.period ?: state.month),
+                onPrev = { onMonthOffset(-1) },
+                onNext = { onMonthOffset(1) },
+                onPick = { pickerOpen = true },
+            )
         }
         if (state.loading && ts == null) item { LoadingBlock() }
         if (ts == null) {
@@ -539,6 +547,133 @@ fun TimesheetScreen(
             }
         }
     }
+
+    if (pickerOpen) {
+        MonthYearPickerDialog(
+            initialYear = currentStart.year,
+            initialMonth = currentStart.monthValue,
+            onDismiss = { pickerOpen = false },
+            onConfirm = { year, month ->
+                pickerOpen = false
+                onSelectMonth("%04d-%02d".format(year, month))
+            },
+        )
+    }
+}
+
+/**
+ * Thanh chọn tháng: hai mũi tên ở hai đầu (lùi/tiến tháng), ở giữa hiện tháng đang xem
+ * (vd "Tháng 7/2026") — bấm vào giữa để mở bộ chọn tháng/năm.
+ */
+@Composable
+private fun MonthSelectorBar(
+    label: String,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onPick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onPrev) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Tháng trước", tint = MaterialTheme.colorScheme.primary)
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onPick)
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Chọn tháng/năm", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onNext) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Tháng sau", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+/** Bộ chọn tháng/năm: chỉnh năm bằng 2 mũi tên, chọn 1 trong 12 tháng dạng lưới. */
+@Composable
+private fun MonthYearPickerDialog(
+    initialYear: Int,
+    initialMonth: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int, Int) -> Unit,
+) {
+    var year by rememberSaveable { mutableStateOf(initialYear) }
+    var month by rememberSaveable { mutableStateOf(initialMonth) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Chọn tháng bảng công", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                // Chỉnh năm
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    IconButton(onClick = { year -= 1 }) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Năm trước", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    Text("Năm $year", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { year += 1 }) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Năm sau", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                // Lưới 12 tháng (3 hàng x 4 cột)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (0 until 3).forEach { r ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            (1..4).forEach { c ->
+                                val m = r * 4 + c
+                                val selected = m == month
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { month = m },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+                                ) {
+                                    Text(
+                                        "Th $m",
+                                        modifier = Modifier.padding(vertical = 12.dp),
+                                        textAlign = TextAlign.Center,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(year, month) }) { Text("Xem", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Hủy") }
+        },
+    )
 }
 
 @Composable
@@ -919,5 +1054,102 @@ fun timesheetTone(status: String?): Tone {
         normalized.contains("muộn") || normalized.contains("sớm") || normalized.contains("thiếu") || normalized == "late" -> Tone.Warning
         normalized.contains("không phân ca") -> Tone.Muted
         else -> Tone.Neutral
+    }
+}
+
+// ── Lương của tôi (nhân viên tự xem lương dự tính tháng hiện tại) ─────────────
+@Composable
+fun MySalaryScreen(state: PayEstimateUiState) {
+    val est = state.data
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            PageHeader(
+                Icons.Filled.Payments,
+                "Lương của tôi",
+                "Dự tính ${formatTimesheetPeriod(est?.period)}",
+                Tone.Success,
+            )
+        }
+        if (state.loading && est == null) item { LoadingBlock() }
+        if (est == null && !state.loading) {
+            item { EmptyState("Chưa có dữ liệu lương", state.error ?: "Không tải được lương dự tính.") }
+        }
+        if (est != null) {
+            if (!est.hasSalary) {
+                item {
+                    HrCard {
+                        Text(
+                            "Bạn chưa được thiết lập mức lương. Số liệu dưới đây có thể chưa đầy đủ — vui lòng liên hệ quản trị nhân sự.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            // Thẻ nổi bật: thực nhận dự tính.
+            item {
+                HrCard {
+                    Text("Thực nhận dự tính", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        formatMoney(est.netPay),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(
+                        "Tổng thu ${formatMoney(est.totalEarnings)} − Khấu trừ ${formatMoney(est.totalDeductions)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatTile(Icons.Filled.EventAvailable, "Ngày công", "${est.workedDays}", Success, Modifier.weight(1f))
+                    StatTile(Icons.Filled.Schedule, "Tăng ca", "${trimNum(est.overtimeHours)}h", InfoBlue, Modifier.weight(1f))
+                }
+            }
+
+            item { SectionTitle("Khoản cộng", modifier = Modifier.padding(start = 4.dp)) }
+            item {
+                HrCard {
+                    if (est.earnings.isEmpty()) {
+                        Text("Không có khoản cộng.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        est.earnings.forEach { line -> LabelValue(line.label, formatMoney(line.amount)) }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    LabelValue("Tổng thu nhập", formatMoney(est.totalEarnings))
+                }
+            }
+
+            item { SectionTitle("Khoản trừ", modifier = Modifier.padding(start = 4.dp)) }
+            item {
+                HrCard {
+                    if (est.deductions.isEmpty()) {
+                        Text("Không có khoản trừ.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        est.deductions.forEach { line -> LabelValue(line.label, "− ${formatMoney(line.amount)}") }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    LabelValue("Tổng khấu trừ", "− ${formatMoney(est.totalDeductions)}")
+                }
+            }
+
+            item {
+                Text(
+                    "Đây là lương DỰ TÍNH của tháng hiện tại, đã gồm khấu trừ tiền phạt (nếu có). Số liệu có thể thay đổi khi quản trị chốt phiếu lương.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+        }
     }
 }

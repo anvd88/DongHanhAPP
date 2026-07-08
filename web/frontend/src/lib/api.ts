@@ -16,6 +16,18 @@ export class ApiError extends Error {
   }
 }
 
+function isPublicNoAuthRoute() {
+  const path = location.pathname.replace(/\/+$/, "") || "/";
+  const hashPath = location.hash.replace(/^#/, "").split(/[?#]/)[0].replace(/\/+$/, "") || "/";
+  return path === "/tai-apk" || hashPath === "/tai-apk";
+}
+
+function handleUnauthorized(): never {
+  tokenStore.clear();
+  if (!isPublicNoAuthRoute() && !location.pathname.startsWith("/login") && location.hash !== "#/login") redirectToLogin();
+  throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   const token = tokenStore.get();
@@ -29,9 +41,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
 
   if (res.status === 401) {
-    tokenStore.clear();
-    if (!location.pathname.startsWith("/login") && location.hash !== "#/login") redirectToLogin();
-    throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
+    handleUnauthorized();
   }
 
   if (!res.ok) {
@@ -57,9 +67,7 @@ async function requestBlob(path: string): Promise<Blob> {
   const res = await fetch(appUrl(path), { method: "GET", headers });
 
   if (res.status === 401) {
-    tokenStore.clear();
-    if (!location.pathname.startsWith("/login") && location.hash !== "#/login") redirectToLogin();
-    throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
+    handleUnauthorized();
   }
 
   if (!res.ok) throw new ApiError(res.status, `Lỗi ${res.status}`);
@@ -75,9 +83,7 @@ async function postBlob<T>(path: string, blob: Blob): Promise<T> {
   const res = await fetch(appUrl(path), { method: "POST", headers, body: blob });
 
   if (res.status === 401) {
-    tokenStore.clear();
-    if (!location.pathname.startsWith("/login") && location.hash !== "#/login") redirectToLogin();
-    throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
+    handleUnauthorized();
   }
   if (!res.ok) {
     let msg = `Lỗi ${res.status}`;
@@ -100,9 +106,7 @@ async function requestForm<T>(method: string, path: string, form: FormData): Pro
   const res = await fetch(appUrl(path), { method, headers, body: form });
 
   if (res.status === 401) {
-    tokenStore.clear();
-    if (!location.pathname.startsWith("/login") && location.hash !== "#/login") redirectToLogin();
-    throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
+    handleUnauthorized();
   }
 
   if (!res.ok) {

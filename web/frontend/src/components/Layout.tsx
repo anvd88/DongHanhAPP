@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
@@ -32,7 +32,42 @@ function ClassicLayout({
   suppressMainWebSystem: boolean;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const railRef = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
+
+  // Khi KHÔNG nhập liệu: nhấn Tab để bung sidebar (thu gọn) ra và đưa tiêu điểm
+  // vào mục menu đầu tiên — sidebar tự mở nhờ :focus-within, tab tiếp để duyệt menu.
+  useEffect(() => {
+    const isEditable = (el: Element | null) => {
+      if (!el) return false;
+      const node = el as HTMLElement;
+      const tag = node.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        node.isContentEditable ||
+        node.getAttribute("role") === "textbox"
+      );
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+      const rail = railRef.current;
+      // Chỉ khi rail desktop đang hiển thị (lg) và người dùng không đang gõ
+      if (!rail || rail.offsetParent === null) return;
+      if (isEditable(document.activeElement)) return;
+      // Nếu tiêu điểm đã ở trong sidebar thì để Tab hoạt động bình thường
+      if (rail.contains(document.activeElement)) return;
+      const firstLink = rail.querySelector<HTMLElement>("a[href], button");
+      if (!firstLink) return;
+      e.preventDefault();
+      firstLink.focus();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const { user } = useAuth();
   const { unreadCount } = useChatNotifications();
   const admin = isAdmin(user);
@@ -43,7 +78,7 @@ function ClassicLayout({
   return (
     <div className="km-app-shell">
       {/* Sidebar desktop */}
-      <div className="km-sidebar-rail hidden lg:block">
+      <div ref={railRef} className="km-sidebar-rail hidden lg:block">
         <Sidebar />
       </div>
 

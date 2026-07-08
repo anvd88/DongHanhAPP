@@ -38,9 +38,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Kiểm tra cập nhật mỗi khi app quay lại foreground (tự chặn gọi dồn trong ViewModel).
-        viewModel.autoCheckForUpdate()
+        // Kiểm tra cập nhật MỖI KHI vào app / quay lại foreground (force = bỏ qua hạn mức 10 phút).
+        viewModel.autoCheckForUpdate(force = true)
         viewModel.refreshPushPermissionState()
+        // Làm mới ngay + bật vòng poll nhẹ để thấy admin duyệt đơn mà không cần kéo làm mới.
+        viewModel.onAppResumed()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Dừng vòng poll khi app xuống nền để đỡ tốn pin/mạng (nền đã có WorkManager + push FCM).
+        viewModel.onAppPaused()
     }
 
     /** Mở đúng màn hình khi người dùng bấm vào thông báo hệ thống. */

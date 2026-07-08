@@ -13,6 +13,39 @@ public static class ReleaseEndpoints
 {
     public static void MapReleases(this IEndpointRouteBuilder app)
     {
+        var publicReleases = app.MapGroup("/api/releases/public");
+
+        publicReleases.MapGet("/latest", async (string? appTarget, Database db) =>
+        {
+            var target = NormalizeTarget(appTarget);
+
+            await using var conn = await db.OpenAsync();
+            await using var r = await conn.Cmd(
+                @"SELECT id, release_notes, is_mandatory, published_at
+                  FROM app_releases
+                  WHERE app_target=@target AND is_published=TRUE AND apk_data IS NOT NULL
+                  ORDER BY version_code DESC, published_at DESC, id DESC
+                  LIMIT 1")
+                .With("@target", target)
+                .ExecuteReaderAsync();
+
+            if (!await r.ReadAsync())
+                return Results.Ok(new { hasUpdate = false, appTarget = target });
+
+            var id = r.Long("id");
+            return Results.Ok(new
+            {
+                hasUpdate = true,
+                id,
+                releaseNotes = r.Str("release_notes"),
+                isMandatory = r.Bool("is_mandatory"),
+                publishedAt = r.Dt("published_at"),
+                downloadUrl = $"/api/releases/public/{id}/download",
+            });
+        });
+
+        publicReleases.MapGet("/{id:long}/download", DownloadPublishedReleasePublic);
+
         var user = app.MapGroup("/api/releases").RequireAuthorization();
 
         user.MapGet("/latest", async (string? appTarget, int? currentVersionCode, Database db) =>
@@ -53,25 +86,7 @@ public static class ReleaseEndpoints
             });
         });
 
-        user.MapGet("/{id:long}/download", async (long id, Database db) =>
-        {
-            await using var conn = await db.OpenAsync();
-            await using var r = await conn.Cmd(
-                @"SELECT apk_file_name, apk_mime_type, apk_data
-                  FROM app_releases
-                  WHERE id=@id AND is_published=TRUE AND apk_data IS NOT NULL")
-                .With("@id", id)
-                .ExecuteReaderAsync();
-
-            if (!await r.ReadAsync()) return Results.NotFound(new { message = "Không tìm thấy bản APK đã phát hành." });
-
-            var fileName = string.IsNullOrWhiteSpace(r.Str("apk_file_name")) ? $"ketoan-hr-{id}.apk" : r.Str("apk_file_name");
-            var mime = string.IsNullOrWhiteSpace(r.Str("apk_mime_type"))
-                ? "application/vnd.android.package-archive"
-                : r.Str("apk_mime_type");
-            var bytes = (byte[])r.GetValue(r.GetOrdinal("apk_data"));
-            return Results.File(bytes, mime, fileName, enableRangeProcessing: true);
-        });
+        user.MapGet("/{id:long}/download", DownloadPublishedRelease);
 
         var g = app.MapGroup("/api/releases").RequireAuthorization(p => p.RequireRole("Admin"));
 
@@ -241,6 +256,45 @@ public static class ReleaseEndpoints
         r.Str("apk_file_name"),
         r.Long("apk_size"),
         r.Str("apk_sha256"));
+
+    private static async Task<IResult> DownloadPublishedRelease(long id, Database db)
+    {
+        await using var conn = await db.OpenAsync();
+        await using var r = await conn.Cmd(
+            @"SELECT apk_file_name, apk_mime_type, apk_data
+              FROM app_releases
+              WHERE id=@id AND is_published=TRUE AND apk_data IS NOT NULL")
+            .With("@id", id)
+            .ExecuteReaderAsync();
+
+        if (!await r.ReadAsync()) return Results.NotFound(new { message = "Không tìm thấy bản APK đã phát hành." });
+
+        var fileName = string.IsNullOrWhiteSpace(r.Str("apk_file_name")) ? $"ketoan-hr-{id}.apk" : r.Str("apk_file_name");
+        var mime = string.IsNullOrWhiteSpace(r.Str("apk_mime_type"))
+            ? "application/vnd.android.package-archive"
+            : r.Str("apk_mime_type");
+        var bytes = (byte[])r.GetValue(r.GetOrdinal("apk_data"));
+        return Results.File(bytes, mime, fileName, enableRangeProcessing: true);
+    }
+
+    private static async Task<IResult> DownloadPublishedReleasePublic(long id, Database db)
+    {
+        await using var conn = await db.OpenAsync();
+        await using var r = await conn.Cmd(
+            @"SELECT apk_mime_type, apk_data
+              FROM app_releases
+              WHERE id=@id AND is_published=TRUE AND apk_data IS NOT NULL")
+            .With("@id", id)
+            .ExecuteReaderAsync();
+
+        if (!await r.ReadAsync()) return Results.NotFound(new { message = "Không tìm thấy bản APK đã phát hành." });
+
+        var mime = string.IsNullOrWhiteSpace(r.Str("apk_mime_type"))
+            ? "application/vnd.android.package-archive"
+            : r.Str("apk_mime_type");
+        var bytes = (byte[])r.GetValue(r.GetOrdinal("apk_data"));
+        return Results.File(bytes, mime, "KetoanAPK.apk", enableRangeProcessing: true);
+    }
 
     private static async Task<int> ReadLatestPublishedVersionCode(Npgsql.NpgsqlConnection conn, string target, long? excludeId = null)
     {

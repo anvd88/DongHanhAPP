@@ -16,8 +16,12 @@
     </style>
 
 
+    <!-- Splash hiện đại (androidx core-splashscreen): nền cream + bánh răng đỏ xoay,
+         nối liền mạch vào IntroOverlay. Không còn dùng ảnh splash.png (chữ X xanh cũ). -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/avd_splash_gear</item>
+        <item name="windowSplashScreenAnimationDuration">1000</item>
         <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>

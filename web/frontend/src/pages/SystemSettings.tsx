@@ -6,6 +6,7 @@ import {
   FilePlus2,
   Gauge,
   HardDrive,
+  Megaphone,
   MessageCircle,
   MessageSquare,
   Power,
@@ -264,7 +265,10 @@ export function SystemSettings() {
       {admin && tab === "db" ? (
         <ChatDbUsagePanel />
       ) : admin && tab === "updates" ? (
-        <ReleaseUpdatePanel />
+        <div className="space-y-4">
+          <AppConfigPanel />
+          <ReleaseUpdatePanel />
+        </div>
       ) : (
       <>
       {preferenceError && (
@@ -527,6 +531,110 @@ export function SystemSettings() {
       </>
       )}
     </div>
+  );
+}
+
+type AppConfig = {
+  announcement: string;
+  announcementLevel: string;
+  faceEnrollBannerEnabled: boolean;
+  foregroundPollSeconds: number;
+};
+
+/**
+ * Cấu hình ứng dụng điều khiển từ xa (remote config): admin đổi mà KHÔNG cần phát hành APK mới.
+ * App đọc lúc đăng nhập + khi quay lại foreground rồi áp dụng: thông báo chạy chữ, bật/tắt banner
+ * nhắc đăng ký khuôn mặt, nhịp tự làm mới nền.
+ */
+function AppConfigPanel() {
+  const { data, loading, reload } = useApi<AppConfig>("/api/app-config");
+  const { notify } = useAppNotifications();
+  const [announcement, setAnnouncement] = useState("");
+  const [level, setLevel] = useState("info");
+  const [faceBanner, setFaceBanner] = useState(true);
+  const [pollSeconds, setPollSeconds] = useState("20");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!data) return;
+    setAnnouncement(data.announcement);
+    setLevel(data.announcementLevel || "info");
+    setFaceBanner(data.faceEnrollBannerEnabled);
+    setPollSeconds(String(data.foregroundPollSeconds || 20));
+  }, [data]);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    const secs = Number(pollSeconds);
+    if (!Number.isInteger(secs) || secs < 5 || secs > 3600) {
+      notify.warning("Nhịp làm mới phải là số nguyên trong khoảng 5–3600 giây.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.put<AppConfig>("/api/app-config", {
+        announcement: announcement.trim(),
+        announcementLevel: level,
+        faceEnrollBannerEnabled: faceBanner,
+        foregroundPollSeconds: secs,
+      });
+      notify.success("Đã lưu cấu hình ứng dụng. App sẽ áp dụng ở lần mở/đăng nhập kế tiếp.");
+      reload({ silent: true });
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không lưu được cấu hình.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <GlassPanel strong className="rounded-[20px] p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <Megaphone className="h-5 w-5 text-[var(--accent)]" />
+        <h2 className="text-sm font-black text-[var(--text)]">Cấu hình ứng dụng (điều khiển từ xa)</h2>
+      </div>
+      <p className="mb-4 text-xs font-semibold text-[var(--text-muted)]">
+        Đổi các mục dưới đây để áp dụng cho app di động mà không cần phát hành APK mới.
+      </p>
+      <form onSubmit={save} className="grid gap-3 lg:grid-cols-2">
+        <Field label="Thông báo chạy trong app (để trống = ẩn)">
+          <Input
+            value={announcement}
+            onChange={(e) => setAnnouncement(e.target.value)}
+            placeholder="VD: Bảo trì hệ thống 22h tối nay"
+          />
+        </Field>
+        <Field label="Mức độ thông báo">
+          <select
+            value={level}
+            onChange={(e) => setLevel(e.target.value)}
+            className="h-10 w-full rounded-xl border border-[var(--glass-border)] bg-white/55 px-3 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)] dark:bg-white/5"
+          >
+            <option value="info">Thông tin (xanh)</option>
+            <option value="warning">Cảnh báo (vàng)</option>
+            <option value="critical">Quan trọng (đỏ)</option>
+          </select>
+        </Field>
+        <Field label="Nhịp tự làm mới khi mở app (giây)">
+          <Input
+            value={pollSeconds}
+            onChange={(e) => setPollSeconds(e.target.value.replace(/[^\d]/g, ""))}
+            inputMode="numeric"
+            placeholder="20"
+          />
+        </Field>
+        <label className="flex items-center gap-2 self-end text-sm font-semibold text-[var(--text-secondary)]">
+          <input type="checkbox" checked={faceBanner} onChange={(e) => setFaceBanner(e.target.checked)} />
+          Hiện banner nhắc đăng ký khuôn mặt
+        </label>
+        <div className="lg:col-span-2">
+          <Button type="submit" loading={saving} disabled={loading}>
+            <Settings2 className="h-4 w-4" />
+            Lưu cấu hình
+          </Button>
+        </div>
+      </form>
+    </GlassPanel>
   );
 }
 

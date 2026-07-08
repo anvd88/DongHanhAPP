@@ -1,7 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <domain-config>
-        <domain includeSubdomains="true">192.168.1.88</domain>
+    <!-- Domain public qua Cloudflare Tunnel: cert do CA công cộng cấp nên chỉ cần tin
+         kho CA hệ thống (không còn dùng CA tự ký ketoanmini_ca như thời chạy LAN 192.168.1.88). -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">ketoancp.click</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+    <!-- Máy chủ chấm công trong LAN (https://192.168.1.88:5443). Cert tự ký do mkcert cấp cho
+         chính IP này (SAN có IP 192.168.1.88); tin CA gốc mkcert đóng gói kèm app (raw/ketoanmini_ca).
+         Chỉ áp cho đúng IP này, không ảnh hưởng phần còn lại của app (đi qua ketoancp.click). -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">192.168.1.88</domain>
         <trust-anchors>
             <certificates src="@raw/ketoanmini_ca" />
             <certificates src="system" />

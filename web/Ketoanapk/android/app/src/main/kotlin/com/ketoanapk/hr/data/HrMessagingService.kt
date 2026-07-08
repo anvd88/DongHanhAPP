@@ -46,6 +46,10 @@ class HrMessagingService : FirebaseMessagingService() {
             NotificationCenter(applicationContext).ingestFromPush(notifId, kind, title, body, target)
         }
         created?.let { AppNotifier.show(applicationContext, it) }
+
+        // Push này báo dữ liệu đổi (đơn duyệt/từ chối, đơn mới chờ duyệt, phạt…) → nếu app đang mở,
+        // làm mới NGAY màn đang xem thay vì chờ nhịp poll (đơn từ cập nhật gần như tức thì).
+        if (kind != NotificationKind.System) AppEvents.signalDataChanged()
     }
 
     private fun kindOf(notifId: String, target: String?): NotificationKind = when {

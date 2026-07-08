@@ -19,11 +19,17 @@ android {
         applicationId "com.ketoanapk.hr"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 16
-        versionName "1.2.10"
+        versionCode 26
+        versionName "1.2.20"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        // Địa chỉ API backend (LAN). Đổi tại đây khi máy chủ đổi IP.
-        buildConfigField "String", "API_BASE_URL", "\"https://192.168.1.88:5443\""
+        // Địa chỉ API backend qua Cloudflare Tunnel (public, cert hợp lệ, cổng 443).
+        // Đổi tại đây nếu đổi domain. Dùng cho MỌI tính năng TRỪ chấm công.
+        buildConfigField "String", "API_BASE_URL", "\"https://app.ketoancp.click\""
+        // Địa chỉ máy chủ chấm công trong LAN (KHÔNG qua Internet). Bắt buộc cùng mạng LAN với máy
+        // chủ mới chấm được — chống gian lận "chấm từ xa" + không đẩy ảnh khuôn mặt ra ngoài Internet.
+        // Cert tự ký (mkcert) cho IP này được tin qua res/xml/network_security_config.xml (raw/ketoanmini_ca).
+        // Đổi IP tại đây nếu máy chủ đổi địa chỉ LAN (nhớ đổi kèm domain trong network_security_config.xml).
+        buildConfigField "String", "ATTENDANCE_BASE_URL", "\"https://192.168.1.88:5443\""
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -102,6 +108,10 @@ dependencies {
     implementation 'com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0'
     implementation 'com.squareup.okhttp3:logging-interceptor:4.12.0'
     implementation 'androidx.datastore:datastore-preferences:1.1.1'
+
+    // --- Realtime SignalR: đồng bộ tức thì (đơn từ…) khi app đang mở, như bản web (/hubs/changes) ---
+    implementation 'com.microsoft.signalr:signalr:8.0.0'
+    implementation 'org.slf4j:slf4j-nop:2.0.13' // signalr dùng SLF4J; nop = tắt log tránh cảnh báo
 
     // --- Thông báo nền: khay hệ thống + kiểm tra định kỳ (WorkManager) ---
     implementation 'androidx.core:core-ktx:1.13.1'

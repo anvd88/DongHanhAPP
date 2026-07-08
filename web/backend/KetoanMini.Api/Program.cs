@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -9,6 +10,7 @@ using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 
@@ -115,6 +117,17 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.SetIsOriginAllowed(_ => true).AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
+
+// Chạy sau reverse proxy (Cloudflare Tunnel → cloudflared trỏ vào http://localhost:5239).
+// Đọc X-Forwarded-Proto do Cloudflare gắn (=https) để Request.Scheme = https → KHÔNG bị
+// UseHttpsRedirection đá vòng lặp, mà vẫn ép HTTPS cho request http thật (không có header này).
+// Chỉ tin proxy chạy trên loopback (chính cloudflared cùng máy) để tránh giả mạo header từ LAN.
+var forwardedHeaders = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedProto };
+forwardedHeaders.KnownNetworks.Clear();
+forwardedHeaders.KnownProxies.Clear();
+forwardedHeaders.KnownProxies.Add(IPAddress.Loopback);
+forwardedHeaders.KnownProxies.Add(IPAddress.IPv6Loopback);
+app.UseForwardedHeaders(forwardedHeaders);
 
 // Ép HTTPS (mã hóa dữ liệu khi truyền tải). Cấu hình qua Security:RequireHttps (mặc định bật).
 // HSTS chỉ bật ngoài môi trường Development để tránh "ghim" HTTPS cho localhost của dự án khác.
@@ -236,6 +249,7 @@ app.MapPenalties();
 app.MapPenaltyRefunds();
 app.MapPayroll();
 app.MapBankAccounts();
+app.MapAppConfig();
 
 // Hub tín hiệu real-time (web + desktop kết nối tới đây).
 app.MapHub<ChangesHub>("/hubs/changes");
@@ -292,5 +306,8 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang bang luong luc
 
 try { await BankAccountEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tai khoan ngan hang luc khoi dong: {Msg}", ex.Message); }
+
+try { await AppConfigEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang cau hinh ung dung luc khoi dong: {Msg}", ex.Message); }
 
 app.Run();
