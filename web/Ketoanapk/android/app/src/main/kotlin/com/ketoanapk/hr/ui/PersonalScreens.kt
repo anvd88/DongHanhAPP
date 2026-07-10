@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonOff
 import androidx.compose.material.icons.filled.PostAdd
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
@@ -77,6 +79,7 @@ import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.data.PayEstimate
+import com.ketoanapk.hr.data.PayslipItem
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
@@ -109,7 +112,9 @@ fun HomeScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { HomeHeroCard(name, position, today) { onSelect(HrDestination.Scan) } }
+        item { HomeHeroCard(name, position, today, state.employee?.avatar) { onSelect(HrDestination.Scan) } }
+
+        item { PortalEntryCard { onSelect(HrDestination.Portal) } }
 
         if (user.isAdmin) {
             item { AdminDashboardCard(manager.summary?.headcount) { onSelect(HrDestination.Approval) } }
@@ -142,7 +147,7 @@ fun HomeScreen(
 
 /** Thẻ tiêu đề tối: avatar + tên + trạng thái ca + Vào/Ra + nút Chấm công ngay. */
 @Composable
-private fun HomeHeroCard(name: String, position: String, today: TimesheetDay?, onScan: () -> Unit) {
+private fun HomeHeroCard(name: String, position: String, today: TimesheetDay?, avatar: String? = null, onScan: () -> Unit) {
     val checkedIn = !today?.checkIn.isNullOrBlank()
     val checkedOut = !today?.checkOut.isNullOrBlank()
     val statusText = when {
@@ -157,7 +162,7 @@ private fun HomeHeroCard(name: String, position: String, today: TimesheetDay?, o
     }
     HeroContainer {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            UserAvatar(name, 56)
+            UserAvatar(name, 56, avatar = avatar)
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(name, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -407,7 +412,7 @@ private fun weekRangeLabel(monday: LocalDate): String {
 }
 
 @Composable
-fun ProfileScreen(state: HomeUiState) {
+fun ProfileScreen(state: HomeUiState, onCapturePortrait: () -> Unit = {}) {
     val e = state.employee
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -428,6 +433,8 @@ fun ProfileScreen(state: HomeUiState) {
                     },
                     statusText = if (e.status == "Active") "Đang làm việc" else e.status,
                     statusColor = if (e.status == "Active") Color(0xFF34D399) else Color(0xFF94A3B8),
+                    avatar = e.avatar,
+                    onCapturePortrait = onCapturePortrait,
                     footer = {
                         Row(
                             modifier = Modifier
@@ -448,6 +455,34 @@ fun ProfileScreen(state: HomeUiState) {
                         }
                     },
                 )
+            }
+            if (e.avatar.isNullOrBlank()) {
+                item {
+                    HrCard {
+                        Text(
+                            "Bạn chưa có ảnh chân dung",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Mỗi nhân viên cần chụp một ảnh chân dung. Đưa mặt vào giữa khung và giữ yên, ứng dụng sẽ tự chụp.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Button(
+                            onClick = onCapturePortrait,
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Icon(Icons.Filled.CameraAlt, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Chụp ảnh chân dung", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
             item {
                 HrCard {
@@ -1150,6 +1185,183 @@ fun MySalaryScreen(state: PayEstimateUiState) {
                     modifier = Modifier.padding(horizontal = 4.dp),
                 )
             }
+        }
+    }
+}
+
+// ── Phiếu lương của tôi (các phiếu lương đã nhận, mỗi tháng một thẻ) ───────────
+/**
+ * Danh sách phiếu lương ĐÃ PHÁT HÀNH của chính nhân viên. Giao diện: mỗi kỳ (yyyy-MM) là một thẻ ghi
+ * "Tháng MM/yyyy" + thực nhận; bấm vào thẻ mở chi tiết phiếu lương của đúng tháng đó (khoản cộng/trừ).
+ */
+@Composable
+fun MyPayslipsScreen(
+    state: PayslipsUiState,
+    openPeriod: String?,
+    onOpen: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val opened = openPeriod?.let { p -> state.items.find { it.period == p } }
+    if (opened != null) {
+        PayslipDetailView(opened, onClose)
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item { PageHeader(Icons.Filled.ReceiptLong, "Phiếu lương", "Các phiếu lương đã nhận", Tone.Success) }
+        if (state.loading && state.items.isEmpty()) item { LoadingBlock() }
+        if (state.items.isEmpty() && !state.loading) {
+            item {
+                EmptyState(
+                    "Chưa có phiếu lương",
+                    state.error ?: "Khi quản trị phát hành phiếu lương, các tháng sẽ hiện ở đây.",
+                )
+            }
+        }
+        items(state.items, key = { it.period }) { p -> PayslipMonthCard(p, onOpen) }
+    }
+}
+
+/** Thẻ tháng: bấm vào mở phiếu lương của kỳ đó. */
+@Composable
+private fun PayslipMonthCard(p: PayslipItem, onOpen: (String) -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shadowElevation = 1.dp,
+        onClick = { onOpen(p.period) },
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.ReceiptLong, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(formatTimesheetPeriod(p.period), fontSize = 17.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                Text("Thực nhận ${formatMoney(p.netPay)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Đã phát hành" + (if (p.createdAt.isNotBlank()) " · ${formatIsoDate(p.createdAt)}" else ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Chi tiết một phiếu lương của một kỳ: thực nhận + ngày công/tăng ca + khoản cộng/trừ + ghi chú. */
+@Composable
+private fun PayslipDetailView(p: PayslipItem, onClose: () -> Unit) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    onClick = onClose,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = "Quay lại",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(9.dp).size(22.dp),
+                    )
+                }
+                Column {
+                    Text("Phiếu lương", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(formatTimesheetPeriod(p.period), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        // Thực nhận nổi bật.
+        item {
+            HrCard {
+                Text("Thực nhận", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    formatMoney(p.netPay),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    "Tổng thu ${formatMoney(p.totalEarnings)} − Khấu trừ ${formatMoney(p.totalDeductions)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(Icons.Filled.EventAvailable, "Ngày công", "${p.workedDays}", Success, Modifier.weight(1f))
+                StatTile(Icons.Filled.Schedule, "Tăng ca", "${trimNum(p.overtimeHours)}h", InfoBlue, Modifier.weight(1f))
+            }
+        }
+
+        item { SectionTitle("Khoản cộng", modifier = Modifier.padding(start = 4.dp)) }
+        item {
+            HrCard {
+                if (p.earnings.isEmpty()) {
+                    Text("Không có khoản cộng.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    p.earnings.forEach { line -> LabelValue(line.label, formatMoney(line.amount)) }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                LabelValue("Tổng thu nhập", formatMoney(p.totalEarnings))
+            }
+        }
+
+        item { SectionTitle("Khoản trừ", modifier = Modifier.padding(start = 4.dp)) }
+        item {
+            HrCard {
+                if (p.deductions.isEmpty()) {
+                    Text("Không có khoản trừ.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    p.deductions.forEach { line -> LabelValue(line.label, "− ${formatMoney(line.amount)}") }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                LabelValue("Tổng khấu trừ", "− ${formatMoney(p.totalDeductions)}")
+            }
+        }
+
+        if (p.note.isNotBlank()) {
+            item {
+                HrCard {
+                    Text("Ghi chú", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(p.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        }
+
+        item {
+            Text(
+                "Phiếu lương đã phát hành" + (if (p.createdAt.isNotBlank()) " ngày ${formatIsoDate(p.createdAt)}" else "") + ".",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
         }
     }
 }

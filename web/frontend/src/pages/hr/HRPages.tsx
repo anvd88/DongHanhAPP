@@ -41,6 +41,7 @@ import { useAuth } from "../../lib/auth";
 import { checkForAppUpdate, getCurrentAppVersion, installAppUpdate } from "../../lib/apkUpdater";
 import { date, dateTime, initials, moneyVnd } from "../../lib/format";
 import {
+  applyServerRequestFields,
   docTypeLabel,
   fieldDisplayValue,
   fieldLabel,
@@ -702,6 +703,7 @@ function TimesheetRow({ day, detailed = false }: { day: TimesheetDay; detailed?:
 export function HRRequestsPage() {
   const { notify, confirm } = useAppNotifications();
   const { data: types } = useApi<RequestType[]>("/api/requests/types");
+  useEffect(() => { if (types) applyServerRequestFields(types); }, [types]);
   const { data, loading, reload } = useApi<RequestListItem[]>("/api/requests?scope=mine");
   const [createOpen, setCreateOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -1009,6 +1011,7 @@ export function HRPenaltyPage() {
       eyebrow="Kỷ luật"
       title={admin ? "Phạt / kỷ luật" : "Phạt của tôi"}
       action={admin ? <HrButton onClick={() => setEditing("new")}><FilePlus2 className="h-4 w-4" /> Lập phạt</HrButton> : undefined}
+      className="hr-page--penalty"
     >
       <div className="hr-grid-3">
         <HrStat label="Số lần bị phạt" value={`${items.length}`} tone={items.length ? "warning" : "neutral"} />
@@ -1017,7 +1020,7 @@ export function HRPenaltyPage() {
       </div>
 
       {admin && (
-        <HrCard>
+        <HrCard className="hr-penalty-filter-card">
           <div className="hr-range-row">
             <Field label="Lọc theo tháng">
               <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
@@ -1027,21 +1030,21 @@ export function HRPenaltyPage() {
         </HrCard>
       )}
 
-      <HrCard>
+      <HrCard className="hr-penalty-list-card">
         {loading && !data ? <HrEmpty text="Đang tải danh sách phạt..." /> : (items.length ? items.map((p) => (
           <PenaltyRow key={p.id} p={p} admin={admin} onEdit={() => setEditing(p)} onWaive={() => waive(p)} onDelete={() => remove(p)} onAppeal={() => setAppealing(p)} />
         )) : <HrEmpty text={admin ? "Chưa có quyết định phạt nào." : "Bạn chưa bị phạt lần nào. 🎉"} />)}
       </HrCard>
 
       {(myRefunds?.length ?? 0) > 0 && (
-        <HrCard>
+        <HrCard className="hr-penalty-list-card">
           <div className="hr-card-title">Hoàn tiền phạt của tôi</div>
           {myRefunds!.map((r) => <RefundRow key={r.id} r={r} showEmployee={false} />)}
         </HrCard>
       )}
 
       {canAccounting && (
-        <HrCard>
+        <HrCard className="hr-penalty-list-card">
           <div className="hr-card-title">Duyệt chi hoàn phạt {pendingQueue.length > 0 ? `(${pendingQueue.length})` : ""}</div>
           {pendingQueue.length === 0 ? <HrEmpty text="Không có khoản hoàn nào chờ xử lý." /> : pendingQueue.map((r) => (
             <RefundRow
@@ -1094,9 +1097,12 @@ function PenaltyRow({ p, admin, onEdit, onWaive, onDelete, onAppeal }: { p: Pena
   const waived = p.status === "Waived";
   const progress = p.progress ?? null;
   return (
-    <article className="hr-day-row" style={waived ? { opacity: 0.6 } : undefined}>
-      <div>
-        <strong>{admin ? p.employeeName : p.penaltyTypeLabel}</strong>
+    <article className="hr-day-row hr-penalty-row" style={waived ? { opacity: 0.6 } : undefined}>
+      <div className="hr-penalty-main">
+        <div className="hr-penalty-titleline">
+          <strong>{admin ? p.employeeName : p.penaltyTypeLabel}</strong>
+          <span>{p.penaltyNo}</span>
+        </div>
         <small>
           {admin ? `${p.penaltyTypeLabel} · ` : ""}
           {p.penaltyDate ? date(p.penaltyDate) : "--"}
@@ -1223,8 +1229,8 @@ function PenaltyAppealModal({ penalty, onClose, onSent }: { penalty: Penalty; on
 function RefundRow({ r, showEmployee, actions }: { r: PenaltyRefund; showEmployee: boolean; actions?: ReactNode }) {
   const paid = r.status === "Paid";
   return (
-    <article className="hr-day-row" style={r.status === "Rejected" ? { opacity: 0.6 } : undefined}>
-      <div>
+    <article className="hr-day-row hr-penalty-row hr-refund-row" style={r.status === "Rejected" ? { opacity: 0.6 } : undefined}>
+      <div className="hr-penalty-main">
         <strong>{showEmployee ? r.employeeName : `Hoàn phạt ${r.penaltyNo}`}</strong>
         <small>
           {showEmployee ? `${r.refundNo} · phạt ${r.penaltyNo} · ` : `${r.refundNo} · `}
@@ -1396,7 +1402,7 @@ function PenaltyModal({ penalty, onClose, onSaved }: { penalty: Penalty | null; 
 export function HRPayrollPage() {
   const [tab, setTab] = useState<"salary" | "payslip">("salary");
   return (
-    <HrPage eyebrow="Quản trị" title="Bảng lương">
+    <HrPage eyebrow="Quản trị" title="Bảng lương" className="hr-page--payroll">
       <div className="hr-tabs">
         {[
           ["salary", "Mức lương"],
@@ -1414,14 +1420,16 @@ function SalaryAdmin() {
   const { data, loading, reload } = useApi<SalaryListItem[]>("/api/payroll/salaries");
   const [edit, setEdit] = useState<SalaryListItem | null>(null);
   return (
-    <HrCard>
+    <HrCard className="hr-payroll-list-card">
       {loading && !data ? <HrEmpty text="Đang tải mức lương..." /> : (data?.length ? data.map((row) => (
-        <article key={row.employeeId} className="hr-day-row">
-          <div>
-            <strong>{row.employeeName}</strong>
+        <article key={row.employeeId} className="hr-day-row hr-payroll-employee-row">
+          <div className="hr-payroll-employee-main">
+            <div className="hr-payroll-employee-titleline">
+              <strong>{row.employeeName}</strong>
+              <span>{row.employeeCode}</span>
+            </div>
             <small>
-              {row.employeeCode}
-              {row.hasSalary ? ` · CB ${moneyVnd(row.baseSalary)}` : ""}
+              {row.hasSalary ? `CB ${moneyVnd(row.baseSalary)}` : "Chưa thiết lập mức lương"}
               {row.hasSalary && row.allowance > 0 ? ` · PC ${moneyVnd(row.allowance)}` : ""}
               {row.hasSalary && row.extraCount > 0 ? ` · +${row.extraCount} khoản` : ""}
             </small>
@@ -1611,7 +1619,7 @@ function PayslipMaker() {
 
   return (
     <>
-      <HrCard>
+      <HrCard className="hr-payroll-filter-card">
         <div className="hr-form-grid">
           <Field label="Nhân viên">
             <Select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} className="w-full">
@@ -1624,9 +1632,9 @@ function PayslipMaker() {
       </HrCard>
 
       {!canQuery ? (
-        <HrCard><HrEmpty text="Chọn nhân viên và kỳ lương để tính." /></HrCard>
+        <HrCard className="hr-payroll-empty-card"><HrEmpty text="Chọn nhân viên và kỳ lương để tính." /></HrCard>
       ) : loading && !compute ? (
-        <HrCard><HrEmpty text="Đang tính lương..." /></HrCard>
+        <HrCard className="hr-payroll-empty-card"><HrEmpty text="Đang tính lương..." /></HrCard>
       ) : compute ? (
         <>
           <div className="hr-grid-3">
@@ -1635,7 +1643,7 @@ function PayslipMaker() {
             <HrStat label="Đi muộn" value={`${compute.lateDays}`} tone={compute.lateDays > 0 ? "warning" : "neutral"} />
           </div>
 
-          <HrCard>
+          <HrCard className="hr-payroll-overtime-card">
             <div className="hr-salary-components-head">
               <strong>Duyệt tăng ca theo ngày</strong>
               {otDays.length > 0 && (
@@ -1665,7 +1673,7 @@ function PayslipMaker() {
             )}
           </HrCard>
 
-          <HrCard>
+          <HrCard className="hr-payroll-preview-card">
             <div className="hr-payslip-lines">
               <div className="hr-payslip-group">
                 <h3>Khoản cộng</h3>
@@ -1685,7 +1693,7 @@ function PayslipMaker() {
             </div>
           </HrCard>
 
-          <HrCard>
+          <HrCard className="hr-payroll-adjust-card">
             <div className="hr-salary-components-head">
               <strong>Điều chỉnh thêm cho kỳ này</strong>
               <div>
@@ -1704,14 +1712,14 @@ function PayslipMaker() {
             ))}
           </HrCard>
 
-          <HrCard className="hr-sync-card">
+          <HrCard className="hr-sync-card hr-payroll-submit-card">
             <label className="hr-publish-check">
               <input type="checkbox" checked={published} onChange={(e) => setPublished(e.target.checked)} /> Phát hành cho nhân viên
             </label>
             <HrButton onClick={create} disabled={saving}><Banknote className="h-4 w-4" /> Lập phiếu lương</HrButton>
           </HrCard>
         </>
-      ) : <HrCard><HrEmpty text="Không tính được lương." /></HrCard>}
+      ) : <HrCard className="hr-payroll-empty-card"><HrEmpty text="Không tính được lương." /></HrCard>}
     </>
   );
 }

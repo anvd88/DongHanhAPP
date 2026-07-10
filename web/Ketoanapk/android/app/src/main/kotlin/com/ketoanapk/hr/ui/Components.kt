@@ -1,6 +1,7 @@
 package com.ketoanapk.hr.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -27,13 +29,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -253,7 +258,9 @@ fun KpiCard(
 }
 
 @Composable
-fun UserAvatar(name: String, size: Int, modifier: Modifier = Modifier) {
+fun UserAvatar(name: String, size: Int, modifier: Modifier = Modifier, avatar: String? = null) {
+    // Ảnh chân dung lưu dạng data URL JPEG; giải mã một lần theo chuỗi. Không có/không hợp lệ → chữ cái đầu.
+    val bitmap = remember(avatar) { avatar?.takeIf { it.isNotBlank() }?.let { decodeDataUrl(it) } }
     Box(
         modifier = modifier
             .size(size.dp)
@@ -261,12 +268,21 @@ fun UserAvatar(name: String, size: Int, modifier: Modifier = Modifier) {
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = initials(name),
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-            fontWeight = FontWeight.ExtraBold,
-            style = if (size >= 44) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelMedium,
-        )
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Text(
+                text = initials(name),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontWeight = FontWeight.ExtraBold,
+                style = if (size >= 44) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelMedium,
+            )
+        }
     }
 }
 
@@ -505,11 +521,29 @@ fun IdentityHero(
     subtitle: String,
     statusText: String,
     statusColor: Color,
+    avatar: String? = null,
+    onCapturePortrait: (() -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
 ) {
     HeroContainer {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            UserAvatar(name, 64)
+            Box {
+                UserAvatar(name, 64, avatar = avatar)
+                if (onCapturePortrait != null) {
+                    // Nút camera nhỏ ở góc dưới-phải avatar để chụp/đổi ảnh chân dung.
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable(onClick = onCapturePortrait),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Filled.CameraAlt, contentDescription = "Chụp ảnh chân dung", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(name, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)

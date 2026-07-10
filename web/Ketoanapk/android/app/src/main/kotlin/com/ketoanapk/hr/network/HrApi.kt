@@ -13,6 +13,8 @@ import com.ketoanapk.hr.data.EmployeeCard
 import com.ketoanapk.hr.data.EmployeeDetail
 import com.ketoanapk.hr.data.FaceEngineStatus
 import com.ketoanapk.hr.data.FacePasswordResetRequest
+import com.ketoanapk.hr.data.FlashChallenge
+import com.ketoanapk.hr.data.MotionConfig
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.LoginRequest
 import com.ketoanapk.hr.data.LoginResponse
@@ -25,6 +27,7 @@ import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
 import com.ketoanapk.hr.data.SalaryListItem
+import com.ketoanapk.hr.data.SaveAvatarBody
 import com.ketoanapk.hr.data.SelfFaceEnrollRequest
 import com.ketoanapk.hr.data.SelfFaceEnrollResult
 import com.ketoanapk.hr.data.SelfFaceStatus
@@ -62,6 +65,9 @@ interface HrApi {
 
     @GET("api/hr/me")
     suspend fun myProfile(): EmployeeDetail
+
+    @PUT("api/hr/me/avatar")
+    suspend fun updateMyAvatar(@Body body: SaveAvatarBody): retrofit2.Response<Unit>
 
     @GET("api/timesheet/me")
     suspend fun myTimesheet(@Query("month") month: String): Timesheet
@@ -102,6 +108,9 @@ interface HrApi {
     @GET("api/payroll/my-estimate")
     suspend fun myEstimate(): com.ketoanapk.hr.data.PayEstimate
 
+    @GET("api/payroll/my-payslips")
+    suspend fun myPayslips(): List<com.ketoanapk.hr.data.PayslipItem>
+
     @GET("api/hr/manager/summary")
     suspend fun managerSummary(
         @Query("date") date: String,
@@ -113,6 +122,10 @@ interface HrApi {
 
     @GET("api/hr/departments")
     suspend fun departments(): List<Department>
+
+    // --- Cổng thông tin công ty (tin tức, sự kiện, giới thiệu) ---
+    @GET("api/portal/feed")
+    suspend fun portalFeed(): com.ketoanapk.hr.data.PortalFeed
 
     // --- Cài đặt tài khoản ---
     @POST("api/auth/change-password")
@@ -155,6 +168,14 @@ interface HrApi {
 
     @POST("api/chamcong/cham")
     suspend fun chamCong(@Body body: ChamCongBurstRequest): ChamCongResult
+
+    // Active-flash liveness (ngừng dùng): xin chuỗi màu để chiếu lên mặt lúc quét.
+    @GET("api/chamcong/flash-challenge")
+    suspend fun flashChallenge(): FlashChallenge
+
+    // Liveness quay đầu: đọc cấu hình để biết có yêu cầu quay đầu lúc quét không.
+    @GET("api/chamcong/motion-config")
+    suspend fun motionConfig(): MotionConfig
 
     // --- Tự đăng ký khuôn mặt (mỗi tài khoản một lần, nhiều góc) ---
     @GET("api/chamcong/dangky/cua-toi")

@@ -1,13 +1,16 @@
 package com.ketoanapk.hr.ui
 
+import com.ketoanapk.hr.data.ReqFieldDto
+import com.ketoanapk.hr.data.RequestType
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Cấu hình các trường nhập cho từng loại đơn — app dựng form động từ đây, tương ứng với
- * `requestFields` bên web (frontend/src/lib/hr.ts). Backend nhận payload jsonb linh hoạt nên
- * việc thêm/bớt trường ở đây là an toàn; các loại chưa khai báo sẽ dùng một ô "Lý do" mặc định.
+ * Định nghĩa các trường nhập cho từng loại đơn. NGUỒN CHUẨN là SERVER (`/api/requests/types` trả kèm
+ * `fields`) — nạp qua [applyServerRequestFields] khi tải types. Bảng [requestFields] bên dưới chỉ là
+ * BẢN DỰ PHÒNG (offline / trước khi tải xong). Nhờ vậy thêm/sửa trường KHÔNG cần build lại app.
  */
 
 enum class RfType { Text, Date, Time, Number, Money, Textarea, Segmented }
@@ -94,10 +97,20 @@ val requestFields: Map<String, List<RequestField>> = mapOf(
         RequestField("reason", "Mục đích", RfType.Textarea, "Dùng để làm gì?"),
     ),
     "penalty_appeal" to listOf(
-        RequestField("penaltyNo", "Mã quyết định phạt", RfType.Text, "Xem ở mục Phạt / kỷ luật"),
-        RequestField("penaltyType", "Hình thức phạt", RfType.Text, "Ví dụ: phạt tiền, cảnh cáo…", required = false),
-        RequestField("penaltyAmount", "Số tiền phạt", RfType.Money, "Bỏ trống nếu không phải phạt tiền", required = false),
-        RequestField("reason", "Nội dung khiếu nại", RfType.Textarea, "Vì sao bạn cho rằng phạt chưa đúng?"),
+        RequestField(
+            "appealKind", "Bạn muốn đề nghị gì?", RfType.Segmented, "Chọn hình thức đề nghị với án phạt này",
+            options = listOf(
+                "dispute" to "Bỏ phạt",
+                "reduce" to "Giảm tiền",
+                "installment" to "Trả góp",
+            ),
+        ),
+        RequestField("penaltyNo", "Mã quyết định phạt", RfType.Text, "Chọn quyết định phạt để tự điền hình thức và số tiền"),
+        RequestField("penaltyType", "Hình thức phạt", RfType.Text, "", required = false),
+        RequestField("penaltyAmount", "Số tiền phạt hiện tại", RfType.Money, "", required = false),
+        RequestField("requestedAmount", "Số tiền đề nghị còn lại", RfType.Money, "Số tiền bạn mong muốn sau khi được giảm"),
+        RequestField("requestedMonths", "Số tháng muốn chia đóng", RfType.Number, "Ví dụ: 3, 6, 12 tháng"),
+        RequestField("reason", "Lý do đề nghị", RfType.Textarea, "Vì sao bạn cho rằng nên bỏ / giảm / chia nhỏ khoản phạt này?"),
     ),
 )
 
@@ -106,7 +119,36 @@ val defaultRequestFields = listOf(
     RequestField("reason", "Nội dung đơn", RfType.Textarea, "Mô tả chi tiết yêu cầu của bạn"),
 )
 
-fun fieldsForType(type: String): List<RequestField> = requestFields[type] ?: defaultRequestFields
+// Định nghĩa field do SERVER trả, ưu tiên hơn bản dự phòng. Cập nhật khi ViewModel tải xong types.
+private val serverRequestFields = ConcurrentHashMap<String, List<RequestField>>()
+
+/** Đổi kiểu field kiểu chuỗi của server sang [RfType]. select/checkboxes đều là ô chọn (Segmented). */
+private fun rfTypeOf(type: String): RfType = when (type.lowercase()) {
+    "date" -> RfType.Date
+    "time" -> RfType.Time
+    "number" -> RfType.Number
+    "money" -> RfType.Money
+    "textarea" -> RfType.Textarea
+    "select", "checkboxes", "segmented" -> RfType.Segmented
+    else -> RfType.Text
+}
+
+private fun ReqFieldDto.toUi(): RequestField = RequestField(
+    key = key,
+    label = label,
+    type = rfTypeOf(type),
+    hint = hint,
+    required = required,
+    options = options.map { it.value to it.label },
+)
+
+/** Nạp định nghĩa field từ server (gọi sau khi tải `/api/requests/types`). */
+fun applyServerRequestFields(types: List<RequestType>) {
+    for (t in types) if (t.fields.isNotEmpty()) serverRequestFields[t.type] = t.fields.map { it.toUi() }
+}
+
+fun fieldsForType(type: String): List<RequestField> =
+    serverRequestFields[type] ?: requestFields[type] ?: defaultRequestFields
 
 /** Với leave/sick, số ngày nghỉ tự tính khớp khoảng Từ ngày → Đến ngày (tính cả 2 đầu). */
 fun daysAutoSynced(type: String): Boolean = type == "leave" || type == "sick"

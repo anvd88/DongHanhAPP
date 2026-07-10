@@ -93,6 +93,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.ketoanapk.hr.data.CapturedFrame
 import com.ketoanapk.hr.data.ChamCongResult
 import com.ketoanapk.hr.ui.theme.Danger
 import com.ketoanapk.hr.ui.theme.Success
@@ -116,10 +117,14 @@ private const val CENTER_TOL_X = 0.18f
 private const val CENTER_TOL_Y = 0.20f
 private const val STAGE_STABLE_MS = 550L   // giữ đạt liên tục ngần này mới sang bước kế
 private const val HOLD_MS = 3000L          // quét giữ khung 3 giây (kèm soi sáng)
+private const val MOTION_CENTER_YAW = 12f  // |yaw| < mức này = coi như nhìn thẳng (độ)
+private const val MOTION_TURN_YAW = 20f    // |yaw| > mức này = đã quay đủ sang một bên (độ)
+private const val MOTION_FRONTAL_MS = 350L // giữ nhìn thẳng ngần này trước khi yêu cầu quay
 private const val POLL_MS = 40L
 private const val FACE_STALE_MS = 350L     // không thấy mặt quá lâu = coi như rời khung
 private const val AIM_TIMEOUT_MS = 45_000L // không căn được khung đủ lâu → tự huỷ để thử lại
-private const val MAX_FRAMES = 14          // trần số khung gửi lên (giữ các khung mới nhất)
+private const val MAX_FRAMES = 14          // trần số khung gửi lên khi KHÔNG chạy flash (giữ khung mới nhất)
+private const val PER_SLOT_CAP = 3         // khi chạy flash: tối đa số khung mỗi ô màu (phủ đủ mọi slot)
 
 private enum class AimStage { Far, Near, Hold }
 
@@ -156,6 +161,9 @@ fun AttendanceScreen(vm: HrViewModel) {
         // thanh tiêu đề/điều hướng. Ở đây chỉ để nền đen làm lớp dưới, tránh bind camera hai lần.
         capture is AttendanceCapture.Collecting ->
             Box(Modifier.fillMaxSize().background(Color.Black))
+
+        capture is AttendanceCapture.Preparing ->
+            AttendanceStatusScreen("Đang chuẩn bị máy quét…")
 
         capture is AttendanceCapture.Recognizing ->
             AttendanceStatusScreen("Đang so khớp khuôn mặt…")
@@ -194,7 +202,11 @@ fun AttendanceScreen(vm: HrViewModel) {
  * (xem HrShell) nên không dính thanh tiêu đề/điều hướng của app. Chỉ hiện khi đang Collecting.
  */
 @Composable
-fun FullScreenCameraScan(onCaptured: (List<String>) -> Unit, onCancel: () -> Unit) {
+fun FullScreenCameraScan(
+    onCaptured: (List<CapturedFrame>) -> Unit,
+    onCancel: () -> Unit,
+    motionMode: Boolean = false,
+) {
     val context = LocalContext.current
     // Ẩn thanh hệ thống trong lúc quét để camera phủ kín màn hình; khôi phục khi thoát.
     DisposableEffect(Unit) {
@@ -216,6 +228,7 @@ fun FullScreenCameraScan(onCaptured: (List<String>) -> Unit, onCancel: () -> Uni
             modifier = Modifier.fillMaxSize(),
             onCaptured = onCaptured,
             onCancel = onCancel,
+            motionMode = motionMode,
         )
         IconButton(
             onClick = onCancel,
@@ -638,19 +651,36 @@ private data class FaceObs(
     val cx: Float,        // tâm mặt theo trục X (0..1) trong ảnh đã xoay
     val cy: Float,        // tâm mặt theo trục Y (0..1)
     val widthFrac: Float, // bề rộng mặt / bề rộng ảnh (to hơn = ở gần hơn)
+    val yaw: Float,       // góc quay đầu trái/phải (độ, từ ML Kit headEulerAngleY) — cho liveness quay đầu
     val t: Long,          // mốc thời gian (elapsedRealtime) để biết khung còn "tươi"
 )
 
 private class FaceAimState {
     @Volatile var latest: FaceObs? = null
+    // Ô màu flash đang chiếu lúc thu khung (-1 = không chạy flash liveness). Vòng lặp giữ khung cập nhật.
+    @Volatile var currentSlot: Int = -1
     val collect = AtomicBoolean(false)
-    private val frames = ArrayList<String>()
+    private val frames = ArrayList<CapturedFrame>()
 
     fun addFrame(url: String) = synchronized(frames) {
-        if (frames.size >= MAX_FRAMES) frames.removeAt(0)
-        frames.add(url)
+        val slot = currentSlot
+        if (slot < 0) {
+            // Khung TỰ NHIÊN (không flash, hoặc đuôi sau chuỗi màu để nhận diện): giữ tối đa MAX_FRAMES
+            // khung tự nhiên MỚI NHẤT — chỉ loại khung tự nhiên cũ, KHÔNG đụng khung flash (slot ≥ 0)
+            // đang cần cho việc đối chiếu phản xạ.
+            while (frames.count { it.slot < 0 } >= MAX_FRAMES) {
+                val i = frames.indexOfFirst { it.slot < 0 }
+                if (i < 0) break
+                frames.removeAt(i)
+            }
+            frames.add(CapturedFrame(url, -1))
+        } else {
+            // Khung FLASH: giới hạn số khung MỖI slot để không slot nào lấn át, phủ đủ mọi màu.
+            if (frames.count { it.slot == slot } >= PER_SLOT_CAP) return@synchronized
+            frames.add(CapturedFrame(url, slot))
+        }
     }
-    fun snapshot(): List<String> = synchronized(frames) { frames.toList() }
+    fun snapshot(): List<CapturedFrame> = synchronized(frames) { frames.toList() }
     fun clearFrames() = synchronized(frames) { frames.clear() }
 }
 
@@ -664,8 +694,9 @@ private class FaceAimState {
 fun BiometricFaceCamera(
     capturing: Boolean,
     modifier: Modifier = Modifier,
-    onCaptured: (List<String>) -> Unit,
+    onCaptured: (List<CapturedFrame>) -> Unit,
     onCancel: () -> Unit,
+    motionMode: Boolean = false,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -728,6 +759,7 @@ fun BiometricFaceCamera(
                                                 cx = (bb.exactCenterX() / iw).coerceIn(0f, 1f),
                                                 cy = (bb.exactCenterY() / ih).coerceIn(0f, 1f),
                                                 widthFrac = (bb.width().toFloat() / iw).coerceIn(0f, 1f),
+                                                yaw = face.headEulerAngleY,
                                                 t = SystemClock.elapsedRealtime(),
                                             )
                                         } else {
@@ -778,6 +810,7 @@ fun BiometricFaceCamera(
         aim.collect.set(false)
         aim.clearFrames()
         aim.latest = null
+        aim.currentSlot = -1
         stage = AimStage.Far
         holdProgress = 0f
         lightColor = null
@@ -786,6 +819,12 @@ fun BiometricFaceCamera(
         var goodSince = 0L
         var holdStart = 0L
         val startedAt = SystemClock.elapsedRealtime()
+
+        // Trạng thái pha giữ khung khi bật liveness QUAY ĐẦU (motionMode):
+        // 0 = nhìn thẳng, 1 = quay sang một bên, 2 = quay sang bên còn lại, 3 = xong.
+        var motionStep = 0
+        var sideASign = 0        // dấu yaw của lần quay đầu tiên (ép lần sau quay NGƯỢC lại)
+        var frontalSince = 0L
 
         while (isActive) {
             val now = SystemClock.elapsedRealtime()
@@ -796,6 +835,8 @@ fun BiometricFaceCamera(
                 if (stage == AimStage.Hold) { stage = AimStage.Near; aim.collect.set(false); aim.clearFrames() }
                 holdProgress = 0f
                 lightColor = null
+                aim.currentSlot = -1
+                motionStep = 0; frontalSince = 0L
                 hint = "Đưa khuôn mặt vào giữa khung"
             } else {
                 val centered = abs(face.cx - 0.5f) < CENTER_TOL_X && abs(face.cy - 0.5f) < CENTER_TOL_Y
@@ -822,33 +863,84 @@ fun BiometricFaceCamera(
                             if (now - goodSince >= STAGE_STABLE_MS) {
                                 stage = AimStage.Hold; holdStart = now
                                 aim.clearFrames(); aim.collect.set(true)
+                                motionStep = 0; sideASign = 0; frontalSince = 0L
                             }
                             hint = "Giữ yên trong khung nhỏ…"
                         }
                     }
                     AimStage.Hold -> {
-                        val inBand = centered && w in NEAR_MIN..NEAR_TOO_CLOSE
-                        if (!inBand) {
-                            stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
-                            lightColor = null
-                            aim.collect.set(false); aim.clearFrames()
-                            hint = if (w > NEAR_TOO_CLOSE) "Quá gần — lùi ra xa" else "Giữ khuôn mặt trong khung"
+                        if (motionMode) {
+                            // ── Pha LIVENESS QUAY ĐẦU (không ép giữ tĩnh; chỉ cần mặt còn trong khung) ──
+                            // Rời khung quá xa/quá gần → về Near (giữ nguyên bước để đỡ bực); mất mặt hẳn thì
+                            // nhánh face==null lo. Quay đầu làm mặt hẹp lại nên KHÔNG chặn theo NEAR_MIN.
+                            val tooClose = w > NEAR_TOO_CLOSE
+                            val wayOff = abs(face.cx - 0.5f) > 0.30f || abs(face.cy - 0.5f) > 0.30f
+                            if (tooClose || wayOff || w < NEAR_MIN * 0.55f) {
+                                stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
+                                aim.currentSlot = -1; motionStep = 0; frontalSince = 0L
+                                aim.collect.set(false); aim.clearFrames()
+                                hint = if (tooClose) "Quá gần — lùi ra xa" else "Giữ khuôn mặt trong khung"
+                            } else {
+                                val yaw = face.yaw
+                                aim.collect.set(true)
+                                when (motionStep) {
+                                    0 -> {
+                                        aim.currentSlot = 0; holdProgress = 0f
+                                        hint = "Nhìn thẳng vào camera"
+                                        if (abs(yaw) < MOTION_CENTER_YAW) {
+                                            if (frontalSince == 0L) frontalSince = now
+                                            if (now - frontalSince >= MOTION_FRONTAL_MS) motionStep = 1
+                                        } else frontalSince = 0L
+                                    }
+                                    1 -> {
+                                        aim.currentSlot = 1; holdProgress = 0.34f
+                                        hint = "Từ từ quay đầu sang một bên"
+                                        if (abs(yaw) > MOTION_TURN_YAW) {
+                                            sideASign = if (yaw >= 0f) 1 else -1
+                                            motionStep = 2
+                                        }
+                                    }
+                                    2 -> {
+                                        aim.currentSlot = 2; holdProgress = 0.67f
+                                        hint = "Rồi quay sang bên còn lại"
+                                        // Bắt buộc quay NGƯỢC dấu lần đầu, đủ mạnh → đã phủ cả hai bên.
+                                        if (yaw * sideASign < -MOTION_TURN_YAW) motionStep = 3
+                                    }
+                                    else -> {
+                                        holdProgress = 1f
+                                        val frames = aim.snapshot()
+                                        aim.collect.set(false); aim.currentSlot = -1
+                                        if (frames.isNotEmpty()) { onCapturedNow(frames); return@LaunchedEffect }
+                                        else {
+                                            stage = AimStage.Near; goodSince = 0L; motionStep = 0
+                                            hint = "Chưa bắt được ảnh, thử lại"
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            val held = now - holdStart
-                            holdProgress = (held.toFloat() / HOLD_MS).coerceIn(0f, 1f)
-                            lightColor = softFlashColor(held)
-                            val remain = ((HOLD_MS - held) / 1000f).toInt() + 1
-                            hint = "Đang quét khuôn mặt… ${remain.coerceAtLeast(1)}s"
-                            if (held >= HOLD_MS) {
-                                val frames = aim.snapshot()
-                                aim.collect.set(false)
-                                lightColor = null
-                                if (frames.isNotEmpty()) {
-                                    onCapturedNow(frames)
-                                    return@LaunchedEffect
-                                } else {
-                                    stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
-                                    hint = "Chưa bắt được ảnh, thử lại"
+                            // ── Giữ khung tĩnh 3 giây (như cũ) ──
+                            val inBand = centered && w in NEAR_MIN..NEAR_TOO_CLOSE
+                            if (!inBand) {
+                                stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
+                                lightColor = null; aim.currentSlot = -1
+                                aim.collect.set(false); aim.clearFrames()
+                                hint = if (w > NEAR_TOO_CLOSE) "Quá gần — lùi ra xa" else "Giữ khuôn mặt trong khung"
+                            } else {
+                                val held = now - holdStart
+                                holdProgress = (held.toFloat() / HOLD_MS).coerceIn(0f, 1f)
+                                aim.currentSlot = -1
+                                lightColor = softFlashColor(held)
+                                val remain = ((HOLD_MS - held) / 1000f).toInt() + 1
+                                hint = "Đang quét khuôn mặt… ${remain.coerceAtLeast(1)}s"
+                                if (held >= HOLD_MS) {
+                                    val frames = aim.snapshot()
+                                    aim.collect.set(false); lightColor = null; aim.currentSlot = -1
+                                    if (frames.isNotEmpty()) { onCapturedNow(frames); return@LaunchedEffect }
+                                    else {
+                                        stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
+                                        hint = "Chưa bắt được ảnh, thử lại"
+                                    }
                                 }
                             }
                         }

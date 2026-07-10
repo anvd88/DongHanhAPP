@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Gavel
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +34,7 @@ import com.ketoanapk.hr.data.AppEvents
 import com.ketoanapk.hr.data.AppNotification
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
+import com.ketoanapk.hr.data.CapturedFrame
 import com.ketoanapk.hr.data.ChamCongResult
 import com.ketoanapk.hr.data.CreateRequestBody
 import com.ketoanapk.hr.data.Department
@@ -45,12 +48,15 @@ import com.ketoanapk.hr.data.ManagerSummary
 import com.ketoanapk.hr.data.NotificationCenter
 import com.ketoanapk.hr.data.NotificationWorker
 import com.ketoanapk.hr.data.Penalty
+import com.ketoanapk.hr.data.PortalFeed
+import com.ketoanapk.hr.data.PortalPost
 import com.ketoanapk.hr.data.RealtimeClient
 import com.ketoanapk.hr.data.ReleaseInfo
 import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
 import com.ketoanapk.hr.data.PayEstimate
+import com.ketoanapk.hr.data.PayslipItem
 import com.ketoanapk.hr.data.SalaryListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TokenStore
@@ -76,12 +82,15 @@ enum class HrDestination(
     val adminOnly: Boolean = false,
 ) {
     Home("Trang chủ", "Trang chủ", Icons.Filled.Home),
+    Portal("Cổng thông tin", "Cổng TT", Icons.Filled.Campaign),
     Profile("Hồ sơ của tôi", "Hồ sơ", Icons.Filled.AccountCircle),
     Scan("Chấm công", "Chấm công", Icons.Filled.Face),
     Timesheet("Bảng công", "Bảng công", Icons.Filled.CalendarMonth),
     Requests("Đơn từ", "Đơn từ", Icons.Filled.Description),
     // Nhân viên tự xem lương dự tính tháng hiện tại (gồm phạt nếu có).
     MySalary("Lương của tôi", "Lương", Icons.Filled.AccountBalanceWallet),
+    // Nhân viên tự xem các phiếu lương đã nhận (mỗi tháng một thẻ).
+    MyPayslips("Phiếu lương", "Phiếu lương", Icons.Filled.ReceiptLong),
     // Chỉ để XEM trạng thái đơn của nhân sự (không duyệt trong app — duyệt trên bản web).
     Approval("Đơn chờ duyệt", "Chờ duyệt", Icons.Filled.Inbox),
     Penalty("Kỷ luật", "Kỷ luật", Icons.Filled.Gavel),
@@ -93,6 +102,17 @@ enum class HrDestination(
 }
 
 data class NavGroup(val title: String, val destinations: List<HrDestination>)
+
+/**
+ * Nháp đơn "Khiếu nại án phạt" khởi tạo từ màn Kỷ luật khi nhân viên bấm đề nghị trên một quyết định phạt
+ * tiền còn hiệu lực. Mang sẵn thông tin án phạt để form điền trước (mã, hình thức, số tiền hiện tại).
+ */
+data class AppealDraft(
+    val penaltyNo: String,
+    val penaltyTypeLabel: String,
+    val amount: Double,
+    val installments: Int,
+)
 
 data class HomeUiState(
     val loading: Boolean = false,
@@ -141,6 +161,20 @@ data class PayEstimateUiState(
     val data: PayEstimate? = null,
 )
 
+/** Danh sách phiếu lương đã nhận của chính nhân viên (mỗi kỳ một thẻ). */
+data class PayslipsUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val items: List<PayslipItem> = emptyList(),
+)
+
+/** Cổng thông tin công ty (tin tức, sự kiện, giới thiệu). */
+data class PortalUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val feed: PortalFeed? = null,
+)
+
 data class SettingsUiState(
     val loading: Boolean = false,
     val webLoginEnabled: Boolean? = null,
@@ -164,10 +198,16 @@ sealed interface AttendanceServerState {
 /** Trạng thái luồng chấm công bằng khuôn mặt trên máy (kiểu sinh trắc học có bước xác nhận). */
 sealed interface AttendanceCapture {
     data object Idle : AttendanceCapture
+    data object Preparing : AttendanceCapture      // đang xin chuỗi màu flash trước khi mở camera
     data object Collecting : AttendanceCapture    // camera đang căn khung 2 bước + quét 3s soi sáng
     data object Recognizing : AttendanceCapture   // đã gửi loạt ảnh, máy chủ đang nhận diện (xem trước)
-    // Đã nhận diện xong nhưng CHƯA ghi công — chờ người dùng bấm Xác nhận. Giữ lại loạt ảnh để gửi lại.
-    data class AwaitingConfirm(val result: ChamCongResult, val frames: List<String>) : AttendanceCapture
+    // Đã nhận diện xong nhưng CHƯA ghi công — chờ người dùng bấm Xác nhận. Giữ lại loạt khung (kèm nhãn
+    // slot flash) + challengeId để gửi lại đúng loạt đó khi ghi công thật.
+    data class AwaitingConfirm(
+        val result: ChamCongResult,
+        val frames: List<CapturedFrame>,
+        val motionCheck: Boolean,
+    ) : AttendanceCapture
     data object Submitting : AttendanceCapture     // đang ghi công thật lên máy chủ (sau khi xác nhận)
     data class Done(val result: ChamCongResult) : AttendanceCapture
 }
@@ -178,6 +218,14 @@ sealed interface FaceEnrollCapture {
     data object Capturing : FaceEnrollCapture   // camera đang quét lần lượt các góc (toàn màn hình)
     data object Submitting : FaceEnrollCapture   // đang gửi mẫu lên máy chủ để lưu
     data class Done(val success: Boolean, val message: String) : FaceEnrollCapture
+}
+
+/** Trạng thái chụp ảnh chân dung hồ sơ (có hướng dẫn đưa mặt vào khung, tự chụp). */
+sealed interface PortraitCapture {
+    data object Idle : PortraitCapture
+    data object Capturing : PortraitCapture   // camera hướng dẫn chụp phủ toàn màn hình
+    data object Saving : PortraitCapture       // đang tải ảnh lên máy chủ
+    data class Done(val success: Boolean, val message: String) : PortraitCapture
 }
 
 class HrViewModel(application: Application) : AndroidViewModel(application) {
@@ -210,9 +258,23 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var payEstimateState by mutableStateOf(PayEstimateUiState())
         private set
+    var payslipsState by mutableStateOf(PayslipsUiState())
+        private set
+    // Kỳ (yyyy-MM) của phiếu lương đang mở chi tiết (null = đang xem danh sách thẻ tháng).
+    var payslipOpenPeriod: String? by mutableStateOf(null)
+        private set
+    var portalState by mutableStateOf(PortalUiState())
+        private set
+    // Bài đang mở ở màn chi tiết cổng thông tin (null = đang xem danh sách).
+    var portalDetail: PortalPost? by mutableStateOf(null)
+        private set
     var requestDetailState by mutableStateOf(RequestDetailUiState())
         private set
     var creatingRequest by mutableStateOf(false)
+        private set
+    // Nháp khiếu nại mở thẳng từ màn Kỷ luật (bấm đề nghị trên một quyết định phạt). RequestsScreen đọc
+    // để mở luôn form penalty_appeal đã điền sẵn án phạt; xoá đi sau khi rời luồng tạo đơn.
+    var appealDraft: AppealDraft? by mutableStateOf(null)
         private set
     var managerState by mutableStateOf(ManagerUiState())
         private set
@@ -221,6 +283,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // Màn con đang mở trong tab Cài đặt. Đặt ở ViewModel để nút Back của điện thoại lùi về đúng cấp
     // (từ màn con → Cài đặt gốc) thay vì nhảy thẳng về Trang chủ.
     var settingsRoute by mutableStateOf(SettingsRoute.Home)
+    // Lượt chấm hiện tại có yêu cầu QUAY ĐẦU không (đọc từ cấu hình server). Camera dùng để chạy pha
+    // quay đầu; false = giữ khung tĩnh như cũ.
+    var motionMode: Boolean by mutableStateOf(false)
+        private set
     var attendanceServer: AttendanceServerState by mutableStateOf(AttendanceServerState.Checking)
         private set
     var attendanceCapture: AttendanceCapture by mutableStateOf(AttendanceCapture.Idle)
@@ -233,6 +299,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     var faceStatusLoading by mutableStateOf(false)
         private set
     var faceEnroll: FaceEnrollCapture by mutableStateOf(FaceEnrollCapture.Idle)
+        private set
+    var portraitCapture: PortraitCapture by mutableStateOf(PortraitCapture.Idle)
         private set
     // Tín hiệu "mở thẳng màn Đăng ký khuôn mặt" (bấm từ banner nhắc) — màn Cài đặt đọc rồi tự nhảy vào.
     var openFaceEnroll by mutableStateOf(false)
@@ -273,7 +341,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private val navGroups = listOf(
-        NavGroup("Cá nhân", listOf(HrDestination.Home, HrDestination.Profile, HrDestination.Scan, HrDestination.Timesheet, HrDestination.MySalary, HrDestination.Requests)),
+        NavGroup("Công ty", listOf(HrDestination.Portal)),
+        NavGroup("Cá nhân", listOf(HrDestination.Home, HrDestination.Profile, HrDestination.Scan, HrDestination.Timesheet, HrDestination.MySalary, HrDestination.MyPayslips, HrDestination.Requests)),
         NavGroup("Công việc", listOf(HrDestination.Approval, HrDestination.Penalty)),
         NavGroup("Quản trị", listOf(HrDestination.People, HrDestination.Payroll, HrDestination.Audit)),
         NavGroup("Hệ thống", listOf(HrDestination.Settings)),
@@ -476,6 +545,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             homeState = HomeUiState()
             timesheetState = TimesheetUiState()
             payEstimateState = PayEstimateUiState()
+            payslipsState = PayslipsUiState()
+            payslipOpenPeriod = null
             managerState = ManagerUiState()
             settingsState = SettingsUiState()
             attendanceServer = AttendanceServerState.Checking
@@ -544,11 +615,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         if (destination.adminOnly && !user.isAdmin) return
         selected = destination
         closeRequestDetail() // đóng chi tiết đơn đang mở (nếu có) khi chuyển màn để vào trạng thái sạch
+        portalDetail = null  // luôn vào cổng thông tin ở danh sách, không giữ chi tiết cũ
+        payslipOpenPeriod = null // luôn vào Phiếu lương ở danh sách thẻ tháng, không giữ chi tiết cũ
         when (destination) {
             HrDestination.People -> if (managerState.summary == null) refreshManager(silent = false)
             HrDestination.Scan -> { resetCapture(); checkAttendanceServer(); refreshPendingCount() }
             HrDestination.Timesheet -> if (timesheetState.timesheet == null && !timesheetState.loading) loadTimesheet(timesheetState.month, silent = false)
             HrDestination.MySalary -> if (payEstimateState.data == null && !payEstimateState.loading) loadMyEstimate()
+            HrDestination.MyPayslips -> if (payslipsState.items.isEmpty() && !payslipsState.loading) loadMyPayslips()
+            HrDestination.Portal -> if (portalState.feed == null && !portalState.loading) loadPortal(silent = false)
             HrDestination.Settings -> {
                 settingsRoute = SettingsRoute.Home // vào tab Cài đặt luôn bắt đầu ở màn gốc
                 if (settingsState.webLoginEnabled == null) loadSettings()
@@ -566,6 +641,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Scan -> checkAttendanceServer()
             HrDestination.Timesheet -> loadTimesheet(timesheetState.month, silent = false)
             HrDestination.MySalary -> loadMyEstimate()
+            HrDestination.MyPayslips -> loadMyPayslips()
+            HrDestination.Portal -> loadPortal(silent = false)
             HrDestination.Settings -> {
                 loadSettings()
                 loadPushNotificationSetting()
@@ -582,6 +659,23 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun cancel(id: String) = decide { repo.cancelRequest(id); "Đã hủy đơn." }
 
     // ── Tạo đơn từ + xem chi tiết ────────────────────────────────────────────────
+    /**
+     * Mở luồng khiếu nại từ màn Kỷ luật cho một án phạt tiền cụ thể: ghi nháp rồi chuyển sang tab Đơn từ,
+     * nơi form penalty_appeal tự mở với án phạt đã chọn (nhân viên chỉ việc chọn Bỏ phạt / Giảm / Trả góp).
+     */
+    fun startPenaltyAppeal(penalty: Penalty) {
+        appealDraft = AppealDraft(
+            penaltyNo = penalty.penaltyNo,
+            penaltyTypeLabel = penalty.penaltyTypeLabel.ifBlank { penalty.penaltyType },
+            amount = penalty.amount,
+            installments = penalty.installments,
+        )
+        select(HrDestination.Requests)
+    }
+
+    /** Xoá nháp khiếu nại khi đã gửi xong hoặc thoát luồng tạo đơn. */
+    fun consumeAppealDraft() { appealDraft = null }
+
     /** Gửi một đơn mới (payload đã được màn hình dựng từ các trường nhập). */
     fun submitRequest(type: String, title: String, payload: JsonObject, onDone: (Boolean) -> Unit) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
@@ -657,6 +751,38 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Tải danh sách phiếu lương ĐÃ NHẬN của chính nhân viên (mỗi kỳ một thẻ). */
+    fun loadMyPayslips() {
+        viewModelScope.launch {
+            payslipsState = payslipsState.copy(loading = true, error = null)
+            runCatching { repo.myPayslips() }
+                .onSuccess { payslipsState = PayslipsUiState(loading = false, items = it) }
+                .onFailure { payslipsState = payslipsState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    /** Mở chi tiết phiếu lương của một kỳ (bấm vào thẻ tháng). */
+    fun openPayslip(period: String) { payslipOpenPeriod = period }
+
+    /** Đóng chi tiết, quay lại danh sách thẻ tháng. */
+    fun closePayslip() { payslipOpenPeriod = null }
+
+    /** Mở màn chi tiết một bài (tin tức/sự kiện) trong cổng thông tin. */
+    fun openPortalPost(post: PortalPost) { portalDetail = post }
+
+    /** Đóng màn chi tiết, quay lại danh sách cổng thông tin. */
+    fun closePortalDetail() { portalDetail = null }
+
+    /** Tải cổng thông tin công ty (tin tức, sự kiện, giới thiệu) cho app hiển thị. */
+    fun loadPortal(silent: Boolean) {
+        viewModelScope.launch {
+            portalState = portalState.copy(loading = true, error = if (silent) portalState.error else null)
+            runCatching { repo.portalFeed() }
+                .onSuccess { portalState = PortalUiState(loading = false, feed = it) }
+                .onFailure { portalState = portalState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
     private fun loadTimesheet(month: String, silent: Boolean) {
         viewModelScope.launch {
             if (!silent) timesheetState = timesheetState.copy(loading = true, error = null, month = month, timesheet = null)
@@ -708,6 +834,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             if (!silent) homeState = homeState.copy(loading = true, error = null)
             runCatching {
                 val month = currentMonthKey()
+                // Tải danh mục loại đơn kèm định nghĩa field, rồi nạp vào registry để dựng form động.
+                val types = runCatching { repo.requestTypes() }.getOrDefault(emptyList())
+                applyServerRequestFields(types)
                 HomeUiState(
                     loading = false,
                     employee = runCatching { repo.myProfile() }.getOrNull(),
@@ -717,7 +846,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     inbox = runCatching { repo.requests("inbox") }.getOrDefault(emptyList()),
                     penalties = runCatching { repo.penalties(if (user.isAdmin) "all" else "mine", if (user.isAdmin) month else null) }.getOrDefault(emptyList()),
                     salaries = if (user.isAdmin) runCatching { repo.salaries() }.getOrDefault(emptyList()) else emptyList(),
-                    requestTypes = runCatching { repo.requestTypes() }.getOrDefault(emptyList()),
+                    requestTypes = types,
                 )
             }.onSuccess {
                 homeState = it
@@ -991,9 +1120,18 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Chấm công: căn khung → nhận diện (xem trước) → xác nhận → ghi công ───────
     fun startCapture() {
-        if (attendanceServer is AttendanceServerState.Online) {
-            captureOffline = false
-            attendanceCapture = AttendanceCapture.Collecting
+        if (attendanceServer !is AttendanceServerState.Online) return
+        captureOffline = false
+        motionMode = false
+        // Đọc cấu hình liveness quay đầu TRƯỚC khi mở camera để biết pha quét (quay đầu hay giữ tĩnh).
+        // Lỗi/không có ⇒ giữ tĩnh như cũ. Hiện màn chờ ngắn trong lúc đọc.
+        attendanceCapture = AttendanceCapture.Preparing
+        viewModelScope.launch {
+            motionMode = runCatching { repo.motionConfig().enabled }.getOrDefault(false)
+            // Chỉ mở camera nếu người dùng chưa hủy trong lúc chờ.
+            if (attendanceCapture is AttendanceCapture.Preparing) {
+                attendanceCapture = AttendanceCapture.Collecting
+            }
         }
     }
 
@@ -1006,8 +1144,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun resetCapture() { attendanceCapture = AttendanceCapture.Idle }
 
     /** Camera quét xong → tuỳ chế độ: nhận diện trực tuyến (xem trước) hoặc lưu tạm ngoại tuyến. */
-    fun onFramesCaptured(images: List<String>) {
-        if (captureOffline) saveOfflineAttendance(images) else previewAttendance(images)
+    fun onFramesCaptured(frames: List<CapturedFrame>) {
+        if (captureOffline) saveOfflineAttendance(frames.map { it.image }) else previewAttendance(frames)
     }
 
     /**
@@ -1016,15 +1154,17 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * Chỉ khi khớp đúng người đang đăng nhập mới sang bước xác nhận; các trường hợp khác (sai tư thế,
      * mờ, giả mạo, không khớp…) hiện luôn kết quả để người dùng quét lại.
      */
-    fun previewAttendance(images: List<String>) {
-        if (images.isEmpty()) { attendanceCapture = AttendanceCapture.Idle; return }
+    fun previewAttendance(frames: List<CapturedFrame>) {
+        if (frames.isEmpty()) { attendanceCapture = AttendanceCapture.Idle; return }
+        val motion = motionMode
+        val images = frames.map { it.image }
         attendanceCapture = AttendanceCapture.Recognizing
         viewModelScope.launch {
-            runCatching { repo.chamCong(images, previewOnly = true) }
+            runCatching { repo.chamCong(images, previewOnly = true, motionCheck = motion) }
                 .onSuccess { result ->
                     attendanceCapture =
                         if (result.status.equals("ok", true) && result.matched)
-                            AttendanceCapture.AwaitingConfirm(result, images)
+                            AttendanceCapture.AwaitingConfirm(result, frames, motion)
                         else
                             AttendanceCapture.Done(result)
                 }
@@ -1039,9 +1179,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Người dùng bấm "Xác nhận" → gửi lại đúng loạt ảnh (previewOnly=false) để ghi công thật. */
     fun confirmAttendance() {
         val pending = attendanceCapture as? AttendanceCapture.AwaitingConfirm ?: return
+        val images = pending.frames.map { it.image }
         attendanceCapture = AttendanceCapture.Submitting
         viewModelScope.launch {
-            runCatching { repo.chamCong(pending.frames, previewOnly = false) }
+            runCatching {
+                repo.chamCong(images, previewOnly = false, motionCheck = pending.motionCheck)
+            }
                 .onSuccess { result ->
                     attendanceCapture = AttendanceCapture.Done(result)
                     if (result.status.equals("ok", true)) {
@@ -1079,10 +1222,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Bấm "Quét lại" từ form xác nhận hoặc màn kết quả → bỏ ảnh cũ, quét lại từ đầu (giữ chế độ). */
     fun rescanAttendance() {
-        attendanceCapture = when {
-            captureOffline -> AttendanceCapture.Collecting
-            attendanceServer is AttendanceServerState.Online -> AttendanceCapture.Collecting
-            else -> AttendanceCapture.Idle
+        when {
+            captureOffline -> attendanceCapture = AttendanceCapture.Collecting
+            // Trực tuyến: xin CHUỖI MÀU MỚI cho lượt quét lại (challenge cũ có thể đã dùng/hết hạn).
+            attendanceServer is AttendanceServerState.Online -> startCapture()
+            else -> attendanceCapture = AttendanceCapture.Idle
         }
     }
 
@@ -1119,6 +1263,30 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Bỏ kết quả đăng ký (thành công/thất bại) để quay về trạng thái nghỉ. */
     fun resetFaceEnroll() { faceEnroll = FaceEnrollCapture.Idle }
+
+    // ----- Ảnh chân dung hồ sơ (tự chụp có hướng dẫn) -----
+    /** Mở lớp camera hướng dẫn chụp chân dung (phủ toàn màn hình). */
+    fun startPortraitCapture() { portraitCapture = PortraitCapture.Capturing }
+
+    /** Đóng camera chụp chân dung (bấm Đóng / Back). */
+    fun cancelPortraitCapture() { portraitCapture = PortraitCapture.Idle }
+
+    /** Bỏ kết quả (thành công/thất bại) để quay về nghỉ. */
+    fun resetPortraitCapture() { portraitCapture = PortraitCapture.Idle }
+
+    /** Đã chụp xong 1 ảnh chân dung (data URL JPEG) → lưu lên máy chủ rồi làm mới hồ sơ. */
+    fun submitPortrait(dataUrl: String) {
+        if (dataUrl.isBlank()) { portraitCapture = PortraitCapture.Idle; return }
+        portraitCapture = PortraitCapture.Saving
+        viewModelScope.launch {
+            runCatching { repo.updateMyAvatar(dataUrl) }
+                .onSuccess {
+                    portraitCapture = PortraitCapture.Done(true, "Đã cập nhật ảnh chân dung.")
+                    (authState as? AuthState.SignedIn)?.user?.let { refreshHome(it, silent = true) }
+                }
+                .onFailure { portraitCapture = PortraitCapture.Done(false, readable(it)) }
+        }
+    }
 
     /** Camera đã quét đủ các góc → gửi lên máy chủ lưu mẫu. */
     fun submitFaceEnroll(poses: List<FaceEnrollPose>) {

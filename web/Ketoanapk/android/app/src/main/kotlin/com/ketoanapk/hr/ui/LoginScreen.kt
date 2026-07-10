@@ -266,7 +266,8 @@ private fun ForgotPasswordOverlay(
             onCaptured = { frames ->
                 phase = ForgotPhase.Submitting
                 localError = null
-                onResetPasswordWithFace(username.trim(), newPassword, frames) { ok, message ->
+                // Đăng nhập/đặt lại mật khẩu không chạy active-flash → chỉ lấy ảnh, bỏ nhãn slot.
+                onResetPasswordWithFace(username.trim(), newPassword, frames.map { it.image }) { ok, message ->
                     if (ok) {
                         phase = ForgotPhase.Success
                         newPassword = ""

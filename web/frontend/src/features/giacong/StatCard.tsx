@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import type { CSSProperties } from "react";
 import type { LucideIcon } from "lucide-react";
 import { GlassCard } from "../../components/glass/GlassCard";
+import { CountUp } from "../../components/CountUp";
 
 export interface StatCardProps {
   index: number;
@@ -33,7 +34,7 @@ export function StatCard({ index, icon: Icon, label, value, sub, trend, tone }: 
         </motion.div>
         <div className="min-w-0">
           <p className="text-[0.78rem] font-bold text-[var(--gc-text-soft)]">{label}</p>
-          <p className="mt-1 truncate text-[1.45rem] font-black leading-none text-[var(--gc-text)]">{value}</p>
+          <p className="mt-1 truncate text-[1.45rem] font-black leading-none text-[var(--gc-text)]"><CountUp text={value} /></p>
           <div className="mt-1.5 flex items-center gap-2">
             {sub && <span className="text-[0.74rem] font-semibold text-[var(--gc-text-muted)]">{sub}</span>}
             {trend && (

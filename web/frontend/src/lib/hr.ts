@@ -219,6 +219,8 @@ export interface RequestType {
   type: string;
   label: string;
   category: string;
+  /** Định nghĩa các trường nhập do server trả về (nguồn chuẩn). Dùng để dựng form động. */
+  fields?: RequestField[];
 }
 
 export interface RequestListItem {
@@ -497,10 +499,17 @@ export interface RequestField {
   key: string;
   label: string;
   type: "text" | "date" | "number" | "textarea" | "time" | "money" | "select" | "checkboxes";
+  hint?: string;
+  required?: boolean;
   options?: { value: string; label: string }[];
 }
 
-export const requestFields: Record<string, RequestField[]> = {
+/**
+ * NGUỒN CHUẨN là server (`/api/requests/types` trả kèm `fields`). Bảng dưới chỉ là BẢN DỰ PHÒNG
+ * dùng trước khi tải xong types / khi offline. Khi types về, {@link applyServerRequestFields} sẽ
+ * GHI ĐÈ tại chỗ, nên mọi nơi đọc `requestFields[type]` tự động dùng định nghĩa mới nhất từ server.
+ */
+const fallbackRequestFields: Record<string, RequestField[]> = {
   leave: [
     { key: "fromDate", label: "Từ ngày", type: "date" },
     { key: "toDate", label: "Đến ngày", type: "date" },
@@ -566,12 +575,37 @@ export const requestFields: Record<string, RequestField[]> = {
     { key: "reason", label: "Mục đích", type: "textarea" },
   ],
   penalty_appeal: [
+    {
+      key: "appealKind",
+      label: "Hình thức đề nghị",
+      type: "select",
+      options: [
+        { value: "dispute", label: "Bỏ phạt" },
+        { value: "reduce", label: "Giảm tiền" },
+        { value: "installment", label: "Trả góp" },
+      ],
+    },
     { key: "penaltyNo", label: "Mã quyết định phạt", type: "text" },
     { key: "penaltyType", label: "Hình thức phạt", type: "text" },
-    { key: "penaltyAmount", label: "Số tiền phạt (₫)", type: "money" },
-    { key: "reason", label: "Nội dung khiếu nại", type: "textarea" },
+    { key: "penaltyAmount", label: "Số tiền phạt hiện tại (₫)", type: "money" },
+    { key: "requestedAmount", label: "Số tiền đề nghị còn lại (₫)", type: "money" },
+    { key: "requestedMonths", label: "Số tháng muốn chia đóng", type: "number" },
+    { key: "reason", label: "Lý do đề nghị", type: "textarea" },
   ],
 };
+
+/**
+ * Registry định nghĩa field đang dùng: khởi tạo bằng bản dự phòng, được server ghi đè khi tải types.
+ * Mọi nơi vẫn đọc `requestFields[type]` như cũ nên không phải sửa các nơi gọi.
+ */
+export const requestFields: Record<string, RequestField[]> = { ...fallbackRequestFields };
+
+/** Nạp định nghĩa field từ server (gọi sau khi tải `/api/requests/types`). Ghi đè tại chỗ. */
+export function applyServerRequestFields(types: RequestType[]): void {
+  for (const t of types) {
+    if (t.fields && t.fields.length > 0) requestFields[t.type] = t.fields;
+  }
+}
 
 export const fieldLabel = (type: string, key: string) =>
   requestFields[type]?.find((f) => f.key === key)?.label ?? key;

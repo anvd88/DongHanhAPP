@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, lazy, Suspense } from "react";
 import { BrowserRouter, HashRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { startRealtime, subscribeFeedbackResolved } from "./lib/realtime";
 import { initFileTransfers } from "./lib/filetransfer";
@@ -12,47 +12,54 @@ import { NAV } from "./components/nav";
 import { AppUpdatePrompt } from "./components/AppUpdatePrompt";
 import { WaterReminderPopup } from "./components/WaterReminderPopup";
 import { EyeReminderPopup } from "./components/EyeReminderPopup";
-import { Login } from "./pages/Login";
-import { KioskPage } from "./pages/KioskPage";
-import { FarewellPage } from "./pages/FarewellPage";
-import { TinhToan } from "./pages/TinhToan";
-import { ApkDownload } from "./pages/ApkDownload";
-import { Dashboard } from "./pages/Dashboard";
-import { KeToan } from "./pages/KeToan";
-import { KhachHang } from "./pages/KhachHang";
-import { GiaCongPage } from "./features/giacong/GiaCongPage";
-import { ChamCongPage } from "./features/chamcong/ChamCongPage";
-import { ChamCongScannerPage } from "./features/chamcong/ChamCongScannerPage";
-import { NhanSuPortal } from "./pages/NhanSuPortal";
-import { NhanSu } from "./pages/NhanSu";
-import { HoSo } from "./pages/HoSo";
-import { DonTu } from "./pages/DonTu";
-import { PheDuyet } from "./pages/PheDuyet";
-import { QuanLyDonTu } from "./pages/QuanLyDonTu";
-import { BangCong } from "./pages/BangCong";
-import { QuanLyBangCong } from "./pages/QuanLyBangCong";
-import { QuanLyNhanSu } from "./pages/QuanLyNhanSu";
-import { TaiKhoanNganHang } from "./pages/TaiKhoanNganHang";
-import {
-  HRAttendanceAdminPage,
-  HRAttendancePage,
-  HRApprovalPage,
-  HRHomePage,
-  HRManagerPage,
-  HRPayrollPage,
-  HRPenaltyPage,
-  HRProfilePage,
-  HRRequestsPage,
-  HRSystemSettingsPage,
-  HRTimesheetPage,
-} from "./pages/hr/HRPages";
-import { BaoCao } from "./pages/BaoCao";
-import { CongCu } from "./pages/CongCu";
-import { Chats } from "./pages/Chats";
-import { SaoLuu } from "./pages/SaoLuu";
-import { PhanHoi } from "./pages/PhanHoi";
-import { StubPage } from "./pages/StubPage";
-import { SystemSettings } from "./pages/SystemSettings";
+// ─────────────────────────────────────────────────────────────────────────────
+// Lazy-load (code splitting): mỗi trang là một chunk riêng, chỉ tải khi điều hướng
+// tới. Giảm mạnh dung lượng bundle khởi động → mở app / đăng nhập nhanh hơn nhiều,
+// nhất là các trang nặng (Chấm công + nhận diện khuôn mặt, Chat, Cài đặt, HR...).
+// Suspense fallback bên dưới hiển thị loader trong lúc chunk đang tải.
+// ─────────────────────────────────────────────────────────────────────────────
+const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
+const KioskPage = lazy(() => import("./pages/KioskPage").then((m) => ({ default: m.KioskPage })));
+const FarewellPage = lazy(() => import("./pages/FarewellPage").then((m) => ({ default: m.FarewellPage })));
+const TinhToan = lazy(() => import("./pages/TinhToan").then((m) => ({ default: m.TinhToan })));
+const ApkDownload = lazy(() => import("./pages/ApkDownload").then((m) => ({ default: m.ApkDownload })));
+const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
+const KeToan = lazy(() => import("./pages/KeToan").then((m) => ({ default: m.KeToan })));
+const KhachHang = lazy(() => import("./pages/KhachHang").then((m) => ({ default: m.KhachHang })));
+const GiaCongPage = lazy(() => import("./features/giacong/GiaCongPage").then((m) => ({ default: m.GiaCongPage })));
+const ChamCongPage = lazy(() => import("./features/chamcong/ChamCongPage").then((m) => ({ default: m.ChamCongPage })));
+const ChamCongScannerPage = lazy(() =>
+  import("./features/chamcong/ChamCongScannerPage").then((m) => ({ default: m.ChamCongScannerPage })),
+);
+const NhanSuPortal = lazy(() => import("./pages/NhanSuPortal").then((m) => ({ default: m.NhanSuPortal })));
+const NhanSu = lazy(() => import("./pages/NhanSu").then((m) => ({ default: m.NhanSu })));
+const HoSo = lazy(() => import("./pages/HoSo").then((m) => ({ default: m.HoSo })));
+const DonTu = lazy(() => import("./pages/DonTu").then((m) => ({ default: m.DonTu })));
+const PheDuyet = lazy(() => import("./pages/PheDuyet").then((m) => ({ default: m.PheDuyet })));
+const QuanLyDonTu = lazy(() => import("./pages/QuanLyDonTu").then((m) => ({ default: m.QuanLyDonTu })));
+const BangCong = lazy(() => import("./pages/BangCong").then((m) => ({ default: m.BangCong })));
+const QuanLyBangCong = lazy(() => import("./pages/QuanLyBangCong").then((m) => ({ default: m.QuanLyBangCong })));
+const QuanLyNhanSu = lazy(() => import("./pages/QuanLyNhanSu").then((m) => ({ default: m.QuanLyNhanSu })));
+const TaiKhoanNganHang = lazy(() => import("./pages/TaiKhoanNganHang").then((m) => ({ default: m.TaiKhoanNganHang })));
+const HRAttendanceAdminPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRAttendanceAdminPage })));
+const HRAttendancePage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRAttendancePage })));
+const HRApprovalPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRApprovalPage })));
+const HRHomePage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRHomePage })));
+const HRManagerPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRManagerPage })));
+const HRPayrollPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPayrollPage })));
+const HRPenaltyPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPenaltyPage })));
+const HRProfilePage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRProfilePage })));
+const HRRequestsPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRRequestsPage })));
+const HRSystemSettingsPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRSystemSettingsPage })));
+const HRTimesheetPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRTimesheetPage })));
+const BaoCao = lazy(() => import("./pages/BaoCao").then((m) => ({ default: m.BaoCao })));
+const CongCu = lazy(() => import("./pages/CongCu").then((m) => ({ default: m.CongCu })));
+const Chats = lazy(() => import("./pages/Chats").then((m) => ({ default: m.Chats })));
+const SaoLuu = lazy(() => import("./pages/SaoLuu").then((m) => ({ default: m.SaoLuu })));
+const PhanHoi = lazy(() => import("./pages/PhanHoi").then((m) => ({ default: m.PhanHoi })));
+const StubPage = lazy(() => import("./pages/StubPage").then((m) => ({ default: m.StubPage })));
+const SystemSettings = lazy(() => import("./pages/SystemSettings").then((m) => ({ default: m.SystemSettings })));
+const CongThongTin = lazy(() => import("./pages/CongThongTin").then((m) => ({ default: m.CongThongTin })));
 import { isAdmin } from "./lib/types";
 import { DEFAULT_AUTH_PATH, IS_HR_APK, isHrModulePath } from "./lib/appConfig";
 import { Loader2 } from "lucide-react";
@@ -148,6 +155,15 @@ function Protected({
   return <ChatNotificationProvider suppress={suppressMainWebSystem}>{content}</ChatNotificationProvider>;
 }
 
+/** Loader hiển thị trong lúc chunk của trang (lazy) đang được tải về. */
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <Loader2 className="h-7 w-7 animate-spin text-[var(--accent)]" />
+    </div>
+  );
+}
+
 function FeedbackResolvedToasts() {
   const { notify } = useAppNotifications();
 
@@ -199,6 +215,7 @@ export default function App() {
         <RealtimeBoot />
         <AuthProvider>
           <AppUpdatePrompt />
+          <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/kiosk" element={<KioskPage />} />
@@ -227,6 +244,7 @@ export default function App() {
             <Route path="/quanly-nhansu" element={<Protected admin>{IS_HR_APK ? <HRManagerPage /> : <QuanLyNhanSu />}</Protected>} />
             <Route path="/phat" element={<Protected><HRPenaltyPage /></Protected>} />
             <Route path="/tai-khoan-ngan-hang" element={<Protected><TaiKhoanNganHang /></Protected>} />
+            <Route path="/cong-thong-tin" element={<Protected admin><CongThongTin /></Protected>} />
             <Route path="/bang-luong" element={<Protected admin><HRPayrollPage /></Protected>} />
             {/* Module chưa hiện thực — hiển thị "đang phát triển" giống bản desktop */}
             <Route path="/kho" element={<Protected><StubPage title="Hàng tồn kho" /></Protected>} />
@@ -242,6 +260,7 @@ export default function App() {
 
             <Route path="*" element={<Navigate to={DEFAULT_AUTH_PATH} replace />} />
           </Routes>
+          </Suspense>
         </AuthProvider>
         </Router>
       </AppNotificationProvider>

@@ -135,6 +135,53 @@ public static class PayrollEndpoints
             });
         });
 
+        // Nhân viên tự xem các PHIẾU LƯƠNG ĐÃ PHÁT HÀNH của chính mình (mỗi kỳ một phiếu), kèm chi tiết
+        // khoản cộng/trừ để app hiển thị khi bấm vào từng tháng. Chỉ trả phiếu đã publish.
+        g.MapGet("/my-payslips", async (ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            if (await conn.Cmd("SELECT id FROM hr_employees WHERE username=@u").With("@u", u.Username()).ExecuteScalarAsync() is not Guid employeeId)
+                return Results.NotFound(new { message = "Tài khoản chưa gắn hồ sơ nhân sự." });
+
+            var list = new List<object>();
+            await using var r = await conn.Cmd("""
+                SELECT id, period, overtime_hours, base_salary, allowance, overtime_pay,
+                       deductions, net_pay, note, details::text AS details, created_at
+                FROM hr_payslips
+                WHERE employee_id=@id AND published = TRUE
+                ORDER BY period DESC
+                """).With("@id", employeeId).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+            {
+                var det = ParsePayslipDetail(r.Str("details"));
+                var baseSalary = r.Dec("base_salary");
+                var allowance = r.Dec("allowance");
+                var overtimePay = r.Dec("overtime_pay");
+                var colDeductions = r.Dec("deductions");
+                var colNet = r.Dec("net_pay");
+                list.Add(new
+                {
+                    id = r.Guid("id"),
+                    period = r.Str("period"),
+                    baseSalary,
+                    allowance,
+                    overtimePay,
+                    overtimeHours = r.Dec("overtime_hours"),
+                    workedDays = det.WorkedDays,
+                    absentDays = det.AbsentDays,
+                    lateDays = det.LateDays,
+                    earnings = det.Earnings,
+                    deductions = det.Deductions,
+                    totalEarnings = det.TotalEarnings > 0 ? det.TotalEarnings : baseSalary + allowance + overtimePay,
+                    totalDeductions = det.TotalDeductions > 0 ? det.TotalDeductions : colDeductions,
+                    netPay = det.NetPay != 0 ? det.NetPay : colNet,
+                    note = r.Str("note"),
+                    createdAt = r.Dt("created_at"),
+                });
+            }
+            return Results.Ok(list);
+        });
+
         // ---------------- Tính & lập phiếu lương ----------------
 
         // Xem trước phiếu lương (chưa lưu): lấy mức lương + bảng công + phạt của kỳ.
@@ -204,6 +251,57 @@ public static class PayrollEndpoints
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
         });
     }
+
+    // ---- Đọc chi tiết phiếu lương đã lưu (jsonb) cho màn "Phiếu lương của tôi" ----
+
+    private sealed record PayslipDetail(List<object> Earnings, List<object> Deductions,
+        decimal WorkedDays, decimal AbsentDays, decimal LateDays, decimal OvertimeHours,
+        decimal TotalEarnings, decimal TotalDeductions, decimal NetPay);
+
+    /// <summary>Phân giải cột details (jsonb) của phiếu lương ra khoản cộng/trừ + số liệu bảng công + các tổng.</summary>
+    private static PayslipDetail ParsePayslipDetail(string json)
+    {
+        var earnings = new List<object>();
+        var deductions = new List<object>();
+        decimal workedDays = 0, absentDays = 0, lateDays = 0, overtimeHours = 0;
+        decimal totalEarnings = 0, totalDeductions = 0, netPay = 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
+            var root = doc.RootElement;
+            earnings = ReadPayLines(root, "earnings");
+            deductions = ReadPayLines(root, "deductions");
+            if (root.TryGetProperty("timesheet", out var ts) && ts.ValueKind == JsonValueKind.Object)
+            {
+                workedDays = NumProp(ts, "workedDays");
+                absentDays = NumProp(ts, "absentDays");
+                lateDays = NumProp(ts, "lateDays");
+                overtimeHours = NumProp(ts, "overtimeHours");
+            }
+            totalEarnings = NumProp(root, "totalEarnings");
+            totalDeductions = NumProp(root, "totalDeductions");
+            netPay = NumProp(root, "netPay");
+        }
+        catch { /* details hỏng → trả rỗng, số liệu lấy từ cột phiếu */ }
+        return new PayslipDetail(earnings, deductions, workedDays, absentDays, lateDays, overtimeHours,
+            totalEarnings, totalDeductions, netPay);
+    }
+
+    private static List<object> ReadPayLines(JsonElement root, string prop)
+    {
+        var list = new List<object>();
+        if (root.TryGetProperty(prop, out var arr) && arr.ValueKind == JsonValueKind.Array)
+            foreach (var e in arr.EnumerateArray())
+                list.Add(new
+                {
+                    label = e.TryGetProperty("label", out var l) ? (l.GetString() ?? "") : "",
+                    amount = e.TryGetProperty("amount", out var a) && a.ValueKind == JsonValueKind.Number ? a.GetDecimal() : 0m,
+                });
+        return list;
+    }
+
+    private static decimal NumProp(JsonElement el, string prop) =>
+        el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDecimal(out var d) ? d : 0m;
 
     // ---- Tính lương ----
 

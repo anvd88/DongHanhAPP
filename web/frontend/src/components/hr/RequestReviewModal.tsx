@@ -158,8 +158,9 @@ export function RequestReviewModal({
   const [comment, setComment] = useState("");
   const [signature, setSignature] = useState<string | null>(null);
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
-  const [penaltyOutcome, setPenaltyOutcome] = useState<"waive" | "reduce">("waive");
+  const [penaltyOutcome, setPenaltyOutcome] = useState<"waive" | "reduce" | "installment">("waive");
   const [newAmount, setNewAmount] = useState("");
+  const [newMonths, setNewMonths] = useState("");
 
   const me = user?.username ?? "";
   const admin = isAdmin(user);
@@ -174,11 +175,30 @@ export function RequestReviewModal({
     (curStep.approverUsername === me || (curStep.approverRole === "Admin" && admin));
   const actionable = mode === "act" ? data?.request.status === "Pending" : canDecide;
 
-  // Khiếu nại án phạt: ở bước duyệt cuối, người duyệt chọn xử lý phạt (bác bỏ / giảm tiền).
+  // Khiếu nại án phạt: ở bước duyệt cuối, người duyệt chọn xử lý phạt (bác bỏ / giảm tiền / trả góp).
   const isPenaltyAppeal = data?.request.type === "penalty_appeal";
   const isFinalStep = !!data && data.request.currentStep >= data.approvals.length;
   const showPenaltyDecision = isPenaltyAppeal && isFinalStep && actionable;
   const oldAmount = Number(data?.request.payload?.penaltyAmount ?? 0) || 0;
+  const appealKind = String(data?.request.payload?.appealKind ?? "");
+
+  // Điền sẵn quyết định theo ĐÚNG đề nghị của nhân viên (đơn ghi trong payload): bỏ phạt / giảm / trả góp.
+  // Người duyệt vẫn có thể đổi lại trước khi duyệt.
+  useEffect(() => {
+    if (!isPenaltyAppeal) return;
+    const p = data?.request.payload ?? {};
+    if (appealKind === "reduce") {
+      setPenaltyOutcome("reduce");
+      setNewAmount(String(Number(p.requestedAmount ?? "") || ""));
+    } else if (appealKind === "installment") {
+      setPenaltyOutcome("installment");
+      setNewMonths(String(Number(p.requestedMonths ?? "") || ""));
+    } else {
+      setPenaltyOutcome("waive");
+    }
+    // Chỉ chạy khi tải xong một đơn khác.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, isPenaltyAppeal, appealKind]);
 
   const fieldTypeOf = (k: string) => (data ? requestFields[data.request.type]?.find((f) => f.key === k)?.type : undefined);
   const displayVal = (k: string, v: unknown) =>
@@ -196,12 +216,20 @@ export function RequestReviewModal({
         return;
       }
     }
+    if (approve && showPenaltyDecision && penaltyOutcome === "installment") {
+      const m = Number(newMonths);
+      if (!Number.isInteger(m) || m < 1 || m > 60) {
+        notify.error("Số tháng chia đóng phải là số nguyên từ 1 đến 60.");
+        return;
+      }
+    }
     setBusy(approve ? "approve" : "reject");
     try {
       const body: Record<string, unknown> = { comment: comment.trim(), signature };
       if (approve && showPenaltyDecision) {
         body.penaltyOutcome = penaltyOutcome;
         if (penaltyOutcome === "reduce") body.newAmount = Number(newAmount);
+        if (penaltyOutcome === "installment") body.newInstallments = Number(newMonths);
       }
       await api.post(`/api/requests/${id}/${approve ? "approve" : "reject"}`, body);
       onDecided(approve ? "Đã duyệt đơn." : "Đã từ chối đơn.");
@@ -284,7 +312,15 @@ export function RequestReviewModal({
               <>
                 {showPenaltyDecision && (
                   <div className="rounded-2xl border border-[var(--glass-border)] bg-amber-500/5 p-4">
-                    <div className="mb-2 text-sm font-bold text-[var(--text)]">Xử lý án phạt khi duyệt</div>
+                    <div className="mb-1 text-sm font-bold text-[var(--text)]">Xử lý án phạt khi duyệt</div>
+                    {appealKind && (
+                      <p className="mb-2 text-xs text-[var(--text-muted)]">
+                        Nhân viên đề nghị:{" "}
+                        <span className="font-semibold text-[var(--text-secondary)]">
+                          {appealKind === "reduce" ? "Giảm tiền phạt" : appealKind === "installment" ? "Chia đóng nhiều tháng (trả góp)" : "Bỏ phạt (miễn toàn bộ)"}
+                        </span>
+                      </p>
+                    )}
                     <div className="space-y-2">
                       <label className="flex items-center gap-2 text-sm">
                         <input type="radio" name="penaltyOutcome" checked={penaltyOutcome === "waive"} onChange={() => setPenaltyOutcome("waive")} />
@@ -304,9 +340,23 @@ export function RequestReviewModal({
                           />
                         </Field>
                       )}
+                      <label className="flex items-center gap-2 text-sm">
+                        <input type="radio" name="penaltyOutcome" checked={penaltyOutcome === "installment"} onChange={() => setPenaltyOutcome("installment")} />
+                        <span>Chia đóng nhiều tháng (trả góp)</span>
+                      </label>
+                      {penaltyOutcome === "installment" && (
+                        <Field label="Số tháng chia đóng (1–60)">
+                          <Input
+                            inputMode="numeric"
+                            value={newMonths}
+                            onChange={(e) => setNewMonths(e.target.value.replace(/[^\d]/g, ""))}
+                            placeholder="Ví dụ 6"
+                          />
+                        </Field>
+                      )}
                     </div>
                     <p className="mt-2 text-xs text-[var(--text-muted)]">
-                      Nếu tiền phạt đã bị trừ vào lương, hệ thống sẽ tạo khoản hoàn tương ứng và chuyển phòng Kế toán duyệt chi.
+                      Bỏ phạt / giảm tiền: nếu đã trừ vào lương, hệ thống tạo khoản hoàn tương ứng và chuyển phòng Kế toán duyệt chi. Trả góp: giữ nguyên tổng tiền, chia nhỏ khấu trừ theo số tháng đã chọn.
                     </p>
                   </div>
                 )}

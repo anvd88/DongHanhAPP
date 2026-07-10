@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Clock, FilePlus2, RefreshCw, Send, X, XCircle } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
@@ -10,11 +10,14 @@ import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { useAppNotifications } from "../components/AppNotifications";
 import {
+  applyServerRequestFields,
   fieldDisplayValue,
   fieldLabel,
+  penaltyTypeLabel,
   requestFields,
   requestStatusColor,
   requestStatusLabel,
+  type Penalty,
   type RequestDetail,
   type RequestListItem,
   type RequestType,
@@ -42,6 +45,7 @@ function StatusBadge({ status }: { status: string }) {
 export function DonTu() {
   const { notify, confirm } = useAppNotifications();
   const { data: types } = useApi<RequestType[]>("/api/requests/types");
+  useEffect(() => { if (types) applyServerRequestFields(types); }, [types]);
   const { data, loading, error, reload } = useApi<RequestListItem[]>("/api/requests?scope=mine");
   const [createOpen, setCreateOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -150,6 +154,15 @@ function CreateRequestModal({
   const fields = requestFields[type] ?? [];
   const daysAutoSynced = type === "leave" || type === "sick";
 
+  // Khiếu nại án phạt: nhân viên chọn mã quyết định PHẠT TIỀN còn hiệu lực của chính mình (dropdown),
+  // rồi tự điền Hình thức phạt theo mã đã chọn. Chỉ hiện phạt tiền vì đó là loại backend xử lý hoàn/miễn.
+  const isPenaltyAppeal = type === "penalty_appeal";
+  const { data: myPenalties } = useApi<Penalty[]>(isPenaltyAppeal ? "/api/penalties?scope=mine" : null);
+  const activePenalties = useMemo(
+    () => (myPenalties ?? []).filter((p) => p.status === "Active" && p.penaltyType === "fine"),
+    [myPenalties],
+  );
+
   const setField = (k: string, v: string) =>
     setValues((s) => {
       const next = { ...s, [k]: v };
@@ -215,6 +228,31 @@ function CreateRequestModal({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {fields.map((f) => {
             const autoDays = daysAutoSynced && f.key === "days";
+            // Khiếu nại án phạt: ô "Mã quyết định phạt" là dropdown các án phạt còn hiệu lực của tôi.
+            if (isPenaltyAppeal && f.key === "penaltyNo") {
+              return (
+                <div key={f.key} className="sm:col-span-2">
+                  <Field label={f.label}>
+                    <Select
+                      value={values[f.key] ?? ""}
+                      onChange={(e) => setField(f.key, e.target.value)}
+                      className="w-full"
+                    >
+                      <option value="" disabled>
+                        {activePenalties.length ? "— Chọn án phạt tiền còn hiệu lực —" : "Bạn không có án phạt tiền còn hiệu lực"}
+                      </option>
+                      {activePenalties.map((p) => (
+                        <option key={p.id} value={p.penaltyNo}>
+                          {p.penaltyNo} · {penaltyTypeLabel(p.penaltyType)}
+                          {p.amount > 0 ? ` · ${p.amount.toLocaleString("en-US")}₫` : ""}
+                          {p.reason ? ` — ${p.reason}` : ""}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+              );
+            }
             if (f.type === "checkboxes") {
               return (
                 <div key={f.key} className="sm:col-span-2">

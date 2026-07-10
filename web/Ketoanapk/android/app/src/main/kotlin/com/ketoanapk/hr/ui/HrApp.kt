@@ -2,6 +2,8 @@ package com.ketoanapk.hr.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,6 +12,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,9 +23,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -64,6 +69,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,14 +78,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ReleaseInfo
 import com.ketoanapk.hr.ui.theme.KetoanTheme
@@ -90,8 +103,17 @@ fun HrApp(vm: HrViewModel) {
     KetoanTheme {
         // Intro mở app chạy 1 lần mỗi phiên (không lặp lại khi xoay màn hình).
         var showIntro by rememberSaveable { mutableStateOf(true) }
+        // Bấm ra vùng trống bất kỳ → thu bàn phím + bỏ focus ô nhập (nút/ô bấm con vẫn tự nuốt sự
+        // kiện của chúng nên không bị ảnh hưởng). Áp ở gốc app nên có tác dụng trên MỌI màn hình nhập.
+        val focusManager = LocalFocusManager.current
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Box(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { focusManager.clearFocus() })
+                    },
+            ) {
                 // Chuyển cảnh mượt khi vào ứng dụng (Loading → Đăng nhập / Trang chủ).
                 AnimatedContent(
                     targetState = vm.authState,
@@ -149,12 +171,18 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
     val inFaceEnroll = vm.faceEnroll == FaceEnrollCapture.Capturing
     // Đang ở một màn con của tab Cài đặt (Đổi mật khẩu, Thiết bị, ...) → Back lùi về Cài đặt gốc trước.
     val inSettingsSub = vm.selected == HrDestination.Settings && vm.settingsRoute != SettingsRoute.Home
-    BackHandler(enabled = drawerState.isOpen || inScanFlow || inFaceEnroll || inSettingsSub || vm.selected != HrDestination.Home) {
+    // Đang mở chi tiết một bài trong cổng thông tin → Back lùi về danh sách trước.
+    val inPortalDetail = vm.selected == HrDestination.Portal && vm.portalDetail != null
+    // Đang mở chi tiết một phiếu lương → Back lùi về danh sách thẻ tháng trước.
+    val inPayslipDetail = vm.selected == HrDestination.MyPayslips && vm.payslipOpenPeriod != null
+    BackHandler(enabled = drawerState.isOpen || inScanFlow || inFaceEnroll || inSettingsSub || inPortalDetail || inPayslipDetail || vm.selected != HrDestination.Home) {
         when {
             drawerState.isOpen -> scope.launch { drawerState.close() }
             inFaceEnroll -> vm.cancelFaceEnroll()
             inScanFlow -> vm.resetCapture()
             inSettingsSub -> vm.settingsRoute = SettingsRoute.Home
+            inPortalDetail -> vm.closePortalDetail()
+            inPayslipDetail -> vm.closePayslip()
             else -> vm.select(HrDestination.Home)
         }
     }
@@ -165,6 +193,8 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
         HrDestination.Scan -> vm.attendanceServer is AttendanceServerState.Checking
         HrDestination.Timesheet -> vm.timesheetState.loading
         HrDestination.MySalary -> vm.payEstimateState.loading
+        HrDestination.MyPayslips -> vm.payslipsState.loading
+        HrDestination.Portal -> vm.portalState.loading
         else -> vm.homeState.loading
     }
 
@@ -266,13 +296,20 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                 ) {
                     when (vm.selected) {
                     HrDestination.Home -> HomeScreen(user, vm.homeState, vm.managerState, vm::select)
-                    HrDestination.Profile -> ProfileScreen(vm.homeState)
+                    HrDestination.Portal -> PortalScreen(vm.portalState, vm.portalDetail, vm::openPortalPost, vm::closePortalDetail)
+                    HrDestination.Profile -> ProfileScreen(vm.homeState, vm::startPortraitCapture)
                     HrDestination.Scan -> AttendanceScreen(vm)
                     HrDestination.Timesheet -> TimesheetScreen(vm.timesheetState, vm::changeTimesheetMonth, vm::setTimesheetMonth)
                     HrDestination.MySalary -> MySalaryScreen(vm.payEstimateState)
+                    HrDestination.MyPayslips -> MyPayslipsScreen(
+                        state = vm.payslipsState,
+                        openPeriod = vm.payslipOpenPeriod,
+                        onOpen = vm::openPayslip,
+                        onClose = vm::closePayslip,
+                    )
                     HrDestination.Requests -> RequestsScreen(vm)
                     HrDestination.Approval -> StaffRequestsScreen(vm)
-                    HrDestination.Penalty -> PenaltyScreen(user, vm.homeState)
+                    HrDestination.Penalty -> PenaltyScreen(user, vm.homeState, vm::startPenaltyAppeal)
                     HrDestination.People -> ManagerScreen(vm.managerState)
                     HrDestination.Payroll -> PayrollScreen(vm.homeState)
                     HrDestination.Audit -> SimpleScreen("Nhật ký hệ thống", "Chưa có nhật ký mới trong ứng dụng.")
@@ -291,12 +328,49 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
 
         // Camera quét khuôn mặt phủ TOÀN MÀN HÌNH (ngoài Scaffold) → không dính thanh tiêu đề/điều hướng.
         if (vm.selected == HrDestination.Scan && vm.attendanceCapture == AttendanceCapture.Collecting) {
-            FullScreenCameraScan(onCaptured = vm::onFramesCaptured, onCancel = vm::resetCapture)
+            FullScreenCameraScan(
+                onCaptured = vm::onFramesCaptured,
+                onCancel = vm::resetCapture,
+                motionMode = vm.motionMode,
+            )
         }
 
         // Camera ĐĂNG KÝ khuôn mặt (quét nhiều góc) cũng phủ toàn màn hình như trên.
         if (vm.faceEnroll == FaceEnrollCapture.Capturing) {
             FaceEnrollCameraScan(onCompleted = vm::submitFaceEnroll, onCancel = vm::cancelFaceEnroll)
+        }
+
+        // Camera CHỤP ẢNH CHÂN DUNG (hồ sơ) phủ toàn màn hình; xong → lưu lên máy chủ.
+        // Tham số cắt lấy từ remote config (AppConfig) → chỉnh trên trang Hệ thống, khỏi build APK.
+        if (vm.portraitCapture == PortraitCapture.Capturing) {
+            PortraitCaptureScan(
+                onCaptured = vm::submitPortrait,
+                onCancel = vm::cancelPortraitCapture,
+                params = PortraitCropParams(
+                    heightFactor = vm.appConfig.portraitHeightFactor.toFloat(),
+                    verticalNudge = vm.appConfig.portraitVerticalNudge.toFloat(),
+                    aspect = vm.appConfig.portraitAspect.toFloat(),
+                    minWidthFactor = vm.appConfig.portraitMinWidthFactor.toFloat(),
+                ),
+            )
+        }
+        if (vm.portraitCapture == PortraitCapture.Saving) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xCC000000)),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        }
+        (vm.portraitCapture as? PortraitCapture.Done)?.let { done ->
+            AlertDialog(
+                onDismissRequest = vm::resetPortraitCapture,
+                confirmButton = { TextButton(onClick = vm::resetPortraitCapture) { Text("Đóng") } },
+                title = { Text(if (done.success) "Đã cập nhật ảnh" else "Chưa lưu được ảnh") },
+                text = { Text(done.message) },
+            )
         }
 
         // Nhắc cập nhật ngay khi phát hiện bản mới (kiểm tra ngầm lúc đăng nhập/quay lại app).
@@ -381,11 +455,56 @@ private fun AnnouncementBanner(text: String, level: String, onDismiss: () -> Uni
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Icon(Icons.Filled.Info, contentDescription = null, tint = fg, modifier = Modifier.size(22.dp))
-            Text(text, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = fg)
+            MarqueeText(text = text, color = fg, modifier = Modifier.weight(1f))
             IconButton(onClick = onDismiss) {
                 Icon(Icons.Filled.Close, contentDescription = "Ẩn thông báo", tint = fg.copy(alpha = 0.7f))
             }
         }
+    }
+}
+
+/**
+ * Chữ chạy liên tục từ PHẢI sang TRÁI (kiểu bảng LED). Luôn chạy dù nội dung ngắn hay dài:
+ * đo bề rộng khung + bề rộng chữ rồi trượt offset từ mép phải ra khỏi mép trái, lặp vô hạn.
+ */
+@Composable
+private fun MarqueeText(text: String, color: Color, modifier: Modifier = Modifier) {
+    val density = LocalDensity.current.density
+    var containerWidth by remember { mutableIntStateOf(0) }
+    var textWidth by remember { mutableIntStateOf(0) }
+    val offsetX = remember { Animatable(0f) }
+
+    LaunchedEffect(text, containerWidth, textWidth) {
+        if (containerWidth > 0 && textWidth > 0) {
+            val start = containerWidth.toFloat()       // bắt đầu ngay ngoài mép phải
+            val end = -textWidth.toFloat()             // kết thúc khi khuất hẳn mép trái
+            val distance = start - end
+            // Tốc độ ~55dp/giây, kẹp trong khoảng 4–40 giây cho dễ đọc.
+            val durationMs = (distance / (density * 55f) * 1000f).roundToInt().coerceIn(4000, 40000)
+            while (true) {
+                offsetX.snapTo(start)
+                offsetX.animateTo(end, animationSpec = tween(durationMs, easing = LinearEasing))
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clipToBounds()
+            .onGloballyPositioned { containerWidth = it.size.width },
+    ) {
+        Text(
+            text = text,
+            color = color,
+            maxLines = 1,
+            softWrap = false,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .wrapContentWidth(align = Alignment.Start, unbounded = true)
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .onGloballyPositioned { textWidth = it.size.width },
+        )
     }
 }
 
