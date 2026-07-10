@@ -36,6 +36,122 @@ public static class RequestEndpoints
     private static string TypeLabel(string type) =>
         Array.Find(Types, t => t.Type == type).Label ?? type;
 
+    public record ReqOption(string Value, string Label);
+    public record ReqField(string Key, string Label, string Type, string Hint = "", bool Required = true, ReqOption[]? Options = null);
+
+    /// <summary>
+    /// Định nghĩa các trường nhập cho từng loại đơn — NGUỒN CHUẨN DUY NHẤT. Web và app native dựng
+    /// form động từ đây (endpoint /types trả kèm), nên thêm/sửa trường KHÔNG cần build lại app.
+    /// `type`: text | date | time | number | money | textarea | select | checkboxes.
+    /// </summary>
+    private static readonly Dictionary<string, ReqField[]> FieldDefs = new()
+    {
+        ["leave"] = new[]
+        {
+            new ReqField("fromDate", "Từ ngày", "date", "Ngày đầu tiên bạn nghỉ"),
+            new ReqField("toDate", "Đến ngày", "date", "Ngày cuối cùng bạn nghỉ"),
+            new ReqField("days", "Số ngày nghỉ", "number", "Tự động tính theo khoảng ngày"),
+            new ReqField("reason", "Lý do nghỉ", "textarea", "Ví dụ: về quê, việc gia đình…"),
+        },
+        ["sick"] = new[]
+        {
+            new ReqField("fromDate", "Từ ngày", "date", "Ngày đầu tiên bạn nghỉ"),
+            new ReqField("toDate", "Đến ngày", "date", "Ngày cuối cùng bạn nghỉ"),
+            new ReqField("days", "Số ngày nghỉ", "number", "Tự động tính theo khoảng ngày"),
+            new ReqField("reason", "Lý do nghỉ ốm", "textarea", "Ví dụ: sốt, đi khám bệnh…"),
+        },
+        ["business_trip"] = new[]
+        {
+            new ReqField("fromDate", "Từ ngày", "date", "Ngày bắt đầu đi công tác"),
+            new ReqField("toDate", "Đến ngày", "date", "Ngày kết thúc công tác"),
+            new ReqField("destination", "Nơi công tác", "text", "Ví dụ: Hà Nội, kho Bình Dương…"),
+            new ReqField("reason", "Nội dung công tác", "textarea", "Bạn đi làm việc gì?"),
+        },
+        ["overtime"] = new[]
+        {
+            new ReqField("date", "Ngày tăng ca", "date", "Ngày bạn làm thêm giờ"),
+            new ReqField("fromTime", "Từ giờ", "time", "Giờ bắt đầu làm thêm"),
+            new ReqField("toTime", "Đến giờ", "time", "Giờ kết thúc làm thêm"),
+            new ReqField("reason", "Nội dung công việc", "textarea", "Bạn làm thêm việc gì?"),
+        },
+        ["attendance_fix"] = new[]
+        {
+            new ReqField("date", "Ngày cần điều chỉnh", "date", "Ngày chấm công bị sai"),
+            new ReqField("checkIn", "Giờ vào đúng", "time", "Bỏ trống nếu không cần sửa", Required: false),
+            new ReqField("checkOut", "Giờ ra đúng", "time", "Bỏ trống nếu không cần sửa", Required: false),
+            new ReqField("reason", "Lý do", "textarea", "Vì sao chấm công bị sai?"),
+        },
+        ["forgot_checkin"] = new[]
+        {
+            new ReqField("date", "Ngày quên chấm", "date", "Ngày bạn quên chấm công"),
+            new ReqField("direction", "Bạn quên chấm giờ nào?", "checkboxes", "Chọn giờ vào hoặc giờ ra",
+                Options: new[] { new ReqOption("in", "Giờ vào"), new ReqOption("out", "Giờ ra") }),
+            new ReqField("time", "Giờ thực tế", "time", "Giờ bạn thực sự vào/ra"),
+            new ReqField("reason", "Lý do", "textarea", "Vì sao bạn quên chấm?"),
+        },
+        ["shift_swap"] = new[]
+        {
+            new ReqField("date", "Ngày đổi ca", "date", "Ngày cần đổi ca"),
+            new ReqField("withPerson", "Người nhận ca", "text", "Tên đồng nghiệp nhận ca giúp"),
+            new ReqField("reason", "Lý do", "textarea", "Vì sao bạn cần đổi ca?"),
+        },
+        ["payment"] = new[]
+        {
+            new ReqField("amount", "Số tiền", "money", "Số tiền cần thanh toán"),
+            new ReqField("content", "Nội dung thanh toán", "textarea", "Thanh toán cho khoản gì?"),
+        },
+        ["advance"] = new[]
+        {
+            new ReqField("amount", "Số tiền tạm ứng", "money", "Số tiền bạn muốn tạm ứng"),
+            new ReqField("reason", "Lý do", "textarea", "Bạn tạm ứng để làm gì?"),
+        },
+        ["purchase"] = new[]
+        {
+            new ReqField("item", "Vật tư cần mua", "text", "Tên món đồ cần mua"),
+            new ReqField("quantity", "Số lượng", "number", "Cần mua bao nhiêu?"),
+            new ReqField("amount", "Dự trù chi phí", "money", "Ước tính hết bao nhiêu tiền", Required: false),
+            new ReqField("reason", "Mục đích", "textarea", "Mua để dùng vào việc gì?"),
+        },
+        ["booking"] = new[]
+        {
+            new ReqField("resource", "Xe / phòng họp", "text", "Ví dụ: xe tải, phòng họp tầng 2…"),
+            new ReqField("date", "Ngày sử dụng", "date", "Ngày bạn cần dùng"),
+            new ReqField("fromTime", "Từ giờ", "time", "Giờ bắt đầu dùng"),
+            new ReqField("toTime", "Đến giờ", "time", "Giờ trả lại"),
+            new ReqField("reason", "Mục đích", "textarea", "Dùng để làm gì?"),
+        },
+        ["penalty_appeal"] = new[]
+        {
+            new ReqField("appealKind", "Bạn muốn đề nghị gì?", "select", "Chọn hình thức đề nghị với án phạt này",
+                Options: new[] { new ReqOption("dispute", "Bỏ phạt"), new ReqOption("reduce", "Giảm tiền"), new ReqOption("installment", "Trả góp") }),
+            new ReqField("penaltyNo", "Mã quyết định phạt", "text", "Chọn quyết định phạt để tự điền hình thức và số tiền"),
+            new ReqField("penaltyType", "Hình thức phạt", "text", "", Required: false),
+            new ReqField("penaltyAmount", "Số tiền phạt hiện tại", "money", "", Required: false),
+            new ReqField("requestedAmount", "Số tiền đề nghị còn lại", "money", "Số tiền bạn mong muốn sau khi được giảm"),
+            new ReqField("requestedMonths", "Số tháng muốn chia đóng", "number", "Ví dụ: 3, 6, 12 tháng"),
+            new ReqField("reason", "Lý do đề nghị", "textarea", "Vì sao bạn cho rằng nên bỏ / giảm / chia nhỏ khoản phạt này?"),
+        },
+    };
+
+    private static readonly ReqField[] DefaultFields =
+    {
+        new ReqField("reason", "Nội dung đơn", "textarea", "Mô tả chi tiết yêu cầu của bạn"),
+    };
+
+    private static object FieldsPayload(string type)
+    {
+        var fields = FieldDefs.TryGetValue(type, out var f) ? f : DefaultFields;
+        return Array.ConvertAll(fields, x => new
+        {
+            key = x.Key,
+            label = x.Label,
+            type = x.Type,
+            hint = x.Hint,
+            required = x.Required,
+            options = Array.ConvertAll(x.Options ?? Array.Empty<ReqOption>(), o => new { value = o.Value, label = o.Label }),
+        });
+    }
+
     public static async Task EnsureTables(Database db, CancellationToken ct = default)
     {
         await using var conn = await db.OpenAsync(ct);
@@ -80,7 +196,13 @@ public static class RequestEndpoints
     {
         var g = app.MapGroup("/api/requests").RequireAuthorization();
 
-        g.MapGet("/types", () => Results.Ok(Array.ConvertAll(Types, t => new { type = t.Type, label = t.Label, category = t.Category })));
+        g.MapGet("/types", () => Results.Ok(Array.ConvertAll(Types, t => new
+        {
+            type = t.Type,
+            label = t.Label,
+            category = t.Category,
+            fields = FieldsPayload(t.Type),
+        })));
 
         // scope: mine (mặc định) | inbox (chờ tôi duyệt) | all (admin)
         g.MapGet("/", async (ClaimsPrincipal u, Database db, string? scope, string? status) =>
@@ -499,33 +621,68 @@ public static class RequestEndpoints
         if (!found) return;
 
         var deducted = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(conn, employeeId, startPeriod, amount, installments);
-        var reduce = req.PenaltyOutcome == "reduce" && req.NewAmount is > 0 && req.NewAmount < amount;
+
+        // Hình thức xử lý: ưu tiên chỉ định của người duyệt (web admin); nếu không có thì theo ĐỀ NGHỊ
+        // của nhân viên ghi trong đơn (appealKind): dispute → bác bỏ, reduce → giảm tiền, installment → chia đóng.
+        var payloadKind = ReadString(payloadJson, "appealKind").Trim().ToLowerInvariant();
+        var outcome = !string.IsNullOrWhiteSpace(req.PenaltyOutcome)
+            ? req.PenaltyOutcome!.Trim().ToLowerInvariant()
+            : payloadKind switch { "reduce" => "reduce", "installment" => "installment", _ => "waive" };
 
         decimal refund;
         string appended;
-        if (reduce)
+
+        if (outcome == "installment")
         {
-            var newAmount = decimal.Round(req.NewAmount!.Value, 0);
-            // Quy đổi các kỳ ĐÃ trừ sang LỊCH MỚI: chỉ hoàn phần đã thu vượt so với mức mới cho những kỳ đó.
-            // Các kỳ còn lại sẽ tự trừ theo lịch mới, nên tổng thu cuối cùng = mức phạt mới (không thừa/thiếu).
+            // Chia nhỏ tiền phạt ra nhiều tháng (KHÔNG đổi tổng tiền). Nếu các kỳ ĐÃ trừ thu vượt so với
+            // lịch mới thì hoàn phần vượt; các kỳ còn lại tự trừ theo lịch mới nên tổng thu vẫn = mức phạt.
+            var months = req.NewInstallments is > 0
+                ? req.NewInstallments!.Value
+                : (int)Math.Round(ReadNumber(payloadJson, "requestedMonths"));
+            months = Math.Clamp(months, 1, 60);
             var newScheduledForPaid = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(
-                conn, employeeId, startPeriod, newAmount, installments);
-            await conn.Cmd("UPDATE hr_penalties SET amount=@amt, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
-                .With("@id", penaltyId).With("@amt", newAmount)
-                .With("@note", Append(note, $"Giảm còn {newAmount:0} theo khiếu nại {requestNo}"))
+                conn, employeeId, startPeriod, amount, months);
+            await conn.Cmd("UPDATE hr_penalties SET installments=@inst, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                .With("@id", penaltyId).With("@inst", months)
+                .With("@note", Append(note, $"Chia đóng {months} tháng theo khiếu nại {requestNo}"))
                 .ExecuteNonQueryAsync();
             refund = Math.Max(0, deducted - newScheduledForPaid);
-            appended = $"Giảm tiền phạt {penaltyNo}";
+            appended = $"Chia đóng {months} tháng phạt {penaltyNo}";
         }
         else
         {
-            // Mặc định (kể cả khi outcome trống): bác bỏ = miễn toàn bộ.
-            await conn.Cmd("UPDATE hr_penalties SET status='Waived', note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
-                .With("@id", penaltyId)
-                .With("@note", Append(note, $"Miễn theo khiếu nại {requestNo}"))
-                .ExecuteNonQueryAsync();
-            refund = deducted;
-            appended = $"Bác bỏ phạt {penaltyNo}";
+            // Số tiền giảm còn: ưu tiên mức người duyệt nhập, sau đó tới mức nhân viên đề nghị trong đơn.
+            decimal? reduceTo = null;
+            if (outcome == "reduce")
+            {
+                var candidate = req.NewAmount ?? ReadNumber(payloadJson, "requestedAmount");
+                if (candidate > 0 && candidate < amount) reduceTo = decimal.Round(candidate, 0);
+            }
+
+            if (reduceTo is not null)
+            {
+                var newAmount = reduceTo.Value;
+                // Quy đổi các kỳ ĐÃ trừ sang LỊCH MỚI: chỉ hoàn phần đã thu vượt so với mức mới cho những kỳ đó.
+                // Các kỳ còn lại sẽ tự trừ theo lịch mới, nên tổng thu cuối cùng = mức phạt mới (không thừa/thiếu).
+                var newScheduledForPaid = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(
+                    conn, employeeId, startPeriod, newAmount, installments);
+                await conn.Cmd("UPDATE hr_penalties SET amount=@amt, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                    .With("@id", penaltyId).With("@amt", newAmount)
+                    .With("@note", Append(note, $"Giảm còn {newAmount:0} theo khiếu nại {requestNo}"))
+                    .ExecuteNonQueryAsync();
+                refund = Math.Max(0, deducted - newScheduledForPaid);
+                appended = $"Giảm tiền phạt {penaltyNo}";
+            }
+            else
+            {
+                // Bác bỏ = miễn toàn bộ (mặc định, kể cả khi outcome trống hoặc mức giảm không hợp lệ).
+                await conn.Cmd("UPDATE hr_penalties SET status='Waived', note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                    .With("@id", penaltyId)
+                    .With("@note", Append(note, $"Miễn theo khiếu nại {requestNo}"))
+                    .ExecuteNonQueryAsync();
+                refund = deducted;
+                appended = $"Bác bỏ phạt {penaltyNo}";
+            }
         }
 
         if (refund > 0)
@@ -651,5 +808,5 @@ public static class RequestEndpoints
     }
 
     public record CreateRequestReq(string? Type, string? Title, JsonElement? Payload);
-    public record DecideReq(string? Comment, string? Signature, string? PenaltyOutcome, decimal? NewAmount);
+    public record DecideReq(string? Comment, string? Signature, string? PenaltyOutcome, decimal? NewAmount, int? NewInstallments);
 }

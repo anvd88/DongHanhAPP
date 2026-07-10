@@ -156,8 +156,27 @@ public record NhanDienResult(bool Matched, string? Username, string? FullName, d
 /// luồng sinh trắc học trên app: quét → xem trước "Nhân viên / Giờ vào" → người dùng bấm Xác nhận thì
 /// mới gửi lại cùng loạt ảnh với PreviewOnly=false để ghi công thật.
 /// </summary>
+// MotionCheck=true: loạt ảnh này được chụp KHI người dùng QUAY ĐẦU (chống ảnh tĩnh) ⇒ server kiểm tra
+// biên độ góc quay (yaw span). Ngoại tuyến/kiosk giữ hình tĩnh ⇒ false ⇒ bỏ qua kiểm tra chuyển động.
 public record ChamCongBurstRequest(List<string> Images, DateTime? OccurredAt = null, bool SelfOnly = false,
-    bool PreviewOnly = false, double? GpsLat = null, double? GpsLng = null);
+    bool PreviewOnly = false, double? GpsLat = null, double? GpsLng = null,
+    string? ChallengeId = null, List<int>? SlotIndices = null, bool MotionCheck = false);
+
+/// <summary>
+/// Active-flash liveness: server phát chuỗi màu ngẫu nhiên; client hiển thị đúng thứ tự từng
+/// <see cref="SlotMs"/>ms (chờ <see cref="SettleMs"/>ms cho màn hình + camera ổn định) rồi gắn nhãn slot
+/// cho từng khung gửi lên. <see cref="FlashSlot.Color"/> là mã hex CSS phủ đầy màn hình.
+/// </summary>
+public record FlashChallengeResponse(string ChallengeId, List<FlashSlot> Slots, int SlotMs, int SettleMs);
+public record FlashSlot(int Index, string Color);
+
+// Cấu hình liveness QUAY ĐẦU (challenge-response): Enabled = app yêu cầu quay đầu lúc quét;
+// Enforce = chặn nếu biên độ quay quá nhỏ (nghi ảnh tĩnh) hay chỉ ghi log để hiệu chỉnh.
+public record MotionConfigDto(bool Enabled, bool Enforce);
+
+// Một lượt đo Silent-Face (chống ảnh/màn hình): điểm P(real) cao nhất/trung bình/nhì + biên độ quay đầu.
+public record LivenessMetricDto(DateTime AtUtc, string User, double Best, double Mean, double Second,
+    int Frames, double Threshold, bool Passed, double MotionSpan);
 
 /// <summary>
 /// Kết quả chấm công theo loạt ảnh. <see cref="Status"/>:

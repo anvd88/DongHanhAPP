@@ -227,6 +227,35 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
         }
     }
 
+    public FaceSkinColor? SampleFaceSkinColor(byte[] imageBytes)
+    {
+        if (imageBytes is null || imageBytes.Length == 0) return null;
+        // Giải mã RAW — cố ý KHÔNG gọi EnhanceForLowLight: CLAHE/gamma sẽ làm méo sắc độ ⇒ hỏng tín hiệu
+        // flash (màu phản xạ phải giữ nguyên như camera thu được).
+        using var image = Cv2.ImDecode(imageBytes, ImreadModes.Color);
+        if (image.Empty()) return null;
+
+        lock (_gate)
+        {
+            var face = DetectLargest(image);
+            if (face is null) return null;
+
+            var rect = ClampRect(face.Rect, image.Width, image.Height);
+            // Thu vào vùng TRUNG TÂM khuôn mặt (bỏ 20% mỗi biên) để lấy da má/trán, tránh tóc/viền/nền.
+            var insetX = (int)(rect.Width * 0.20);
+            var insetY = (int)(rect.Height * 0.20);
+            var inner = ClampRect(
+                new Rect2d(rect.X + insetX, rect.Y + insetY, rect.Width - 2 * insetX, rect.Height - 2 * insetY),
+                image.Width, image.Height);
+            if (inner.Width < 4 || inner.Height < 4) return null;
+
+            using var roi = new Mat(image, inner);
+            var mean = Cv2.Mean(roi); // Scalar theo thứ tự BGR
+            var faceRatio = rect.Width * rect.Height / (double)(image.Width * image.Height);
+            return new FaceSkinColor(mean.Val2 / 255.0, mean.Val1 / 255.0, mean.Val0 / 255.0, faceRatio);
+        }
+    }
+
     private double LivenessScore(Mat imageBgr, FaceDetection face)
     {
         // Ưu tiên Silent-Face: crop theo tỉ lệ riêng từng model rồi softmax 3 lớp, hợp nhất 2 model.

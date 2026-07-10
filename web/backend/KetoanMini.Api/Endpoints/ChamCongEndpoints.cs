@@ -37,6 +37,16 @@ public static class ChamCongEndpoints
 
     // ── Chính sách chấm công NGOẠI TUYẾN (chờ duyệt) — có thể ghi đè bằng khóa cấu hình trong
     //    web_system_settings (attendance.offline.*). Mặc định đủ dùng nếu chưa cấu hình.
+    // Active-flash liveness LUÔN BẬT + CHẶN THẬT (đã bỏ công tắc runtime/UI để tránh lỡ tắt). An toàn vì
+    // FlashLivenessChallenge.Verify fail-open: thiếu challenge/dữ liệu ⇒ cho qua (Silent-Face vẫn gác);
+    // chỉ chặn khi mặt HOÀN TOÀN không phản ứng với ánh sáng màn hình (chữ ký ảnh/màn hình/luồng giả).
+    private const string CfgMotionEnabled = "attendance.motion.enabled"; // app yêu cầu quay đầu lúc quét
+    private const string CfgMotionEnforce = "attendance.motion.enforce"; // chặn nếu biên độ quay quá nhỏ
+
+    // Liveness QUAY ĐẦU: cần người dùng chủ động quay đầu → để admin tự bật khi sẵn sàng (tránh phiền hà).
+    private const bool DefaultMotionEnabled = false;
+    private const bool DefaultMotionEnforce = false;
+    private const double MinMotionSpan = 0.30; // yaw span tối thiểu (đơn vị EstimatePose) — tinh chỉnh theo số đo
     private const string CfgMaxBackdate = "attendance.offline.maxBackdateMinutes";
     private const string CfgGeofenceLat = "attendance.offline.geofenceLat";
     private const string CfgGeofenceLng = "attendance.offline.geofenceLng";
@@ -162,6 +172,38 @@ public static class ChamCongEndpoints
         g.MapGet("/trangthai", (IFaceEngine engine) =>
             Results.Ok(new FaceEngineStatusDto(engine.Name, engine.MatchThreshold)))
             .AllowAnonymous();
+
+        // Active-flash liveness: cấp một chuỗi màu ngẫu nhiên (ràng buộc theo tài khoản đăng nhập) để app
+        // chiếu lên mặt lúc quét. BẮT BUỘC đăng nhập (không cho kiosk ẩn danh) vì challenge bind theo user.
+        // LUÔN BẬT (đã bỏ công tắc runtime để tránh lỡ tắt) — cơ chế fail-open ở FlashLivenessChallenge.Verify.
+        g.MapGet("/flash-challenge", (ClaimsPrincipal u, FlashLivenessChallenge flash) =>
+            Results.Ok(flash.Issue(u.Username())));
+
+        // Cấu hình liveness QUAY ĐẦU. GET cho MỌI tài khoản (app đọc để biết có yêu cầu quay đầu không);
+        // PUT chỉ Admin. Runtime, không build lại app.
+        g.MapGet("/motion-config", async (Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            return Results.Ok(new MotionConfigDto(
+                await GetSettingBoolAsync(conn, CfgMotionEnabled, DefaultMotionEnabled),
+                await GetSettingBoolAsync(conn, CfgMotionEnforce, DefaultMotionEnforce)));
+        });
+
+        g.MapPut("/motion-config", async (MotionConfigDto cfg, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            await SetSettingAsync(conn, CfgMotionEnabled, cfg.Enabled ? "1" : "0", u.Username());
+            await SetSettingAsync(conn, CfgMotionEnforce, cfg.Enforce ? "1" : "0", u.Username());
+            await db.RecordAudit(u.Username(), "Cấu hình liveness quay đầu", "ChamCong", "",
+                $"motion enabled={cfg.Enabled} enforce={cfg.Enforce}");
+            return Results.Ok(new { message = "Đã lưu cấu hình liveness quay đầu (áp dụng ngay)." });
+        }).RequireAuthorization(p => p.RequireRole("Admin"));
+
+        // Số đo Silent-Face (chống ảnh/màn hình) gần nhất (Admin) — hiệu chỉnh ngưỡng ngay trên panel.
+        g.MapGet("/liveness-metrics", (LivenessMetricsLog log) =>
+            Results.Ok(log.Recent().Select(m => new LivenessMetricDto(
+                m.AtUtc, m.User, m.Best, m.Mean, m.Second, m.Frames, m.Threshold, m.Passed, m.MotionSpan))))
+            .RequireAuthorization(p => p.RequireRole("Admin"));
 
         // Danh sách nhân viên đã đăng ký khuôn mặt (gộp theo username).
         g.MapGet("/dadangky", async (Database db) =>
@@ -435,7 +477,7 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, HttpContext http) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, FlashLivenessChallenge flash, LivenessMetricsLog livenessLog, ILoggerFactory lf, HttpContext http) =>
         {
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
@@ -480,17 +522,75 @@ public static class ChamCongEndpoints
             // Model 1 ảnh tĩnh dao động mạnh ngay với người thật (cùng mặt lúc 0.99 lúc 0.11), nên xét
             // 1 khung dễ từ chối nhầm. Ảnh/màn hình giả thì thấp ở MỌI khung → vẫn bị chặn.
             const int livenessFramesToCheck = 5;
-            double bestLive = 0;
+            var liveScores = new List<double>();
             foreach (var c in candidates.Take(livenessFramesToCheck))
+                liveScores.Add(engine.LivenessProbability(c.Bytes)); // tính HẾT để có đủ số đo hiệu chỉnh
+            var bestLive = liveScores.Count > 0 ? liveScores.Max() : 0;
+            var livePassed = bestLive >= engine.LivenessThreshold;
+
+            // 4a) LIVENESS QUAY ĐẦU (challenge-response): biên độ góc quay yaw của loạt (từ pose các khung
+            // đã có sẵn). Ảnh tĩnh không quay đầu ⇒ span ≈ 0. Chỉ xét khi app báo motionCheck.
+            var yaws = candidates.Where(c => c.Q.FaceFound).Select(c => c.Q.Pose.Yaw).ToList();
+            var motionSpan = req.MotionCheck && yaws.Count >= 2 ? yaws.Max() - yaws.Min() : -1;
+            bool motionEnabled = false, motionEnforce = false;
+            if (req.MotionCheck)
             {
-                bestLive = Math.Max(bestLive, engine.LivenessProbability(c.Bytes));
-                if (bestLive >= engine.LivenessThreshold) break; // đã có khung đạt → dừng sớm
+                await using var smc = await db.OpenAsync();
+                motionEnabled = await GetSettingBoolAsync(smc, CfgMotionEnabled, DefaultMotionEnabled);
+                motionEnforce = await GetSettingBoolAsync(smc, CfgMotionEnforce, DefaultMotionEnforce);
             }
-            if (bestLive < engine.LivenessThreshold)
+
+            // Ghi số đo (Silent-Face + biên độ quay) để hiển thị lên panel hiệu chỉnh.
+            livenessLog.Record(currentUser, liveScores, engine.LivenessThreshold, livePassed, motionSpan);
+
+            if (!livePassed)
                 return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
                     "Nghi ngờ giả mạo (không phải người thật).", "Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình."));
 
-            var probe = engine.ExtractEmbedding(bestBytes);
+            // Chặn nếu bật kiểm tra chuyển động + biên độ quay quá nhỏ (nghi ảnh tĩnh). Fail-open khi thiếu
+            // dữ liệu (span < 0). Mặc định enforce=false (chỉ ghi log) để hiệu chỉnh trước.
+            if (req.MotionCheck && motionEnabled && motionEnforce && motionSpan >= 0 && motionSpan < MinMotionSpan)
+                return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
+                    "Chưa xác nhận được người thật (không thấy quay đầu).",
+                    "Làm theo hướng dẫn: nhìn thẳng rồi từ từ quay đầu sang hai bên."));
+
+            // 4b) ACTIVE-FLASH LIVENESS — chỉ khi client gửi kèm challenge (app online). Đối chiếu màu phản
+            // xạ trên mặt theo từng slot với chuỗi màu server đã phát. Bịt đúng lỗ hổng Silent-Face để hở:
+            // phát lại video / deepfake stream / bơm luồng camera giả (không thể khớp chuỗi màu ngẫu nhiên).
+            // Consume (vô hiệu hóa) challenge chỉ khi GHI công thật (không phải bước xem trước).
+            if (!string.IsNullOrWhiteSpace(req.ChallengeId) && req.SlotIndices is { Count: > 0 })
+            {
+                // LUÔN BẬT + CHẶN THẬT (không còn công tắc runtime để tránh lỡ tắt). An toàn vì Verify
+                // fail-open: thiếu challenge/slot/sai user ⇒ cho qua (Silent-Face vẫn gác); chỉ chặn khi
+                // mặt hoàn toàn không phản ứng với ánh sáng màn hình.
+                var samples = new List<(int, FaceSkinColor)>();
+                for (var k = 0; k < req.Images.Count && k < req.SlotIndices.Count; k++)
+                {
+                    if (!TryDecodeImage(req.Images[k], out var fb)) continue;
+                    if (engine.SampleFaceSkinColor(fb) is { } sc) samples.Add((req.SlotIndices[k], sc));
+                }
+                var fl = flash.Verify(currentUser, req.ChallengeId, samples, enforce: true, consume: !req.PreviewOnly);
+                lf.CreateLogger("FlashLiveness").LogInformation(
+                    "user={User} slots={Slots} corr={Corr:0.000} react={React:0.0000} reason={Reason} suspect={Suspect} blocked={Blocked}",
+                    currentUser, fl.SlotsWithFace, fl.Correlation, fl.Reactivity, fl.Reason, fl.Suspect, fl.Blocked);
+                if (fl.Blocked)
+                    return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
+                        "Không xác minh được người thật (kiểm tra ánh sáng động).",
+                        "Giữ khuôn mặt trong khung khi màn hình đổi màu, tránh ngược sáng hoặc che mặt."));
+            }
+
+            // Gộp vector NHIỀU khung CHÍNH DIỆN tốt nhất (trung bình + chuẩn hóa) → ổn định hơn 1 khung,
+            // giảm nhận nhầm/từ chối nhầm. Loại khung QUAY ĐẦU (yaw lớn — khi bật liveness quay đầu) để
+            // không làm méo vector. Không có khung chính diện nào ⇒ dùng khung tốt nhất.
+            const int fuseFrames = 5;
+            const double frontalYawLimit = 0.18;
+            var fuseBytes = candidates
+                .Where(c => Math.Abs(c.Q.Pose.Yaw) < frontalYawLimit)
+                .Take(fuseFrames)
+                .Select(c => c.Bytes)
+                .ToList();
+            if (fuseBytes.Count == 0) fuseBytes.Add(bestBytes);
+            var probe = engine.ExtractFusedEmbedding(fuseBytes);
             if (probe is null)
                 return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, best.Score,
                     "Không trích được đặc trưng khuôn mặt.", "Nhìn thẳng vào camera rồi chấm lại."));
@@ -785,6 +885,13 @@ public static class ChamCongEndpoints
             .With("@dist", (object?)distanceM ?? DBNull.Value).With("@inf", (object?)inGeofence ?? DBNull.Value)
             .With("@flags", string.Join("; ", flags))
             .ExecuteNonQueryAsync();
+    }
+
+    private static async Task<bool> GetSettingBoolAsync(NpgsqlConnection conn, string key, bool dflt)
+    {
+        var v = await conn.Cmd("SELECT setting_value FROM web_system_settings WHERE setting_key=@k LIMIT 1")
+            .With("@k", key).ExecuteScalarAsync();
+        return v is string s ? (s == "1" || s.Equals("true", StringComparison.OrdinalIgnoreCase)) : dflt;
     }
 
     private static async Task<double?> GetSettingDoubleAsync(NpgsqlConnection conn, string key)

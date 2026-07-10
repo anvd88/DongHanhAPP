@@ -539,6 +539,10 @@ type AppConfig = {
   announcementLevel: string;
   faceEnrollBannerEnabled: boolean;
   foregroundPollSeconds: number;
+  portraitHeightFactor: number;
+  portraitVerticalNudge: number;
+  portraitAspect: number;
+  portraitMinWidthFactor: number;
 };
 
 /**
@@ -553,6 +557,10 @@ function AppConfigPanel() {
   const [level, setLevel] = useState("info");
   const [faceBanner, setFaceBanner] = useState(true);
   const [pollSeconds, setPollSeconds] = useState("20");
+  const [portraitHeight, setPortraitHeight] = useState("1.85");
+  const [portraitNudge, setPortraitNudge] = useState("0.15");
+  const [portraitAspect, setPortraitAspect] = useState("0.75");
+  const [portraitMinWidth, setPortraitMinWidth] = useState("1.35");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -561,6 +569,10 @@ function AppConfigPanel() {
     setLevel(data.announcementLevel || "info");
     setFaceBanner(data.faceEnrollBannerEnabled);
     setPollSeconds(String(data.foregroundPollSeconds || 20));
+    setPortraitHeight(String(data.portraitHeightFactor ?? 1.85));
+    setPortraitNudge(String(data.portraitVerticalNudge ?? 0.15));
+    setPortraitAspect(String(data.portraitAspect ?? 0.75));
+    setPortraitMinWidth(String(data.portraitMinWidthFactor ?? 1.35));
   }, [data]);
 
   const save = async (event: FormEvent) => {
@@ -570,6 +582,16 @@ function AppConfigPanel() {
       notify.warning("Nhịp làm mới phải là số nguyên trong khoảng 5–3600 giây.");
       return;
     }
+    const nums = {
+      portraitHeightFactor: Number(portraitHeight),
+      portraitVerticalNudge: Number(portraitNudge),
+      portraitAspect: Number(portraitAspect),
+      portraitMinWidthFactor: Number(portraitMinWidth),
+    };
+    if (Object.values(nums).some((n) => !Number.isFinite(n))) {
+      notify.warning("Các thông số cắt ảnh chân dung phải là số.");
+      return;
+    }
     setSaving(true);
     try {
       await api.put<AppConfig>("/api/app-config", {
@@ -577,6 +599,7 @@ function AppConfigPanel() {
         announcementLevel: level,
         faceEnrollBannerEnabled: faceBanner,
         foregroundPollSeconds: secs,
+        ...nums,
       });
       notify.success("Đã lưu cấu hình ứng dụng. App sẽ áp dụng ở lần mở/đăng nhập kế tiếp.");
       reload({ silent: true });
@@ -627,6 +650,26 @@ function AppConfigPanel() {
           <input type="checkbox" checked={faceBanner} onChange={(e) => setFaceBanner(e.target.checked)} />
           Hiện banner nhắc đăng ký khuôn mặt
         </label>
+
+        <div className="lg:col-span-2 mt-1 border-t border-black/5 pt-3 dark:border-white/10">
+          <p className="text-xs font-bold text-[var(--text-secondary)]">Ảnh chân dung trên app (cách cắt — kiểu ảnh thẻ)</p>
+          <p className="mt-1 text-xs font-semibold text-[var(--text-muted)]">
+            Chỉnh mấy số này để đổi khung cắt mà không cần phát hành APK mới. Áp dụng cho lần chụp kế tiếp trên app.
+          </p>
+        </div>
+        <Field label="Chiều cao khung (× cao mặt) — lớn = lấy rộng hơn">
+          <Input value={portraitHeight} onChange={(e) => setPortraitHeight(e.target.value)} inputMode="decimal" placeholder="1.85" />
+        </Field>
+        <Field label="Nhích khung lên (× cao mặt) — dương = lấy nhiều đỉnh đầu">
+          <Input value={portraitNudge} onChange={(e) => setPortraitNudge(e.target.value)} inputMode="decimal" placeholder="0.15" />
+        </Field>
+        <Field label="Tỉ lệ ngang/dọc (0.75 = 3:4)">
+          <Input value={portraitAspect} onChange={(e) => setPortraitAspect(e.target.value)} inputMode="decimal" placeholder="0.75" />
+        </Field>
+        <Field label="Bề rộng tối thiểu (× rộng mặt)">
+          <Input value={portraitMinWidth} onChange={(e) => setPortraitMinWidth(e.target.value)} inputMode="decimal" placeholder="1.35" />
+        </Field>
+
         <div className="lg:col-span-2">
           <Button type="submit" loading={saving} disabled={loading}>
             <Settings2 className="h-4 w-4" />
@@ -649,6 +692,18 @@ function ReleaseUpdatePanel() {
   const [isPublished, setIsPublished] = useState(true);
   const [apk, setApk] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  const rows = data ?? [];
+  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const toggleOne = (id: number) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)));
 
   // Mốc chuẩn: app chỉ nhận cập nhật khi mã bản MỚI > mã bản đã phát hành cao nhất.
   const highestPublishedVersionCode = Math.max(
@@ -746,6 +801,28 @@ function ReleaseUpdatePanel() {
     }
   };
 
+  // Gỡ HÀNG LOẠT các bản đã tích chọn trong một lần (thay vì xóa từng cái).
+  const removeSelected = async () => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    const ok = await confirm({
+      title: `Gỡ ${ids.length} bản đã chọn?`,
+      description: "File APK lưu trong DB của các bản này cũng sẽ bị xóa vĩnh viễn.",
+      confirmLabel: "Gỡ hàng loạt",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    try {
+      await api.post("/api/releases/bulk-delete", { ids });
+      notify.success(`Đã xóa ${ids.length} bản phát hành.`);
+      setSelected(new Set());
+      reload({ silent: true });
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không xóa được các bản đã chọn.");
+    }
+  };
+
   return (
     <section className="space-y-4">
       <GlassPanel strong className="rounded-[20px] p-4">
@@ -800,12 +877,36 @@ function ReleaseUpdatePanel() {
         {error ? (
           <div className="p-5 text-sm text-[var(--danger)]">{error}</div>
         ) : (
-          <Table<Release>
-            loading={loading}
-            rows={data ?? []}
-            keyOf={(r) => r.id}
-            empty="Chưa có bản phát hành"
-            columns={[
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/5 px-4 py-3 dark:border-white/10">
+              <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text-secondary)]">
+                <input type="checkbox" checked={allSelected} disabled={rows.length === 0} onChange={toggleAll} />
+                {selected.size > 0 ? `Đã chọn ${selected.size} bản` : "Chọn tất cả"}
+              </label>
+              {selected.size > 0 && (
+                <Button type="button" variant="danger" className="px-3 py-2" onClick={removeSelected}>
+                  <Trash2 className="h-4 w-4" />
+                  Gỡ {selected.size} bản đã chọn
+                </Button>
+              )}
+            </div>
+            <Table<Release>
+              loading={loading}
+              rows={rows}
+              keyOf={(r) => r.id}
+              empty="Chưa có bản phát hành"
+              columns={[
+              {
+                header: "",
+                cell: (r) => (
+                  <input
+                    type="checkbox"
+                    checked={selected.has(r.id)}
+                    onChange={() => toggleOne(r.id)}
+                    aria-label={`Chọn bản ${r.version}`}
+                  />
+                ),
+              },
               { header: "Ứng dụng", cell: (r) => <span className="font-semibold">{r.appTarget}</span> },
               { header: "Phiên bản", cell: (r) => <span className="font-semibold">{r.version}</span> },
               { header: "Mã", align: "right", cell: (r) => r.versionCode },
@@ -840,7 +941,8 @@ function ReleaseUpdatePanel() {
                 ),
               },
             ]}
-          />
+            />
+          </>
         )}
       </GlassPanel>
     </section>

@@ -50,6 +50,12 @@ builder.Services.AddSingleton<PushService>();
 // Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
 builder.Services.AddSingleton<IFaceEngine, AdaFaceR50Engine>();
 
+// Active-flash liveness: sinh + xác minh chuỗi màu chống giả mạo chủ động (lưu tạm challenge trong RAM).
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<FlashLivenessChallenge>();
+// Vòng đệm số đo Silent-Face gần nhất (hiển thị lên panel để hiệu chỉnh ngưỡng chống ảnh/màn hình).
+builder.Services.AddSingleton<LivenessMetricsLog>();
+
 // Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
 builder.Services.AddSignalR();
 // Định danh kết nối hub theo username để phát tín hiệu chat đúng thành viên (Clients.Users).
@@ -250,6 +256,7 @@ app.MapPenaltyRefunds();
 app.MapPayroll();
 app.MapBankAccounts();
 app.MapAppConfig();
+app.MapPortal();
 
 // Hub tín hiệu real-time (web + desktop kết nối tới đây).
 app.MapHub<ChangesHub>("/hubs/changes");
@@ -309,5 +316,8 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tai khoan ngan
 
 try { await AppConfigEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang cau hinh ung dung luc khoi dong: {Msg}", ex.Message); }
+
+try { await PortalEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang cong thong tin luc khoi dong: {Msg}", ex.Message); }
 
 app.Run();

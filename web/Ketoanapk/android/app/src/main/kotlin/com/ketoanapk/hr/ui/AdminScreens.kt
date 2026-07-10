@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -136,7 +137,7 @@ private fun StaffRequestCard(req: RequestListItem, onOpen: () -> Unit) {
 }
 
 @Composable
-fun PenaltyScreen(user: HrUser, state: HomeUiState) {
+fun PenaltyScreen(user: HrUser, state: HomeUiState, onAppeal: (Penalty) -> Unit) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
@@ -147,13 +148,18 @@ fun PenaltyScreen(user: HrUser, state: HomeUiState) {
         if (state.penalties.isEmpty()) {
             item { EmptyState("Không có quyết định phạt", state.error ?: "Danh sách hiện đang trống.") }
         } else {
-            items(state.penalties, key = { it.id }) { p -> PenaltyCard(p) }
+            items(state.penalties, key = { it.id }) { p ->
+                // Chỉ nhân viên mới khiếu nại/đề nghị trên án phạt TIỀN còn hiệu lực của chính mình.
+                // Admin xem toàn công ty (không phải của mình) nên không hiện nút này; họ xử lý trên web.
+                val canAppeal = !user.isAdmin && p.status == "Active" && p.penaltyType == "fine"
+                PenaltyCard(p, canAppeal = canAppeal, onAppeal = { onAppeal(p) })
+            }
         }
     }
 }
 
 @Composable
-private fun PenaltyCard(p: Penalty) {
+private fun PenaltyCard(p: Penalty, canAppeal: Boolean, onAppeal: () -> Unit) {
     HrCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -165,7 +171,19 @@ private fun PenaltyCard(p: Penalty) {
         Text(p.reason.ifBlank { p.note.ifBlank { "Không có ghi chú" } }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (p.amount > 0) StatusChip(formatMoney(p.amount), Tone.Warning)
+            if (p.installments > 1) StatusChip("Chia ${p.installments} tháng", Tone.Muted)
             StatusChip(formatIsoDate(p.penaltyDate), Tone.Muted)
+        }
+        if (canAppeal) {
+            OutlinedButton(
+                onClick = onAppeal,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Icon(Icons.Filled.Gavel, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Khiếu nại / xin giảm · trả góp", fontWeight = FontWeight.Bold)
+            }
         }
     }
 }

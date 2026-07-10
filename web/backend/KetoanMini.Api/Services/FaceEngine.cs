@@ -28,6 +28,34 @@ public interface IFaceEngine
     /// <summary>Phát hiện 1 khuôn mặt + trích vector đặc trưng. Trả null nếu KHÔNG thấy mặt.</summary>
     float[]? ExtractEmbedding(byte[] imageBytes);
 
+    /// <summary>
+    /// Trích + GỘP vector của NHIỀU khung (trung bình từng chiều rồi chuẩn hóa L2) → ổn định hơn 1 khung,
+    /// giảm nhận nhầm/từ chối nhầm do nhiễu 1 khung. Bỏ qua khung không trích được; trả null nếu KHÔNG
+    /// khung nào trích được. Vì mỗi vector đã chuẩn hóa L2, trung bình rồi chuẩn hóa lại vẫn hợp lệ cho cosine.
+    /// </summary>
+    float[]? ExtractFusedEmbedding(IReadOnlyList<byte[]> frames)
+    {
+        float[]? sum = null;
+        var n = 0;
+        foreach (var f in frames)
+        {
+            var e = ExtractEmbedding(f);
+            if (e is null) continue;
+            if (sum is null) sum = new float[e.Length];
+            if (e.Length != sum.Length) continue;
+            for (var i = 0; i < e.Length; i++) sum[i] += e[i];
+            n++;
+        }
+        if (sum is null || n == 0) return null;
+
+        double norm = 0;
+        foreach (var v in sum) norm += (double)v * v;
+        norm = Math.Sqrt(norm);
+        if (norm <= 0) return sum;
+        for (var i = 0; i < sum.Length; i++) sum[i] = (float)(sum[i] / norm);
+        return sum;
+    }
+
     /// <summary>Độ tương đồng cosine giữa 2 vector (0..1, càng cao càng giống).</summary>
     double Compare(float[] a, float[] b);
 
@@ -45,10 +73,21 @@ public interface IFaceEngine
     /// KHÔNG trích vector/chống giả mạo (nhẹ) — chỉ để xếp hạng khung, khâu nặng chạy 1 lần trên khung tốt nhất.
     /// </summary>
     FaceFrameQuality? AssessFrame(byte[] imageBytes);
+
+    /// <summary>
+    /// Lấy màu TRUNG BÌNH vùng da khuôn mặt (mỗi kênh R,G,B trong 0..1) từ pixel GỐC — KHÔNG tăng
+    /// sáng/CLAHE (vì làm méo màu) — phục vụ active-flash liveness: đối chiếu ánh phản xạ trên mặt với
+    /// màu màn hình đang chiếu. Trả null nếu không thấy mặt. Mặc định null ⇒ engine không hỗ trợ
+    /// (endpoint sẽ bỏ qua bước flash liveness cho engine đó).
+    /// </summary>
+    FaceSkinColor? SampleFaceSkinColor(byte[] imageBytes) => null;
 }
 
 /// <summary>Hướng mặt tương đối (tỉ lệ hình học từ 5 điểm landmark, không phải độ).</summary>
 public readonly record struct FacePose(double Yaw, double Pitch);
+
+/// <summary>Màu trung bình vùng da mặt (mỗi kênh 0..1) + tỉ lệ diện tích mặt/ảnh — cho active-flash liveness.</summary>
+public readonly record struct FaceSkinColor(double R, double G, double B, double FaceRatio);
 
 /// <summary>
 /// Chất lượng một khung hình khuôn mặt. Mọi chỉ số (trừ <see cref="Score"/>) là giá trị thô để

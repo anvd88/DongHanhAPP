@@ -168,6 +168,21 @@ public static class ReleaseEndpoints
             await db.RecordAudit(u.Username(), "Xóa bản phát hành APK", "Release", id.ToString(), "");
             return Results.NoContent();
         });
+
+        // Gỡ HÀNG LOẠT các bản phát hành đã tích chọn (kèm APK trong DB) trong một lần.
+        g.MapPost("/bulk-delete", async (BulkDeleteReleasesRequest req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        {
+            var ids = (req.Ids ?? Array.Empty<long>()).Where(x => x > 0).Distinct().ToArray();
+            if (ids.Length == 0) return Results.BadRequest(new { message = "Chưa chọn bản phát hành nào." });
+
+            await using var conn = await db.OpenAsync();
+            var deleted = await conn.Cmd("DELETE FROM app_releases WHERE id = ANY(@ids)")
+                .With("@ids", ids)
+                .ExecuteNonQueryAsync();
+            await NotifyReleaseChanged(hub);
+            await db.RecordAudit(u.Username(), "Xóa hàng loạt bản phát hành APK", "Release", string.Join(",", ids), $"{deleted} bản");
+            return Results.Ok(new { deleted });
+        });
     }
 
     private static async Task<IResult> UploadRelease(HttpRequest request, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push)
@@ -345,4 +360,6 @@ public static class ReleaseEndpoints
     }
 
     public record PublishReleaseRequest(bool IsPublished, bool? IsMandatory);
+
+    public record BulkDeleteReleasesRequest(long[]? Ids);
 }

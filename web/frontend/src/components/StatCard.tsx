@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { useGlow } from "./Glass";
+import { CountUp } from "./CountUp";
 
 export function StatCard({
   label,
@@ -36,7 +37,7 @@ export function StatCard({
       ) : (
         <div className="min-w-0">
           <p className="km-stat-label">{label}</p>
-          <p className="km-stat-value">{value}</p>
+          <p className="km-stat-value"><CountUp text={value} /></p>
           <div className="mt-1.5 flex items-center gap-2">
             {sub && <p className="km-stat-sub">{sub}</p>}
             {trend && <span className="km-trend-badge">{trend}</span>}

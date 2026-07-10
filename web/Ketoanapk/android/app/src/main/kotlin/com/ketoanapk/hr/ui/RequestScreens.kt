@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -67,6 +68,7 @@ import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +85,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ketoanapk.hr.data.Penalty
 import com.ketoanapk.hr.data.RequestApproval
 import com.ketoanapk.hr.data.RequestHead
 import com.ketoanapk.hr.data.RequestListItem
@@ -106,6 +109,12 @@ fun RequestsScreen(vm: HrViewModel) {
     val detail = vm.requestDetailState
     var creating by rememberSaveable { mutableStateOf(false) }
 
+    // Mở thẳng luồng tạo đơn khi có "nháp khiếu nại" từ màn Kỷ luật (bấm đề nghị trên một quyết định phạt).
+    val appealDraft = vm.appealDraft
+    LaunchedEffect(appealDraft) { if (appealDraft != null) creating = true }
+    // Khi rời luồng tạo đơn thì bỏ nháp để lần sau vào "Tạo đơn mới" bình thường (không dính án phạt cũ).
+    fun leaveCreate() { creating = false; vm.consumeAppealDraft() }
+
     when {
         detail.id != null -> {
             BackHandler { vm.closeRequestDetail() }
@@ -116,13 +125,15 @@ fun RequestsScreen(vm: HrViewModel) {
             )
         }
         creating -> {
-            BackHandler { creating = false }
+            BackHandler { leaveCreate() }
             CreateRequestFlow(
                 types = vm.homeState.requestTypes,
+                penalties = vm.homeState.penalties,
                 saving = vm.creatingRequest,
-                onClose = { creating = false },
+                initialDraft = appealDraft,
+                onClose = { leaveCreate() },
                 onSubmit = { type, title, payload ->
-                    vm.submitRequest(type, title, payload) { ok -> if (ok) creating = false }
+                    vm.submitRequest(type, title, payload) { ok -> if (ok) leaveCreate() }
                 },
             )
         }
@@ -254,12 +265,26 @@ private fun RequestListCard(req: RequestListItem, onOpen: (String) -> Unit) {
 @Composable
 private fun CreateRequestFlow(
     types: List<RequestType>,
+    penalties: List<Penalty>,
     saving: Boolean,
+    initialDraft: AppealDraft?,
     onClose: () -> Unit,
     onSubmit: (type: String, title: String, payload: kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
-    var selectedType by rememberSaveable { mutableStateOf<String?>(null) }
+    // Có nháp khiếu nại → mở thẳng form "penalty_appeal", bỏ qua bước chọn loại.
+    var selectedType by rememberSaveable { mutableStateOf(initialDraft?.let { "penalty_appeal" }) }
     val chosen = types.find { it.type == selectedType }
+
+    // Giá trị điền sẵn cho form khiếu nại đến từ án phạt được chọn ở màn Kỷ luật.
+    val draftValues: Map<String, String> = if (chosen?.type == "penalty_appeal" && initialDraft != null) {
+        mapOf(
+            "penaltyNo" to initialDraft.penaltyNo,
+            "penaltyType" to initialDraft.penaltyTypeLabel,
+            "penaltyAmount" to (if (initialDraft.amount > 0) initialDraft.amount.toLong().toString() else ""),
+        )
+    } else {
+        emptyMap()
+    }
 
     if (chosen == null) {
         RequestTypePicker(types = types, onBack = onClose, onPick = { selectedType = it.type })
@@ -268,8 +293,11 @@ private fun CreateRequestFlow(
         androidx.compose.runtime.key(chosen.type) {
             RequestFormStep(
                 type = chosen,
+                penalties = penalties,
                 saving = saving,
-                onBack = { selectedType = null },
+                initialValues = draftValues,
+                // Từ nháp khiếu nại: nút quay lại thoát hẳn luồng (không có bước chọn loại để lùi về).
+                onBack = { if (initialDraft != null) onClose() else selectedType = null },
                 onSubmit = { title, payload -> onSubmit(chosen.type, title, payload) },
             )
         }
@@ -337,14 +365,43 @@ private fun RequestTypeCard(type: RequestType, onPick: (RequestType) -> Unit) {
 @Composable
 private fun RequestFormStep(
     type: RequestType,
+    penalties: List<Penalty>,
     saving: Boolean,
+    initialValues: Map<String, String>,
     onBack: () -> Unit,
     onSubmit: (title: String, payload: kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
-    val fields = fieldsForType(type.type)
-    val values = remember { mutableStateMapOf<String, String>() }
+    val allFields = fieldsForType(type.type)
     var showErrors by remember { mutableStateOf(false) }
     val auto = daysAutoSynced(type.type)
+
+    // Khiếu nại án phạt: chỉ cho chọn án phạt TIỀN còn hiệu lực của chính nhân viên (nạp sẵn ở home).
+    val isPenaltyAppeal = type.type == "penalty_appeal"
+    val activePenalties = remember(penalties) {
+        penalties.filter { it.status.equals("Active", true) && it.penaltyType == "fine" }
+    }
+
+    // Điền sẵn giá trị (nếu đến từ nháp khiếu nại) và mặc định hình thức đề nghị = "Bỏ phạt".
+    val values = remember {
+        mutableStateMapOf<String, String>().apply {
+            putAll(initialValues)
+            if (isPenaltyAppeal && this["appealKind"].isNullOrBlank()) this["appealKind"] = "dispute"
+        }
+    }
+
+    // Với khiếu nại: chỉ hiện ô "Số tiền đề nghị" khi Giảm tiền, ô "Số tháng" khi Trả góp.
+    val appealKind = values["appealKind"].orEmpty()
+    val fields = if (isPenaltyAppeal) {
+        allFields.filter { f ->
+            when (f.key) {
+                "requestedAmount" -> appealKind == "reduce"
+                "requestedMonths" -> appealKind == "installment"
+                else -> true
+            }
+        }
+    } else {
+        allFields
+    }
 
     fun isAutoDays(key: String) = auto && key == "days"
 
@@ -390,13 +447,30 @@ private fun RequestFormStep(
         }
 
         fields.forEach { field ->
-            FieldEditor(
-                field = field,
-                value = values[field.key].orEmpty(),
-                readOnly = isAutoDays(field.key),
-                isError = showErrors && field.required && !isAutoDays(field.key) && values[field.key].isNullOrBlank(),
-                onChange = { setField(field.key, it) },
-            )
+            if (isPenaltyAppeal && field.key == "penaltyNo") {
+                PenaltyPickerField(
+                    field = field,
+                    value = values[field.key].orEmpty(),
+                    isError = showErrors && field.required && values[field.key].isNullOrBlank(),
+                    penalties = activePenalties,
+                    onPicked = { p ->
+                        // Chọn 1 quyết định phạt → tự điền cả mã, hình thức và số tiền phạt.
+                        setField("penaltyNo", p.penaltyNo)
+                        setField("penaltyType", p.penaltyTypeLabel.ifBlank { p.penaltyType })
+                        setField("penaltyAmount", if (p.amount > 0) p.amount.toLong().toString() else "")
+                    },
+                )
+            } else {
+                // Hình thức phạt & số tiền phạt được điền tự động theo quyết định → chỉ đọc.
+                val autoFilled = isPenaltyAppeal && (field.key == "penaltyType" || field.key == "penaltyAmount")
+                FieldEditor(
+                    field = field,
+                    value = values[field.key].orEmpty(),
+                    readOnly = isAutoDays(field.key) || autoFilled,
+                    isError = showErrors && field.required && !isAutoDays(field.key) && values[field.key].isNullOrBlank(),
+                    onChange = { setField(field.key, it) },
+                )
+            }
         }
 
         if (showErrors && missing.isNotEmpty()) {
@@ -486,6 +560,7 @@ private fun FieldEditor(
                 value = groupThousands(value),
                 onValueChange = { onChange(it.filter { c -> c.isDigit() }) },
                 modifier = Modifier.fillMaxWidth(),
+                readOnly = readOnly,
                 singleLine = true,
                 isError = isError,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -518,6 +593,7 @@ private fun FieldEditor(
                 value = value,
                 onValueChange = onChange,
                 modifier = Modifier.fillMaxWidth(),
+                readOnly = readOnly,
                 singleLine = true,
                 isError = isError,
                 shape = RoundedCornerShape(14.dp),
@@ -528,6 +604,110 @@ private fun FieldEditor(
             Text(field.hint, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+/**
+ * Ô chọn "Mã quyết định phạt" cho đơn khiếu nại: nhân viên bấm để mở danh sách các án phạt TIỀN còn
+ * hiệu lực của chính mình rồi chọn một mã (không gõ tay để tránh sai mã). Hình thức phạt và số tiền
+ * phạt tự điền theo quyết định đã chọn.
+ */
+@Composable
+private fun PenaltyPickerField(
+    field: RequestField,
+    value: String,
+    isError: Boolean,
+    penalties: List<Penalty>,
+    onPicked: (Penalty) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row {
+            Text(field.label, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+            if (field.required) Text(" *", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+        }
+
+        val selected = penalties.find { it.penaltyNo == value }
+        PickerBox(
+            display = when {
+                selected != null -> "${selected.penaltyNo} · ${selected.penaltyTypeLabel.ifBlank { selected.penaltyType }}"
+                value.isNotBlank() -> value
+                else -> "Chọn án phạt tiền còn hiệu lực"
+            },
+            placeholder = selected == null && value.isBlank(),
+            icon = Icons.Filled.Gavel,
+            isError = isError,
+            enabled = true,
+        ) { control -> PenaltyPickerDialog(penalties, onPicked = onPicked, control = control) }
+
+        val hint = if (penalties.isEmpty()) "Bạn không có án phạt tiền còn hiệu lực để khiếu nại." else field.hint
+        if (hint.isNotBlank()) {
+            Text(hint, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Hộp thoại liệt kê các án phạt tiền còn hiệu lực để nhân viên chọn (mã · hình thức · số tiền · lý do). */
+@Composable
+private fun PenaltyPickerDialog(
+    penalties: List<Penalty>,
+    onPicked: (Penalty) -> Unit,
+    control: MutableControl,
+) {
+    AlertDialog(
+        onDismissRequest = control.dismiss,
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = control.dismiss) { Text("Đóng") } },
+        title = { Text("Chọn án phạt") },
+        text = {
+            if (penalties.isEmpty()) {
+                Text("Bạn không có án phạt tiền còn hiệu lực để khiếu nại.")
+            } else {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    penalties.forEach { p ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            onClick = { onPicked(p); control.dismiss() },
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    "${p.penaltyNo} · ${p.penaltyTypeLabel.ifBlank { p.penaltyType }}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                if (p.amount > 0) {
+                                    Text(
+                                        "${formatMoney(p.amount)} ₫",
+                                        fontSize = 13.sp,
+                                        color = toneColor(Tone.Danger),
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                                if (p.reason.isNotBlank()) {
+                                    Text(
+                                        p.reason,
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
 }
 
 /** Ô bấm mở lịch/đồng hồ, hiển thị giá trị đã chọn. */

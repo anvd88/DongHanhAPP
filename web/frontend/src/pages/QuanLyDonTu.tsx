@@ -1,14 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ClipboardList, Clock, RefreshCw, Search, XCircle } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Badge, Input, Select } from "../components/ui";
 import { Table } from "../components/Table";
+import { CountUp } from "../components/CountUp";
 import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { useAppNotifications } from "../components/AppNotifications";
 import { RequestReviewModal } from "../components/hr/RequestReviewModal";
-import { requestStatusColor, requestStatusLabel, type RequestListItem, type RequestType } from "../lib/hr";
+import { applyServerRequestFields, requestStatusColor, requestStatusLabel, type RequestListItem, type RequestType } from "../lib/hr";
 
 type StatusKey = "all" | "Pending" | "Approved" | "Rejected" | "Cancelled";
 
@@ -30,7 +31,7 @@ function StatCard({ label, value, tone }: { label: string; value: number; tone: 
   return (
     <GlassPanel className="rounded-2xl px-4 py-3.5">
       <div className="text-xs font-semibold text-[var(--text-secondary)]">{label}</div>
-      <div className={`mt-1 text-2xl font-extrabold ${toneCls[tone] ?? toneCls.accent}`}>{value}</div>
+      <div className={`mt-1 text-2xl font-extrabold ${toneCls[tone] ?? toneCls.accent}`}><CountUp text={value} /></div>
     </GlassPanel>
   );
 }
@@ -38,6 +39,7 @@ function StatCard({ label, value, tone }: { label: string; value: number; tone: 
 export function QuanLyDonTu() {
   const { notify } = useAppNotifications();
   const { data: types } = useApi<RequestType[]>("/api/requests/types");
+  useEffect(() => { if (types) applyServerRequestFields(types); }, [types]);
   const { data, loading, error, reload } = useApi<RequestListItem[]>("/api/requests?scope=all");
   const [status, setStatus] = useState<StatusKey>("all");
   const [type, setType] = useState<string>("all");

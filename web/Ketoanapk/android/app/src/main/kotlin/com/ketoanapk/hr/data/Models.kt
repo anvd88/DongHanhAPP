@@ -35,6 +35,54 @@ data class AppConfig(
     val announcementLevel: String = "info",
     val faceEnrollBannerEnabled: Boolean = true,
     val foregroundPollSeconds: Int = 20,
+    // Tham số cắt ảnh chân dung (điều khiển từ xa — đổi trên trang Hệ thống, khỏi build lại APK).
+    val portraitHeightFactor: Double = 1.85,
+    val portraitVerticalNudge: Double = 0.15,
+    val portraitAspect: Double = 0.75,
+    val portraitMinWidthFactor: Double = 1.35,
+)
+
+// ----- Cổng thông tin công ty (tin tức, sự kiện, giới thiệu) -----
+
+@Serializable
+data class PortalPost(
+    val id: Long = 0,
+    val kind: String = "news",        // "news" | "event"
+    val title: String = "",
+    val summary: String = "",
+    val body: String = "",
+    val coverImage: String? = null,   // data URL base64 (tùy chọn)
+    val location: String = "",
+    val eventAt: String? = null,      // ISO UTC (chỉ dùng cho sự kiện)
+    val pinned: Boolean = false,
+    val published: Boolean = true,
+    val authorUsername: String = "",
+    val authorName: String = "",
+    val createdAt: String = "",
+    val updatedAt: String = "",
+)
+
+@Serializable
+data class PortalAbout(
+    val title: String = "",
+    val content: String = "",
+    val coverImage: String? = null,
+    val address: String = "",
+    val hotline: String = "",
+    val email: String = "",
+    val website: String = "",
+    val updatedAt: String = "",
+) {
+    val hasContent: Boolean
+        get() = title.isNotBlank() || content.isNotBlank() || address.isNotBlank() ||
+            hotline.isNotBlank() || email.isNotBlank() || website.isNotBlank() || !coverImage.isNullOrBlank()
+}
+
+@Serializable
+data class PortalFeed(
+    val about: PortalAbout = PortalAbout(),
+    val news: List<PortalPost> = emptyList(),
+    val events: List<PortalPost> = emptyList(),
 )
 
 @Serializable
@@ -151,7 +199,23 @@ data class RequestType(
     val type: String = "",
     val label: String = "",
     val category: String = "",
+    // Định nghĩa field do server trả (NGUỒN CHUẨN). App dựng form động từ đây; rỗng thì dùng bản dự phòng.
+    val fields: List<ReqFieldDto> = emptyList(),
 )
+
+/** Một trường nhập của đơn do server mô tả. type: text|date|time|number|money|textarea|select|checkboxes. */
+@Serializable
+data class ReqFieldDto(
+    val key: String = "",
+    val label: String = "",
+    val type: String = "text",
+    val hint: String = "",
+    val required: Boolean = true,
+    val options: List<ReqOptionDto> = emptyList(),
+)
+
+@Serializable
+data class ReqOptionDto(val value: String = "", val label: String = "")
 
 @Serializable
 data class RequestListItem(
@@ -231,6 +295,7 @@ data class Penalty(
     val penaltyTypeLabel: String = "",
     val penaltyDate: String? = null,
     val amount: Double = 0.0,
+    val installments: Int = 1,
     val reason: String = "",
     val note: String = "",
     val status: String = "",
@@ -256,6 +321,27 @@ data class SalaryListItem(
 data class PayLine(
     val label: String = "",
     val amount: Double = 0.0,
+)
+
+/** Một phiếu lương ĐÃ PHÁT HÀNH của chính nhân viên (mỗi kỳ yyyy-MM một phiếu). */
+@Serializable
+data class PayslipItem(
+    val id: String = "",
+    val period: String = "",
+    val baseSalary: Double = 0.0,
+    val allowance: Double = 0.0,
+    val overtimePay: Double = 0.0,
+    val overtimeHours: Double = 0.0,
+    val workedDays: Int = 0,
+    val absentDays: Int = 0,
+    val lateDays: Int = 0,
+    val earnings: List<PayLine> = emptyList(),
+    val deductions: List<PayLine> = emptyList(),
+    val totalEarnings: Double = 0.0,
+    val totalDeductions: Double = 0.0,
+    val netPay: Double = 0.0,
+    val note: String = "",
+    val createdAt: String = "",
 )
 
 /** Lương dự tính của chính nhân viên cho tháng hiện tại (gồm khấu trừ phạt nếu có). */
@@ -382,7 +468,33 @@ data class ChamCongBurstRequest(
     val occurredAt: String? = null,
     val gpsLat: Double? = null,
     val gpsLng: Double? = null,
+    // Active-flash liveness (đã ngừng dùng — giữ để tương thích): challengeId + slotIndices.
+    val challengeId: String? = null,
+    val slotIndices: List<Int>? = null,
+    // Liveness QUAY ĐẦU: true = loạt ảnh chụp khi người dùng quay đầu (server kiểm tra biên độ góc quay).
+    val motionCheck: Boolean = false,
 )
+
+// Cấu hình liveness quay đầu (đọc từ server để biết có yêu cầu quay đầu lúc quét không).
+@Serializable
+data class MotionConfig(val enabled: Boolean = false, val enforce: Boolean = false)
+
+// ----- Active-flash liveness (chống giả mạo chủ động bằng ánh sáng màn hình) -----
+// Server phát chuỗi màu ngẫu nhiên; app hiển thị full màn hình từng màu theo slotMs (chờ settleMs cho
+// màn hình + camera ổn định) rồi gắn nhãn slot cho từng khung ảnh gửi lên để server đối chiếu phản xạ.
+@Serializable
+data class FlashChallenge(
+    val challengeId: String = "",
+    val slots: List<FlashSlot> = emptyList(),
+    val slotMs: Int = 420,
+    val settleMs: Int = 150,
+)
+
+@Serializable
+data class FlashSlot(val index: Int = 0, val color: String = "#FFFFFF")
+
+// Một khung đã chụp kèm nhãn slot màu đang chiếu (slot = -1 khi không chạy flash liveness).
+data class CapturedFrame(val image: String, val slot: Int)
 
 // ----- Tự đăng ký khuôn mặt (mỗi tài khoản một lần, nhiều góc) -----
 // Một góc quét = nhãn tư thế ("front" | "side1" | "side2") + loạt ảnh của góc đó.
@@ -391,6 +503,10 @@ data class FaceEnrollPose(val pose: String, val images: List<String>)
 
 @Serializable
 data class SelfFaceEnrollRequest(val poses: List<FaceEnrollPose>)
+
+// Cập nhật ảnh chân dung hồ sơ của chính tài khoản (data URL JPEG; rỗng = xoá ảnh).
+@Serializable
+data class SaveAvatarBody(val avatar: String?)
 
 // Trạng thái đã đăng ký khuôn mặt của chính tài khoản (để làm mờ nút "Đăng ký khuôn mặt").
 @Serializable

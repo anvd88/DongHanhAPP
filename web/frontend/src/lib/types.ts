@@ -343,6 +343,28 @@ export interface OfflineConfig {
   maxBackdateMinutes: number;
 }
 
+/** Cấu hình liveness quay đầu (challenge-response). */
+export interface MotionConfig {
+  /** Bật = app yêu cầu quay đầu lúc quét. */
+  enabled: boolean;
+  /** Chặn nếu biên độ quay quá nhỏ (nghi ảnh tĩnh) hay chỉ ghi log. */
+  enforce: boolean;
+}
+
+/** Một lượt đo Silent-Face (chống ảnh/màn hình): điểm P(real) cao nhất/trung bình/nhì trong các khung. */
+export interface LivenessMetric {
+  atUtc: string;
+  user: string;
+  best: number;
+  mean: number;
+  second: number;
+  frames: number;
+  threshold: number;
+  passed: boolean;
+  /** Biên độ góc quay đầu (yaw span) của lượt; < 0 nghĩa là lượt không kiểm tra chuyển động. */
+  motionSpan: number;
+}
+
 export interface Release {
   id: number;
   appTarget: string;

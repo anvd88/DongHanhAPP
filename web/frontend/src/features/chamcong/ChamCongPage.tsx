@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, MapPin, ShieldAlert, Trash2, UserPlus, Wifi, WifiOff, X } from "lucide-react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useApi } from "../../lib/useApi";
@@ -8,6 +8,8 @@ import type {
   ChamCongOffline,
   FaceRegistrationLog,
   FaceNguoiDung,
+  LivenessMetric,
+  MotionConfig,
   OfflineConfig,
   UserAdmin,
 } from "../../lib/types";
@@ -90,6 +92,8 @@ function OfflineTab() {
 
   return (
     <>
+      <MotionConfigPanel />
+      <LivenessMetricsPanel />
       <OfflineConfigPanel />
 
       <div className="cc-result glass">
@@ -181,6 +185,128 @@ function OfflineTab() {
         onConfirm={doReject}
       />
     </>
+  );
+}
+
+/* -------- Công tắc liveness QUAY ĐẦU (challenge-response) -------- */
+function MotionConfigPanel() {
+  const { data, reload } = useApi<MotionConfig>("/api/chamcong/motion-config");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const save = async (patch: Partial<MotionConfig>) => {
+    if (!data) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.put("/api/chamcong/motion-config", { ...data, ...patch });
+      setMsg("Đã lưu — áp dụng ngay, không cần build lại app.");
+      reload();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Lỗi lưu cấu hình.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cc-result glass" style={{ marginBottom: 12 }}>
+      <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <ShieldAlert className="h-4 w-4" /> Liveness quay đầu (chống chấm bằng ảnh)
+      </div>
+      <div className="cc-note" style={{ marginBottom: 10 }}>
+        💡 Lúc quét, app yêu cầu nhân viên <b>nhìn thẳng rồi quay đầu sang hai bên</b>. Ảnh tĩnh không quay
+        đầu được nên bị loại. Rẻ, chạy trên mọi camera. Bật thử ở chế độ <b>chỉ ghi log</b> để xem biên độ
+        quay (cột <code>span</code> ở bảng dưới) trước khi bật chặn.
+      </div>
+      {data && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={data.enabled} disabled={busy}
+              onChange={(e) => save({ enabled: e.target.checked })} />
+            <span>
+              <b>Bật yêu cầu quay đầu khi quét</b>
+              <div className="cc-note">Tắt = quét giữ khung tĩnh như cũ.</div>
+            </span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: data.enabled ? "pointer" : "not-allowed", opacity: data.enabled ? 1 : 0.5 }}>
+            <input type="checkbox" checked={data.enforce} disabled={busy || !data.enabled}
+              onChange={(e) => save({ enforce: e.target.checked })} />
+            <span>
+              <b>Chặn nếu không quay đầu (nghi ảnh tĩnh)</b>
+              <div className="cc-note">Tắt = chỉ ghi log biên độ quay để hiệu chỉnh, KHÔNG chặn chấm công.</div>
+            </span>
+          </label>
+          {msg && <span className="cc-note">{msg}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------- Số đo Silent-Face (chống ảnh/màn hình) — hiệu chỉnh ngưỡng có số liệu -------- */
+function LivenessMetricsPanel() {
+  const { data, reload } = useApi<LivenessMetric[]>("/api/chamcong/liveness-metrics");
+  useEffect(() => {
+    const t = setInterval(reload, 4000);
+    return () => clearInterval(t);
+  }, [reload]);
+
+  const hhmmss = (iso: string) => {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("vi-VN", { hour12: false });
+  };
+  const numCell = { textAlign: "right" as const, fontVariantNumeric: "tabular-nums" as const };
+
+  return (
+    <div className="cc-result glass" style={{ marginBottom: 12 }}>
+      <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <ShieldAlert className="h-4 w-4" /> Chống ảnh/màn hình giả (Silent-Face)
+      </div>
+      <div className="cc-note" style={{ marginBottom: 8 }}>
+        📊 Điểm "người thật" (P_real) mỗi lượt quét. Hiện quét <b>qua</b> nếu <b>khung cao nhất</b> ≥ ngưỡng.
+        Quét <b>mặt thật</b> và <b>ảnh giả</b> vài lần rồi so <code>best</code>/<code>mean</code>: nếu ảnh vẫn
+        <code> best</code> cao thì cần nâng ngưỡng hoặc đổi sang xét <code>mean</code> (báo tôi số liệu để chỉnh).
+      </div>
+      {(!data || data.length === 0) ? (
+        <div className="cc-note">Chưa có số đo. Hãy quét mặt trên app để bắt đầu ghi.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="cc-table" style={{ width: "100%", fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left" }}>Giờ</th>
+                <th style={{ textAlign: "left" }}>Nhân viên</th>
+                <th style={{ textAlign: "right" }}>best</th>
+                <th style={{ textAlign: "right" }}>mean</th>
+                <th style={{ textAlign: "right" }}>nhì</th>
+                <th style={{ textAlign: "right" }}>khung</th>
+                <th style={{ textAlign: "right" }}>ngưỡng</th>
+                <th style={{ textAlign: "right" }}>span</th>
+                <th style={{ textAlign: "left" }}>Kết luận</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((m, i) => (
+                <tr key={i}>
+                  <td>{hhmmss(m.atUtc)}</td>
+                  <td>{m.user || "—"}</td>
+                  <td style={numCell}>{m.best.toFixed(3)}</td>
+                  <td style={numCell}>{m.mean.toFixed(3)}</td>
+                  <td style={numCell}>{m.second.toFixed(3)}</td>
+                  <td style={{ textAlign: "right" }}>{m.frames}</td>
+                  <td style={numCell}>{m.threshold.toFixed(2)}</td>
+                  <td style={numCell}>{m.motionSpan < 0 ? "—" : m.motionSpan.toFixed(3)}</td>
+                  <td style={{ color: m.passed ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
+                    {m.passed ? "Qua (thật)" : "Chặn (giả)"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

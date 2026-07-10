@@ -57,6 +57,7 @@ class HrRepository(context: Context) {
 
     suspend fun appConfig(): AppConfig = call { api.appConfig() }
     suspend fun myProfile(): EmployeeDetail = call { api.myProfile() }
+    suspend fun updateMyAvatar(avatar: String?) = callUnit { api.updateMyAvatar(SaveAvatarBody(avatar)) }
     suspend fun myTimesheet(month: String): Timesheet = call { api.myTimesheet(month) }
     suspend fun requests(scope: String, status: String? = null): List<RequestListItem> =
         call { api.requests(scope, status) }
@@ -67,10 +68,12 @@ class HrRepository(context: Context) {
         call { api.penalties(scope, month) }
     suspend fun salaries(): List<SalaryListItem> = call { api.salaries() }
     suspend fun myEstimate(): PayEstimate = call { api.myEstimate() }
+    suspend fun myPayslips(): List<PayslipItem> = call { api.myPayslips() }
     suspend fun managerSummary(date: String, month: String): ManagerSummary =
         call { api.managerSummary(date, month) }
     suspend fun employees(): List<EmployeeCard> = call { api.employees() }
     suspend fun departments(): List<Department> = call { api.departments() }
+    suspend fun portalFeed(): PortalFeed = call { api.portalFeed() }
 
     suspend fun approveRequest(id: String, comment: String) = callUnit {
         api.approveRequest(id, DecisionBody(comment))
@@ -167,8 +170,24 @@ class HrRepository(context: Context) {
     // Dùng attendanceApi → gọi thẳng máy chủ LAN, nên đây cũng là phép thử "có trong mạng LAN không".
     suspend fun faceEngineStatus(): FaceEngineStatus = call { attendanceApi.faceEngineStatus() }
 
-    suspend fun chamCong(images: List<String>, previewOnly: Boolean = false): ChamCongResult =
-        call { attendanceApi.chamCong(ChamCongBurstRequest(images, selfOnly = true, previewOnly = previewOnly)) }
+    suspend fun chamCong(
+        images: List<String>,
+        previewOnly: Boolean = false,
+        motionCheck: Boolean = false,
+    ): ChamCongResult =
+        call {
+            attendanceApi.chamCong(
+                ChamCongBurstRequest(
+                    images = images,
+                    selfOnly = true,
+                    previewOnly = previewOnly,
+                    motionCheck = motionCheck,
+                ),
+            )
+        }
+
+    // Đọc cấu hình liveness quay đầu (có yêu cầu quay đầu lúc quét không).
+    suspend fun motionConfig(): MotionConfig = call { attendanceApi.motionConfig() }
 
     // --- Tự đăng ký khuôn mặt (đi qua máy chủ LAN như chấm công) ---
     suspend fun myFaceStatus(): SelfFaceStatus = call { attendanceApi.myFaceStatus() }

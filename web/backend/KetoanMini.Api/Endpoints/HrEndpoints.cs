@@ -404,6 +404,19 @@ public static class HrEndpoints
             return Results.Ok(await ReadEmployeeDetail(conn, id));
         });
 
+        // Cập nhật ảnh chân dung của CHÍNH người đang đăng nhập (app tự chụp có hướng dẫn).
+        // Nhận data URL JPEG (data:image/jpeg;base64,...); gửi chuỗi rỗng/null để xoá ảnh.
+        g.MapPut("/me/avatar", async (SaveAvatarReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var id = await EnsureEmployeeForUser(conn, u.Username());
+            var avatar = string.IsNullOrWhiteSpace(req.Avatar) ? null : req.Avatar;
+            await conn.Cmd("UPDATE hr_employees SET avatar=@a, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                .With("@a", (object?)avatar ?? DBNull.Value).With("@id", id).ExecuteNonQueryAsync();
+            await Signal(hub, db, u, "Cập nhật ảnh chân dung", "Employee", u.Username());
+            return Results.NoContent();
+        });
+
         g.MapGet("/employees/{id:guid}", async (Guid id, Database db) =>
         {
             await using var conn = await db.OpenAsync();
@@ -1663,6 +1676,7 @@ public static class HrEndpoints
     public record SaveEmployeeReq(string? EmployeeCode, string? Username, string? FullName, DateOnly? Dob, string? Gender,
         string? Phone, string? Email, string? Address, Guid? DepartmentId, string? Position, Guid? ManagerId,
         DateOnly? HireDate, string? Status, string? Avatar, Guid? LocationId = null, string? AccessRole = null);
+    public record SaveAvatarReq(string? Avatar);
     public record SaveContractReq(string? ContractNo, string? ContractType, DateOnly? StartDate, DateOnly? EndDate,
         decimal BaseSalary, decimal Allowance, string? Status, string? Note);
     public record SavePayslipReq(string? Period, decimal WorkDays, decimal OvertimeHours, decimal BaseSalary,
