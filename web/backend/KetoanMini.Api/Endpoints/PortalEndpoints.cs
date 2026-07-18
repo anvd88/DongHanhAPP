@@ -1,7 +1,5 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
-using Microsoft.AspNetCore.SignalR;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -40,7 +38,7 @@ public static class PortalEndpoints
             return Results.Ok(posts);
         });
 
-        g.MapPost("/posts", async (PortalPostRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/posts", async (PortalPostRequest req, ClaimsPrincipal principal, Database db) =>
         {
             if (!principal.IsAdmin()) return Results.Forbid();
             var (kind, title, summary, body, cover, location, eventAt, error) = ValidatePost(req);
@@ -68,12 +66,11 @@ public static class PortalEndpoints
                 .With("@author", author)
                 .ExecuteScalarAsync())!;
 
-            await hub.Clients.All.SendAsync("changed", "data");
             await db.RecordAudit(author, "Đăng bài cổng thông tin", "PortalPost", id.ToString(), $"[{kind}] {title}");
             return Results.Ok(new { id });
         });
 
-        g.MapPut("/posts/{id:long}", async (long id, PortalPostRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/posts/{id:long}", async (long id, PortalPostRequest req, ClaimsPrincipal principal, Database db) =>
         {
             if (!principal.IsAdmin()) return Results.Forbid();
             var (kind, title, summary, body, cover, location, eventAt, error) = ValidatePost(req);
@@ -108,12 +105,11 @@ public static class PortalEndpoints
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound(new { message = "Bài viết không còn tồn tại." });
 
-            await hub.Clients.All.SendAsync("changed", "data");
             await db.RecordAudit(principal.Username(), "Sửa bài cổng thông tin", "PortalPost", id.ToString(), $"[{kind}] {title}");
             return Results.NoContent();
         });
 
-        g.MapDelete("/posts/{id:long}", async (long id, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/posts/{id:long}", async (long id, ClaimsPrincipal principal, Database db) =>
         {
             if (!principal.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -122,7 +118,6 @@ public static class PortalEndpoints
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound(new { message = "Bài viết không còn tồn tại." });
 
-            await hub.Clients.All.SendAsync("changed", "data");
             await db.RecordAudit(principal.Username(), "Xóa bài cổng thông tin", "PortalPost", id.ToString(), "");
             return Results.NoContent();
         });
@@ -134,7 +129,7 @@ public static class PortalEndpoints
             return Results.Ok(await ReadAbout(conn));
         });
 
-        g.MapPut("/about", async (PortalAboutRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/about", async (PortalAboutRequest req, ClaimsPrincipal principal, Database db) =>
         {
             if (!principal.IsAdmin()) return Results.Forbid();
             var title = Trim(req.Title, 300);
@@ -169,7 +164,6 @@ public static class PortalEndpoints
                 .With("@website", website)
                 .ExecuteNonQueryAsync();
 
-            await hub.Clients.All.SendAsync("changed", "data");
             await db.RecordAudit(principal.Username(), "Sửa giới thiệu công ty", "PortalAbout", "1", title);
             return Results.NoContent();
         });

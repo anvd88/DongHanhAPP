@@ -103,7 +103,7 @@ public static class BankAccountEndpoints
                 .With("@branch", (req.Branch ?? "").Trim()).With("@def", makeDefault)
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
 
-            await SignalEmployee(hub, db, conn, u, empId.Value, "Thêm tài khoản ngân hàng", id.ToString());
+            await SignalEmployee(hub, db, u, "Thêm tài khoản ngân hàng", id.ToString());
             return Results.Ok(new { id });
         });
 
@@ -128,7 +128,7 @@ public static class BankAccountEndpoints
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
 
-            await SignalEmployee(hub, db, conn, u, empId.Value, "Cập nhật tài khoản ngân hàng", id.ToString());
+            await SignalEmployee(hub, db, u, "Cập nhật tài khoản ngân hàng", id.ToString());
             return Results.NoContent();
         });
 
@@ -143,7 +143,7 @@ public static class BankAccountEndpoints
             await ClearDefault(conn, empId.Value);
             await conn.Cmd("UPDATE hr_bank_accounts SET is_default=TRUE, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                 .With("@id", id).ExecuteNonQueryAsync();
-            await SignalEmployee(hub, db, conn, u, empId.Value, "Đặt tài khoản ngân hàng mặc định", id.ToString());
+            await SignalEmployee(hub, db, u, "Đặt tài khoản ngân hàng mặc định", id.ToString());
             return Results.NoContent();
         });
 
@@ -164,7 +164,7 @@ public static class BankAccountEndpoints
                     WHERE id = (SELECT id FROM hr_bank_accounts WHERE employee_id=@e ORDER BY created_at LIMIT 1)
                     """).With("@e", empId.Value).ExecuteNonQueryAsync();
 
-            await SignalEmployee(hub, db, conn, u, empId.Value, "Xóa tài khoản ngân hàng", id.ToString());
+            await SignalEmployee(hub, db, u, "Xóa tài khoản ngân hàng", id.ToString());
             return Results.NoContent();
         });
     }
@@ -210,19 +210,14 @@ public static class BankAccountEndpoints
         note = r.Str("note"),
     };
 
-    private static async Task SignalEmployee(IHubContext<ChangesHub> hub, Database db, NpgsqlConnection conn,
-        ClaimsPrincipal u, Guid employeeId, string action, string name)
+    private static async Task SignalEmployee(IHubContext<ChangesHub> hub, Database db,
+        ClaimsPrincipal u, string action, string name)
     {
         await db.RecordAudit(u.Username(), action, "BankAccount", name, $"{action} (web).");
+        // Clients.All ĐÃ gồm cả nhân viên chủ tài khoản, nên không gửi thêm bản riêng cho họ nữa:
+        // trước đây máy của người đó nhận "data"/"hr" HAI lần và tải lại dữ liệu thừa một lượt.
         await hub.Clients.All.SendAsync("changed", "data");
         await hub.Clients.All.SendAsync("changed", "hr");
-        var target = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
-            .With("@id", employeeId).ExecuteScalarAsync() as string;
-        if (!string.IsNullOrWhiteSpace(target))
-        {
-            await hub.Clients.User(target).SendAsync("changed", "data");
-            await hub.Clients.User(target).SendAsync("changed", "hr");
-        }
     }
 
     public record SaveBankAccountReq(Guid? EmployeeId, string? Bank, string? AccountNumber,

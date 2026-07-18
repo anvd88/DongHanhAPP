@@ -4,8 +4,14 @@ using Microsoft.AspNetCore.SignalR;
 namespace KetoanMini.Api.Realtime;
 
 /// <summary>
-/// Hub đẩy tín hiệu thay đổi dữ liệu xuống mọi client (web + desktop).
-/// Broadcast "changed" không kèm dữ liệu nhạy cảm nên để mở (không yêu cầu đăng nhập) trong LAN.
+/// Hub đẩy tín hiệu thay đổi dữ liệu xuống mọi client (web + app).
+/// Broadcast "changed" chỉ mang TÊN PHẠM VI ("hr", "data"…), không kèm dữ liệu nghiệp vụ — máy khách
+/// nhận tín hiệu rồi tự gọi API (đã kiểm quyền) để lấy phần mình được xem.
+/// Hub YÊU CẦU ĐĂNG NHẬP: <c>Program.cs</c> gắn <c>RequireAuthorization(RequireRole(AppRoles.All))</c>,
+/// nên kết nối ẩn danh bị chặn ngay từ bước negotiate (quan trọng vì hub đang lộ ra Internet qua
+/// Cloudflare Tunnel). Vì vậy <see cref="HubCallerContext.UserIdentifier"/> luôn có giá trị —
+/// token nào cũng mang claim Name (xem <c>TokenService</c>); thấy "(ẩn danh)" trong log là dấu hiệu
+/// token không tới được hub, cần điều tra chứ không phải trạng thái bình thường.
 /// Ngoài ra hub còn TRUNG CHUYỂN tín hiệu bắt tay WebRTC (gửi tệp P2P + GỌI THOẠI/VIDEO) qua LAN/Internet.
 /// </summary>
 public sealed class ChangesHub : Hub

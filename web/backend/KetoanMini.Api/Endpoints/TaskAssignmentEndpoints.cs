@@ -1,8 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Services;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -16,7 +14,8 @@ namespace KetoanMini.Api.Endpoints;
 ///                              submitted → rejected → in_progress (trả lại làm tiếp, có thể nộp lại)
 ///   bất kỳ trạng thái chưa kết thúc → cancelled              (người giao huỷ)
 ///
-/// Realtime: mỗi thao tác phát "changed"/"hr" (client tự làm mới) + đẩy thông báo tới đúng người liên quan.
+/// Realtime: PostgreSQL phát scope "tasks" sau khi giao dịch ghi hoàn tất; thông báo FCM vẫn nhắm
+/// tới đúng người liên quan khi app đang ở nền.
 /// </summary>
 public static class TaskAssignmentEndpoints
 {
@@ -174,7 +173,7 @@ public static class TaskAssignmentEndpoints
         });
 
         // Giao việc mới (chỉ Thủ kho/Admin).
-        g.MapPost("/", async (CreateTaskReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/", async (CreateTaskReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -209,12 +208,11 @@ public static class TaskAssignmentEndpoints
 
             await db.RecordAudit(me, "Giao việc", "WorkTask", no, $"{title} → {assigneeName}.");
             await push.SendToUserAsync(assignee, "Bạn được giao việc mới", $"{no}: {title}", $"task:{id}:assigned", "WorkTasks");
-            await NotifyTask(hub, me, assignee);
             return Results.Ok(new { id, taskNo = no });
         });
 
         // Sửa thông tin việc (người giao/Admin, khi chưa nghiệm thu/huỷ).
-        g.MapPut("/{id:guid}", async (Guid id, CreateTaskReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPut("/{id:guid}", async (Guid id, CreateTaskReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -256,16 +254,15 @@ public static class TaskAssignmentEndpoints
                 reassigned ? $"Chuyển việc cho {assigneeName}." : "Cập nhật thông tin việc.");
             await db.RecordAudit(me, "Sửa việc", "WorkTask", t.TaskNo, title);
             if (reassigned) await push.SendToUserAsync(assignee, "Bạn được giao việc", $"{t.TaskNo}: {title}", $"task:{id}:assigned", "WorkTasks");
-            await NotifyTask(hub, me, assignee, t.AssignerUsername);
             return Results.NoContent();
         });
 
         // Nhân viên bắt đầu làm.
-        g.MapPost("/{id:guid}/start", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
-            await AssigneeTransition(id, u, db, hub, expect: ["assigned"], to: "in_progress", kind: "started", note: "Bắt đầu thực hiện."));
+        g.MapPost("/{id:guid}/start", async (Guid id, ClaimsPrincipal u, Database db) =>
+            await AssigneeTransition(id, u, db, expect: ["assigned"], to: "in_progress", kind: "started", note: "Bắt đầu thực hiện."));
 
         // Nhân viên cập nhật tiến độ.
-        g.MapPost("/{id:guid}/progress", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/progress", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -280,12 +277,11 @@ public static class TaskAssignmentEndpoints
                 .With("@p", pct).With("@s", status).With("@id", id).ExecuteNonQueryAsync();
             var name = await DisplayName(conn, me);
             await AddEvent(conn, id, me, name, "progress", string.IsNullOrWhiteSpace(req.Note) ? $"Tiến độ {pct}%." : $"Tiến độ {pct}%: {req.Note!.Trim()}");
-            await NotifyTask(hub, me, t.AssignerUsername);
             return Results.NoContent();
         });
 
         // Nhân viên nộp để nghiệm thu.
-        g.MapPost("/{id:guid}/submit", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/{id:guid}/submit", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -304,12 +300,11 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, name, "submitted", note.Length > 0 ? $"Nộp nghiệm thu: {note}" : "Nộp nghiệm thu.");
             await db.RecordAudit(me, "Nộp nghiệm thu", "WorkTask", t.TaskNo, t.Title);
             await push.SendToUserAsync(t.AssignerUsername, "Có việc chờ nghiệm thu", $"{t.TaskNo}: {t.Title}", $"task:{id}:submitted", "WorkTasks");
-            await NotifyTask(hub, me, t.AssignerUsername);
             return Results.NoContent();
         });
 
         // Người giao NGHIỆM THU ĐẠT.
-        g.MapPost("/{id:guid}/accept", async (Guid id, ReviewReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/{id:guid}/accept", async (Guid id, ReviewReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -331,12 +326,11 @@ public static class TaskAssignmentEndpoints
                 (rating is not null ? $"Nghiệm thu đạt ({rating}★). " : "Nghiệm thu đạt. ") + note);
             await db.RecordAudit(me, "Nghiệm thu đạt", "WorkTask", t.TaskNo, t.Title);
             await push.SendToUserAsync(t.AssigneeUsername, "Việc đã được nghiệm thu", $"{t.TaskNo}: {t.Title}", $"task:{id}:accepted", "WorkTasks");
-            await NotifyTask(hub, me, t.AssigneeUsername);
             return Results.NoContent();
         });
 
         // Người giao TRẢ LẠI (không đạt) → nhân viên làm tiếp rồi nộp lại.
-        g.MapPost("/{id:guid}/reject", async (Guid id, ReviewReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/{id:guid}/reject", async (Guid id, ReviewReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -356,12 +350,11 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, name, "rejected", $"Trả lại: {note}");
             await db.RecordAudit(me, "Trả lại việc", "WorkTask", t.TaskNo, note);
             await push.SendToUserAsync(t.AssigneeUsername, "Việc bị trả lại", $"{t.TaskNo}: {note}", $"task:{id}:rejected", "WorkTasks");
-            await NotifyTask(hub, me, t.AssigneeUsername);
             return Results.NoContent();
         });
 
         // Người giao huỷ việc.
-        g.MapPost("/{id:guid}/cancel", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/{id:guid}/cancel", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -377,12 +370,11 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, name, "cancelled", note.Length > 0 ? $"Huỷ việc: {note}" : "Huỷ việc.");
             await db.RecordAudit(me, "Huỷ việc", "WorkTask", t.TaskNo, t.Title);
             await push.SendToUserAsync(t.AssigneeUsername, "Việc đã bị huỷ", $"{t.TaskNo}: {t.Title}", $"task:{id}:cancelled", "WorkTasks");
-            await NotifyTask(hub, me, t.AssigneeUsername);
             return Results.NoContent();
         });
 
         // Bình luận / trao đổi trên việc (cả hai phía).
-        g.MapPost("/{id:guid}/comment", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/{id:guid}/comment", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             var me = u.Username();
             var note = (req.Note ?? "").Trim();
@@ -398,12 +390,11 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, name, "comment", note);
             var other = isAssignee ? t.AssignerUsername : t.AssigneeUsername;
             await push.SendToUserAsync(other, $"Trao đổi việc {t.TaskNo}", note, $"task:{id}:comment", "WorkTasks");
-            await NotifyTask(hub, me, other);
             return Results.NoContent();
         });
 
         // Xoá việc (người giao/Admin).
-        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
@@ -412,7 +403,6 @@ public static class TaskAssignmentEndpoints
             if (!CanReview(t, me, u.IsAdmin())) return Results.Forbid();
             await conn.Cmd("DELETE FROM work_tasks WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             await db.RecordAudit(me, "Xoá việc", "WorkTask", t.TaskNo, t.Title);
-            await NotifyTask(hub, me, t.AssigneeUsername, t.AssignerUsername);
             return Results.NoContent();
         });
     }
@@ -450,20 +440,8 @@ public static class TaskAssignmentEndpoints
             .With("@t", taskId).With("@au", actor).With("@an", actorName).With("@k", kind).With("@n", note)
             .ExecuteNonQueryAsync();
 
-    /// <summary>Phát tín hiệu làm mới tới mọi client + nhắm thẳng vào những người liên quan (tức thì).</summary>
-    private static async Task NotifyTask(IHubContext<ChangesHub> hub, params string[] users)
-    {
-        try
-        {
-            await hub.Clients.All.SendAsync("changed", "hr");
-            foreach (var user in users.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct())
-                await hub.Clients.User(user).SendAsync("changed", "hr");
-        }
-        catch { /* không có kết nối hub → bỏ qua */ }
-    }
-
     private static async Task<IResult> AssigneeTransition(Guid id, ClaimsPrincipal u, Database db,
-        IHubContext<ChangesHub> hub, string[] expect, string to, string kind, string note)
+        string[] expect, string to, string kind, string note)
     {
         var me = u.Username();
         await using var conn = await db.OpenAsync();
@@ -476,7 +454,6 @@ public static class TaskAssignmentEndpoints
             .With("@s", to).With("@id", id).ExecuteNonQueryAsync();
         var name = await DisplayName(conn, me);
         await AddEvent(conn, id, me, name, kind, note);
-        await NotifyTask(hub, me, t.AssignerUsername);
         return Results.NoContent();
     }
 

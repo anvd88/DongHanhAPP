@@ -11,12 +11,24 @@ function scopesForPath(path: string): RealtimeScope[] {
   if (path.startsWith("/api/chat/conversations/") && path.endsWith("/messages")) return ["chat"];
   if (path.startsWith("/api/chat/conversations") || path.startsWith("/api/chat/contacts"))
     return ["chat", "presence"];
+  if (path.startsWith("/api/tasks")) return ["tasks", "hr"];
+  if (path.startsWith("/api/worklist")) return ["tasks", "hr"];
+  if (path.startsWith("/api/portal")) return ["portal"];
+  if (path.startsWith("/api/app-config")) return ["config"];
+  if (path.startsWith("/api/audit")) return ["audit"];
+  if (path.startsWith("/api/talent")) return ["talent"];
+  if (path.startsWith("/api/chamcong/liveness-metrics")) return ["liveness"];
+  if (
+    path.startsWith("/api/users") ||
+    path.startsWith("/api/directory") ||
+    path.startsWith("/api/auth/devices")
+  )
+    return ["presence"];
   if (path.startsWith("/api/feedback")) return ["feedback"];
   if (path.startsWith("/api/releases")) return ["release"];
   if (
     path.startsWith("/api/hr") ||
     path.startsWith("/api/requests") ||
-    path.startsWith("/api/tasks") ||
     path.startsWith("/api/shifts") ||
     path.startsWith("/api/timesheet") ||
     path.startsWith("/api/bank-accounts") ||
@@ -25,9 +37,10 @@ function scopesForPath(path: string): RealtimeScope[] {
     path.startsWith("/api/payroll") ||
     path.startsWith("/api/chamcong")
   )
-    return ["hr", "data", "presence"];
-  // Mọi path nghiệp vụ khác: phản ứng với thay đổi dữ liệu & hiện diện, KHÔNG bị chat làm phiền.
-  return ["data", "presence"];
+    return ["hr", "data"];
+  // Presence đổi mỗi nhịp tim (45 giây/người dùng). Chỉ màn hình thật sự hiển thị online
+  // mới nghe scope đó; nếu không, một heartbeat sẽ làm tải lại gần như toàn bộ ứng dụng.
+  return ["data"];
 }
 
 /** Hook fetch GET đơn giản với trạng thái loading/error + refetch. */

@@ -11,7 +11,20 @@ import { appUrl } from "./appConfig";
  * Client chỉ LẮNG NGHE WebSocket — không poll. Mỗi listener đăng ký phạm vi quan tâm để
  * tránh refetch thừa: trang chat không tải lại khi có thay đổi kế toán và ngược lại.
  */
-export type RealtimeScope = "data" | "presence" | "chat" | "feedback" | "hr" | "release" | "all";
+export type RealtimeScope =
+  | "data"
+  | "presence"
+  | "chat"
+  | "feedback"
+  | "hr"
+  | "tasks"
+  | "portal"
+  | "config"
+  | "audit"
+  | "talent"
+  | "liveness"
+  | "release"
+  | "all";
 type Listener = (scope: RealtimeScope, payload?: string) => void;
 
 const listeners = new Set<Listener>();
