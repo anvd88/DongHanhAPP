@@ -132,6 +132,32 @@ public sealed class RealtimeWatcherTests
     }
 
     /// <summary>
+    /// Rớt kết nối tới PostgreSQL là mất trắng thông báo: LISTEN/NOTIFY không giữ hàng chờ cho phiên
+    /// đã ngắt. Máy khách vẫn nối SignalR nên không tự biết mà nạp lại → phải được bảo nạp toàn bộ
+    /// ('all') ngay khi listener nối lại, nếu không chúng giữ dữ liệu cũ tới lần ghi kế tiếp.
+    /// </summary>
+    [Fact]
+    public async Task ListenerReconnect_TellsClientsToResync()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var (watcher, hub, db) = await StartWatcherAsync(_factory, cts.Token);
+        try
+        {
+            hub.Sent.Clear();
+            // Ngắt phũ kết nối đang LISTEN từ phía máy chủ (giống lúc mạng chớp / PostgreSQL khởi động lại).
+            await using (var killer = await db.OpenAsync())
+                await killer.Cmd(
+                    @"SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                      WHERE query LIKE 'LISTEN %' AND pid <> pg_backend_pid()")
+                    .ExecuteNonQueryAsync();
+
+            await WaitUntilAsync(() => Task.FromResult(hub.Sent.Contains("all")), TimeSpan.FromSeconds(45));
+            Assert.Contains("all", hub.Sent);
+        }
+        finally { await watcher.StopAsync(CancellationToken.None); }
+    }
+
+    /// <summary>
     /// Mỗi nhịp tim (45 giây/người) ghi last_seen vào user_sessions → NOTIFY 'presence'. Trước đây mỗi
     /// thông báo thành một lần phát tới TOÀN BỘ máy khách (N người ⇒ N² tin nhắn). Giờ 'presence' bị
     /// gộp nhịp: dội liên tục cũng chỉ phát vài lần, trong khi phạm vi khác vẫn tới ngay.

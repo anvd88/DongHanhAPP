@@ -27,6 +27,9 @@ public sealed class ChangeWatcher(
         ["presence"] = TimeSpan.FromSeconds(15),
     };
 
+    // Đã từng LISTEN thành công chưa. Lần sau là NỐI LẠI → phải bảo máy khách nạp lại (xem ListenAsync).
+    private bool _hasSubscribed;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var triggersReady = false;
@@ -83,6 +86,18 @@ public sealed class ChangeWatcher(
 
         await conn.Cmd($"LISTEN {DatabaseChangePublisher.ChannelName}").ExecuteNonQueryAsync(ct);
         logger.LogInformation("Realtime database listener subscribed to {Channel}.", DatabaseChangePublisher.ChannelName);
+
+        // NỐI LẠI sau khi rớt: PostgreSQL KHÔNG giữ thông báo cho phiên đã ngắt, nên mọi thay đổi xảy
+        // ra trong lúc gián đoạn đã mất hẳn. Máy khách vẫn đang nối SignalR bình thường nên tự chúng
+        // không biết mà nạp lại — phải chủ động bảo nạp toàn bộ, nếu không chúng giữ dữ liệu cũ cho
+        // tới lần ghi kế tiếp (có thể hàng giờ). Lần LISTEN đầu tiên thì bỏ qua: máy khách vừa kết nối
+        // đã tự nạp dữ liệu rồi.
+        if (_hasSubscribed)
+        {
+            logger.LogInformation("Realtime listener reconnected; asking clients to resync.");
+            await hub.Clients.All.SendAsync("changed", "all", ct);
+        }
+        _hasSubscribed = true;
 
         using var listenerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var pump = PumpNotificationsAsync(conn, wake.Writer, listenerCts.Token);
