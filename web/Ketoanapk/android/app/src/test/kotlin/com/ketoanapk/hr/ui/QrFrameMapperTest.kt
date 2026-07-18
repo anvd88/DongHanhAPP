@@ -88,8 +88,11 @@ class QrFrameMapperTest {
         assertFalse(QrFrameMapper.isVisible(corners(140f, 10f, 160f, 10f, 160f, 30f, 140f, 30f), crop))
         // Mã nằm vắt qua mép nhưng TÂM vẫn trong vùng nhìn thì vẫn nhận (người dùng đang chĩa vào nó).
         assertTrue(QrFrameMapper.isVisible(corners(80f, 140f, 180f, 140f, 180f, 160f, 80f, 160f), crop))
-        // Thiếu góc thì không loại: thà nhận nhầm còn hơn bỏ sót mã người dùng thật sự đang quét.
-        assertTrue(QrFrameMapper.isVisible(corners(0f, 0f, 1f, 0f), crop))
+        // Thiếu góc không đủ chứng minh vị trí. Caller phải dùng tâm bounding-box làm fallback.
+        assertFalse(QrFrameMapper.isVisible(corners(0f, 0f, 1f, 0f), crop))
+        assertTrue(QrFrameMapper.isPointVisible(TrackPoint(150f, 150f), crop))
+        assertFalse(QrFrameMapper.isPointVisible(TrackPoint(50f, 150f), crop))
+        assertFalse(QrFrameMapper.isPointVisible(TrackPoint(150f, 150f), QrCropRect(0, 0, 0, 0)))
     }
 
     @Test

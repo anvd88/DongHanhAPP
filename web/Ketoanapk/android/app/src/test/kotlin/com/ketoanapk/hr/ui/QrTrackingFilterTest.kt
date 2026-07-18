@@ -132,20 +132,12 @@ class QrTrackingFilterTest {
         val filter = QrTrackingFilter()
         filter.update(square(centerX = 200f, centerY = 200f, edge = 200f), nowMs = 1_000L)
 
+        assertEquals(1f, filter.opacity(nowMs = 1_000L + QrTrackingFilter.HOLD_MS), 0.001f)
+        val fadeMidpoint = 1_000L + (QrTrackingFilter.HOLD_MS + QrTrackingFilter.RELEASE_MS) / 2L
+        assertTrue(filter.opacity(fadeMidpoint) in 0.45f..0.55f)
         assertNotNull("A few missing frames must not make the overlay blink", filter.current(nowMs = 1_519L))
         assertNull("The overlay must release after the fade window", filter.current(nowMs = 1_851L))
-    }
-
-    @Test
-    fun retainedSelection_remainsAvailableAfterNormalFadeTimeout() {
-        val filter = QrTrackingFilter()
-        val selected = square(centerX = 200f, centerY = 200f, edge = 160f)
-
-        filter.update(selected, nowMs = 1_000L, releaseWhenStale = false)
-
-        assertNull(filter.current(nowMs = 5_000L))
-        assertNotNull("The selected QR frame must stay visible until another QR replaces it", filter.retained())
-        assertQuadEquals(selected, filter.retained()!!)
+        assertEquals(0f, filter.opacity(nowMs = 1_851L), 0.001f)
     }
 
     @Test

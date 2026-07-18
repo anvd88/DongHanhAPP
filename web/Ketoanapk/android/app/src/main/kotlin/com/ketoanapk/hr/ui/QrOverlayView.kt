@@ -1,5 +1,6 @@
 package com.ketoanapk.hr.ui
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -14,12 +15,14 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Khung ngắm + lưới kẻ ô, vẽ trên PreviewView của CameraX.
+ * Khung ngắm vẽ trên PreviewView của CameraX.
  *
- * Hai trạng thái:
- *  • **Đang tìm** — khung vuông kèm lưới đứng yên GIỮA màn hình để người dùng biết chĩa vào đâu.
- *  • **Bắt được mã** — lưới rời khỏi giữa màn hình, TRƯỢT tới ôm lấy mã rồi bám theo. ML Kit trả về
- *    đúng 4 góc thật của mã nên lưới nghiêng/méo y hệt mã khi cầm máy chếch (xem [TrackQuad.pointAt]).
+ * Ba trạng thái:
+ *  • **Đang tìm** — bốn góc trắng đứng yên GIỮA màn hình để người dùng biết chĩa vào đâu.
+ *  • **Bắt được mã** — bốn góc vàng trượt tới ôm mã rồi bám theo. ML Kit trả về đúng 4 góc thật nên
+ *    khung nghiêng/méo theo mã khi cầm máy chếch.
+ *  • **Mất mã** — giữ ngắn để hấp thụ vài frame rớt, sau đó mờ dần và trở về khung trắng. Kết quả đã
+ *    đọc vẫn do Activity giữ lại; chỉ lớp đánh dấu vị trí biến mất, giống hành vi quan sát ở Zalo.
  *
  * Khác bản cũ (bám vào ViewfinderView của thư viện zxing): view này nhận thẳng TỨ GIÁC ĐÃ ĐỔI SANG
  * TOẠ ĐỘ MÀN HÌNH; bản cũ phải suy ra góc từ 3 tâm ô định vị nên khung hay lệch với mã méo phối cảnh.
@@ -32,10 +35,11 @@ class QrOverlayView @JvmOverloads constructor(
     private val trackingFilter = QrTrackingFilter()
     private val fillPath = Path()
     private val cornerPath = Path()
-    private val gridPath = Path()
     private var lastHapticAt = 0L
 
-    /** Hình đang vẽ ở khung trước — điểm XUẤT PHÁT khi lưới cần trượt sang mã mới. */
+    private val beginRelease = Runnable { postInvalidateOnAnimation() }
+
+    /** Hình đang vẽ ở khung trước — điểm xuất phát khi khung cần trượt sang mã mới. */
     private var lastDrawnQuad: TrackQuad? = null
     private var flyFrom: TrackQuad? = null
     private var flyStartAt = 0L
@@ -56,30 +60,27 @@ class QrOverlayView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-    }
-    private val gridShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.BLACK
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-    }
-
     /**
-     * Cập nhật khung. [snapToQr] = true khi vừa chuyển sang MỘT mã khác — khi đó lưới TRƯỢT từ chỗ
+     * Cập nhật khung. [snapToQr] = true khi vừa chuyển sang MỘT mã khác — khi đó khung TRƯỢT từ chỗ
      * đang đứng (khung ngắm giữa màn hình, hoặc mã trước đó) sang mã mới thay vì nhảy giật.
      */
     fun submitQuad(quad: TrackQuad, snapToQr: Boolean) {
         if (width <= 0 || height <= 0) return
         val now = SystemClock.uptimeMillis()
-        val wasVisible = trackingFilter.retained() != null
+        val wasVisible = trackingFilter.current(now) != null
         if (snapToQr || !wasVisible) {
             flyFrom = lastDrawnQuad ?: idleQuad()
             flyStartAt = now
             trackingFilter.reset()
         }
-        trackingFilter.update(measured = clampToView(quad), nowMs = now, releaseWhenStale = false)
+        trackingFilter.update(measured = clampToView(quad), nowMs = now)
+        removeCallbacks(beginRelease)
+        val releaseDelay = if (ValueAnimator.areAnimatorsEnabled()) {
+            QrTrackingFilter.HOLD_MS + 1L
+        } else {
+            QrTrackingFilter.RELEASE_MS + 1L
+        }
+        postDelayed(beginRelease, releaseDelay)
         if ((snapToQr || !wasVisible) && now - lastHapticAt >= HAPTIC_GUARD_MS) {
             performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             lastHapticAt = now
@@ -89,6 +90,7 @@ class QrOverlayView @JvmOverloads constructor(
 
     /** Quay lại khung ngắm đứng giữa màn hình. */
     fun clear() {
+        removeCallbacks(beginRelease)
         trackingFilter.reset()
         flyFrom = null
         lastDrawnQuad = null
@@ -96,33 +98,43 @@ class QrOverlayView @JvmOverloads constructor(
     }
 
     override fun onDraw(canvas: Canvas) {
-        val tracked = trackingFilter.retained()
+        val now = SystemClock.uptimeMillis()
+        val tracked = trackingFilter.current(now)
         if (tracked == null) {
+            trackingFilter.reset()
+            flyFrom = null
+            lastDrawnQuad = null
             // Chưa bắt được mã: khung ngắm đứng yên, màu trắng mờ để không tranh chấp với khung vàng.
-            drawFrame(canvas, idleQuad(), tracking = false)
+            drawFrame(canvas, idleQuad(), tracking = false, trackingAlpha = 1f)
             return
         }
+
+        val animationsEnabled = ValueAnimator.areAnimatorsEnabled()
+        val trackingAlpha = if (animationsEnabled) trackingFilter.opacity(now) else 1f
+        if (animationsEnabled && trackingAlpha < 1f) postInvalidateOnAnimation()
 
         val from = flyFrom
-        if (from == null) {
-            drawFrame(canvas, tracked, tracking = true)
+        if (from == null || !animationsEnabled) {
+            flyFrom = null
+            drawFrame(canvas, tracked, tracking = true, trackingAlpha = trackingAlpha)
             return
         }
 
-        val elapsed = SystemClock.uptimeMillis() - flyStartAt
+        val elapsed = now - flyStartAt
         if (elapsed >= FLY_MS) {
             flyFrom = null
-            drawFrame(canvas, tracked, tracking = true)
+            drawFrame(canvas, tracked, tracking = true, trackingAlpha = trackingAlpha)
             return
         }
-        // Chậm dần về cuối: lưới lao tới mã rồi "dính" vào, thay vì đứng khựng lại đột ngột.
+        // Chậm dần về cuối: khung lao tới mã rồi "dính" vào, thay vì đứng khựng lại đột ngột.
         val progress = elapsed.toFloat() / FLY_MS
         val eased = 1f - (1f - progress) * (1f - progress) * (1f - progress)
-        drawFrame(canvas, lerpQuad(from, tracked, eased), tracking = true)
+        drawFrame(canvas, lerpQuad(from, tracked, eased), tracking = true, trackingAlpha = trackingAlpha)
         postInvalidateOnAnimation()
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(beginRelease)
         trackingFilter.reset()
         super.onDetachedFromWindow()
     }
@@ -141,11 +153,11 @@ class QrOverlayView @JvmOverloads constructor(
         )
     }
 
-    private fun drawFrame(canvas: Canvas, quad: TrackQuad, tracking: Boolean) {
+    private fun drawFrame(canvas: Canvas, quad: TrackQuad, tracking: Boolean, trackingAlpha: Float) {
         lastDrawnQuad = quad
 
-        // Nền và lưới CHỈ vẽ khi đã nhận diện được mã. Lúc đang tìm thì chỉ có khung ngắm bốn góc —
-        // màn hình thoáng, không có gì che tầm nhìn khi người dùng đang căn mã.
+        // Chỉ phủ một lớp vàng rất nhẹ khi nhận diện. Không kẻ lưới lên mã: bốn góc màu đã đủ chỉ vị
+        // trí, còn ảnh QR nên được giữ thoáng và dễ nhìn như giao diện Zalo.
         if (tracking) {
             fillPath.reset()
             fillPath.moveTo(quad.topLeft.x, quad.topLeft.y)
@@ -153,49 +165,21 @@ class QrOverlayView @JvmOverloads constructor(
             fillPath.lineTo(quad.bottomRight.x, quad.bottomRight.y)
             fillPath.lineTo(quad.bottomLeft.x, quad.bottomLeft.y)
             fillPath.close()
-            fillPaint.alpha = TRACK_FILL_ALPHA
+            fillPaint.alpha = (TRACK_FILL_ALPHA * trackingAlpha).roundToInt()
             canvas.drawPath(fillPath, fillPaint)
-
-            buildGridPath(quad)
-            gridPaint.color = Color.rgb(255, 196, 0)
-            gridPaint.alpha = TRACK_GRID_ALPHA
-            gridShadowPaint.alpha = TRACK_SHADOW_ALPHA
-            canvas.drawPath(gridPath, gridShadowPaint)
-            canvas.drawPath(gridPath, gridPaint)
         }
 
         val lineColor = if (tracking) Color.rgb(255, 196, 0) else Color.WHITE
         buildRoundedCornerPath(quad)
         cornerPaint.color = lineColor
-        cornerPaint.alpha = if (tracking) 255 else IDLE_CORNER_ALPHA
-        cornerShadowPaint.alpha = if (tracking) TRACK_SHADOW_ALPHA else IDLE_SHADOW_ALPHA
+        cornerPaint.alpha = if (tracking) (255 * trackingAlpha).roundToInt() else IDLE_CORNER_ALPHA
+        cornerShadowPaint.alpha = if (tracking) {
+            (TRACK_SHADOW_ALPHA * trackingAlpha).roundToInt()
+        } else {
+            IDLE_SHADOW_ALPHA
+        }
         canvas.drawPath(cornerPath, cornerShadowPaint)
         canvas.drawPath(cornerPath, cornerPaint)
-    }
-
-    /**
-     * Lưới [GRID_CELLS]×[GRID_CELLS] kẻ bên trong tứ giác. Mỗi đường nối hai điểm trên hai cạnh đối
-     * diện qua [TrackQuad.pointAt] nên lưới nghiêng và méo đúng theo mã, không phải lưới vuông dán đè.
-     */
-    private fun buildGridPath(quad: TrackQuad) {
-        gridPath.reset()
-        val stroke = (edgeLength(quad) * GRID_STROKE_RATIO)
-            .coerceIn(MIN_GRID_STROKE_DP * density, MAX_GRID_STROKE_DP * density)
-        gridPaint.strokeWidth = stroke
-        gridShadowPaint.strokeWidth = stroke + GRID_SHADOW_EXTRA_DP * density
-
-        for (i in 1 until GRID_CELLS) {
-            val ratio = i.toFloat() / GRID_CELLS
-            val top = quad.pointAt(ratio, 0f)
-            val bottom = quad.pointAt(ratio, 1f)
-            gridPath.moveTo(top.x, top.y)
-            gridPath.lineTo(bottom.x, bottom.y)
-
-            val left = quad.pointAt(0f, ratio)
-            val right = quad.pointAt(1f, ratio)
-            gridPath.moveTo(left.x, left.y)
-            gridPath.lineTo(right.x, right.y)
-        }
     }
 
     private fun edgeLength(quad: TrackQuad) = minOf(
@@ -279,18 +263,11 @@ class QrOverlayView @JvmOverloads constructor(
         hypot(first.x - second.x, first.y - second.y)
 
     private companion object {
-        /** Lưới 5×5 ô: rõ hiệu ứng mà không rối mắt hay che mất mã. Chỉ hiện khi đã nhận diện được mã. */
-        const val GRID_CELLS = 5
-        const val FLY_MS = 260L
+        const val FLY_MS = 160L
         /** Khung ngắm chiếm 62% cạnh ngắn màn hình — đủ rộng để đưa mã vào, không lấn hết hình. */
         const val IDLE_SIDE_RATIO = 0.62f
         const val IDLE_CORNER_ALPHA = 210
         const val IDLE_SHADOW_ALPHA = 56
-        const val TRACK_GRID_ALPHA = 150
-        const val GRID_STROKE_RATIO = 0.014f
-        const val MIN_GRID_STROKE_DP = 0.8f
-        const val MAX_GRID_STROKE_DP = 2f
-        const val GRID_SHADOW_EXTRA_DP = 1.5f
         const val VIEW_EDGE_INSET_DP = 6f
         const val MIN_CORNER_LENGTH_DP = 4f
         const val MAX_CORNER_LENGTH_DP = 54f
@@ -302,7 +279,7 @@ class QrOverlayView @JvmOverloads constructor(
         const val CORNER_SHADOW_EXTRA_DP = 3.5f
         const val MAX_EDGE_FRACTION = 0.38f
         /** Nền vàng chỉ để chỉ rõ vùng mã, cố ý rất nhạt để không lấn mất chính mã QR bên dưới. */
-        const val TRACK_FILL_ALPHA = 0x16
+        const val TRACK_FILL_ALPHA = 0x30
         const val TRACK_SHADOW_ALPHA = 92
         const val HAPTIC_GUARD_MS = 1_000L
     }

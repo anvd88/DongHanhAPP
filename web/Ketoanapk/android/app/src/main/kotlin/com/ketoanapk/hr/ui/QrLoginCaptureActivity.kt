@@ -1,17 +1,22 @@
 package com.ketoanapk.hr.ui
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
+import android.util.Rational
 import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -27,6 +32,10 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -44,10 +53,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import android.util.Rational
 
 /**
  * Màn quét QR chạy trên **CameraX + ML Kit** (trước đây là Camera1 qua zxing-android-embedded).
@@ -75,32 +82,47 @@ class QrLoginCaptureActivity : ComponentActivity() {
     private lateinit var resultSheet: View
     private lateinit var resultTitle: TextView
     private lateinit var resultBody: TextView
+    private lateinit var openButton: Button
     private lateinit var copyButton: Button
     private lateinit var closeButton: Button
     private lateinit var torchButton: Button
+    private lateinit var exitButton: ImageButton
+    private lateinit var galleryButton: ImageButton
 
     private val workScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val repository by lazy(LazyThreadSafetyMode.NONE) { HrRepository.foreground(applicationContext) }
     private val continuousScanGate = QrContinuousScanGate()
     private val overlaySelection = QrOverlaySelection()
-    private val pendingScans = ArrayDeque<PendingScan>(MAX_PENDING_SCANS)
 
     private var barcodeScanner: BarcodeScanner? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var previewUseCase: Preview? = null
+    private var analysisUseCase: ImageAnalysis? = null
     private var cameraControl: androidx.camera.core.CameraControl? = null
+    private var cameraStartRequested = false
     private var resolvingQr = false
+    private var readingImage = false
     private var localRead: QrLocalRead? = null
     private var torchOn = false
     private var hasFlash = false
+    private var scanPrompt = ""
     private val captureMode by lazy(LazyThreadSafetyMode.NONE) {
         QrCaptureMode.fromName(intent?.getStringExtra(EXTRA_CAPTURE_MODE))
     }
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startCamera() else {
-            Toast.makeText(this, "Cần quyền camera để quét mã QR.", Toast.LENGTH_LONG).show()
-            finish()
+        if (granted) {
+            startCamera()
+        } else {
+            showCameraUnavailable("Camera chưa được cấp quyền.")
+            Toast.makeText(this, "Bạn vẫn có thể chọn một ảnh có mã QR.", Toast.LENGTH_LONG).show()
         }
+    }
+
+    /** ACTION_GET_CONTENT works from API 29 without broad storage permission. */
+    private val imagePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let(::scanQrFromImage)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -113,18 +135,35 @@ class QrLoginCaptureActivity : ComponentActivity() {
         resultSheet = findViewById(R.id.qr_result_sheet)
         resultTitle = findViewById(R.id.qr_result_title)
         resultBody = findViewById(R.id.qr_result_body)
+        openButton = findViewById(R.id.qr_open_button)
         copyButton = findViewById(R.id.qr_copy_button)
         closeButton = findViewById(R.id.qr_close_button)
         torchButton = findViewById(R.id.qr_torch_button)
+        exitButton = findViewById(R.id.qr_exit_button)
+        galleryButton = findViewById(R.id.qr_gallery_button)
 
+        openButton.setOnClickListener { openDisplayedLink() }
         copyButton.setOnClickListener { copyDisplayedContent() }
-        closeButton.setOnClickListener { finish() }
+        closeButton.setOnClickListener { prepareForNextScan() }
+        exitButton.setOnClickListener { finish() }
+        galleryButton.setOnClickListener {
+            if (resolvingQr) {
+                Toast.makeText(this, "Đang xử lý mã QR hiện tại.", Toast.LENGTH_SHORT).show()
+            } else {
+                runCatching { imagePicker.launch("image/*") }.onFailure {
+                    Toast.makeText(this, "Không mở được trình chọn ảnh.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
 
-        intent?.getStringExtra(EXTRA_PROMPT)?.trim()?.takeIf { it.isNotEmpty() }?.let { statusView.text = it }
+        scanPrompt = intent?.getStringExtra(EXTRA_PROMPT)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: getString(R.string.qr_default_prompt)
+        statusView.text = scanPrompt
 
-        hasFlash = packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)
-        torchButton.visibility = if (hasFlash) View.VISIBLE else View.GONE
+        // Chỉ hiện đèn sau khi camera sau đã bind và chính camera đó xác nhận có flash unit.
+        torchButton.visibility = View.GONE
         torchButton.setOnClickListener { setTorch(!torchOn) }
+        applySystemBarInsets()
 
         // Chạm vào preview = lấy nét + đo sáng ĐÚNG chỗ người dùng chỉ (giống app quét tốt). Rất hữu
         // ích khi có nhiều vật ở các khoảng cách khác nhau hoặc nền quá sáng làm mã bị tối.
@@ -147,15 +186,22 @@ class QrLoginCaptureActivity : ComponentActivity() {
 
     // ── Camera ───────────────────────────────────────────────────────────────────
 
+    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun startCamera() {
         // ViewPort cần kích thước thật của PreviewView; onCreate thì view chưa đo xong nên chờ một nhịp.
         if (previewView.width <= 0 || previewView.height <= 0) {
             previewView.post { if (!isFinishing && !isDestroyed) startCamera() }
             return
         }
+        if (cameraStartRequested) return
+        cameraStartRequested = true
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            val provider = runCatching { future.get() }.getOrNull() ?: return@addListener
+            val provider = runCatching { future.get() }.getOrElse {
+                cameraStartRequested = false
+                showCameraUnavailable("Không khởi tạo được camera.")
+                return@addListener
+            }
             val resolution = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
                 .build()
@@ -185,17 +231,22 @@ class QrLoginCaptureActivity : ComponentActivity() {
                 .build()
 
             val camera = runCatching {
-                provider.unbindAll()
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, useCases)
             }.getOrNull() ?: run {
-                Toast.makeText(this, "Không mở được camera trên thiết bị này.", Toast.LENGTH_LONG).show()
-                finish()
+                cameraStartRequested = false
+                showCameraUnavailable("Không mở được camera sau trên thiết bị này.")
                 return@addListener
             }
+            cameraProvider = provider
+            previewUseCase = preview
+            analysisUseCase = analysis
             cameraControl = camera.cameraControl
+            hasFlash = camera.cameraInfo.hasFlashUnit()
+            torchButton.visibility = if (hasFlash && resultSheet.visibility != View.VISIBLE) View.VISIBLE else View.GONE
 
             // Bộ quét phải dựng SAU khi bind vì mức zoom tối đa chỉ biết được từ camera đã mở.
             val maxZoom = camera.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
+            runCatching { barcodeScanner?.close() }
             barcodeScanner = BarcodeScanning.getClient(buildScannerOptions(maxZoom))
             analysis.setAnalyzer(analysisExecutor, ::analyze)
         }, ContextCompat.getMainExecutor(this))
@@ -233,10 +284,55 @@ class QrLoginCaptureActivity : ComponentActivity() {
 
     private fun setTorch(on: Boolean) {
         val control = cameraControl ?: return
-        runCatching { control.enableTorch(on) }.onSuccess {
-            torchOn = on
-            torchButton.text = if (on) "Tắt đèn" else "Bật đèn"
+        if (!hasFlash || !torchButton.isEnabled) return
+        val request = runCatching { control.enableTorch(on) }.getOrElse {
+            Toast.makeText(this, "Không điều khiển được đèn pin.", Toast.LENGTH_SHORT).show()
+            return
         }
+        torchButton.isEnabled = false
+        request.addListener({
+            if (isFinishing || isDestroyed) return@addListener
+            torchButton.isEnabled = true
+            runCatching { request.get() }.onSuccess {
+                torchOn = on
+                torchButton.text = getString(if (on) R.string.qr_torch_off else R.string.qr_torch_on)
+            }.onFailure {
+                Toast.makeText(this, "Không điều khiển được đèn pin.", Toast.LENGTH_SHORT).show()
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun showCameraUnavailable(message: String) {
+        hasFlash = false
+        torchButton.visibility = View.GONE
+        statusView.text = getString(R.string.qr_camera_fallback, message)
+    }
+
+    /** Keep camera edge-to-edge while moving controls away from cutouts and gesture navigation. */
+    private fun applySystemBarInsets() {
+        val root = findViewById<View>(R.id.qr_capture_root)
+        val topContent = findViewById<View>(R.id.qr_top_content)
+        val baseTopPadding = topContent.paddingTop
+        val baseSheetBottomPadding = resultSheet.paddingBottom
+        val torchParams = torchButton.layoutParams as FrameLayout.LayoutParams
+        val baseTorchBottomMargin = torchParams.bottomMargin
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val safe = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            topContent.updatePadding(top = baseTopPadding + safe.top)
+            resultSheet.updatePadding(bottom = baseSheetBottomPadding + safe.bottom)
+            (torchButton.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                val wanted = baseTorchBottomMargin + safe.bottom
+                if (params.bottomMargin != wanted) {
+                    params.bottomMargin = wanted
+                    torchButton.layoutParams = params
+                }
+            }
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     // ── Phân tích khung hình ─────────────────────────────────────────────────────
@@ -273,31 +369,45 @@ class QrLoginCaptureActivity : ComponentActivity() {
     }
 
     private fun onBarcodes(barcodes: List<Barcode>, crop: QrCropRect) {
-        if (isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed || readingImage) return
         val candidates = barcodes.mapNotNull { candidate ->
             val value = candidate.rawValue?.trim()?.takeIf(String::isNotEmpty) ?: return@mapNotNull null
             val corners = candidate.cornerPoints?.map { TrackPoint(it.x.toFloat(), it.y.toFloat()) }
-            // Bỏ mã nằm ngoài vùng đang hiển thị: chỉ quét đúng thứ người dùng nhìn thấy và chĩa vào.
-            if (corners != null && !QrFrameMapper.isVisible(corners, crop)) return@mapNotNull null
-            val area = candidate.boundingBox?.let { it.width().toLong() * it.height().toLong() } ?: 0L
+            val box = candidate.boundingBox
+            // ML Kit phân tích toàn ảnh cảm biến, còn PreviewView chỉ hiển thị crop của ViewPort. Phải
+            // chứng minh tâm mã nằm trong vùng người dùng thật sự nhìn thấy; nếu thiếu cornerPoints thì
+            // dùng boundingBox, không cho một mã vô hình kích hoạt chấm công/phiếu chi.
+            val visible = when {
+                corners != null && corners.size >= 4 -> QrFrameMapper.isVisible(corners, crop)
+                box != null -> QrFrameMapper.isPointVisible(
+                    TrackPoint(box.exactCenterX(), box.exactCenterY()),
+                    crop,
+                )
+                else -> false
+            }
+            if (!visible) return@mapNotNull null
+            val area = box?.let { it.width().toLong() * it.height().toLong() } ?: 0L
             Candidate(value, corners, area)
         }
-        // Nhiều mã cùng khung: ưu tiên mã LỚN NHẤT để một nhãn nhỏ phía sau không cướp lượt quét.
-        // Không thấy mã nào: GIỮ NGUYÊN khung vàng của mã đang chọn (nó chỉ rõ nội dung đang hiển thị
-        // thuộc mã nào) — không nhấp nháy theo từng khung trượt.
-        val best = candidates.maxByOrNull { it.area } ?: return
+        // Giữ mã đang hiển thị nếu nó vẫn còn trong camera. Chỉ khi mã đó rời khung mới chuyển sang mã
+        // lớn nhất còn lại; nhờ vậy một tờ giấy có nhiều QR không làm khung vàng và kết quả nhảy liên tục.
+        val best = candidates.firstOrNull { overlaySelection.owns(it.value) }
+            ?: candidates.maxByOrNull { it.area }
+            ?: return
 
         val quad = best.corners?.let {
             QrFrameMapper.map(it, crop, previewView.width.toFloat(), previewView.height.toFloat())
         }
         val now = android.os.SystemClock.uptimeMillis()
 
-        if (continuousScanGate.shouldAccept(best.value, now)) {
-            enqueueScan(PendingScan(best.value, quad, now))
-        } else if (overlaySelection.owns(best.value) && quad != null) {
-            // Chỉ mã ĐANG được xử lý/hiển thị mới được kéo khung. Mã khác lọt vào khung hình tuyệt đối
-            // không được làm khung vàng nhảy sang chỗ khác.
+        if (overlaySelection.owns(best.value) && quad != null) {
             overlay.submitQuad(quad, snapToQr = false)
+        }
+        // Không xếp hàng mã nhìn thấy thoáng qua trong lúc request đang chạy. Sau khi request xong,
+        // analyzer sẽ chỉ nhận mã nào vẫn còn thật sự trước camera và tránh tự chạy kết quả FIFO cũ.
+        if (resolvingQr) return
+        if (continuousScanGate.shouldAccept(best.value, now)) {
+            enqueueScan(PendingScan(best.value, quad))
         }
     }
 
@@ -312,23 +422,8 @@ class QrLoginCaptureActivity : ComponentActivity() {
             finish()
             return
         }
-        if (resolvingQr) {
-            // Giữ vài mã kế tiếp để không bắt người dùng đóng/mở camera giữa chừng, nhưng CHỈ vài mã:
-            // lướt camera qua một tờ giấy đầy mã mà xếp hàng dài thì app sẽ bắn hàng loạt request rồi
-            // nhấp nháy qua từng kết quả, tệ nhất là tự đóng màn quét vì một mã người dùng không định quét.
-            if (pendingScans.size < MAX_PENDING_SCANS) pendingScans.addLast(scan)
-            return
-        }
+        if (resolvingQr) return
         resolveScan(scan)
-    }
-
-    /** Bỏ các mã đã nằm chờ quá lâu — chúng không còn là thứ người dùng đang chĩa camera vào. */
-    private fun nextFreshScan(): PendingScan? {
-        val now = android.os.SystemClock.uptimeMillis()
-        while (true) {
-            val next = pendingScans.pollFirst() ?: return null
-            if (now - next.atMs <= MAX_PENDING_AGE_MS) return next
-        }
     }
 
     private fun resolveScan(scan: PendingScan) {
@@ -338,7 +433,16 @@ class QrLoginCaptureActivity : ComponentActivity() {
         // Không để nội dung QR trước nằm dưới khung QR mới trong lúc chờ server.
         localRead = null
         setResultSheetVisible(false)
-        statusView.text = "Đang kiểm tra mã QR…"
+
+        // Các chuẩn công khai được đọc tại chỗ: nhanh hơn và không đưa mật khẩu Wi-Fi/danh thiếp/URL
+        // lên API. Chuỗi nội bộ hoặc không rõ định dạng vẫn dùng bộ phân giải nghiệp vụ trên server.
+        if (QrContentReader.isStandardFormat(scan.value)) {
+            showLocalResult(scan.value, offline = false)
+            resolvingQr = false
+            return
+        }
+
+        statusView.text = getString(R.string.qr_status_checking)
         statusView.visibility = View.VISIBLE
 
         workScope.launch {
@@ -356,7 +460,6 @@ class QrLoginCaptureActivity : ComponentActivity() {
             }
 
             resolvingQr = false
-            nextFreshScan()?.let(::resolveScan)
         }
     }
 
@@ -379,19 +482,24 @@ class QrLoginCaptureActivity : ComponentActivity() {
         } else {
             read.body
         }
+        openButton.visibility = if (read.openUrl != null) View.VISIBLE else View.GONE
         copyButton.text = read.copyLabel
         copyButton.visibility = if (read.copyText.isNotEmpty()) View.VISIBLE else View.GONE
-        statusView.text = "Đưa mã QR tiếp theo vào khung"
+        copyButton.setBackgroundResource(
+            if (read.openUrl == null) R.drawable.qr_result_copy_button else R.drawable.qr_result_close_button,
+        )
+        statusView.text = getString(R.string.qr_status_next)
         statusView.visibility = View.VISIBLE
         setResultSheetVisible(true)
     }
 
     private fun showError(message: String) {
         localRead = null
-        resultTitle.text = "Không thể xử lý mã QR"
+        resultTitle.text = getString(R.string.qr_error_title)
         resultBody.text = message
+        openButton.visibility = View.GONE
         copyButton.visibility = View.GONE
-        statusView.text = "Đưa mã QR khác vào khung"
+        statusView.text = getString(R.string.qr_status_other)
         statusView.visibility = View.VISIBLE
         setResultSheetVisible(true)
     }
@@ -400,6 +508,92 @@ class QrLoginCaptureActivity : ComponentActivity() {
     private fun setResultSheetVisible(visible: Boolean) {
         resultSheet.visibility = if (visible) View.VISIBLE else View.GONE
         torchButton.visibility = if (!visible && hasFlash) View.VISIBLE else View.GONE
+    }
+
+    /** Ẩn kết quả nhưng giữ camera mở, tương ứng hành động “Quét tiếp” thay vì thoát cả scanner. */
+    private fun prepareForNextScan() {
+        localRead = null
+        overlaySelection.clear()
+        overlay.clear()
+        setResultSheetVisible(false)
+        statusView.text = scanPrompt
+        statusView.visibility = View.VISIBLE
+        runCatching { cameraControl?.setZoomRatio(1f) }
+    }
+
+    private fun openDisplayedLink() {
+        val safeUrl = QrExternalUrlPolicy.normalize(localRead?.openUrl)
+        if (safeUrl == null) {
+            Toast.makeText(this, "Liên kết này không đủ điều kiện an toàn để mở.", Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, safeUrl.toUri()).addCategory(Intent.CATEGORY_BROWSABLE),
+            )
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "Điện thoại chưa có ứng dụng phù hợp để mở liên kết.", Toast.LENGTH_LONG).show()
+        } catch (_: SecurityException) {
+            Toast.makeText(this, "Điện thoại đã chặn liên kết này.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Đọc QR từ ảnh do người dùng chủ động chọn; không cần quyền truy cập toàn bộ thư viện ảnh. */
+    private fun scanQrFromImage(uri: Uri) {
+        if (readingImage || resolvingQr || isFinishing || isDestroyed) return
+        val image = runCatching { InputImage.fromFilePath(this, uri) }.getOrElse {
+            showError("Không đọc được ảnh đã chọn.")
+            return
+        }
+
+        readingImage = true
+        galleryButton.isEnabled = false
+        localRead = null
+        overlaySelection.clear()
+        overlay.clear()
+        setResultSheetVisible(false)
+        statusView.text = getString(R.string.qr_status_reading_image)
+
+        val stillScanner = runCatching {
+            BarcodeScanning.getClient(
+                BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
+            )
+        }.getOrElse {
+            readingImage = false
+            galleryButton.isEnabled = true
+            showError("Không khởi tạo được bộ đọc mã QR cho ảnh.")
+            return
+        }
+        stillScanner.process(image)
+            .addOnSuccessListener(ContextCompat.getMainExecutor(this)) { barcodes ->
+                if (isFinishing || isDestroyed) return@addOnSuccessListener
+                val selected = barcodes
+                    .mapNotNull { barcode ->
+                        val value = barcode.rawValue?.trim()?.takeIf(String::isNotEmpty)
+                            ?: return@mapNotNull null
+                        val area = barcode.boundingBox?.let { it.width().toLong() * it.height().toLong() } ?: 0L
+                        value to area
+                    }
+                    .maxByOrNull { it.second }
+                if (selected == null) {
+                    showError("Không tìm thấy mã QR đọc được trong ảnh đã chọn.")
+                } else {
+                    enqueueScan(
+                        PendingScan(
+                            value = selected.first,
+                            quad = null,
+                        ),
+                    )
+                }
+            }
+            .addOnFailureListener(ContextCompat.getMainExecutor(this)) {
+                if (!isFinishing && !isDestroyed) showError("Không đọc được mã QR trong ảnh đã chọn.")
+            }
+            .addOnCompleteListener(ContextCompat.getMainExecutor(this)) {
+                readingImage = false
+                if (!isDestroyed) galleryButton.isEnabled = true
+                runCatching { stillScanner.close() }
+            }
     }
 
     private fun copyDisplayedContent() {
@@ -421,20 +615,23 @@ class QrLoginCaptureActivity : ComponentActivity() {
 
     override fun onDestroy() {
         workScope.cancel()
+        runCatching { analysisUseCase?.clearAnalyzer() }
+        val ownedUseCases = listOfNotNull(previewUseCase, analysisUseCase)
+        if (ownedUseCases.isNotEmpty()) {
+            runCatching { cameraProvider?.unbind(*ownedUseCases.toTypedArray()) }
+        }
         runCatching { barcodeScanner?.close() }
         runCatching { analysisExecutor.shutdown() }
         super.onDestroy()
     }
 
-    private data class PendingScan(val value: String, val quad: TrackQuad?, val atMs: Long)
+    private data class PendingScan(val value: String, val quad: TrackQuad?)
 
     companion object {
         const val EXTRA_RESOLVED_ENVELOPE = "com.ketoanapk.hr.extra.QR_RESOLVED_ENVELOPE"
         const val EXTRA_SCANNED_VALUE = "com.ketoanapk.hr.extra.QR_SCANNED_VALUE"
         const val EXTRA_CAPTURE_MODE = "com.ketoanapk.hr.extra.QR_CAPTURE_MODE"
         const val EXTRA_PROMPT = "com.ketoanapk.hr.extra.QR_PROMPT"
-        private const val MAX_PENDING_SCANS = 3
-        private const val MAX_PENDING_AGE_MS = 2_000L
     }
 }
 
@@ -445,7 +642,7 @@ class QrLoginCaptureActivity : ComponentActivity() {
 data class QrCaptureResult(val value: String?, val resolvedEnvelopeJson: String?)
 
 enum class QrCaptureMode {
-    /** Mặc định: hỏi `/api/qr/resolve` ngay trên camera, nghiệp vụ do máy chủ quyết định. */
+    /** Mặc định: chuẩn phổ thông đọc tại chỗ; chuỗi nội bộ/không rõ mới hỏi `/api/qr/resolve`. */
     Resolve,
 
     /** Trả thẳng nội dung mã cho người gọi tự xử lý (chấm công đã có endpoint riêng của nó). */

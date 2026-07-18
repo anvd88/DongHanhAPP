@@ -1,10 +1,11 @@
 @echo off
 setlocal enabledelayedexpansion
-title KetoanMini - Restart (5173 HR + 5443 Web + BE + Cloudflare Tunnel)
+title KetoanMini - Restart (5443 Web + API + Cloudflare Tunnel)
 
 set "ROOT=C:\Users\Admin\Desktop\KetoanMiniDotNet_Code_20260615_155926\web"
 set "FE=%ROOT%\frontend"
 set "API=%ROOT%\backend\KetoanMini.Api"
+set "PUBLISH=%API%\bin\Release\net8.0\publish"
 
 echo ============================================================
 echo [1/5] Dung cac tien trinh cu
@@ -33,15 +34,23 @@ call npm.cmd run build || goto :error
 
 echo.
 echo ============================================================
-echo [3/5] Chay backend + web chinh: https://192.168.1.88:5443 (+ http :5239 cho tunnel)
+echo [3/5] Publish Release va chay backend + web chinh
 echo ============================================================
+rem -- Khong dung "dotnet run" tren server: no giu them dotnet host + compiler trong RAM.
+rem -- Tat compiler server cho rieng lenh publish; backend sau do chay truc tiep bang file Release.
+cd /d "%API%" || goto :backend_build_error
+set "DOTNET_CLI_USE_MSBUILD_SERVER=0"
+dotnet publish KetoanMini.Api.csproj -c Release --nologo /p:UseSharedCompilation=false || goto :backend_build_error
+
 rem -- Nap secret da rotate tu HKCU\Environment de batch van dung gia tri moi ngay ca khi
 rem -- Explorer/Codex chua duoc mo lai sau luc cap nhat bien moi truong.
 for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v Jwt__Key 2^>nul') do set "Jwt__Key=%%b"
 for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v ConnectionStrings__KetoanMini 2^>nul') do set "ConnectionStrings__KetoanMini=%%b"
 for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v Bootstrap__AdminUsername 2^>nul') do set "Bootstrap__AdminUsername=%%b"
 for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v Bootstrap__AdminPassword 2^>nul') do set "Bootstrap__AdminPassword=%%b"
-start "KetoanMini Backend (5443)" cmd.exe /k "cd /d ""%API%"" && set ""ASPNETCORE_ENVIRONMENT=Production"" && dotnet run --no-launch-profile --project KetoanMini.Api.csproj"
+rem -- Giu content root tai thu muc API de doc appsettings.Local.json ma khong sao chep secret
+rem -- sang thu muc publish; executable va model van duoc nap tu ban Release.
+start "KetoanMini Backend (5443)" cmd.exe /k "cd /d ""%API%"" && set ""ASPNETCORE_ENVIRONMENT=Production"" && ""%PUBLISH%\KetoanMini.Api.exe"""
 
 rem -- Cho backend toi da 45 giay de build/khoi dong, roi xac nhan DB cung san sang.
 for /l %%i in (1,1,45) do (
@@ -55,9 +64,14 @@ echo Backend da san sang, health check OK.
 
 echo.
 echo ============================================================
-echo [4/5] Chay dev server HR: http://192.168.1.88:5173
+echo [4/5] Dev server Vite (mac dinh TAT de tiet kiem RAM)
 echo ============================================================
-start "KetoanMini Dev HR (5173)" cmd.exe /k "cd /d ""%FE%"" && npm.cmd run dev"
+if /i "%KETOANMINI_START_VITE%"=="1" (
+  start "KetoanMini Dev HR (5173)" cmd.exe /k "cd /d ""%FE%"" && npm.cmd run dev"
+) else (
+  echo Khong chay Vite. Trang web va HR da duoc backend phuc vu tai cong 5443.
+  echo Khi can lap trinh, chay: set KETOANMINI_START_VITE=1 ^&^& restart.bat
+)
 
 echo.
 echo ============================================================
@@ -84,11 +98,11 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================
-echo XONG. Da mo 2 cua so server:
+echo XONG. Server tiet kiem RAM dang chay:
 echo   - Web chinh (LAN)  :  https://192.168.1.88:5443
-echo   - Trang HR  (LAN)  :  http://192.168.1.88:5173
 echo   - Public (Internet):  https://app.ketoancp.click
-echo Dong cua so server tuong ung = tat server do.
+if /i "%KETOANMINI_START_VITE%"=="1" echo   - Vite dev (LAN)   :  http://192.168.1.88:5173
+echo Dong cua so backend = tat server.
 echo Tunnel can vai chuc giay de ket noi lai sau khi backend khoi dong.
 echo ============================================================
 timeout /t 5 /nobreak >nul
@@ -97,6 +111,12 @@ goto :eof
 :error
 echo.
 echo *** LOI: build frontend that bai. Kiem tra thong bao ben tren. ***
+pause
+exit /b 1
+
+:backend_build_error
+echo.
+echo *** LOI: publish backend Release that bai. Kiem tra thong bao ben tren. ***
 pause
 exit /b 1
 

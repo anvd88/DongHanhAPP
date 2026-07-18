@@ -5,8 +5,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -82,9 +82,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -119,6 +119,8 @@ import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import kotlin.math.absoluteValue
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -605,6 +607,9 @@ fun TimesheetScreen(
             TimesheetCalendarCard(
                 period = period,
                 daysByDate = daysByDate,
+                daysForPeriod = { key ->
+                    state.neighbors[key]?.days?.associateBy { it.date.take(10) }.orEmpty()
+                },
                 selectedDate = selectedDate,
                 weekOnly = weekMode,
                 loading = state.loading,
@@ -791,75 +796,122 @@ private fun MonthYearPickerDialog(
 private fun TimesheetCalendarCard(
     period: String,
     daysByDate: Map<String, TimesheetDay>,
+    daysForPeriod: (String) -> Map<String, TimesheetDay>,
     selectedDate: String?,
     weekOnly: Boolean,
     loading: Boolean,
     onSelectDate: (String) -> Unit,
     onMonthOffset: (Int) -> Unit,
 ) {
-    val allRows = timesheetCalendarCells(period).chunked(7)
-    val anchor = selectedDate ?: LocalDate.now().takeIf { it.toString().startsWith(period.take(7)) }?.toString()
-    val rows = if (weekOnly) allRows.filter { week -> week.any { it.dateKey == anchor } }.ifEmpty { allRows.take(1) } else allRows
-    var cardWidthPx by remember { mutableFloatStateOf(0f) }
-    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
-    var pendingMonthOffset by remember { mutableIntStateOf(0) }
-    var previousPeriod by remember { mutableStateOf(period) }
-    val minimumSwipePx = with(LocalDensity.current) { 72.dp.toPx() }
-    val dragState = rememberDraggableState { delta ->
-        if (cardWidthPx > 0f) {
-            dragOffsetPx = (dragOffsetPx + delta).coerceIn(-cardWidthPx, cardWidthPx)
+    // Băng chuyền 3 trang: tháng trước | tháng đang xem | tháng sau. Kéo tới đâu thấy tháng liền kề tới đó.
+    var pagerWidthPx by remember { mutableFloatStateOf(0f) }
+    val pageGapPx = with(LocalDensity.current) { 12.dp.toPx() }
+    val dragOffset = remember { Animatable(0f) }
+    var basePeriod by remember { mutableStateOf(period) }
+    val minimumSwipePx = with(LocalDensity.current) { 56.dp.toPx() }
+    val scope = rememberCoroutineScope()
+    val pageStridePx = pagerWidthPx + pageGapPx
+
+    // Đổi tháng bằng nút mũi tên / bộ chọn tháng: cho tháng mới trượt vào từ phía tương ứng.
+    // (Vuốt tay thì trang kề đã nằm đúng chỗ, xử lý ngay trong onDragStopped nên nhánh này bỏ qua.)
+    LaunchedEffect(period) {
+        val from = basePeriod
+        if (period == from) return@LaunchedEffect
+        basePeriod = period
+        if (pageStridePx <= 0f) {
+            dragOffset.snapTo(0f)
+        } else {
+            dragOffset.snapTo(if (period > from) pageStridePx else -pageStridePx)
+            dragOffset.animateTo(0f, tween(durationMillis = 220, easing = FastOutSlowInEasing))
         }
     }
 
-    // Tháng mới đi vào từ đúng phía đối diện tháng vừa vuốt ra, nên chuyển động không bị nháy/khựng.
-    LaunchedEffect(period) {
-        if (period == previousPeriod || cardWidthPx <= 0f) return@LaunchedEffect
-        val direction = pendingMonthOffset.takeIf { it != 0 }
-            ?: if (period > previousPeriod) 1 else -1
-        previousPeriod = period
-        pendingMonthOffset = 0
-        dragOffsetPx = if (direction > 0) cardWidthPx else -cardWidthPx
-        animate(
-            initialValue = dragOffsetPx,
-            targetValue = 0f,
-            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-        ) { value, _ -> dragOffsetPx = value }
+    val dragState = rememberDraggableState { delta ->
+        if (pageStridePx > 0f) {
+            scope.launch {
+                dragOffset.snapTo((dragOffset.value + delta).coerceIn(-pageStridePx, pageStridePx))
+            }
+        }
     }
 
-    Box(modifier = Modifier.fillMaxWidth().clipToBounds().testTag("timesheet-calendar")) {
-        HrCard(
-            modifier = Modifier
-                .onSizeChanged { cardWidthPx = it.width.toFloat() }
-                .graphicsLayer { translationX = dragOffsetPx }
-                .draggable(
-                    state = dragState,
-                    orientation = Orientation.Horizontal,
-                    onDragStopped = { velocity ->
-                        val monthOffset = timesheetMonthOffsetForSwipe(
-                            dragDistancePx = dragOffsetPx,
-                            thresholdPx = maxOf(minimumSwipePx, cardWidthPx * 0.18f),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .testTag("timesheet-calendar")
+            .onSizeChanged { pagerWidthPx = it.width.toFloat() }
+            .draggable(
+                state = dragState,
+                orientation = Orientation.Horizontal,
+                onDragStopped = { velocity ->
+                    val monthOffset = timesheetMonthOffsetForSwipe(
+                        dragDistancePx = dragOffset.value,
+                        thresholdPx = maxOf(minimumSwipePx, pagerWidthPx * 0.16f),
+                    )
+                    if (monthOffset == null) {
+                        dragOffset.animateTo(
+                            targetValue = 0f,
+                            initialVelocity = velocity,
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 520f),
                         )
-                        if (monthOffset == null) {
-                            animate(
-                                initialValue = dragOffsetPx,
-                                targetValue = 0f,
-                                initialVelocity = velocity,
-                                animationSpec = spring(dampingRatio = 0.82f, stiffness = 520f),
-                            ) { value, _ -> dragOffsetPx = value }
-                        } else {
-                            pendingMonthOffset = monthOffset
-                            val exitTarget = if (monthOffset > 0) -cardWidthPx else cardWidthPx
-                            animate(
-                                initialValue = dragOffsetPx,
-                                targetValue = exitTarget,
-                                initialVelocity = velocity,
-                                animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
-                            ) { value, _ -> dragOffsetPx = value }
-                            onMonthOffset(monthOffset)
-                        }
-                    },
-                ),
-        ) {
+                    } else {
+                        // Trượt nốt cho trang tháng kề vào giữa, rồi đổi mốc + trả offset về 0 trong cùng
+                        // một nhịp: trang đang hiển thị y hệt nên mắt không thấy nháy.
+                        dragOffset.animateTo(
+                            targetValue = if (monthOffset > 0) -pageStridePx else pageStridePx,
+                            initialVelocity = velocity,
+                            animationSpec = spring(dampingRatio = 0.9f, stiffness = 420f),
+                        )
+                        basePeriod = shiftTimesheetPeriod(basePeriod, monthOffset)
+                        dragOffset.snapTo(0f)
+                        onMonthOffset(monthOffset)
+                    }
+                },
+            ),
+    ) {
+        listOf(-1, 0, 1).forEach { slot ->
+            val slotPeriod = shiftTimesheetPeriod(basePeriod, slot)
+            val slotDays = if (slot == 0) daysByDate else daysForPeriod(slotPeriod)
+            TimesheetCalendarPage(
+                period = slotPeriod,
+                daysByDate = slotDays,
+                selectedDate = if (slot == 0) selectedDate else null,
+                weekOnly = weekOnly,
+                loading = loading && slot == 0,
+                current = slot == 0,
+                onSelectDate = onSelectDate,
+                modifier = Modifier.graphicsLayer {
+                    val stride = size.width + pageGapPx
+                    translationX = dragOffset.value + slot * stride
+                    // Trang càng xa giữa càng thu nhỏ + mờ đi: kéo tới đâu tháng kề "phóng to" vào tới đó.
+                    val distance = if (stride > 0f) (translationX / stride).absoluteValue.coerceIn(0f, 1f) else 1f
+                    val scale = 1f - 0.25f * distance
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = 1f - 0.45f * distance
+                },
+            )
+        }
+    }
+}
+
+/** Một trang lịch (một tháng) trong băng chuyền vuốt. */
+@Composable
+private fun TimesheetCalendarPage(
+    period: String,
+    daysByDate: Map<String, TimesheetDay>,
+    selectedDate: String?,
+    weekOnly: Boolean,
+    loading: Boolean,
+    current: Boolean,
+    onSelectDate: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val allRows = timesheetCalendarCells(period).chunked(7)
+    val anchor = selectedDate ?: LocalDate.now().takeIf { it.toString().startsWith(period.take(7)) }?.toString()
+    val rows = if (weekOnly) allRows.filter { week -> week.any { it.dateKey == anchor } }.ifEmpty { allRows.take(1) } else allRows
+
+    HrCard(modifier = modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Lịch tháng", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -908,7 +960,8 @@ private fun TimesheetCalendarCard(
                                 day = day,
                                 selected = selectedDate == cell.dateKey,
                                 modifier = Modifier.weight(1f),
-                                onClick = { onSelectDate(cell.dateKey) },
+                                // Trang kề bên chỉ để xem trước, bấm vào không mở chi tiết nhầm tháng.
+                                onClick = if (current) ({ onSelectDate(cell.dateKey) }) else ({}),
                             )
                         }
                     }
@@ -924,14 +977,18 @@ private fun TimesheetCalendarCard(
             )
         } else if (daysByDate.isEmpty()) {
             Text(
-                "Tháng này chưa có chấm công hoặc phân ca. Các ô sẽ đổi màu khi có dữ liệu.",
+                if (current) "Tháng này chưa có chấm công hoặc phân ca. Các ô sẽ đổi màu khi có dữ liệu."
+                else "Thả tay để mở ${formatTimesheetPeriod(period).lowercase()}.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        }
     }
 }
+
+/** Dịch khóa tháng "yyyy-MM" đi `offset` tháng. */
+private fun shiftTimesheetPeriod(period: String, offset: Int): String =
+    timesheetMonthStart(period).plusMonths(offset.toLong()).toString().take(7)
 
 /** Vuốt trái mở tháng sau, vuốt phải quay về tháng trước. */
 internal fun timesheetMonthOffsetForSwipe(dragDistancePx: Float, thresholdPx: Float): Int? = when {

@@ -101,6 +101,7 @@ import com.ketoanapk.hr.data.WorkTaskMeta
 import com.ketoanapk.hr.data.WorkTaskSummary
 import com.ketoanapk.hr.network.ApiException
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -108,6 +109,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.YearMonth
 
 /** Tab trong mini app Chat. Chat chiếm trọn màn nên có thanh tab riêng, không dùng thanh dưới của HR. */
@@ -243,6 +245,8 @@ data class TimesheetUiState(
     val error: String? = null,
     val month: String = currentMonthKey(),
     val timesheet: Timesheet? = null,
+    /** Bảng công các tháng kề bên (khóa "yyyy-MM") để lịch vuốt hiện luôn tháng liền kề. */
+    val neighbors: Map<String, Timesheet> = emptyMap(),
 )
 
 /** Trạng thái màn "Giao việc": hộp việc của tôi + việc tôi giao, kèm quyền giao & tổng hợp huy hiệu. */
@@ -313,6 +317,22 @@ data class PortalUiState(
     val feed: PortalFeed? = null,
 )
 
+/**
+ * Các bước của luồng cập nhật ứng dụng. Trước đây chỉ có một cờ `installing` vẽ *bên trong* hộp thoại
+ * nhắc — mà hộp thoại lại bị đóng ngay khi bấm "Cập nhật ngay", nên suốt vài phút tải gói ~90 MB người
+ * dùng không thấy gì và tưởng app hỏng. Tách thành các bước rõ ràng để giao diện luôn nói được đang làm gì.
+ */
+sealed interface UpdateStage {
+    /** Mới phát hiện bản mới, chưa tải gì. */
+    data object Idle : UpdateStage
+    /** Đang kiểm tra gói đã tải sẵn từ lần trước (đối chiếu SHA-256) để khỏi tải lại. */
+    data object Preparing : UpdateStage
+    data class Downloading(val downloaded: Long, val total: Long) : UpdateStage
+    /** Đã có gói hợp lệ, đang mở màn xác nhận cài của hệ thống. */
+    data object Installing : UpdateStage
+    data class Failed(val message: String) : UpdateStage
+}
+
 data class SettingsUiState(
     val loading: Boolean = false,
     val webLoginEnabled: Boolean? = null,
@@ -320,7 +340,6 @@ data class SettingsUiState(
     val devices: List<DeviceSession> = emptyList(),
     val devicesLoading: Boolean = false,
     val checkingUpdate: Boolean = false,
-    val installing: Boolean = false,
     val updateInfo: ReleaseInfo? = null,
     val updateChecked: Boolean = false,
     val updateMessage: String? = null,
@@ -369,8 +388,9 @@ sealed interface PortraitCapture {
 class HrViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = HrRepository.foreground(application)
     private val notificationCenter = NotificationCenter(application)
+    private val tokenStore = TokenStore(application)
     // Client SignalR (realtime tức thì khi app đang mở, như bản web). Bật/tắt theo foreground.
-    private val realtime = RealtimeClient(TokenStore(application))
+    private val realtime = RealtimeClient(tokenStore)
 
     init {
         // Cắm kênh đẩy "chuông" FCM cho CallManager: khi bắt đầu/hủy gọi, gọi REST để máy người nhận
@@ -549,18 +569,18 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     var notifications: List<AppNotification> by mutableStateOf(emptyList())
         private set
 
-    // Cập nhật tự động (không cần vào Cài đặt): bản mới tìm thấy ngầm + cờ hiện hộp thoại nhắc.
+    // Cập nhật tự động (không cần vào Cài đặt): bản mới tìm thấy ngầm + cờ hiện bảng cập nhật.
     var availableUpdate: ReleaseInfo? by mutableStateOf(null)
         private set
-    var updatePromptVisible by mutableStateOf(false)
+    var updateSheetVisible by mutableStateOf(false)
         private set
-    // Hỏi trước khi tải bản cập nhật LỚN qua dữ liệu di động (tiết kiệm cước cho người dùng).
-    var meteredUpdatePrompt by mutableStateOf(false)
+    /** Bước hiện tại của luồng cập nhật — bảng cập nhật vẽ theo đúng bước này. */
+    var updateStage: UpdateStage by mutableStateOf(UpdateStage.Idle)
         private set
-    var meteredUpdateSize by mutableStateOf("")
+    /** Đang ở mạng tính phí và gói khá lớn → bảng cập nhật hỏi lại trước khi tốn cước. */
+    var updateNeedsMeteredConsent by mutableStateOf(false)
         private set
     private var lastUpdateCheckAt = 0L        // mốc lần kiểm tra gần nhất (chống gọi dồn)
-    private var dismissedUpdateVersionCode = 0 // mã bản người dùng đã bấm "Để sau" (không nhắc lại)
 
     val unreadCount: Int get() = notifications.count { !it.read }
 
@@ -630,10 +650,21 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { rememberedUsername = repo.rememberedUsername() }
         // FCM báo có dữ liệu đổi từ máy chủ → làm mới NGAY màn đang xem (đơn từ tức thì, không chờ poll).
         viewModelScope.launch {
-            AppEvents.dataChanged.collect {
+            AppEvents.dataChanged.collect { changeScope ->
                 if (authState is AuthState.SignedIn) {
-                    pollLiveData()
-                    if (selected == HrDestination.Chat) refreshChatRealtime()
+                    pollLiveData(changeScope)
+                    if ((changeScope == "chat" || changeScope == "all") && selected == HrDestination.Chat)
+                        refreshChatRealtime()
+                    if (changeScope == "config" || changeScope == "all") loadAppConfig(force = true)
+                    if ((changeScope == "portal" || changeScope == "all") && selected == HrDestination.Portal)
+                        loadPortal(silent = true)
+                    if ((changeScope == "audit" || changeScope == "all") && selected == HrDestination.Audit)
+                        loadAudit(reset = true)
+                    val talentScreenOpen = selected == HrDestination.Onboarding ||
+                        selected == HrDestination.Performance || selected == HrDestination.Training ||
+                        selected == HrDestination.Benefits
+                    if ((changeScope == "talent" || changeScope == "all") && talentScreenOpen)
+                        loadTalent()
                 }
             }
         }
@@ -867,8 +898,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             appConfig = AppConfig()
             lastConfigFetchAt = 0L
             availableUpdate = null
-            updatePromptVisible = false
-            dismissedUpdateVersionCode = 0
+            updateSheetVisible = false
+            updateStage = UpdateStage.Idle
+            updateNeedsMeteredConsent = false
             lastUpdateCheckAt = 0L
             loginError = kickedMessage // hiện lý do bị đá (nếu có) trên màn đăng nhập
         }
@@ -949,8 +981,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Điều hướng theo thông báo hệ thống (deep-link) khi mở app từ khay thông báo. */
     fun navigateTo(target: String?, entityId: String? = null) {
-        // Thông báo "bản cập nhật mới" → kiểm tra lại ngay và mở hộp thoại cập nhật (không phải điều hướng).
-        if (target == UPDATE_TARGET) { autoCheckForUpdate(force = true); return }
+        // Thông báo "bản cập nhật mới" → kiểm tra lại ngay và mở bảng cập nhật (không phải điều hướng).
+        // Bỏ qua mốc hoãn: người dùng vừa chủ động bấm vào thông báo thì đương nhiên muốn xem bản mới.
+        if (target == UPDATE_TARGET) { autoCheckForUpdate(force = true, bypassSnooze = true); return }
         val dest = target?.let { runCatching { HrDestination.valueOf(it) }.getOrNull() } ?: return
         val user = (authState as? AuthState.SignedIn)?.user
         if (user == null) { pendingTarget = dest; pendingEntityId = entityId; return }
@@ -1933,6 +1966,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             error = if (silent && cached != null) timesheetState.error else null,
             month = monthKey,
             timesheet = cached,
+            neighbors = timesheetNeighborsOf(monthKey),
         )
 
         timesheetLoadJob = viewModelScope.launch {
@@ -1947,6 +1981,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     loading = false,
                     month = resultMonth,
                     timesheet = sheet,
+                    neighbors = timesheetNeighborsOf(resultMonth),
                 )
                 prefetchTimesheetNeighbors(resultMonth)
             }.onFailure { error ->
@@ -1970,10 +2005,22 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch {
                 val sheet = runCatching { repo.myTimesheet(key) }.getOrNull()
                 val activeOwner = (authState as? AuthState.SignedIn)?.user?.username
-                if (sheet != null && activeOwner == owner) timesheetCache[key] = sheet
+                if (sheet != null && activeOwner == owner) {
+                    timesheetCache[key] = sheet
+                    // Đẩy ra state để trang lịch kề bên (đang hé ra khi vuốt) có dữ liệu thật.
+                    timesheetState = timesheetState.copy(neighbors = timesheetNeighborsOf(timesheetState.month))
+                }
                 timesheetPrefetching.remove(key)
             }
         }
+    }
+
+    /** Lấy bảng công tháng trước/tháng sau đã có trong bộ nhớ đệm (nếu chưa nạp xong thì bỏ trống). */
+    private fun timesheetNeighborsOf(month: String): Map<String, Timesheet> {
+        val center = runCatching { YearMonth.parse(month.take(7)) }.getOrNull() ?: return emptyMap()
+        return listOf(center.minusMonths(1), center.plusMonths(1))
+            .mapNotNull { key -> timesheetCache[key.toString()]?.let { key.toString() to it } }
+            .toMap()
     }
 
     private fun shiftMonthKey(month: String, offset: Int): String {
@@ -2143,25 +2190,29 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * hộp thư "Chờ duyệt", và chi tiết đơn đang mở. Chỉ ghi đè khi tải được (giữ nguyên dữ liệu cũ nếu
      * một nhịp mạng lỗi) để không nhấp nháy/mất danh sách.
      */
-    private fun pollLiveData() {
+    private fun pollLiveData(changeScope: String = "all") {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
-        viewModelScope.launch {
-            val mine = runCatching { repo.requests("mine") }.getOrNull()
-            val inbox = runCatching { repo.requests("inbox") }.getOrNull()
-            if (mine != null || inbox != null) {
-                val next = homeState.copy(
-                    requests = mine ?: homeState.requests,
-                    inbox = inbox ?: homeState.inbox,
-                )
-                homeState = next
-                syncNotifications(user, next) // cập nhật chuông (đơn được duyệt/từ chối) — đã tự chống trùng
+        if (changeScope == "hr" || changeScope == "data" || changeScope == "all") {
+            viewModelScope.launch {
+                val mine = runCatching { repo.requests("mine") }.getOrNull()
+                val inbox = runCatching { repo.requests("inbox") }.getOrNull()
+                if (mine != null || inbox != null) {
+                    val next = homeState.copy(
+                        requests = mine ?: homeState.requests,
+                        inbox = inbox ?: homeState.inbox,
+                    )
+                    homeState = next
+                    syncNotifications(user, next) // cập nhật chuông (đơn được duyệt/từ chối) — đã tự chống trùng
+                }
             }
+            // Đang xem chi tiết một đơn → làm mới để thấy kết quả duyệt/tiến trình ngay.
+            requestDetailState.id?.let { refreshOpenDetail(it) }
         }
-        // Đang xem chi tiết một đơn → làm mới để thấy kết quả duyệt/tiến trình ngay.
-        requestDetailState.id?.let { refreshOpenDetail(it) }
-        // Giao việc: cập nhật danh sách + huy hiệu (và chi tiết đang mở nếu có) theo tín hiệu realtime.
-        loadWorkTasks(silent = true)
-        workTaskDetail.id?.let { refreshWorkTaskDetail(it) }
+        if (changeScope == "tasks" || changeScope == "all") {
+            // Giao việc: cập nhật danh sách + huy hiệu và chi tiết đang mở.
+            loadWorkTasks(silent = true)
+            workTaskDetail.id?.let { refreshWorkTaskDetail(it) }
+        }
     }
 
     /** Làm mới im lặng chi tiết đơn đang mở (không hiện lại vòng quay tải, không đụng nếu đã đóng/đổi đơn). */
@@ -2348,11 +2399,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Kiểm tra cập nhật NGẦM để nhắc người dùng ngay trên Trang chủ (không phải vào Cài đặt).
-     * Gọi lúc đăng nhập và mỗi khi app quay lại foreground; tự chặn gọi dồn trong 10 phút.
+     * Gọi lúc đăng nhập ([force]) và mỗi khi app quay lại foreground; tự chặn gọi dồn trong 10 phút.
      * Lỗi mạng thì im lặng — người dùng vẫn có nút "Kiểm tra cập nhật" thủ công trong Cài đặt.
      */
-    @Suppress("SuspiciousIndentation")
-    fun autoCheckForUpdate(force: Boolean = false) {
+    fun autoCheckForUpdate(force: Boolean = false, bypassSnooze: Boolean = false) {
         if (authState !is AuthState.SignedIn) return
         val now = System.currentTimeMillis()
         if (!force && now - lastUpdateCheckAt < 10 * 60 * 1000L) return
@@ -2362,75 +2412,107 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             val current = AppUpdater.installedVersionCode(ctx)
             runCatching { repo.latestRelease(current) }
                 .onSuccess { info ->
-                    if (info.hasUpdate) {
-                        availableUpdate = info
-                        // Đồng bộ luôn màn Cài đặt để nút "Cập nhật ngay" ở đó cũng sẵn sàng.
-                        settingsState = settingsState.copy(
-                            updateInfo = info,
-                            updateChecked = true,
-                            updateMessage = "Có bản cập nhật ${info.version}.",
-                        )
-                        // Bản bắt buộc luôn nhắc; bản thường không nhắc lại nếu vừa bấm "Để sau".
-                        if (info.isMandatory || info.versionCode != dismissedUpdateVersionCode) {
-                            updatePromptVisible = true
-                        }
+                    if (!info.hasUpdate) return@onSuccess
+                    availableUpdate = info
+                    // Đồng bộ luôn màn Cài đặt để nút "Cập nhật ngay" ở đó cũng sẵn sàng.
+                    settingsState = settingsState.copy(
+                        updateInfo = info,
+                        updateChecked = true,
+                        updateMessage = "Có bản cập nhật ${info.version}.",
+                    )
+                    // Đang tải/đang cài thì đừng dựng lại bảng đè lên tiến trình đang chạy.
+                    if (updateStage !is UpdateStage.Idle) return@onSuccess
+                    // Bản bắt buộc luôn nhắc; bản thường im cho tới hết hạn hoãn đã ghi xuống đĩa.
+                    val (snoozedVersion, snoozedUntil) = tokenStore.snoozedUpdate()
+                    val snoozed = !bypassSnooze &&
+                        snoozedVersion == info.versionCode && System.currentTimeMillis() < snoozedUntil
+                    if (info.isMandatory || !snoozed) {
+                        updateNeedsMeteredConsent = needsMeteredConsent(ctx, info)
+                        updateSheetVisible = true
                     }
                 }
         }
     }
 
-    /** Người dùng bấm "Để sau" trong hộp thoại nhắc — ẩn đi và không nhắc lại bản này trong phiên. */
-    fun dismissUpdatePrompt() {
-        dismissedUpdateVersionCode = availableUpdate?.versionCode ?: dismissedUpdateVersionCode
-        updatePromptVisible = false
+    /** Mở bảng cập nhật theo yêu cầu (nút trong Cài đặt, hoặc bấm vào thông báo phát hành bản mới). */
+    fun openUpdateSheet() {
+        val info = availableUpdate ?: settingsState.updateInfo ?: return
+        availableUpdate = info
+        updateNeedsMeteredConsent = needsMeteredConsent(getApplication(), info)
+        updateSheetVisible = true
     }
 
-    /** Người dùng bấm "Cập nhật ngay" trong hộp thoại nhắc. */
-    fun confirmUpdatePrompt(context: Context) {
-        updatePromptVisible = false
-        installUpdate(context)
+    /**
+     * Người dùng bấm "Để sau" — ẩn bảng và **hoãn 24 giờ**, ghi xuống đĩa nên tắt/mở lại app vẫn nhớ.
+     * Trước đây chỉ nhớ trong RAM của ViewModel, mở lại app là bị nhắc ngay lần nữa.
+     */
+    fun dismissUpdateSheet() {
+        val info = availableUpdate
+        if (info?.isMandatory == true) return          // bản bắt buộc: không cho bỏ qua
+        if (updateStage is UpdateStage.Downloading) return  // đang tải: đóng bảng sẽ mất dấu tiến độ
+        updateSheetVisible = false
+        updateStage = UpdateStage.Idle
+        if (info != null) {
+            viewModelScope.launch {
+                runCatching { tokenStore.snoozeUpdate(info.versionCode, System.currentTimeMillis() + UPDATE_SNOOZE_MS) }
+            }
+        }
     }
 
-    fun installUpdate(context: Context) {
-        val release = settingsState.updateInfo ?: availableUpdate ?: return
+    /** Gói lớn + đang dùng dữ liệu di động → phải xác nhận trước khi tốn cước. */
+    private fun needsMeteredConsent(context: Context, release: ReleaseInfo): Boolean =
+        release.apkSize > AppUpdater.LARGE_UPDATE_BYTES && AppUpdater.isMeteredConnection(context)
+
+    /** Người dùng chấp nhận tải bằng dữ liệu di động — bỏ chặn rồi tải luôn. */
+    fun acceptMeteredUpdate(context: Context) {
+        updateNeedsMeteredConsent = false
+        startUpdateDownload(context)
+    }
+
+    /**
+     * Bấm "Cập nhật ngay": **giữ nguyên bảng cập nhật** và chạy tải ngay tại chỗ, có tiến độ.
+     * (Lỗi cũ: đóng bảng trước rồi mới tải ngầm ~90 MB → màn hình im lìm vài phút, người dùng tưởng hỏng.)
+     */
+    fun startUpdateDownload(context: Context) {
+        val release = availableUpdate ?: settingsState.updateInfo ?: return
+        if (updateStage is UpdateStage.Downloading || updateStage is UpdateStage.Preparing) return
         if (!AppUpdater.canInstallPackages(context)) {
             AppUpdater.openUnknownSourcesSettings(context)
-            actionMessage = "Hãy cho phép cài ứng dụng không rõ nguồn rồi bấm cập nhật lại."
+            updateStage = UpdateStage.Failed("Hãy bật quyền \"Cài ứng dụng không rõ nguồn\" cho ứng dụng này rồi bấm Thử lại.")
             return
         }
-        // Dữ liệu di động + bản cập nhật lớn (>20MB) → HỎI trước khi tải. Wi-Fi (không tính phí) tải thẳng.
-        if (release.apkSize > AppUpdater.LARGE_UPDATE_BYTES && AppUpdater.isMeteredConnection(context)) {
-            meteredUpdateSize = AppUpdater.formatSize(context, release.apkSize)
-            meteredUpdatePrompt = true
+        if (needsMeteredConsent(context, release)) {
+            updateNeedsMeteredConsent = true
             return
         }
-        downloadAndInstall(context, release)
-    }
-
-    /** Người dùng đồng ý tải bản cập nhật lớn dù đang dùng dữ liệu di động. */
-    fun confirmMeteredUpdate(context: Context) {
-        meteredUpdatePrompt = false
-        val release = settingsState.updateInfo ?: availableUpdate ?: return
-        downloadAndInstall(context, release)
-    }
-
-    /** Người dùng chọn chờ Wi-Fi — đóng hộp thoại, không tải. */
-    fun dismissMeteredUpdate() { meteredUpdatePrompt = false }
-
-    private fun downloadAndInstall(context: Context, release: ReleaseInfo) {
+        updateSheetVisible = true
         viewModelScope.launch {
-            settingsState = settingsState.copy(installing = true)
+            updateStage = UpdateStage.Preparing
             runCatching {
-                val file = AppUpdater.apkCacheFile(context, release.apkFileName)
-                repo.downloadRelease(release, file)
+                // Gói của đúng bản này đã tải xong từ lần trước (vd. lỡ thoát màn cài) → cài lại luôn,
+                // khỏi bắt người dùng tải lại ~90 MB.
+                val cached = withContext(Dispatchers.IO) {
+                    AppUpdater.verifiedCachedApk(context, release.apkSize, release.apkSha256)
+                }
+                val file = cached ?: AppUpdater.apkCacheFile(context, release.apkFileName).also { target ->
+                    repo.downloadRelease(release, target) { downloaded, total ->
+                        updateStage = UpdateStage.Downloading(downloaded, total)
+                    }
+                }
+                updateStage = UpdateStage.Installing
                 AppUpdater.openInstaller(context, file)
             }
-                .onSuccess { settingsState = settingsState.copy(installing = false) }
-                .onFailure {
-                    settingsState = settingsState.copy(installing = false)
-                    actionMessage = readable(it)
-                }
+                .onFailure { updateStage = UpdateStage.Failed(readable(it)) }
         }
+    }
+
+    /** Sau khi thoát màn cài của hệ thống mà chưa cài xong — cho bấm mở lại thay vì tải lại từ đầu. */
+    fun resetUpdateStage() { updateStage = UpdateStage.Idle }
+
+    /** Nút "Cập nhật ngay" ở màn Cài đặt — dùng chung một bảng cập nhật với luồng nhắc tự động. */
+    fun installUpdate(context: Context) {
+        if (availableUpdate == null) availableUpdate = settingsState.updateInfo
+        openUpdateSheet()
     }
 
     // ── Chấm công: kiểm tra kết nối máy chủ LAN ─────────────────────────────────
@@ -2745,6 +2827,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         /** Sentinel target của thông báo "bản cập nhật mới" (khớp với backend PushService). */
         const val UPDATE_TARGET = "AppUpdate"
+        /** Bấm "Để sau" thì im 24 giờ (bản bắt buộc không áp dụng). */
+        private const val UPDATE_SNOOZE_MS = 24 * 60 * 60 * 1000L
         private const val AUDIT_PAGE_SIZE = 50
     }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, KeySquare, UserPlus, Wifi, WifiOff, BadgeCheck } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
@@ -45,11 +45,6 @@ export function NhanSu() {
     `/api/users/?search=${encodeURIComponent(search)}&role=${role}`,
     [search, role]
   );
-
-  useEffect(() => {
-    const id = window.setInterval(() => reload({ silent: true }), 15_000);
-    return () => window.clearInterval(id);
-  }, [reload]);
 
   const act = async (fn: () => Promise<unknown>) => {
     try { await fn(); reload({ silent: true }); } catch (e) { notify.error(e instanceof Error ? e.message : "Lỗi"); }

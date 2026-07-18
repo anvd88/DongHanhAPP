@@ -378,8 +378,16 @@ class HrRepository(context: Context, background: Boolean = false) {
     /**
      * Tải APK về [target] qua đúng OkHttp/TLS + token của app (giống mọi request khác đang chạy tốt),
      * đồng thời kiểm tra dung lượng và SHA-256. Ném [ApiException] với thông điệp rõ ràng khi lỗi.
+     *
+     * [onProgress] báo (đã tải, tổng) để màn hình vẽ thanh tiến độ. Gói cập nhật cỡ ~90 MB nên nếu
+     * không báo tiến độ thì người dùng chỉ thấy app "đứng hình" vài phút và tưởng hỏng. Chỉ gọi lại
+     * mỗi 200 ms (hoặc khi xong) để không làm Compose recompose liên tục theo từng buffer 8 KB.
      */
-    suspend fun downloadRelease(release: ReleaseInfo, target: File) = withContext(Dispatchers.IO) {
+    suspend fun downloadRelease(
+        release: ReleaseInfo,
+        target: File,
+        onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> },
+    ) = withContext(Dispatchers.IO) {
         val response = try {
             api.downloadApk(release.downloadUrl)
         } catch (e: HttpException) {
@@ -392,12 +400,16 @@ class HrRepository(context: Context, background: Boolean = false) {
         }
         val body = response.body() ?: throw ApiException("Máy chủ không trả về dữ liệu bản cập nhật.")
 
+        // Tổng dung lượng: ưu tiên số máy chủ đã ghi trong bản phát hành, không có thì lấy Content-Length.
+        val total = if (release.apkSize > 0) release.apkSize else body.contentLength().coerceAtLeast(0L)
         val digest = MessageDigest.getInstance("SHA-256")
         var written = 0L
         try {
             body.byteStream().use { input ->
                 target.outputStream().use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var lastReport = 0L
+                    onProgress(0L, total)
                     while (true) {
                         val read = input.read(buffer)
                         if (read < 0) break
@@ -405,9 +417,15 @@ class HrRepository(context: Context, background: Boolean = false) {
                         digest.update(buffer, 0, read)
                         output.write(buffer, 0, read)
                         written += read
+                        val now = System.currentTimeMillis()
+                        if (now - lastReport >= 200L) {
+                            lastReport = now
+                            onProgress(written, total)
+                        }
                     }
                 }
             }
+            onProgress(written, total)
         } catch (e: IOException) {
             target.delete()
             throw ApiException("Tải bản cập nhật bị gián đoạn: ${e.message ?: "lỗi mạng"}.")

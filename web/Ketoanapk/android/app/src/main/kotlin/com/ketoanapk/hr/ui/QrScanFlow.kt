@@ -5,7 +5,6 @@ import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.PersistableBundle
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import com.ketoanapk.hr.data.QrActionEnvelope
 import com.ketoanapk.hr.data.QrClientAction
 import com.ketoanapk.hr.data.QrResolveOutcome
@@ -44,12 +44,12 @@ import com.ketoanapk.hr.network.ApiClient
 import kotlinx.serialization.decodeFromString
 
 /**
- * APK không phân loại QR. Mọi chuỗi đều gửi tới /api/qr/resolve trước; server trả nội dung và các
- * primitive UI ổn định nên có thể thêm nhiều nghiệp vụ QR mà không phát hành lại APK.
+ * Các chuẩn QR phổ thông (Wi-Fi, danh thiếp, URL, điện thoại, email, SMS, vị trí) được đọc trên máy để
+ * phản hồi tức thì và không tải dữ liệu cá nhân lên server. Chuỗi nội bộ/không rõ định dạng mới gửi tới
+ * /api/qr/resolve; server trả nội dung và các primitive UI ổn định nên vẫn có thể thêm nghiệp vụ mới.
  *
- * Chỉ khi máy chủ nói rõ là không có nghiệp vụ nào cho mã đó (hoặc đang mất mạng) thì app mới tự đọc
- * nội dung mã bằng [QrContentReader] để người dùng ít nhất cũng xem/sao chép được. Thứ tự này giữ cho
- * nghiệp vụ luôn thuộc về máy chủ: một mã QR nội bộ mới sẽ chạy đúng nghiệp vụ chứ không bị app đọc thô.
+ * Khi server không có nghiệp vụ (hoặc đang mất mạng), app vẫn lùi về [QrContentReader]. Mọi hành động
+ * nhạy cảm đều cần người dùng bấm; app không tự mở link, nối Wi-Fi hay xác nhận nghiệp vụ.
  */
 internal data class QrScanController(
     val busy: Boolean,
@@ -149,7 +149,7 @@ internal fun rememberQrScanController(vm: HrViewModel): QrScanController {
         }
         try {
             context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl)).addCategory(Intent.CATEGORY_BROWSABLE),
+                Intent(Intent.ACTION_VIEW, safeUrl.toUri()).addCategory(Intent.CATEGORY_BROWSABLE),
             )
         } catch (_: ActivityNotFoundException) {
             vm.showActionMessage("Điện thoại chưa có ứng dụng phù hợp để mở liên kết HTTPS.")
@@ -197,6 +197,10 @@ internal fun rememberQrScanController(vm: HrViewModel): QrScanController {
     fun resolveValue(rawValue: String) {
         val value = rawValue.trim()
         if (value.isEmpty() || busy || scannerActive) return
+        if (QrContentReader.isStandardFormat(value)) {
+            showLocalRead(value, offline = false)
+            return
+        }
         busy = true
         vm.resolveQr(value) { outcome ->
             busy = false

@@ -82,15 +82,21 @@ object QrFrameMapper {
      * người dùng "quét nhầm thứ mình không chĩa vào" (nguy với phiếu chi/chấm công), còn khung vàng
      * thì bị kẹp dính vào mép màn hình trông như lỗi.
      *
-     * Thiếu góc thì KHÔNG loại — thà nhận nhầm còn hơn bỏ sót mã người dùng thật sự đang quét.
+     * Thiếu bốn góc thì caller dùng tâm bounding-box làm fallback. Nếu detector không trả được cả hai,
+     * không thể chứng minh mã nằm trong preview nên phải bỏ qua, nhất là với chấm công/phiếu chi.
      */
     fun isVisible(corners: List<TrackPoint>, crop: QrCropRect): Boolean {
-        if (corners.size < 4) return true
+        if (corners.size < 4) return false
         val centerX = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4f
         val centerY = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4f
-        return centerX >= crop.left && centerX <= crop.right &&
-            centerY >= crop.top && centerY <= crop.bottom
+        return isPointVisible(TrackPoint(centerX, centerY), crop)
     }
+
+    /** Fallback for detectors that decoded a value and bounding box but omitted corner points. */
+    fun isPointVisible(point: TrackPoint, crop: QrCropRect): Boolean =
+        crop.width > 0 && crop.height > 0 &&
+            point.x >= crop.left && point.x <= crop.right &&
+            point.y >= crop.top && point.y <= crop.bottom
 
     /** Trả null khi thiếu góc hoặc kích thước chưa hợp lệ — khi đó chỉ là không vẽ khung, mã vẫn quét được. */
     fun map(corners: List<TrackPoint>, crop: QrCropRect, viewWidth: Float, viewHeight: Float): TrackQuad? {
@@ -124,10 +130,9 @@ class QrTrackingFilter {
     fun update(
         measured: TrackQuad,
         nowMs: Long,
-        releaseWhenStale: Boolean = true,
     ): TrackQuad {
         val current = filtered
-        if (current == null || releaseWhenStale && age(nowMs) > RELEASE_MS) {
+        if (current == null || age(nowMs) > RELEASE_MS) {
             filtered = measured
             pendingOutlier = null
             lastAcceptedAt = nowMs
@@ -206,8 +211,18 @@ class QrTrackingFilter {
         return value.takeIf { age(nowMs) <= RELEASE_MS }
     }
 
-    /** Last selected geometry without timeout; used while its decoded QR remains the active result. */
-    fun retained(): TrackQuad? = filtered
+    /**
+     * Opacity for the stale-detection window: stay solid briefly to absorb dropped detector frames,
+     * then fade to the idle view. This is intentionally independent from geometry smoothing so the
+     * result card can remain visible after the yellow tracking frame has gone away.
+     */
+    fun opacity(nowMs: Long): Float {
+        if (filtered == null) return 0f
+        val age = age(nowMs)
+        if (age <= HOLD_MS) return 1f
+        if (age >= RELEASE_MS) return 0f
+        return 1f - (age - HOLD_MS).toFloat() / (RELEASE_MS - HOLD_MS).toFloat()
+    }
 
     fun reset() {
         filtered = null

@@ -42,7 +42,6 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -93,7 +92,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import com.ketoanapk.hr.data.HrUser
-import com.ketoanapk.hr.data.ReleaseInfo
 import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.ui.theme.KetoanTheme
 
@@ -136,7 +134,7 @@ fun HrApp(vm: HrViewModel) {
         // kiện của chúng nên không bị ảnh hưởng). Áp ở gốc app nên có tác dụng trên MỌI màn hình nhập.
         val focusManager = LocalFocusManager.current
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            RightEdgeBackContainer(
+            EdgeBackContainer(
                 enabled = backDispatcher != null,
                 onBack = { backDispatcher?.onBackPressed() },
             ) {
@@ -542,26 +540,19 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
             )
         }
 
-        // Nhắc cập nhật ngay khi phát hiện bản mới (kiểm tra ngầm lúc đăng nhập/quay lại app).
+        // Bảng cập nhật: hiện khi phát hiện bản mới (kiểm tra ngầm lúc đăng nhập/quay lại app) và
+        // Ở LẠI suốt lúc tải để vẽ tiến độ — xem [UpdateSheet].
         val update = vm.availableUpdate
-        if (vm.updatePromptVisible && update != null) {
+        if (vm.updateSheetVisible && update != null) {
             val context = LocalContext.current
-            UpdateDialog(
+            UpdateSheet(
                 info = update,
-                installing = vm.settingsState.installing,
-                onConfirm = { vm.confirmUpdatePrompt(context) },
-                onDismiss = vm::dismissUpdatePrompt,
-            )
-        }
-
-        // Cảnh báo tải bản cập nhật lớn khi đang dùng dữ liệu di động (hỏi trước khi tốn cước).
-        if (vm.meteredUpdatePrompt) {
-            val context = LocalContext.current
-            MeteredUpdateDialog(
-                sizeText = vm.meteredUpdateSize,
-                installing = vm.settingsState.installing,
-                onConfirm = { vm.confirmMeteredUpdate(context) },
-                onDismiss = vm::dismissMeteredUpdate,
+                stage = vm.updateStage,
+                needsMeteredConsent = vm.updateNeedsMeteredConsent,
+                onDownload = { vm.startUpdateDownload(context) },
+                onAcceptMetered = { vm.acceptMeteredUpdate(context) },
+                onRetry = { vm.startUpdateDownload(context) },
+                onDismiss = vm::dismissUpdateSheet,
             )
         }
 
@@ -634,83 +625,6 @@ private fun SearchResults(
             }
         }
     }
-}
-
-/** Hộp thoại nhắc cập nhật hiện trên mọi màn hình. Bản bắt buộc không cho bỏ qua. */
-@Composable
-private fun UpdateDialog(
-    info: ReleaseInfo,
-    installing: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = { if (!info.isMandatory) onDismiss() },
-        icon = { Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-        title = { Text("Đã có bản cập nhật ${info.version}") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    if (info.isMandatory) "Đây là bản cập nhật bắt buộc. Vui lòng cập nhật để tiếp tục sử dụng."
-                    else "Phiên bản mới đã sẵn sàng. Bạn có muốn cập nhật ngay không?",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (info.releaseNotes.isNotBlank()) {
-                    Text(info.releaseNotes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !installing) {
-                if (installing) {
-                    CircularProgressIndicator(Modifier.size(18.dp), MaterialTheme.colorScheme.onPrimary, 2.dp)
-                } else {
-                    Text("Cập nhật ngay", fontWeight = FontWeight.Bold)
-                }
-            }
-        },
-        dismissButton = if (info.isMandatory) {
-            null
-        } else {
-            { TextButton(onClick = onDismiss) { Text("Để sau") } }
-        },
-    )
-}
-
-/**
- * Hỏi trước khi tải bản cập nhật LỚN khi đang dùng dữ liệu di động — kèm dung lượng thực (vd. "135 MB").
- * Chọn "Để sau" để chờ Wi-Fi cho khỏi tốn cước. Không hiện khi đang ở Wi-Fi hay bản cập nhật nhỏ.
- */
-@Composable
-private fun MeteredUpdateDialog(
-    sizeText: String,
-    installing: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-        title = { Text("Bạn đang dùng dữ liệu di động") },
-        text = {
-            Text(
-                "Bản cập nhật này khoảng $sizeText. Tải bằng dữ liệu di động có thể tốn cước — bạn muốn tải ngay hay chờ kết nối Wi-Fi?",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !installing) {
-                if (installing) {
-                    CircularProgressIndicator(Modifier.size(18.dp), MaterialTheme.colorScheme.onPrimary, 2.dp)
-                } else {
-                    Text("Tải ngay", fontWeight = FontWeight.Bold)
-                }
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Để sau (chờ Wi-Fi)") } },
-    )
 }
 
 /**

@@ -11,10 +11,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
  */
 object AppEvents {
     // replay=0, có buffer để tryEmit không bị rớt khi chưa có collector tức thời.
-    val dataChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+    val dataChanged = MutableSharedFlow<String>(extraBufferCapacity = 16)
 
-    fun signalDataChanged() {
-        dataChanged.tryEmit(Unit)
+    fun signalDataChanged(scope: String = "all") {
+        dataChanged.tryEmit(scope.ifBlank { "all" })
     }
 
     // Buộc đăng xuất NGAY (tài khoản vừa đăng nhập ở thiết bị khác → 1 máy/tài khoản). Kèm lý do hiện ở

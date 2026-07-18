@@ -4,4 +4,21 @@
     <string name="title_activity_main">Ketoan - Nhân sự</string>
     <string name="package_name">com.ketoanapk.hr</string>
     <string name="custom_url_scheme">com.ketoanapk.hr</string>
+
+    <string name="qr_screen_title">Quét mã QR</string>
+    <string name="qr_close_scanner">Đóng trình quét</string>
+    <string name="qr_pick_image">Chọn ảnh có mã QR</string>
+    <string name="qr_default_prompt">Đưa mã QR vào vùng quét</string>
+    <string name="qr_torch_on">Bật đèn</string>
+    <string name="qr_torch_off">Tắt đèn</string>
+    <string name="qr_open_link">Mở liên kết</string>
+    <string name="qr_copy">Sao chép</string>
+    <string name="qr_scan_next">Quét tiếp</string>
+    <string name="qr_result_pane">Kết quả quét mã QR</string>
+    <string name="qr_camera_fallback">%1$s Bạn có thể chọn ảnh có mã QR ở góc phải.</string>
+    <string name="qr_status_checking">Đang kiểm tra mã QR…</string>
+    <string name="qr_status_next">Đưa mã QR tiếp theo vào khung</string>
+    <string name="qr_status_other">Đưa mã QR khác vào khung</string>
+    <string name="qr_status_reading_image">Đang tìm mã QR trong ảnh…</string>
+    <string name="qr_error_title">Không thể xử lý mã QR</string>
 </resources>

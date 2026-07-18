@@ -86,6 +86,7 @@ class QrActionInterpreterTest {
             "https://localhost/help",
             "https://api.localhost/help",
             "https://127.0.0.1/help",
+            "https://printer/help",
             "https://2130706433/help",
             "https://[::1]/help",
             "https://0x7f000001/help",
