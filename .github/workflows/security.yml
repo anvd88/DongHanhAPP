@@ -1,0 +1,86 @@
+name: Security
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * 1'   # 09:00 thứ Hai (UTC 02:00) hằng tuần
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Quét bí mật (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # quét cả lịch sử của PR/push
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  dotnet-audit:
+    name: .NET - gói NuGet dễ tổn thương
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore web/backend/KetoanMini.Api/KetoanMini.Api.csproj
+      - name: Liệt kê gói dễ tổn thương (fail nếu High/Critical)
+        run: |
+          dotnet list web/backend/KetoanMini.Api/KetoanMini.Api.csproj package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          if grep -qiE "\b(High|Critical)\b" audit.txt; then
+            echo "::error::Phát hiện gói NuGet dễ tổn thương mức High/Critical"; exit 1
+          fi
+
+  npm-audit:
+    name: Frontend - npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Cài phụ thuộc
+        run: npm ci
+        working-directory: web/frontend
+      - name: Audit (fail ở mức high/critical)
+        run: npm audit --audit-level=high
+        working-directory: web/frontend
+
+  auth-tests:
+    name: Kiểm thử bảo mật (401/403/ownership/rate-limit)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ketoanmini
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      ConnectionStrings__KetoanMini: "Host=localhost;Port=5432;Database=ketoanmini;Username=postgres;Password=postgres;Timezone=UTC"
+      Jwt__Key: "ci-only-integration-test-signing-key-0123456789abcdef"
+      Security__FieldEncryptionKey: ""            # test bảo mật không đụng embedding → passthrough là đủ
+      Bootstrap__AdminUsername: "ci-admin"
+      Bootstrap__AdminPassword: "ci-admin-password-not-a-real-secret"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Chạy test
+        run: dotnet test web/backend/KetoanMini.Api.Tests/KetoanMini.Api.Tests.csproj -c Release --logger "console;verbosity=normal"

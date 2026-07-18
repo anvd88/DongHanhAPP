@@ -10,41 +10,69 @@ import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CardGiftcard
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.HelpCenter
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ketoanapk.hr.data.AppConfig
+import com.ketoanapk.hr.data.AuditEntry
 import com.ketoanapk.hr.data.AppEvents
 import com.ketoanapk.hr.data.AppNotification
+import com.ketoanapk.hr.data.CallManager
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.data.CapturedFrame
 import com.ketoanapk.hr.data.ChamCongResult
+import com.ketoanapk.hr.data.AttendancePolicy
+import com.ketoanapk.hr.data.OfflineAttendanceItem
+import com.ketoanapk.hr.data.OfflineAttendanceRecord
+import com.ketoanapk.hr.data.ChatConversation
 import com.ketoanapk.hr.data.CreateRequestBody
 import com.ketoanapk.hr.data.Department
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.EmployeeCard
 import com.ketoanapk.hr.data.EmployeeDetail
+import com.ketoanapk.hr.data.EmployeeDocument
+import com.ketoanapk.hr.data.OnboardingSummary
+import com.ketoanapk.hr.data.PerformanceSummary
+import com.ketoanapk.hr.data.TrainingCourse
+import com.ketoanapk.hr.data.BenefitsSummary
 import com.ketoanapk.hr.data.FaceEnrollPose
 import com.ketoanapk.hr.data.HrRepository
+import com.ketoanapk.hr.data.SessionRestore
+import com.ketoanapk.hr.data.SessionStatus
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerSummary
+import com.ketoanapk.hr.data.MobileAppLoginChallenge
 import com.ketoanapk.hr.data.NotificationCenter
 import com.ketoanapk.hr.data.NotificationWorker
 import com.ketoanapk.hr.data.Penalty
@@ -57,17 +85,33 @@ import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
 import com.ketoanapk.hr.data.PayEstimate
 import com.ketoanapk.hr.data.PayslipItem
+import com.ketoanapk.hr.data.CreatePayoutBody
+import com.ketoanapk.hr.data.PayoutCategory
+import com.ketoanapk.hr.data.PayoutRecipient
+import com.ketoanapk.hr.data.PayoutRefundSource
+import com.ketoanapk.hr.data.PayoutVoucher
 import com.ketoanapk.hr.data.SalaryListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TokenStore
+import com.ketoanapk.hr.data.CreateTaskBody
+import com.ketoanapk.hr.data.WorkTask
+import com.ketoanapk.hr.data.WorkTaskDetailResult
+import com.ketoanapk.hr.data.WorkTaskListResult
+import com.ketoanapk.hr.data.WorkTaskMeta
+import com.ketoanapk.hr.data.WorkTaskSummary
 import com.ketoanapk.hr.network.ApiException
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.Job
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.YearMonth
+
+/** Tab trong mini app Chat. Chat chiếm trọn màn nên có thanh tab riêng, không dùng thanh dưới của HR. */
+enum class ChatTab(val label: String) { Conversations("Hội thoại"), Directory("Danh bạ"), Calls("Cuộc gọi") }
 
 sealed interface AuthState {
     data object Loading : AuthState
@@ -75,6 +119,24 @@ sealed interface AuthState {
     data class SignedIn(val user: HrUser) : AuthState
 }
 
+sealed interface MobileAppLoginState {
+    data object Idle : MobileAppLoginState
+    data object Received : MobileAppLoginState
+    data object AwaitingAppLogin : MobileAppLoginState
+    data object Resolving : MobileAppLoginState
+    data class Confirmation(
+        val challenge: MobileAppLoginChallenge,
+        val submitting: Boolean = false,
+        val error: String? = null,
+    ) : MobileAppLoginState
+    data class Finished(val message: String, val accepted: Boolean) : MobileAppLoginState
+}
+
+/**
+ * Các màn hình của app. Biểu tượng phải ĐÔI MỘT KHÁC NHAU: người dùng lướt ngăn kéo bằng hình chứ không
+ * đọc từng chữ, nên hai màn dùng chung một icon thì icon đó không mang thông tin gì. Thêm màn mới nhớ
+ * chọn icon chưa ai dùng.
+ */
 enum class HrDestination(
     val title: String,
     val label: String,
@@ -82,26 +144,50 @@ enum class HrDestination(
     val adminOnly: Boolean = false,
 ) {
     Home("Trang chủ", "Trang chủ", Icons.Filled.Home),
+    // Màn "chứa" nhóm cá nhân, mở bằng ảnh đại diện trên header (thay ngăn kéo hamburger đã bỏ).
+    Personal("Cá nhân", "Cá nhân", Icons.Filled.Person),
     Portal("Cổng thông tin", "Cổng TT", Icons.Filled.Campaign),
     Profile("Hồ sơ của tôi", "Hồ sơ", Icons.Filled.AccountCircle),
     Scan("Chấm công", "Chấm công", Icons.Filled.Face),
     Timesheet("Bảng công", "Bảng công", Icons.Filled.CalendarMonth),
     Requests("Đơn từ", "Đơn từ", Icons.Filled.Description),
+    Onboarding("Bắt đầu công việc", "Onboarding", Icons.Filled.Checklist),
+    Performance("Mục tiêu & KPI", "Hiệu suất", Icons.Filled.TrackChanges),
+    Training("Đào tạo nội bộ", "Đào tạo", Icons.Filled.School),
+    Benefits("Phúc lợi", "Phúc lợi", Icons.Filled.CardGiftcard),
+    Feedback("Khảo sát & phản hồi", "Khảo sát", Icons.Filled.Poll),
+    Help("Trung tâm trợ giúp", "Trợ giúp", Icons.Filled.HelpCenter),
+    Tasks("Việc cần làm", "Công việc", Icons.Filled.TaskAlt),
+    // Giao việc & nghiệm thu: nhân viên xem việc được giao; Thủ kho/Admin giao việc + nghiệm thu.
+    WorkTasks("Giao việc", "Giao việc", Icons.Filled.AssignmentTurnedIn),
+    Chat("Chat nội bộ", "Chat", Icons.Filled.Chat),
+    Directory("Danh bạ", "Danh bạ", Icons.Filled.Contacts),
+    Calls("Lịch sử cuộc gọi", "Cuộc gọi", Icons.Filled.Call),
     // Nhân viên tự xem lương dự tính tháng hiện tại (gồm phạt nếu có).
     MySalary("Lương của tôi", "Lương", Icons.Filled.AccountBalanceWallet),
     // Nhân viên tự xem các phiếu lương đã nhận (mỗi tháng một thẻ).
     MyPayslips("Phiếu lương", "Phiếu lương", Icons.Filled.ReceiptLong),
-    // Chỉ để XEM trạng thái đơn của nhân sự (không duyệt trong app — duyệt trên bản web).
+    // Phiếu chi tiền mặt: nhân viên xem phiếu của mình; kế toán lập phiếu + hiện QR ngay trên app.
+    Payout("Phiếu chi", "Phiếu chi", Icons.Filled.Payments),
+    // Người quản lý xử lý đơn đang chờ ngay trong ứng dụng.
     Approval("Đơn chờ duyệt", "Chờ duyệt", Icons.Filled.Inbox),
     Penalty("Kỷ luật", "Kỷ luật", Icons.Filled.Gavel),
     People("Quản lý nhân sự", "Quản lý", Icons.Filled.People, adminOnly = true),
+    Dashboard("Dashboard điều hành", "Dashboard", Icons.Filled.Dashboard, adminOnly = true),
     Payroll("Bảng lương", "Lương", Icons.Filled.Payments, adminOnly = true),
     Audit("Nhật ký hệ thống", "Nhật ký", Icons.Filled.History, adminOnly = true),
     Settings("Cài đặt", "Cài đặt", Icons.Filled.Settings),
     Notifications("Thông báo", "Thông báo", Icons.Filled.Notifications),
 }
 
-data class NavGroup(val title: String, val destinations: List<HrDestination>)
+data class TalentUiState(
+    val loading:Boolean=false,
+    val onboarding:OnboardingSummary?=null,
+    val performance:PerformanceSummary?=null,
+    val training:List<TrainingCourse> = emptyList(),
+    val benefits:BenefitsSummary?=null,
+    val error:String?=null,
+)
 
 /**
  * Nháp đơn "Khiếu nại án phạt" khởi tạo từ màn Kỷ luật khi nhân viên bấm đề nghị trên một quyết định phạt
@@ -137,6 +223,19 @@ data class RequestDetailUiState(
     val error: String? = null,
     val detail: RequestDetail? = null,
     val canCancel: Boolean = false,
+    val canDecide: Boolean = false,
+    val deciding: Boolean = false,
+    val decisionError: String? = null,
+)
+
+data class AuditUiState(
+    val loading: Boolean = false,
+    val loadingMore: Boolean = false,
+    val items: List<AuditEntry> = emptyList(),
+    val query: String = "",
+    val entity: String = "",
+    val error: String? = null,
+    val hasMore: Boolean = true,
 )
 
 data class TimesheetUiState(
@@ -144,6 +243,28 @@ data class TimesheetUiState(
     val error: String? = null,
     val month: String = currentMonthKey(),
     val timesheet: Timesheet? = null,
+)
+
+/** Trạng thái màn "Giao việc": hộp việc của tôi + việc tôi giao, kèm quyền giao & tổng hợp huy hiệu. */
+data class WorkTasksUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val canAssign: Boolean = false,
+    val inbox: List<WorkTask> = emptyList(),
+    val outbox: List<WorkTask> = emptyList(),
+    val summary: WorkTaskSummary = WorkTaskSummary(),
+    val meta: WorkTaskMeta? = null,
+) {
+    /** Số việc cần tôi để mắt: việc tôi phải làm + việc chờ tôi nghiệm thu. */
+    val badge: Int get() = summary.inboxActionable + summary.outboxReview
+}
+
+/** Trạng thái xem chi tiết một công việc (mở khi id != null). */
+data class WorkTaskDetailUiState(
+    val id: String? = null,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val detail: WorkTaskDetailResult? = null,
 )
 
 data class ManagerUiState(
@@ -166,6 +287,23 @@ data class PayslipsUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val items: List<PayslipItem> = emptyList(),
+)
+
+/**
+ * Phiếu chi tiền mặt. Nhân viên thường chỉ thấy `mine`; kế toán thấy cả sổ và lập/duyệt được.
+ * `cashier` do màn hình tính từ role + phòng ban — server vẫn là nơi chốt quyền thật.
+ */
+data class PayoutUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val items: List<PayoutVoucher> = emptyList(),
+    val categories: List<PayoutCategory> = emptyList(),
+    val refundSources: List<PayoutRefundSource> = emptyList(),
+    val recipients: List<PayoutRecipient> = emptyList(),
+    /** Phiếu đang mở mã QR để đưa người nhận quét (chỉ kế toán). */
+    val qrVoucher: PayoutVoucher? = null,
+    val busy: Boolean = false,
+    val message: String? = null,
 )
 
 /** Cổng thông tin công ty (tin tức, sự kiện, giới thiệu). */
@@ -229,16 +367,36 @@ sealed interface PortraitCapture {
 }
 
 class HrViewModel(application: Application) : AndroidViewModel(application) {
-    private val repo = HrRepository(application)
+    private val repo = HrRepository.foreground(application)
     private val notificationCenter = NotificationCenter(application)
     // Client SignalR (realtime tức thì khi app đang mở, như bản web). Bật/tắt theo foreground.
     private val realtime = RealtimeClient(TokenStore(application))
+
+    init {
+        // Cắm kênh đẩy "chuông" FCM cho CallManager: khi bắt đầu/hủy gọi, gọi REST để máy người nhận
+        // reo cả khi app họ đang đóng/nền. Best-effort — lỗi mạng không làm hỏng cuộc gọi.
+        CallManager.bindPush(
+            inviter = { to, id, media -> viewModelScope.launch { repo.ringCall(to, id, media) } },
+            canceler = { to, id -> viewModelScope.launch { repo.cancelCallRing(to, id) } },
+            misser = { to, id, media -> viewModelScope.launch { repo.missedCall(to, id, media) } },
+        )
+        // Cắm kênh nạp TURN credential ĐỘNG (backend cấp có hạn giờ) để gọi được khi 2 máy khác mạng —
+        // không nhúng mật khẩu TURN vào APK. Best-effort: lỗi mạng thì tự lùi về STUN.
+        CallManager.bindTurn { viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } }
+        CallManager.bindHistory { session, reason, endedAt ->
+            viewModelScope.launch { repo.recordCall(session, reason, endedAt) }
+        }
+    }
     private var heartbeatJob: Job? = null
+    private var timesheetLoadJob: Job? = null
+    private val timesheetCache = mutableMapOf<String, Timesheet>()
+    private val timesheetPrefetching = mutableSetOf<String>()
     // Vòng làm mới nhẹ khi app đang mở (foreground): tự cập nhật trạng thái đơn từ khi admin duyệt
     // trên web mà không cần người dùng kéo làm mới. Dừng khi app xuống nền để tiết kiệm pin
     // (nền đã có WorkManager + push FCM lo thông báo).
     private var foregroundPollJob: Job? = null
     private var pendingTarget: HrDestination? = null
+    private var pendingEntityId: String? = null
     private var pushToken: String? = null
     private var captureOffline = false   // lượt chấm hiện tại là ngoại tuyến (mất mạng) hay trực tuyến
 
@@ -252,13 +410,35 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var selected by mutableStateOf(HrDestination.Home)
         private set
+    /**
+     * Những màn đã đi qua, mới nhất ở cuối → Back lùi về đúng chỗ vừa rời thay vì nhảy thẳng Trang chủ.
+     * Trang chủ là GỐC: mở Trang chủ sẽ xoá lịch sử, nhờ đó Back ở Trang chủ luôn thoát app đúng như
+     * người dùng Android quen, không bị lùi ngược vào các màn cũ.
+     */
+    private val history = mutableStateListOf<HrDestination>()
     var homeState by mutableStateOf(HomeUiState(loading = true))
+        private set
+    var profileDocuments: List<EmployeeDocument> by mutableStateOf(emptyList())
+        private set
+    var profileDocumentsLoading by mutableStateOf(false)
+        private set
+    var talentState by mutableStateOf(TalentUiState())
+        private set
+    var surveys:List<com.ketoanapk.hr.data.SurveyItem> by mutableStateOf(emptyList())
+        private set
+    var myFeedback:List<com.ketoanapk.hr.data.GeneralFeedbackItem> by mutableStateOf(emptyList())
+        private set
+    var diagnostics:Map<String,String> by mutableStateOf(emptyMap())
+        private set
+    var supportTickets:List<com.ketoanapk.hr.data.SupportTicketItem> by mutableStateOf(emptyList())
         private set
     var timesheetState by mutableStateOf(TimesheetUiState(loading = true))
         private set
     var payEstimateState by mutableStateOf(PayEstimateUiState())
         private set
     var payslipsState by mutableStateOf(PayslipsUiState())
+        private set
+    var payoutState by mutableStateOf(PayoutUiState())
         private set
     // Kỳ (yyyy-MM) của phiếu lương đang mở chi tiết (null = đang xem danh sách thẻ tháng).
     var payslipOpenPeriod: String? by mutableStateOf(null)
@@ -270,13 +450,48 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var requestDetailState by mutableStateOf(RequestDetailUiState())
         private set
+    var auditState by mutableStateOf(AuditUiState())
+        private set
+    private var auditRequestId = 0
     var creatingRequest by mutableStateOf(false)
+        private set
+    var taskActionBusyId: String? by mutableStateOf(null)
+        private set
+    // ── Giao việc & nghiệm thu ──
+    var workTasksState by mutableStateOf(WorkTasksUiState())
+        private set
+    var workTaskDetail by mutableStateOf(WorkTaskDetailUiState())
+        private set
+    var workTaskBusy by mutableStateOf(false)
+        private set
+    var realChatState by mutableStateOf(RealChatUiState())
+        private set
+    var directoryState by mutableStateOf(DirectoryUiState())
+        private set
+    var callHistoryState by mutableStateOf(CallHistoryUiState())
         private set
     // Nháp khiếu nại mở thẳng từ màn Kỷ luật (bấm đề nghị trên một quyết định phạt). RequestsScreen đọc
     // để mở luôn form penalty_appeal đã điền sẵn án phạt; xoá đi sau khi rời luồng tạo đơn.
     var appealDraft: AppealDraft? by mutableStateOf(null)
         private set
+    var requestDraftType: String? by mutableStateOf(null)
+        private set
+    var requestDraftValues: Map<String, String> by mutableStateOf(emptyMap())
+        private set
+    private var editingRequestId: String? = null
     var managerState by mutableStateOf(ManagerUiState())
+        private set
+    var managedEmployee: EmployeeDetail? by mutableStateOf(null)
+        private set
+    var managedEmployeeLoading by mutableStateOf(false)
+        private set
+    var dashboardAttendance:List<com.ketoanapk.hr.data.ManagerAttendanceItem> by mutableStateOf(emptyList())
+        private set
+    var dashboardStatus:String? by mutableStateOf(null)
+        private set
+    var dashboardDate by mutableStateOf(java.time.LocalDate.now().toString())
+        private set
+    var dashboardTrend by mutableStateOf<List<Pair<String, Int>>>(emptyList())
         private set
     var settingsState by mutableStateOf(SettingsUiState())
         private set
@@ -292,6 +507,14 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     var attendanceCapture: AttendanceCapture by mutableStateOf(AttendanceCapture.Idle)
         private set
     var attendancePending by mutableStateOf(0)   // số bản chấm ngoại tuyến đang chờ đồng bộ
+        private set
+    var attendanceQueued: List<OfflineAttendanceItem> by mutableStateOf(emptyList())
+        private set
+    var attendanceHistory: List<OfflineAttendanceRecord> by mutableStateOf(emptyList())
+        private set
+    var attendancePolicy: AttendancePolicy? by mutableStateOf(null)
+        private set
+    var attendanceLocation: android.location.Location? by mutableStateOf(null)
         private set
     // Đăng ký khuôn mặt: trạng thái đã đăng ký (null = chưa biết) + luồng quét đăng ký.
     var faceRegistered: Boolean? by mutableStateOf(null)
@@ -317,6 +540,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var actionMessage: String? by mutableStateOf(null)
         private set
+    var pendingQrLoginCode: String? by mutableStateOf(null)
+        private set
+    var pendingMobileAppLoginCode: String? by mutableStateOf(null)
+        private set
+    var mobileAppLoginState: MobileAppLoginState by mutableStateOf(MobileAppLoginState.Idle)
+        private set
     var notifications: List<AppNotification> by mutableStateOf(emptyList())
         private set
 
@@ -325,6 +554,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var updatePromptVisible by mutableStateOf(false)
         private set
+    // Hỏi trước khi tải bản cập nhật LỚN qua dữ liệu di động (tiết kiệm cước cho người dùng).
+    var meteredUpdatePrompt by mutableStateOf(false)
+        private set
+    var meteredUpdateSize by mutableStateOf("")
+        private set
     private var lastUpdateCheckAt = 0L        // mốc lần kiểm tra gần nhất (chống gọi dồn)
     private var dismissedUpdateVersionCode = 0 // mã bản người dùng đã bấm "Để sau" (không nhắc lại)
 
@@ -332,38 +566,97 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Số đơn đang chờ tôi duyệt (hộp thư đã lọc sẵn ở máy chủ theo người duyệt/quản trị). */
     val pendingApprovalCount: Int get() = homeState.inbox.count { it.status.equals("Pending", true) }
+    val taskCenterItems: List<TaskCenterItem>
+        get() = buildTaskCenterItems(homeState.inbox, homeState.timesheet, managerState.summary?.headcount)
+    val chatUnreadCount: Int get() = realChatState.conversations.sumOf { it.unread }
 
-    val bottomDestinations = listOf(
-        HrDestination.Home,
-        HrDestination.Timesheet,
-        HrDestination.Scan,
-        HrDestination.Requests,
-    )
+    /**
+     * Thanh dưới theo vai trò: nhân viên cần Bảng công + Đơn từ, quản trị cần Chờ duyệt + Quản lý
+     * nhân sự. Chat có mặt ở cả hai vì huy hiệu tin chưa đọc phải thấy được mà không cần mở ngăn kéo.
+     *
+     * RÀNG BUỘC: đúng 5 mục và Chấm công LUÔN ở giữa (chỉ số 2) — nút tròn nổi được căn TopCenter nên
+     * đổi thứ tự sẽ khiến nút lệch khỏi khe trống.
+     */
+    fun bottomDestinations(user: HrUser): List<HrDestination> = if (user.isAdmin) {
+        listOf(
+            HrDestination.Home,
+            HrDestination.Approval,
+            HrDestination.Scan,
+            HrDestination.People,
+            HrDestination.Chat,
+        )
+    } else {
+        listOf(
+            HrDestination.Home,
+            HrDestination.Timesheet,
+            HrDestination.Scan,
+            HrDestination.Requests,
+            HrDestination.Chat,
+        )
+    }
 
-    private val navGroups = listOf(
-        NavGroup("Công ty", listOf(HrDestination.Portal)),
-        NavGroup("Cá nhân", listOf(HrDestination.Home, HrDestination.Profile, HrDestination.Scan, HrDestination.Timesheet, HrDestination.MySalary, HrDestination.MyPayslips, HrDestination.Requests)),
-        NavGroup("Công việc", listOf(HrDestination.Approval, HrDestination.Penalty)),
-        NavGroup("Quản trị", listOf(HrDestination.People, HrDestination.Payroll, HrDestination.Audit)),
-        NavGroup("Hệ thống", listOf(HrDestination.Settings)),
-    )
+    /**
+     * Màn con nào nằm trong màn "chứa" nào — thay cho `navGroups` của ngăn kéo hamburger đã bỏ.
+     *
+     * Nguyên tắc: mỗi màn con xuất hiện ở ĐÚNG MỘT chỗ. Nếu để nó vừa là tab vừa nằm trong màn chứa thì
+     * người dùng gặp cùng một mục hai lần và ta lại quay về đúng cảnh hỗn độn của ngăn kéo cũ.
+     * Nhóm cá nhân không nằm ở đây vì màn Cá nhân chia 3 cụm, xem PersonalHubScreen.
+     */
+    fun hubFor(destination: HrDestination): List<HrDestination> {
+        val admin = (authState as? AuthState.SignedIn)?.user?.isAdmin == true
+        return when (destination) {
+            // Chat không có ở đây: Danh bạ/Cuộc gọi là TAB trong mini app Chat, xem ChatMiniApp.
+            // Admin đã có tab "Chờ duyệt" ở thanh dưới nên không lặp lại nó ở đây.
+            HrDestination.Requests ->
+                if (admin) listOf(HrDestination.Penalty)
+                else listOf(HrDestination.Approval, HrDestination.Penalty)
+            HrDestination.People -> listOf(HrDestination.Dashboard, HrDestination.Payroll, HrDestination.Audit)
+            // Cổng thông tin và Việc cần làm đã có thẻ riêng trên Trang chủ nên không lặp lại.
+            HrDestination.Home -> listOf(HrDestination.Feedback)
+            else -> emptyList()
+        }
+    }
+
+    /** Số trên huy hiệu của một điểm đến (0 = không hiện). Dùng chung cho thanh dưới và các màn chứa. */
+    fun badgeCount(destination: HrDestination): Int = when (destination) {
+        HrDestination.Approval -> pendingApprovalCount
+        HrDestination.Tasks -> taskCenterItems.size
+        HrDestination.WorkTasks -> workTasksState.badge
+        HrDestination.Chat -> chatUnreadCount
+        else -> 0
+    }
 
     init {
         viewModelScope.launch { rememberedUsername = repo.rememberedUsername() }
         // FCM báo có dữ liệu đổi từ máy chủ → làm mới NGAY màn đang xem (đơn từ tức thì, không chờ poll).
         viewModelScope.launch {
             AppEvents.dataChanged.collect {
-                if (authState is AuthState.SignedIn) pollLiveData()
+                if (authState is AuthState.SignedIn) {
+                    pollLiveData()
+                    if (selected == HrDestination.Chat) refreshChatRealtime()
+                }
+            }
+        }
+        // Tài khoản đăng nhập ở thiết bị khác (1 máy/tài khoản) → server đẩy "kicked" → đăng xuất NGAY.
+        viewModelScope.launch {
+            AppEvents.forceLogout.collect { reason ->
+                if (authState is AuthState.SignedIn) logout(reason)
             }
         }
         restoreSession()
     }
 
-    fun visibleNavGroups(user: HrUser): List<NavGroup> =
-        navGroups.map { g -> g.copy(destinations = g.destinations.filter { !it.adminOnly || user.isAdmin }) }
-            .filter { it.destinations.isNotEmpty() }
-
     fun consumeActionMessage() { actionMessage = null }
+
+    /** Báo một dòng ngắn lên snackbar từ màn hình (ghi âm hỏng micro, giữ quá nhanh…). */
+    fun showActionMessage(text: String) { actionMessage = text }
+
+    /** Kiểm tra công tắc gọi (remote config) trước khi mở cuộc gọi; false + báo lý do nếu bị tắt từ xa. */
+    fun ensureCallAllowed(video: Boolean): Boolean {
+        if (!CallManager.callsEnabled) { actionMessage = "Tính năng gọi đang tạm tắt."; return false }
+        if (video && !CallManager.videoCallEnabled) { actionMessage = "Gọi video đang tạm tắt."; return false }
+        return true
+    }
 
     fun login(username: String, password: String, remember: Boolean) {
         if (username.isBlank() || password.isBlank()) {
@@ -383,28 +676,28 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Quên mật khẩu bằng khuôn mặt: backend so 1:1 với mẫu đã đăng ký của đúng username. */
-    fun resetPasswordWithFace(
+    /** Quên mật khẩu bằng MÃ KHÔI PHỤC do admin cấp (thay cho reset khuôn mặt đã tắt ở backend). */
+    fun resetPasswordWithCode(
         username: String,
+        code: String,
         newPassword: String,
-        images: List<String>,
         onDone: (Boolean, String?) -> Unit,
     ) {
         if (username.isBlank()) {
             onDone(false, "Vui lòng nhập tên đăng nhập.")
             return
         }
+        if (code.isBlank()) {
+            onDone(false, "Vui lòng nhập mã khôi phục.")
+            return
+        }
         if (newPassword.length < 6) {
             onDone(false, "Mật khẩu mới cần ít nhất 6 ký tự.")
             return
         }
-        if (images.isEmpty()) {
-            onDone(false, "Chưa chụp được khuôn mặt. Vui lòng thử lại.")
-            return
-        }
         viewModelScope.launch {
             resetPasswordLoading = true
-            runCatching { repo.resetPasswordWithFace(username, newPassword, images) }
+            runCatching { repo.resetPasswordWithCode(username, code, newPassword) }
                 .onSuccess {
                     rememberedUsername = username.trim()
                     onDone(true, null)
@@ -416,14 +709,19 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun onSignedIn(user: HrUser) {
         authState = AuthState.SignedIn(user)
-        selected = HrDestination.Home
+        resetToHome()
         startHeartbeat()
         startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
-        realtime.start()      // realtime tức thì như web (app đang mở lúc đăng nhập)
+        CallManager.setSelfIdentity(user.displayName) // tên thật (DB) gửi kèm lời mời gọi
+        realtime.start(user.username) // realtime + kênh tín hiệu gọi (app đang mở lúc đăng nhập)
+        viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } // TURN sẵn sàng trước cuộc gọi đầu
         loadNotifications()
+        syncMissedCalls() // hiện cuộc gọi nhỡ đã lưu server (kể cả lúc bị gọi đang offline)
         syncPushDelivery()
+        registerPush() // LUÔN đăng ký token FCM để NHẬN ĐƯỢC CUỘC GỌI dù người dùng tắt thông báo nghiệp vụ
         refreshHome(user, silent = false)
         loadTimesheet(currentMonthKey(), silent = false)
+        loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
         if (user.isAdmin) refreshManager(silent = true)
         faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
         loadAppConfig(force = true)
@@ -443,7 +741,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             if (effectiveEnabled) {
                 startPushDelivery()
             } else {
-                stopPushDelivery(unregister = enabled)
+                // Tắt thông báo NGHIỆP VỤ nhưng GIỮ token đã đăng ký để vẫn nhận được CUỘC GỌI.
+                stopPushDelivery(unregister = false)
             }
         }
     }
@@ -467,11 +766,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     repo.setPushNotificationsEnabled(false)
                     settingsState = settingsState.copy(pushNotificationsEnabled = false)
-                    stopPushDelivery(unregister = true)
+                    stopPushDelivery(unregister = false) // giữ token để vẫn nhận cuộc gọi
                     actionMessage = "Chưa cấp quyền thông báo nên push vẫn đang tắt."
                 }
             } else {
-                stopPushDelivery(unregister = true)
+                stopPushDelivery(unregister = false) // giữ token để vẫn nhận cuộc gọi
                 actionMessage = "Đã tắt thông báo push của ứng dụng."
             }
         }
@@ -530,7 +829,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun logout() {
+    /**
+     * Đăng xuất. [kickedMessage] != null nghĩa là bị BUỘC đăng xuất (đăng nhập ở máy khác / phiên hết
+     * hạn) — hiện lý do ở màn đăng nhập. Bỏ qua nếu đã đăng xuất rồi (chống gọi trùng từ heartbeat + SignalR).
+     */
+    fun logout(kickedMessage: String? = null) {
+        if (authState is AuthState.SignedOut) return
         viewModelScope.launch {
             pushToken?.let { runCatching { repo.unregisterPushToken(it) } }
             pushToken = null
@@ -541,12 +845,18 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             notificationCenter.reset()
             notifications = emptyList()
             authState = AuthState.SignedOut
-            selected = HrDestination.Home
+            resetToHome()
             homeState = HomeUiState()
+            timesheetLoadJob?.cancel()
+            timesheetLoadJob = null
+            timesheetCache.clear()
+            timesheetPrefetching.clear()
             timesheetState = TimesheetUiState()
             payEstimateState = PayEstimateUiState()
             payslipsState = PayslipsUiState()
             payslipOpenPeriod = null
+            // Sổ chi có tên + số tiền của người khác: phải xóa sạch khi đăng xuất.
+            payoutState = PayoutUiState()
             managerState = ManagerUiState()
             settingsState = SettingsUiState()
             attendanceServer = AttendanceServerState.Checking
@@ -560,12 +870,40 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             updatePromptVisible = false
             dismissedUpdateVersionCode = 0
             lastUpdateCheckAt = 0L
+            loginError = kickedMessage // hiện lý do bị đá (nếu có) trên màn đăng nhập
         }
     }
 
     // ── Thông báo (chuông) ──────────────────────────────────────────────────────
     private fun loadNotifications() {
         viewModelScope.launch { notifications = notificationCenter.load() }
+    }
+
+    /**
+     * Lấy cuộc gọi NHỠ đã lưu bền ở server và đưa vào chuông thông báo trong app. Chạy khi mở app/đăng
+     * nhập → người nhận thấy cuộc gọi nhỡ DÙ lúc bị gọi đang offline, chưa đăng ký token, hay tắt push.
+     * Chống trùng với push đã đến nhờ chữ ký `callmiss:{callId}`.
+     */
+    fun syncMissedCalls() {
+        viewModelScope.launch {
+            val missed = repo.fetchMissedCalls()
+            if (missed.isEmpty()) return@launch
+            var added = false
+            for (m in missed) {
+                val kind = if (m.media.equals("video", true)) "video" else "thoại"
+                val sig = "callmiss:" + m.callId.ifBlank { m.id.toString() }
+                val n = notificationCenter.ingestFromPush(
+                    sig,
+                    com.ketoanapk.hr.data.NotificationKind.System,
+                    "Cuộc gọi nhỡ",
+                    "Cuộc gọi $kind nhỡ từ ${m.fromName.ifBlank { m.fromUsername }}",
+                    null,
+                )
+                if (n != null) added = true
+            }
+            repo.markMissedCallsSeen()
+            if (added) notifications = notificationCenter.current
+        }
     }
 
     private fun syncNotifications(user: HrUser, state: HomeUiState) {
@@ -578,7 +916,24 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openNotifications() { selected = HrDestination.Notifications }
+    fun openNotifications() { goTo(HrDestination.Notifications) }
+
+    // Hồ sơ (tên + ảnh) ĐÃ XÁC THỰC của người trong cuộc gọi hiện tại — tra từ DB nhân viên theo
+    // username (username do server xác thực qua SignalR, KHÔNG tin tên client tự khai). Đây là nguồn
+    // sự thật cho tên/ảnh hiển thị trên màn gọi.
+    var callPeerProfile by mutableStateOf<com.ketoanapk.hr.data.CallContact?>(null)
+        private set
+    private var resolvePeerJob: Job? = null
+    fun resolveCallPeer(username: String) {
+        if (username.isBlank()) return
+        if (callPeerProfile?.username?.equals(username, true) == true) return // đã có
+        resolvePeerJob?.cancel()
+        resolvePeerJob = viewModelScope.launch {
+            runCatching { repo.callContacts(username) }.getOrNull()
+                ?.firstOrNull { it.username.equals(username, true) }
+                ?.let { if (it.username.equals(username, true)) callPeerProfile = it }
+        }
+    }
 
     fun markNotificationRead(id: String) {
         viewModelScope.launch { notifications = notificationCenter.markRead(id) }
@@ -593,43 +948,174 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Điều hướng theo thông báo hệ thống (deep-link) khi mở app từ khay thông báo. */
-    fun navigateTo(target: String?) {
+    fun navigateTo(target: String?, entityId: String? = null) {
         // Thông báo "bản cập nhật mới" → kiểm tra lại ngay và mở hộp thoại cập nhật (không phải điều hướng).
         if (target == UPDATE_TARGET) { autoCheckForUpdate(force = true); return }
         val dest = target?.let { runCatching { HrDestination.valueOf(it) }.getOrNull() } ?: return
         val user = (authState as? AuthState.SignedIn)?.user
-        if (user == null) { pendingTarget = dest; return }
+        if (user == null) { pendingTarget = dest; pendingEntityId = entityId; return }
         if (dest.adminOnly && !user.isAdmin) return
         select(dest)
+        openNotificationEntity(dest, entityId)
     }
 
     private fun consumePendingTarget(user: HrUser) {
         val dest = pendingTarget ?: return
+        val entityId = pendingEntityId
         pendingTarget = null
+        pendingEntityId = null
         if (dest.adminOnly && !user.isAdmin) return
-        selected = dest
+        goTo(dest)
+        openNotificationEntity(dest, entityId)
+    }
+
+    private fun openNotificationEntity(destination: HrDestination, entityId: String?) {
+        val id = entityId?.takeIf { it.isNotBlank() } ?: return
+        when (destination) {
+            HrDestination.Requests -> openRequestDetail(id)
+            HrDestination.Approval -> openStaffDetail(id)
+            HrDestination.Chat -> openChatNotification(id)
+            else -> Unit
+        }
+    }
+
+    private fun openChatNotification(conversationId: String) {
+        viewModelScope.launch {
+            runCatching { repo.chatConversations() }
+                .onSuccess { conversations ->
+                    realChatState = realChatState.copy(conversations = conversations)
+                    val conversation = conversations.firstOrNull { it.id == conversationId }
+                        ?: ChatConversation(id = conversationId, title = "Hội thoại")
+                    openChatConversation(conversation)
+                }
+                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
+        }
+    }
+
+    /**
+     * Đổi màn và ghi màn cũ vào lịch sử. MỌI chỗ đổi `selected` phải đi qua đây, nếu không Back sẽ
+     * bỏ sót màn đó. Chặn lịch sử ở 20 để bấm qua lại nhiều lần không tích thành hàng dài vô tận.
+     */
+    private fun goTo(destination: HrDestination) {
+        if (destination == selected) return
+        if (destination == HrDestination.Home) {
+            history.clear()
+        } else {
+            history.add(selected)
+            if (history.size > 20) history.removeAt(0)
+        }
+        selected = destination
+    }
+
+    /** Về Trang chủ với lịch sử sạch (dùng khi đăng nhập/đăng xuất). */
+    private fun resetToHome() {
+        history.clear()
+        selected = HrDestination.Home
+    }
+
+    // ── Tìm kiếm toàn cục ───────────────────────────────────────────────
+    // Lối tắt tới bất kỳ màn nào trong ~27 màn mà không cần nhớ nó nằm trong màn chứa nào. Đây là thứ
+    // thay cho việc dò danh sách phẳng của ngăn kéo cũ.
+    var searchOpen by mutableStateOf(false)
+        private set
+    var searchQuery by mutableStateOf("")
+        private set
+
+    fun openSearch() { searchOpen = true; searchQuery = "" }
+    fun closeSearch() { searchOpen = false; searchQuery = "" }
+    fun typeSearch(value: String) { searchQuery = value.take(60) }
+
+    /** Các màn khớp từ khoá. Rỗng khi chưa gõ gì. Ẩn màn quản trị với người không phải admin. */
+    fun searchResults(user: HrUser): List<HrDestination> {
+        val q = searchKey(searchQuery.trim())
+        if (q.isBlank()) return emptyList()
+        return HrDestination.entries.filter {
+            (!it.adminOnly || user.isAdmin) && searchKey(it.title).contains(q)
+        }
+    }
+
+    /**
+     * Chuẩn hoá chuỗi để so khớp: bỏ dấu tiếng Việt + đ→d + thường hoá. Nhờ vậy gõ "phuc loi" không dấu
+     * (kiểu gõ thường gặp trên điện thoại) vẫn ra "Phúc lợi".
+     */
+    private fun searchKey(s: String): String =
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{Mn}+"), "")
+            .replace('đ', 'd')
+            .replace('Đ', 'D')
+            .lowercase()
+
+    /** Tab đang xem trong mini app Chat. Vào lại Chat luôn bắt đầu ở Hội thoại (xem enterDestination). */
+    var chatTab by mutableStateOf(ChatTab.Conversations)
+        private set
+
+    fun openChatTab(tab: ChatTab) {
+        chatTab = tab
+        when (tab) {
+            ChatTab.Conversations -> if (realChatState.conversations.isEmpty()) refreshChat()
+            ChatTab.Directory -> if (directoryState.contacts.isEmpty()) refreshDirectory()
+            ChatTab.Calls -> if (callHistoryState.items.isEmpty()) refreshCallHistory()
+        }
+    }
+
+    /** Còn chỗ để lùi ở cấp màn hình hay không. Trang chủ + lịch sử rỗng = hết, để hệ thống thoát app. */
+    val canGoBack: Boolean get() = history.isNotEmpty() || selected != HrDestination.Home
+
+    /** Back cấp màn hình: lùi về màn trước, hết lịch sử thì về Trang chủ. Ở Trang chủ thì không làm gì. */
+    fun goBack() {
+        val target = when {
+            history.isNotEmpty() -> history.removeAt(history.lastIndex)
+            selected != HrDestination.Home -> HrDestination.Home
+            else -> return
+        }
+        selected = target
+        (authState as? AuthState.SignedIn)?.user?.let { enterDestination(target, it) }
     }
 
     fun select(destination: HrDestination) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
         if (destination.adminOnly && !user.isAdmin) return
-        selected = destination
+        goTo(destination)
+        enterDestination(destination, user)
+    }
+
+    /**
+     * Việc phải làm mỗi khi BƯỚC VÀO một màn — dù đi tới (select) hay lùi lại (goBack): dọn chi tiết đang
+     * mở để vào ở trạng thái sạch, rồi nạp dữ liệu nếu chưa có. Lùi lại cũng là bước vào, nên nếu bỏ qua
+     * hàm này thì Back sẽ trả về màn ở trạng thái cũ (ví dụ Cài đặt hiện màn con thay vì màn gốc).
+     */
+    private fun enterDestination(destination: HrDestination, user: HrUser) {
         closeRequestDetail() // đóng chi tiết đơn đang mở (nếu có) khi chuyển màn để vào trạng thái sạch
         portalDetail = null  // luôn vào cổng thông tin ở danh sách, không giữ chi tiết cũ
         payslipOpenPeriod = null // luôn vào Phiếu lương ở danh sách thẻ tháng, không giữ chi tiết cũ
         when (destination) {
             HrDestination.People -> if (managerState.summary == null) refreshManager(silent = false)
-            HrDestination.Scan -> { resetCapture(); checkAttendanceServer(); refreshPendingCount() }
+            HrDestination.Dashboard -> refreshDashboard(null,null)
+            HrDestination.Feedback -> loadFeedback()
+            HrDestination.Help -> runDiagnostics()
+            HrDestination.Scan -> { resetCapture(); checkAttendanceServer(); refreshAttendanceContext() }
+            HrDestination.Profile -> loadProfileDocuments()
+            HrDestination.Onboarding, HrDestination.Performance, HrDestination.Training, HrDestination.Benefits -> loadTalent()
             HrDestination.Timesheet -> if (timesheetState.timesheet == null && !timesheetState.loading) loadTimesheet(timesheetState.month, silent = false)
             HrDestination.MySalary -> if (payEstimateState.data == null && !payEstimateState.loading) loadMyEstimate()
             HrDestination.MyPayslips -> if (payslipsState.items.isEmpty() && !payslipsState.loading) loadMyPayslips()
+            // Sổ chi đổi liên tục (người nhận vừa quét, kế toán khác vừa lập) → luôn tải lại khi mở.
+            HrDestination.Payout -> loadPayouts(silent = payoutState.items.isNotEmpty())
             HrDestination.Portal -> if (portalState.feed == null && !portalState.loading) loadPortal(silent = false)
+            HrDestination.Tasks -> refreshTasks()
+            HrDestination.WorkTasks -> loadWorkTasks(silent = workTasksState.inbox.isNotEmpty() || workTasksState.outbox.isNotEmpty())
+            HrDestination.Chat -> {
+                chatTab = ChatTab.Conversations // vào mini app Chat luôn bắt đầu ở tab Hội thoại
+                if (realChatState.conversations.isEmpty()) refreshChat()
+            }
+            HrDestination.Directory -> if (directoryState.contacts.isEmpty()) refreshDirectory()
+            HrDestination.Calls -> if (callHistoryState.items.isEmpty()) refreshCallHistory()
             HrDestination.Settings -> {
                 settingsRoute = SettingsRoute.Home // vào tab Cài đặt luôn bắt đầu ở màn gốc
                 if (settingsState.webLoginEnabled == null) loadSettings()
                 if (settingsState.pushNotificationsEnabled == null) loadPushNotificationSetting()
             }
-            HrDestination.Audit -> Unit
+            HrDestination.Audit -> if (auditState.items.isEmpty() && !auditState.loading) loadAudit(reset = true)
             else -> if (homeState.employee == null && !homeState.loading) refreshHome(user, silent = true)
         }
     }
@@ -637,16 +1123,27 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshCurrent() {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
         when (selected) {
+            HrDestination.Profile -> loadProfileDocuments()
+            HrDestination.Onboarding, HrDestination.Performance, HrDestination.Training, HrDestination.Benefits -> loadTalent()
             HrDestination.People -> refreshManager(silent = false)
+            HrDestination.Dashboard -> refreshDashboard(dashboardStatus,null)
+            HrDestination.Feedback -> loadFeedback()
+            HrDestination.Help -> runDiagnostics()
             HrDestination.Scan -> checkAttendanceServer()
             HrDestination.Timesheet -> loadTimesheet(timesheetState.month, silent = false)
             HrDestination.MySalary -> loadMyEstimate()
             HrDestination.MyPayslips -> loadMyPayslips()
             HrDestination.Portal -> loadPortal(silent = false)
+            HrDestination.Tasks -> refreshTasks()
+            HrDestination.WorkTasks -> loadWorkTasks()
+            HrDestination.Chat -> refreshChat()
+            HrDestination.Directory -> refreshDirectory()
+            HrDestination.Calls -> refreshCallHistory()
             HrDestination.Settings -> {
                 loadSettings()
                 loadPushNotificationSetting()
             }
+            HrDestination.Audit -> loadAudit(reset = true)
             else -> {
                 refreshHome(user, silent = false)
                 if (user.isAdmin) refreshManager(silent = true)
@@ -656,7 +1153,410 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         requestDetailState.id?.let { refreshOpenDetail(it) }
     }
 
+    fun openManagedEmployee(id:String)=viewModelScope.launch{managedEmployeeLoading=true;runCatching{repo.employeeDetail(id)}.onSuccess{managedEmployee=it}.onFailure{actionMessage=readable(it)};managedEmployeeLoading=false}
+    fun refreshDashboard(status:String?,departmentId:String?,date:String?=null){
+        dashboardStatus=status
+        date?.let { dashboardDate = it }
+        viewModelScope.launch {
+            val day = dashboardDate
+            runCatching { repo.managerAttendance(day,status,departmentId) }.onSuccess { dashboardAttendance=it }.onFailure { actionMessage=readable(it) }
+            runCatching { repo.managerSummary(day,day.take(7)) }.onSuccess { managerState=managerState.copy(summary=it) }
+            dashboardTrend=(6 downTo 0).map { offset ->
+                val d=java.time.LocalDate.parse(day).minusDays(offset.toLong())
+                val count=runCatching { repo.managerAttendance(d.toString(),"present",departmentId).size }.getOrDefault(0)
+                d.dayOfMonth.toString() to count
+            }
+        }
+    }
+    fun loadFeedback()=viewModelScope.launch{runCatching{repo.openSurveys()}.onSuccess{surveys=it}.onFailure{actionMessage=readable(it)};runCatching{repo.myGeneralFeedback()}.onSuccess{myFeedback=it}}
+    fun answerSurvey(id:String,a:JsonObject)=viewModelScope.launch{runCatching{repo.answerSurvey(id,a)}.onSuccess{actionMessage="Đã gửi câu trả lời khảo sát.";loadFeedback()}.onFailure{actionMessage=readable(it)}}
+    fun sendGeneralFeedback(message:String,anonymous:Boolean)=viewModelScope.launch{runCatching{repo.sendGeneralFeedback(message,anonymous)}.onSuccess{actionMessage="Đã gửi góp ý.";loadFeedback()}.onFailure{actionMessage=readable(it)}}
+    fun runDiagnostics()=viewModelScope.launch{val ctx=getApplication<Application>();val map=linkedMapOf<String,String>();map["API"]=if(runCatching{repo.appConfig()}.isSuccess)"OK" else "Lỗi";map["SignalR"]=if(realtime.isConnected())"Đã kết nối" else "Đang kết nối lại";map["FCM"]=if(pushToken.isNullOrBlank())"Chưa có token" else "OK";map["Camera"]=if(ContextCompat.checkSelfPermission(ctx,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED)"Đã cấp quyền" else "Chưa cấp quyền";map["Micro"]=if(ContextCompat.checkSelfPermission(ctx,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)"Đã cấp quyền" else "Chưa cấp quyền";map["TURN"]=if(repo.fetchTurnCreds()?.urls?.isNotEmpty()==true)"OK" else "Chưa cấu hình / không kết nối";diagnostics=map;supportTickets=runCatching{repo.mySupportTickets()}.getOrDefault(emptyList())}
+    fun createSupportTicket(message:String)=viewModelScope.launch{runCatching{repo.createSupportTicket(message)}.onSuccess{actionMessage="Đã gửi báo lỗi.";runDiagnostics()}.onFailure{actionMessage=readable(it)}}
+    fun closeManagedEmployee(){managedEmployee=null}
+    fun updateManagedEmployee(detail:EmployeeDetail,departmentId:String?,position:String,status:String,managerId:String?=detail.managerId)=viewModelScope.launch{
+        val body=com.ketoanapk.hr.data.SaveEmployeeBody(detail.employeeCode,detail.username,detail.fullName,detail.dob,detail.gender,detail.phone,detail.email,detail.address,departmentId,position,managerId,detail.hireDate,status,detail.avatar)
+        runCatching{repo.updateEmployee(detail.id,body)}.onSuccess{actionMessage="Đã cập nhật hồ sơ nhân viên.";openManagedEmployee(detail.id);refreshManager(false)}.onFailure{actionMessage=readable(it)}}
+    fun updateManagedSalary(id:String,base:Double,allowance:Double,overtime:Double)=viewModelScope.launch{runCatching{repo.updateSalary(id,com.ketoanapk.hr.data.SaveSalaryBody(base,allowance,overtime))}.onSuccess{actionMessage="Đã cập nhật cấu trúc lương.";(authState as? AuthState.SignedIn)?.user?.let{refreshHome(it,true)}}.onFailure{actionMessage=readable(it)}}
+
     fun cancel(id: String) = decide { repo.cancelRequest(id); "Đã hủy đơn." }
+
+    fun refreshTasks() {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return
+        refreshHome(user, silent = false)
+        if (user.isAdmin) refreshManager(silent = true)
+    }
+
+    fun openTask(task: TaskCenterItem) {
+        select(task.target)
+        task.entityId?.let { id ->
+            when (task.target) {
+                HrDestination.Approval -> openStaffDetail(id)
+                HrDestination.Requests -> openRequestDetail(id)
+                else -> Unit
+            }
+        }
+    }
+
+    fun quickApproveRequest(id: String) {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return
+        if (taskActionBusyId != null) return
+        taskActionBusyId = id
+        viewModelScope.launch {
+            runCatching { repo.approveRequest(id, "Duyệt nhanh từ Việc cần làm") }
+                .onSuccess {
+                    actionMessage = "Đã duyệt đơn."
+                    refreshHome(user, silent = true)
+                    if (user.isAdmin) refreshManager(silent = true)
+                }
+                .onFailure { actionMessage = readable(it) }
+            taskActionBusyId = null
+        }
+    }
+
+    // ── Giao việc & nghiệm thu ───────────────────────────────────────────────────
+    /** Nạp danh sách việc (của tôi + tôi giao) + metadata giao việc. */
+    fun loadWorkTasks(silent: Boolean = false) {
+        if (authState !is AuthState.SignedIn) return
+        viewModelScope.launch {
+            if (!silent) workTasksState = workTasksState.copy(loading = true, error = null)
+            runCatching { repo.workTasks() }
+                .onSuccess { res ->
+                    workTasksState = workTasksState.copy(
+                        loading = false, error = null, canAssign = res.canAssign,
+                        inbox = res.inbox, outbox = res.outbox, summary = res.summary,
+                    )
+                }
+                .onFailure { if (!silent) workTasksState = workTasksState.copy(loading = false, error = readable(it)) }
+            // Metadata (danh sách người nhận) chỉ cần cho người có quyền giao.
+            if (workTasksState.canAssign && workTasksState.meta == null)
+                runCatching { repo.workTaskMeta() }.onSuccess { workTasksState = workTasksState.copy(meta = it) }
+        }
+    }
+
+    fun openWorkTask(id: String) {
+        workTaskDetail = WorkTaskDetailUiState(id = id, loading = true)
+        refreshWorkTaskDetail(id)
+    }
+
+    fun closeWorkTaskDetail() { workTaskDetail = WorkTaskDetailUiState() }
+
+    private fun refreshWorkTaskDetail(id: String) {
+        viewModelScope.launch {
+            runCatching { repo.workTaskDetail(id) }
+                .onSuccess { if (workTaskDetail.id == id) workTaskDetail = workTaskDetail.copy(loading = false, detail = it, error = null) }
+                .onFailure { if (workTaskDetail.id == id) workTaskDetail = workTaskDetail.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    /** Bọc một thao tác trên việc: chạy → báo kết quả → làm mới chi tiết + danh sách. */
+    private fun taskAction(successMsg: String, closeDetail: Boolean = false, block: suspend () -> Unit) {
+        if (workTaskBusy) return
+        workTaskBusy = true
+        viewModelScope.launch {
+            runCatching { block() }
+                .onSuccess {
+                    actionMessage = successMsg
+                    val id = workTaskDetail.id
+                    if (closeDetail) closeWorkTaskDetail() else id?.let { refreshWorkTaskDetail(it) }
+                    loadWorkTasks(silent = true)
+                }
+                .onFailure { actionMessage = readable(it) }
+            workTaskBusy = false
+        }
+    }
+
+    fun createWorkTask(title: String, description: String, assignee: String, priority: String, dueAt: String?, onDone: () -> Unit) {
+        if (workTaskBusy) return
+        workTaskBusy = true
+        viewModelScope.launch {
+            runCatching { repo.createWorkTask(CreateTaskBody(title.trim(), description.trim(), assignee, priority, dueAt?.ifBlank { null })) }
+                .onSuccess { actionMessage = "Đã giao việc."; loadWorkTasks(silent = true); onDone() }
+                .onFailure { actionMessage = readable(it) }
+            workTaskBusy = false
+        }
+    }
+
+    fun updateWorkTask(id: String, title: String, description: String, assignee: String, priority: String, dueAt: String?, onDone: () -> Unit) {
+        if (workTaskBusy) return
+        workTaskBusy = true
+        viewModelScope.launch {
+            runCatching { repo.updateWorkTask(id, CreateTaskBody(title.trim(), description.trim(), assignee, priority, dueAt?.ifBlank { null })) }
+                .onSuccess { actionMessage = "Đã cập nhật công việc."; refreshWorkTaskDetail(id); loadWorkTasks(silent = true); onDone() }
+                .onFailure { actionMessage = readable(it) }
+            workTaskBusy = false
+        }
+    }
+
+    fun startWorkTask(id: String) = taskAction("Đã bắt đầu làm.") { repo.startWorkTask(id) }
+    fun updateWorkTaskProgress(id: String, progress: Int, note: String) = taskAction("Đã cập nhật tiến độ.") { repo.progressWorkTask(id, progress, note) }
+    fun submitWorkTask(id: String, note: String) = taskAction("Đã nộp để nghiệm thu.") { repo.submitWorkTask(id, note) }
+    fun acceptWorkTask(id: String, note: String, rating: Int?) = taskAction("Đã nghiệm thu đạt.") { repo.acceptWorkTask(id, note, rating) }
+    fun rejectWorkTask(id: String, note: String) = taskAction("Đã trả lại công việc.") { repo.rejectWorkTask(id, note) }
+    fun cancelWorkTask(id: String, note: String) = taskAction("Đã huỷ công việc.", closeDetail = true) { repo.cancelWorkTask(id, note) }
+    fun deleteWorkTask(id: String) = taskAction("Đã xoá công việc.", closeDetail = true) { repo.deleteWorkTask(id) }
+
+    fun refreshChat() {
+        viewModelScope.launch {
+            realChatState = realChatState.copy(loading = true, error = null)
+            runCatching { repo.chatConversations() }
+                .onSuccess { realChatState = realChatState.copy(loading = false, conversations = it, error = null, offline = repo.chatUsingCache()) }
+                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    @Suppress("SuspiciousIndentation")
+    private fun refreshChatRealtime() {
+        val selectedConversation = realChatState.selected
+        viewModelScope.launch {
+            val conversations = runCatching { repo.chatConversations() }.getOrNull()
+            val messages = selectedConversation?.let { runCatching { repo.chatMessages(it.id) }.getOrNull() }
+            val mergedMessages = if (messages == null) {
+                realChatState.messages
+            } else {
+                // Bản từ MÁY CHỦ phải đứng TRƯỚC: distinctBy giữ phần tử đầu tiên của mỗi id, nên nếu để
+                // danh sách cũ trước thì mọi thay đổi trên tin ĐÃ CÓ (react, sửa, đã đọc, gỡ) đều bị vứt
+                // đi và chỉ tin mới tinh mới hiện — phải thoát app vào lại mới thấy.
+                (messages + realChatState.messages).distinctBy { it.id }.sortedBy { it.id }
+            }
+            realChatState = realChatState.copy(
+                conversations = conversations ?: realChatState.conversations,
+                messages = mergedMessages,
+            )
+        }
+    }
+
+    fun setChatQuery(value: String) { realChatState = realChatState.copy(query = value) }
+    private var messageSearchJob: Job? = null
+    fun setMessageSearch(value: String) {
+        realChatState = realChatState.copy(messageQuery = value)
+        val conversation = realChatState.selected ?: return
+        messageSearchJob?.cancel()
+        messageSearchJob = viewModelScope.launch {
+            delay(350)
+            realChatState = realChatState.copy(loading = true, error = null)
+            runCatching { repo.chatMessages(conversation.id, search = value) }
+                .onSuccess { realChatState = realChatState.copy(loading = false, messages = it, hasMore = it.size == 50) }
+                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
+        }
+    }
+    fun setChatInput(value: String) { realChatState = realChatState.copy(input = value.take(4000), error = null) }
+
+    fun openNewChat() {
+        realChatState = realChatState.copy(choosingContact = true, selected = null, loading = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.callContacts(null) }
+                .onSuccess { realChatState = realChatState.copy(loading = false, contacts = it) }
+                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    fun createDirectChat(contact: com.ketoanapk.hr.data.CallContact) {
+        realChatState = realChatState.copy(loading = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.openDirectConversation(contact.username) }
+                .onSuccess { result ->
+                    val conversation = realChatState.conversations.firstOrNull { it.id == result.id } ?: ChatConversation(
+                        id = result.id,
+                        title = contact.displayName,
+                        username = contact.username,
+                        avatarUrl = contact.avatarUrl,
+                        isOnline = contact.isOnline,
+                    )
+                    realChatState = realChatState.copy(choosingContact = false, loading = false)
+                    openChatConversation(conversation)
+                }
+                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    private var directorySearchJob: Job? = null
+    fun setDirectoryQuery(value: String) {
+        directoryState = directoryState.copy(query = value)
+        directorySearchJob?.cancel()
+        directorySearchJob = viewModelScope.launch { delay(300); refreshDirectory() }
+    }
+
+    fun setOrganizationMode(enabled: Boolean) { directoryState = directoryState.copy(organizationMode = enabled) }
+
+    fun refreshDirectory() {
+        directoryState = directoryState.copy(loading = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.callContacts(directoryState.query) }
+                .onSuccess { directoryState = directoryState.copy(loading = false, contacts = it, error = null) }
+                .onFailure { directoryState = directoryState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    fun chatWithContact(contact: com.ketoanapk.hr.data.CallContact) {
+        goTo(HrDestination.Chat)
+        createDirectChat(contact)
+    }
+
+    fun refreshCallHistory() {
+        callHistoryState = callHistoryState.copy(loading = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.callHistory() }
+                .onSuccess { callHistoryState = callHistoryState.copy(loading = false, items = it) }
+                .onFailure { callHistoryState = callHistoryState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    fun openChatConversation(conversation: ChatConversation) {
+        realChatState = realChatState.copy(selected = conversation, choosingContact = false, messages = emptyList(), loading = true, error = null, messageQuery = "", hasMore = true)
+        viewModelScope.launch {
+            runCatching { repo.chatMessages(conversation.id) }
+                .onSuccess { messages ->
+                    realChatState = realChatState.copy(loading = false, messages = messages, hasMore = messages.size == 50, offline = repo.chatUsingCache())
+                    refreshChatRealtime()
+                }
+                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    fun closeChatLayer() {
+        realChatState = if (realChatState.selected != null) {
+            realChatState.copy(selected = null, messages = emptyList(), input = "", error = null)
+        } else {
+            realChatState.copy(choosingContact = false, error = null)
+        }
+        refreshChat()
+    }
+
+    fun sendCurrentChatMessage() {
+        val conversation = realChatState.selected ?: return
+        val text = realChatState.input.trim()
+        if (text.isBlank() || realChatState.sending) return
+        realChatState = realChatState.copy(sending = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.sendChatMessage(conversation.id, text) }
+                .onSuccess { sent ->
+                    realChatState = realChatState.copy(sending = false, input = "", messages = realChatState.messages + sent)
+                    refreshChatRealtime()
+                }
+                .onFailure { realChatState = realChatState.copy(sending = false, error = readable(it)) }
+        }
+    }
+
+    fun loadOlderChatMessages() {
+        val conversation = realChatState.selected ?: return
+        if (realChatState.loadingMore || !realChatState.hasMore) return
+        val before = realChatState.messages.minOfOrNull { it.id } ?: return
+        realChatState = realChatState.copy(loadingMore = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.chatMessages(conversation.id, beforeId = before, search = realChatState.messageQuery) }
+                .onSuccess { page ->
+                    realChatState = realChatState.copy(
+                        loadingMore = false,
+                        messages = (page + realChatState.messages).distinctBy { it.id }.sortedBy { it.id },
+                        hasMore = page.size == 50,
+                    )
+                }
+                .onFailure { realChatState = realChatState.copy(loadingMore = false, error = readable(it)) }
+        }
+    }
+
+    fun pinCurrentChat(pinned: Boolean) {
+        val conversation = realChatState.selected ?: return
+        viewModelScope.launch {
+            runCatching { repo.pinChatConversation(conversation.id, pinned) }
+                .onSuccess {
+                    val updated = conversation.copy(pinned = pinned)
+                    realChatState = realChatState.copy(
+                        selected = updated,
+                        conversations = realChatState.conversations.map { if (it.id == updated.id) updated else it },
+                    )
+                }
+                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
+        }
+    }
+
+    fun editCurrentChatMessage(messageId: Long, text: String) {
+        val conversation = realChatState.selected ?: return
+        viewModelScope.launch {
+            runCatching { repo.editChatMessage(conversation.id, messageId, text) }
+                .onSuccess { refreshChatRealtime() }
+                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
+        }
+    }
+
+    fun deleteCurrentChatMessage(messageId: Long) {
+        val conversation = realChatState.selected ?: return
+        viewModelScope.launch {
+            runCatching { repo.deleteChatMessage(conversation.id, messageId) }
+                .onSuccess { refreshChatRealtime() }
+                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
+        }
+    }
+
+    fun reactCurrentChatMessage(messageId: Long, emoji: String) {
+        val conversation = realChatState.selected ?: return
+        viewModelScope.launch {
+            runCatching { repo.reactChatMessage(conversation.id, messageId, emoji) }
+                .onSuccess { refreshChatRealtime() }
+                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
+        }
+    }
+
+    fun sendChatAttachment(
+        context: Context,
+        uri: android.net.Uri,
+        kind: String = "file",
+        onResult: (Boolean) -> Unit = {},
+    ) {
+        val conversation = realChatState.selected ?: run { onResult(false); return }
+        if (realChatState.sending) { onResult(false); return }
+        realChatState = realChatState.copy(sending = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.sendChatFile(context.applicationContext, conversation.id, uri, kind) }
+                .onSuccess { message ->
+                    realChatState = realChatState.copy(sending = false, messages = realChatState.messages + message)
+                    refreshChatRealtime()
+                    onResult(true)
+                }
+                .onFailure {
+                    realChatState = realChatState.copy(sending = false, error = readable(it))
+                    onResult(false)
+                }
+        }
+    }
+
+    fun forwardChatMessage(message: com.ketoanapk.hr.data.ChatMessage, target: ChatConversation) {
+        if (message.body.isBlank()) { actionMessage = "Chỉ chuyển tiếp được tin nhắn văn bản trong phiên bản này."; return }
+        viewModelScope.launch {
+            runCatching { repo.sendChatMessage(target.id, message.body, forwarded = true) }
+                .onSuccess { actionMessage = "Đã chuyển tiếp tới ${target.title}." }
+                .onFailure { actionMessage = readable(it) }
+        }
+    }
+
+    /**
+     * Tải tệp đính kèm về máy và trả File để phát TRONG app (tin nhắn thoại), thay vì ném ra app ngoài.
+     * Repo đã cache theo tệp nên bấm phát lại lần sau không tải lại.
+     */
+    suspend fun chatAudioFile(context: Context, message: com.ketoanapk.hr.data.ChatMessage): java.io.File? {
+        val conversation = realChatState.selected ?: return null
+        return runCatching { repo.downloadChatFile(context.applicationContext, conversation.id, message) }
+            .onFailure { actionMessage = readable(it) }
+            .getOrNull()
+    }
+
+    fun downloadChatAttachment(context: Context, message: com.ketoanapk.hr.data.ChatMessage) {
+        val conversation = realChatState.selected ?: return
+        viewModelScope.launch {
+            runCatching { repo.downloadChatFile(context.applicationContext, conversation.id, message) }
+                .onSuccess { file ->
+                    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, message.fileMime ?: "application/octet-stream")
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    runCatching { context.startActivity(intent) }
+                        .onFailure { actionMessage = "Đã tải tệp nhưng thiết bị không có ứng dụng phù hợp để mở." }
+                }
+                .onFailure { actionMessage = readable(it) }
+        }
+    }
 
     // ── Tạo đơn từ + xem chi tiết ────────────────────────────────────────────────
     /**
@@ -676,14 +1576,62 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Xoá nháp khiếu nại khi đã gửi xong hoặc thoát luồng tạo đơn. */
     fun consumeAppealDraft() { appealDraft = null }
 
+    fun startShiftSwap(date: String?) {
+        requestDraftType = "shift_swap"
+        requestDraftValues = date?.takeIf { it.isNotBlank() }?.let { mapOf("date" to it) } ?: emptyMap()
+        select(HrDestination.Requests)
+    }
+
+    fun startAttendanceExplanation(result: ChamCongResult) {
+        requestDraftType = "attendance_fix"
+        requestDraftValues = mapOf(
+            "date" to java.time.LocalDate.now().toString(),
+            "reason" to (result.guidance ?: result.message).orEmpty(),
+        )
+        resetCapture()
+        select(HrDestination.Requests)
+    }
+
+    fun consumeRequestDraft() {
+        requestDraftType = null
+        requestDraftValues = emptyMap()
+        editingRequestId = null
+    }
+
+    fun copyRequest(detail: RequestDetail) {
+        requestDraftType = detail.request.type
+        requestDraftValues = detail.request.payload.mapNotNull { (key, value) ->
+            if (key == "requesterSignature") null else value.jsonPrimitive.contentOrNull?.let { key to it }
+        }.toMap()
+        closeRequestDetail()
+    }
+
+    fun editRequest(detail: RequestDetail) {
+        editingRequestId = detail.request.id
+        requestDraftType = detail.request.type
+        requestDraftValues = detail.request.payload.mapNotNull { (key, value) ->
+            if (key == "requesterSignature") null else value.jsonPrimitive.contentOrNull?.let { key to it }
+        }.toMap()
+        closeRequestDetail()
+    }
+
     /** Gửi một đơn mới (payload đã được màn hình dựng từ các trường nhập). */
-    fun submitRequest(type: String, title: String, payload: JsonObject, onDone: (Boolean) -> Unit) {
+    fun submitRequest(type: String, title: String, payload: JsonObject, attachments: List<android.net.Uri>, onDone: (Boolean) -> Unit) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
         viewModelScope.launch {
             creatingRequest = true
-            runCatching { repo.createRequest(CreateRequestBody(type = type, title = title.trim(), payload = payload)) }
+            runCatching {
+                val body = CreateRequestBody(type = type, title = title.trim(), payload = payload)
+                val editId = editingRequestId
+                val created = if (editId != null) {
+                    repo.updateRequest(editId, body)
+                    com.ketoanapk.hr.data.CreatedRequest(editId, "")
+                } else repo.createRequest(body)
+                attachments.forEach { repo.uploadRequestAttachment(getApplication(), created.id, it) }
+                created
+            }
                 .onSuccess {
-                    actionMessage = "Đã gửi đơn ${it.requestNo}. Bạn có thể theo dõi trạng thái ở đây."
+                    actionMessage = if (it.requestNo.isBlank()) "Đã cập nhật đơn." else "Đã gửi đơn ${it.requestNo}. Bạn có thể theo dõi trạng thái ở đây."
                     refreshHome(user, silent = true)
                     onDone(true)
                 }
@@ -693,26 +1641,94 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Xem chi tiết đơn của CHÍNH MÌNH — cho phép hủy khi còn chờ duyệt. */
-    fun openRequestDetail(id: String) = loadRequestDetail(id, canCancel = true)
+    fun openRequestDetail(id: String) = loadRequestDetail(id, canCancel = true, canDecide = false)
 
     /** Xem chi tiết đơn của nhân sự khác ở chế độ CHỈ ĐỌC (phê duyệt thực hiện trên bản web). */
-    fun openStaffDetail(id: String) = loadRequestDetail(id, canCancel = false)
+    fun openStaffDetail(id: String) = loadRequestDetail(id, canCancel = false, canDecide = true)
 
-    private fun loadRequestDetail(id: String, canCancel: Boolean) {
-        requestDetailState = RequestDetailUiState(id = id, loading = true, canCancel = canCancel)
+    private fun loadRequestDetail(id: String, canCancel: Boolean, canDecide: Boolean) {
+        requestDetailState = RequestDetailUiState(id = id, loading = true, canCancel = canCancel, canDecide = canDecide)
         viewModelScope.launch {
             runCatching { repo.requestDetail(id) }
-                .onSuccess { requestDetailState = RequestDetailUiState(id = id, detail = it, canCancel = canCancel) }
+                .onSuccess { requestDetailState = RequestDetailUiState(id = id, detail = it, canCancel = canCancel, canDecide = canDecide) }
                 .onFailure { requestDetailState = requestDetailState.copy(loading = false, error = readable(it)) }
         }
     }
 
     fun closeRequestDetail() { requestDetailState = RequestDetailUiState() }
 
+    fun remindRequest(id: String) {
+        viewModelScope.launch {
+            runCatching { repo.remindRequest(id) }
+                .onSuccess { actionMessage = "Đã nhắc người đang duyệt đơn." }
+                .onFailure { actionMessage = readable(it) }
+        }
+    }
+
     /** Hủy đơn ngay trong màn chi tiết rồi đóng lại. */
     fun cancelFromDetail(id: String) {
         closeRequestDetail()
         cancel(id)
+    }
+
+    fun decideRequest(id: String, approve: Boolean, comment: String) {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return
+        if (requestDetailState.deciding) return
+        requestDetailState = requestDetailState.copy(deciding = true, decisionError = null)
+        viewModelScope.launch {
+            runCatching {
+                if (approve) repo.approveRequest(id, comment.trim()) else repo.rejectRequest(id, comment.trim())
+            }.onSuccess {
+                actionMessage = if (approve) "Đã duyệt đơn." else "Đã từ chối đơn."
+                val detail = runCatching { repo.requestDetail(id) }.getOrNull()
+                requestDetailState = requestDetailState.copy(deciding = false, detail = detail ?: requestDetailState.detail)
+                refreshHome(user, silent = true)
+                if (user.isAdmin) refreshManager(silent = true)
+            }.onFailure {
+                requestDetailState = requestDetailState.copy(deciding = false, decisionError = readable(it))
+            }
+        }
+    }
+
+    fun setAuditQuery(value: String) {
+        auditState = auditState.copy(query = value)
+    }
+
+    fun setAuditEntity(value: String) {
+        auditState = auditState.copy(entity = value)
+        loadAudit(reset = true)
+    }
+
+    fun searchAudit() = loadAudit(reset = true)
+
+    fun loadMoreAudit() {
+        if (!auditState.loading && !auditState.loadingMore && auditState.hasMore) loadAudit(reset = false)
+    }
+
+    fun loadAudit(reset: Boolean) {
+        if (reset) auditRequestId++
+        val requestId = auditRequestId
+        val offset = if (reset) 0 else auditState.items.size
+        val query = auditState.query
+        val entity = auditState.entity
+        auditState = if (reset) auditState.copy(loading = true, error = null) else auditState.copy(loadingMore = true, error = null)
+        viewModelScope.launch {
+            runCatching { repo.audit(AUDIT_PAGE_SIZE, offset, query, entity) }
+                .onSuccess { page ->
+                    if (requestId != auditRequestId) return@onSuccess
+                    auditState = auditState.copy(
+                        loading = false,
+                        loadingMore = false,
+                        items = if (reset) page else auditState.items + page,
+                        hasMore = page.size == AUDIT_PAGE_SIZE,
+                        error = null,
+                    )
+                }
+                .onFailure {
+                    if (requestId != auditRequestId) return@onFailure
+                    auditState = auditState.copy(loading = false, loadingMore = false, error = readable(it))
+                }
+        }
     }
 
     private fun decide(block: suspend () -> String) {
@@ -761,11 +1777,133 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---------------- Phiếu chi tiền mặt ----------------
+
+    /** Tài khoản này có được lập/duyệt chi không: role Accounting VÀ thuộc phòng ban kế toán. */
+    val isCashier: Boolean
+        get() = (authState as? AuthState.SignedIn)?.user?.role.equals("Accounting", ignoreCase = true) &&
+            homeState.employee?.isAccounting == true
+
+    /**
+     * Tải sổ phiếu chi. Kế toán lấy thêm danh mục/nguồn/người nhận để lập phiếu ngay trên app; nhân viên
+     * thường chỉ cần danh sách phiếu của mình nên không gọi các endpoint bị cấm (tránh 403 vô ích).
+     */
+    fun loadPayouts(silent: Boolean = false) {
+        viewModelScope.launch {
+            val cashier = isCashier
+            payoutState = payoutState.copy(loading = !silent, error = null)
+            runCatching { repo.payoutVouchers(if (cashier) "all" else "mine") }
+                .onSuccess { items ->
+                    payoutState = payoutState.copy(loading = false, items = items)
+                    // Người nhận vừa quét xong thì đóng hộp QR đang mở và báo cho kế toán biết.
+                    val open = payoutState.qrVoucher
+                    if (open != null) {
+                        val fresh = items.firstOrNull { it.id == open.id }
+                        when {
+                            fresh == null -> Unit
+                            fresh.status != "AwaitingScan" -> payoutState = payoutState.copy(
+                                qrVoucher = null,
+                                message = "${fresh.voucherNo} đã được người nhận ký nhận. Bạn có thể duyệt chi.",
+                            )
+                            fresh.qrValue != open.qrValue -> payoutState = payoutState.copy(qrVoucher = fresh)
+                        }
+                    }
+                    if (cashier) loadCashierPickers()
+                }
+                .onFailure { payoutState = payoutState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    private fun loadCashierPickers() {
+        viewModelScope.launch {
+            val categories = runCatching { repo.payoutCategories() }.getOrDefault(payoutState.categories)
+            val refunds = runCatching { repo.payoutRefundSources() }.getOrDefault(emptyList())
+            val recipients = runCatching { repo.payoutRecipients() }.getOrDefault(payoutState.recipients)
+            payoutState = payoutState.copy(categories = categories, refundSources = refunds, recipients = recipients)
+        }
+    }
+
+    /** Lập phiếu rồi mở luôn mã QR để đưa người nhận quét. */
+    fun createPayout(body: CreatePayoutBody, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            payoutState = payoutState.copy(busy = true, error = null)
+            runCatching { repo.createPayoutVoucher(body) }
+                .onSuccess { created ->
+                    val items = runCatching { repo.payoutVouchers("all") }.getOrDefault(payoutState.items)
+                    payoutState = payoutState.copy(
+                        busy = false,
+                        items = items,
+                        qrVoucher = items.firstOrNull { it.id == created.id },
+                        message = "Đã lập phiếu ${created.voucherNo}. Đưa mã QR cho người nhận quét.",
+                    )
+                    loadCashierPickers()
+                    onDone()
+                }
+                .onFailure { payoutState = payoutState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun openPayoutQr(voucher: PayoutVoucher) {
+        // Mã hết hạn (người nhận tới muộn) thì xin mã mới ngay, khỏi bắt kế toán bấm hai lần.
+        val expiresAt = voucher.qrExpiresAt?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() }
+        val expired = voucher.qrValue.isNullOrBlank() || expiresAt == null || !expiresAt.isAfter(java.time.Instant.now())
+        if (!expired) { payoutState = payoutState.copy(qrVoucher = voucher); return }
+        refreshPayoutQr(voucher)
+    }
+
+    fun refreshPayoutQr(voucher: PayoutVoucher) {
+        viewModelScope.launch {
+            payoutState = payoutState.copy(busy = true, error = null)
+            runCatching { repo.refreshPayoutQr(voucher.id) }
+                .onSuccess {
+                    payoutState = payoutState.copy(
+                        busy = false,
+                        qrVoucher = voucher.copy(qrValue = it.qrValue, qrExpiresAt = it.qrExpiresAt),
+                    )
+                    loadPayouts(silent = true)
+                }
+                .onFailure { payoutState = payoutState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun closePayoutQr() { payoutState = payoutState.copy(qrVoucher = null) }
+    fun clearPayoutMessage() { payoutState = payoutState.copy(message = null, error = null) }
+
+    fun approvePayout(voucher: PayoutVoucher) {
+        viewModelScope.launch {
+            payoutState = payoutState.copy(busy = true, error = null)
+            runCatching { repo.approvePayoutVoucher(voucher.id) }
+                .onSuccess {
+                    payoutState = payoutState.copy(busy = false, message = "Đã duyệt chi ${voucher.voucherNo}.")
+                    loadPayouts(silent = true)
+                }
+                .onFailure { payoutState = payoutState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun cancelPayout(voucher: PayoutVoucher, reason: String = "") {
+        viewModelScope.launch {
+            payoutState = payoutState.copy(busy = true, error = null)
+            runCatching { repo.cancelPayoutVoucher(voucher.id, reason) }
+                .onSuccess {
+                    payoutState = payoutState.copy(busy = false, qrVoucher = null, message = "Đã hủy phiếu ${voucher.voucherNo}.")
+                    loadPayouts(silent = true)
+                }
+                .onFailure { payoutState = payoutState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
     /** Mở chi tiết phiếu lương của một kỳ (bấm vào thẻ tháng). */
     fun openPayslip(period: String) { payslipOpenPeriod = period }
 
     /** Đóng chi tiết, quay lại danh sách thẻ tháng. */
     fun closePayslip() { payslipOpenPeriod = null }
+
+    fun acknowledgePayslip(id:String)=viewModelScope.launch{runCatching{repo.acknowledgePayslip(id)}.onSuccess{loadMyPayslips();actionMessage="Đã xác nhận nhận phiếu lương."}.onFailure{actionMessage=readable(it)}}
+    fun sendPayslipInquiry(id:String,line:String,message:String)=viewModelScope.launch{runCatching{repo.payslipInquiry(id,line,message)}.onSuccess{actionMessage="Đã gửi thắc mắc tới bộ phận lương."}.onFailure{actionMessage=readable(it)}}
+    fun downloadPayslip(item:PayslipItem)=viewModelScope.launch{runCatching{repo.downloadPayslipPdf(getApplication(),item)}.onSuccess{file->
+        val context=getApplication<Application>();val uri=androidx.core.content.FileProvider.getUriForFile(context,"${context.packageName}.fileprovider",file);val intent=android.content.Intent(android.content.Intent.ACTION_VIEW).apply{setDataAndType(uri,"application/pdf");addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)};runCatching{context.startActivity(intent)}.onFailure{actionMessage="Đã tải PDF nhưng thiết bị không có ứng dụng mở PDF."}
+    }.onFailure{actionMessage=readable(it)}}
 
     /** Mở màn chi tiết một bài (tin tức/sự kiện) trong cổng thông tin. */
     fun openPortalPost(post: PortalPost) { portalDetail = post }
@@ -784,12 +1922,57 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadTimesheet(month: String, silent: Boolean) {
-        viewModelScope.launch {
-            if (!silent) timesheetState = timesheetState.copy(loading = true, error = null, month = month, timesheet = null)
-            else timesheetState = timesheetState.copy(loading = true, error = null, month = month)
-            runCatching { repo.myTimesheet(month) }
-                .onSuccess { timesheetState = TimesheetUiState(loading = false, month = it.period.ifBlank { month }, timesheet = it) }
-                .onFailure { timesheetState = timesheetState.copy(loading = false, error = readable(it)) }
+        val monthKey = runCatching { YearMonth.parse(month.take(7)).toString() }
+            .getOrElse { currentMonthKey() }
+        timesheetLoadJob?.cancel()
+
+        val current = timesheetState.timesheet?.takeIf { it.period.take(7) == monthKey }
+        val cached = timesheetCache[monthKey] ?: current
+        timesheetState = TimesheetUiState(
+            loading = cached == null,
+            error = if (silent && cached != null) timesheetState.error else null,
+            month = monthKey,
+            timesheet = cached,
+        )
+
+        timesheetLoadJob = viewModelScope.launch {
+            val result = runCatching { repo.myTimesheet(monthKey) }
+            if (!isActive) return@launch
+            result.onSuccess { sheet ->
+                val resultMonth = runCatching { YearMonth.parse(sheet.period.take(7)).toString() }
+                    .getOrElse { monthKey }
+                timesheetCache[monthKey] = sheet
+                timesheetCache[resultMonth] = sheet
+                timesheetState = TimesheetUiState(
+                    loading = false,
+                    month = resultMonth,
+                    timesheet = sheet,
+                )
+                prefetchTimesheetNeighbors(resultMonth)
+            }.onFailure { error ->
+                if (timesheetState.month == monthKey) {
+                    timesheetState = timesheetState.copy(
+                        loading = false,
+                        error = if (cached == null) readable(error) else null,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Nạp sẵn hai tháng kề bên để lần vuốt kế tiếp có dữ liệu ngay, không phải chờ mạng. */
+    private fun prefetchTimesheetNeighbors(month: String) {
+        val owner = (authState as? AuthState.SignedIn)?.user?.username ?: return
+        val center = runCatching { YearMonth.parse(month.take(7)) }.getOrNull() ?: return
+        listOf(center.minusMonths(1), center.plusMonths(1)).forEach { neighbor ->
+            val key = neighbor.toString()
+            if (timesheetCache.containsKey(key) || !timesheetPrefetching.add(key)) return@forEach
+            viewModelScope.launch {
+                val sheet = runCatching { repo.myTimesheet(key) }.getOrNull()
+                val activeOwner = (authState as? AuthState.SignedIn)?.user?.username
+                if (sheet != null && activeOwner == owner) timesheetCache[key] = sheet
+                timesheetPrefetching.remove(key)
+            }
         }
     }
 
@@ -798,35 +1981,47 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         return ym.plusMonths(offset.toLong()).toString()
     }
 
+    /**
+     * Khôi phục phiên khi mở app. Mất mạng KHÔNG làm mất phiên: [SessionRestore.Offline] vào thẳng
+     * app bằng hồ sơ đã lưu, các vòng nhịp tim/poll/realtime bên dưới tự bắt lại khi có mạng.
+     */
     private fun restoreSession() {
         viewModelScope.launch {
-            val token = repo.savedToken()
-            if (token.isNullOrBlank()) {
-                authState = AuthState.SignedOut
-                homeState = HomeUiState()
-                return@launch
-            }
-            runCatching { repo.me() }
-                .onSuccess { user ->
-                    authState = AuthState.SignedIn(user)
-                    startHeartbeat()
-                    startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
-                    realtime.start()      // realtime tức thì như web (app đang mở lúc khôi phục phiên)
-                    loadNotifications()
-                    syncPushDelivery()
-                    refreshHome(user, silent = false)
-                    loadTimesheet(currentMonthKey(), silent = false)
-                    if (user.isAdmin) refreshManager(silent = true)
-                    faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
-                    loadAppConfig(force = true)
-                    consumePendingTarget(user)
-                }
-                .onFailure {
-                    repo.logout()
+            when (val restored = repo.restoreSession()) {
+                is SessionRestore.Online -> enterSignedIn(restored.user)
+                is SessionRestore.Offline -> enterSignedIn(restored.user)
+                is SessionRestore.SignedOut -> {
                     authState = AuthState.SignedOut
                     homeState = HomeUiState()
+                    loginError = if (pendingQrLoginCode != null || pendingMobileAppLoginCode != null) {
+                        "Hãy đăng nhập ứng dụng để xác nhận đăng nhập trên web."
+                    } else {
+                        restored.message // lý do phải đăng nhập lại (nếu có)
+                    }
                 }
+            }
         }
+    }
+
+    /** Dựng toàn bộ trạng thái sau khi đã xác định được người dùng (dù trực tuyến hay ngoại tuyến). */
+    private fun enterSignedIn(user: HrUser) {
+        authState = AuthState.SignedIn(user)
+        startHeartbeat()
+        startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
+        CallManager.setSelfIdentity(user.displayName) // tên thật (DB) gửi kèm lời mời gọi
+        realtime.start(user.username) // realtime + kênh tín hiệu gọi (khôi phục phiên)
+        viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } // TURN sẵn sàng
+        loadNotifications()
+        syncMissedCalls() // hiện cuộc gọi nhỡ đã lưu server (kể cả lúc bị gọi đang offline)
+        syncPushDelivery()
+        registerPush() // LUÔN đăng ký token FCM để nhận được cuộc gọi dù tắt thông báo nghiệp vụ
+        refreshHome(user, silent = false)
+        loadTimesheet(currentMonthKey(), silent = false)
+        loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
+        if (user.isAdmin) refreshManager(silent = true)
+        faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
+        loadAppConfig(force = true)
+        consumePendingTarget(user)
     }
 
     private fun refreshHome(user: HrUser, silent: Boolean) {
@@ -875,7 +2070,14 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         heartbeatJob?.cancel()
         heartbeatJob = viewModelScope.launch {
             while (isActive) {
-                repo.heartbeat()
+                // 401 = phiên bị thu hồi (đăng nhập máy khác), tài khoản bị khoá, hoặc quá hạn nhàn
+                // rỗi → đăng xuất ngay kèm ĐÚNG lý do máy chủ trả về. Đây là lưới dự phòng cho tín
+                // hiệu "kicked" realtime (khi lúc đó SignalR chưa kết nối). Mất mạng = Unknown → giữ phiên.
+                val status = repo.heartbeat()
+                if (status is SessionStatus.Invalid) {
+                    logout(status.message)
+                    break
+                }
                 delay(45_000)
             }
         }
@@ -889,11 +2091,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // ── Tự làm mới khi app đang mở (thay cho "phải kéo/F5" mỗi lần admin duyệt) ──────────
     /** Activity gọi khi app quay lại foreground: làm mới ngay + bật vòng poll nhẹ. */
     fun onAppResumed() {
-        if (authState !is AuthState.SignedIn) return
+        val signedIn = authState as? AuthState.SignedIn ?: return
         pollLiveData()          // cập nhật ngay khi vừa mở lại app
         loadAppConfig()         // lấy remote config mới (tiết chế 60s)
         startForegroundPoll()
-        realtime.start()        // realtime tức thì như web khi app đang mở
+        CallManager.setSelfIdentity(signedIn.user.displayName) // tên thật (DB) gửi kèm lời mời gọi
+        realtime.start(signedIn.user.username) // realtime + kênh tín hiệu gọi khi app đang mở
+        syncMissedCalls() // cuộc gọi nhỡ đã lưu server (mỗi lần vào lại app)
     }
 
     /** Activity gọi khi app xuống nền: dừng poll + SignalR (nền đã có WorkManager + push FCM). */
@@ -908,13 +2112,18 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         foregroundPollJob = viewModelScope.launch {
             while (isActive) {
                 delay(pollIntervalMs()) // nhịp lấy từ remote config (admin chỉnh được), chặn 5–3600s
-                if (authState is AuthState.SignedIn) pollLiveData()
+                // CHỈ poll khi WebSocket ĐANG RỚT — WS khỏe thì server đã đẩy "changed" (qua AppEvents →
+                // pollLiveData) tức thì nên poll định kỳ là THỪA. Đây chỉ còn là lưới dự phòng khi mất WS.
+                if (authState is AuthState.SignedIn && !realtime.isConnected()) pollLiveData()
             }
         }
     }
 
     /** Nhịp tự làm mới foreground (mili-giây) theo remote config, có chặn biên an toàn. */
-    private fun pollIntervalMs(): Long = appConfig.foregroundPollSeconds.coerceIn(5, 3600) * 1000L
+    private fun pollIntervalMs(): Long {
+        val configured = appConfig.foregroundPollSeconds.coerceIn(5, 3600) * 1000L
+        return if (com.ketoanapk.hr.data.AppPersonalization.dataSaver) maxOf(configured, 60_000L) else configured
+    }
 
     /** Nạp remote config (tiết chế 60s trừ khi ép). Lỗi mạng → giữ cấu hình cũ, im lặng. */
     private fun loadAppConfig(force: Boolean = false) {
@@ -922,7 +2131,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         if (!force && now - lastConfigFetchAt < 60_000L) return
         lastConfigFetchAt = now
         viewModelScope.launch {
-            runCatching { repo.appConfig() }.onSuccess { appConfig = it }
+            runCatching { repo.appConfig() }.onSuccess {
+                appConfig = it
+                CallManager.setCallConfig(it.call) // áp cấu hình gọi từ xa ngay (STUN/relay/timeout/video/công tắc)
+            }
         }
     }
 
@@ -947,6 +2159,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Đang xem chi tiết một đơn → làm mới để thấy kết quả duyệt/tiến trình ngay.
         requestDetailState.id?.let { refreshOpenDetail(it) }
+        // Giao việc: cập nhật danh sách + huy hiệu (và chi tiết đang mở nếu có) theo tín hiệu realtime.
+        loadWorkTasks(silent = true)
+        workTaskDetail.id?.let { refreshWorkTaskDetail(it) }
     }
 
     /** Làm mới im lặng chi tiết đơn đang mở (không hiện lại vòng quay tải, không đụng nếu đã đóng/đổi đơn). */
@@ -982,6 +2197,99 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun resolveQr(value: String, onResult: (com.ketoanapk.hr.data.QrResolveOutcome) -> Unit) {
+        viewModelScope.launch {
+            // Lỗi ngoài dự kiến (vd phản hồi sai định dạng) không được làm treo nút quét: coi như bị từ
+            // chối để màn hình vẫn nhả trạng thái bận và báo được lý do.
+            onResult(
+                runCatching { repo.resolveQr(value) }
+                    .getOrElse { com.ketoanapk.hr.data.QrResolveOutcome.Rejected(readable(it)) },
+            )
+        }
+    }
+
+    /** Nhận mã đăng nhập web từ deep-link Android; giữ lại qua màn Loading/Đăng nhập của app. */
+    fun receiveQrLoginDeepLink(value: String) {
+        val normalized = value.trim()
+        if (normalized.isEmpty() || normalized.length > 4_096) return
+        pendingQrLoginCode = normalized
+        if (authState !is AuthState.SignedIn)
+            loginError = "Hãy đăng nhập ứng dụng để xác nhận đăng nhập trên web."
+    }
+
+    fun consumePendingQrLoginCode() {
+        pendingQrLoginCode = null
+    }
+
+    fun receiveMobileAppLoginDeepLink(value: String) {
+        val normalized = value.trim()
+        if (normalized.isEmpty() || normalized.length > 4_096) return
+        pendingMobileAppLoginCode = normalized
+        mobileAppLoginState = MobileAppLoginState.Received
+        if (authState !is AuthState.SignedIn)
+            loginError = "Hãy đăng nhập ứng dụng để xác nhận đăng nhập trên web."
+    }
+
+    fun processPendingMobileAppLogin() {
+        val requestCode = pendingMobileAppLoginCode ?: return
+        when (authState) {
+            AuthState.Loading -> return
+            AuthState.SignedOut -> {
+                mobileAppLoginState = MobileAppLoginState.AwaitingAppLogin
+                return
+            }
+            is AuthState.SignedIn -> Unit
+        }
+        if (mobileAppLoginState !is MobileAppLoginState.Idle &&
+            mobileAppLoginState !is MobileAppLoginState.Received &&
+            mobileAppLoginState !is MobileAppLoginState.AwaitingAppLogin) return
+        pendingMobileAppLoginCode = null
+        mobileAppLoginState = MobileAppLoginState.Resolving
+        viewModelScope.launch {
+            runCatching { repo.resolveMobileAppLogin(requestCode) }
+                .onSuccess { mobileAppLoginState = MobileAppLoginState.Confirmation(it) }
+                .onFailure { mobileAppLoginState = MobileAppLoginState.Finished(readable(it), accepted = false) }
+        }
+    }
+
+    fun decideMobileAppLogin(accept: Boolean) {
+        val current = mobileAppLoginState as? MobileAppLoginState.Confirmation ?: return
+        if (current.submitting) return
+        mobileAppLoginState = current.copy(submitting = true, error = null)
+        viewModelScope.launch {
+            runCatching {
+                if (accept) repo.confirmMobileAppLogin(current.challenge.requestCode)
+                else {
+                    repo.rejectMobileAppLogin(current.challenge.requestCode)
+                    "Đã từ chối yêu cầu đăng nhập web."
+                }
+            }.onSuccess { message ->
+                mobileAppLoginState = MobileAppLoginState.Finished(message, accepted = accept)
+            }.onFailure {
+                mobileAppLoginState = current.copy(submitting = false, error = readable(it))
+            }
+        }
+    }
+
+    fun dismissMobileAppLogin() {
+        val current = mobileAppLoginState
+        mobileAppLoginState = MobileAppLoginState.Idle
+        if (current is MobileAppLoginState.Confirmation && !current.submitting) {
+            viewModelScope.launch { runCatching { repo.rejectMobileAppLogin(current.challenge.requestCode) } }
+        }
+    }
+
+    fun decideQr(decisionToken: String, actionId: String, onResult: (com.ketoanapk.hr.data.QrActionEnvelope?) -> Unit = {}) {
+        viewModelScope.launch {
+            runCatching { repo.decideQr(decisionToken, actionId) }
+                .onSuccess(onResult)
+                .onFailure {
+                    actionMessage = readable(it)
+                    onResult(null)
+                }
+        }
+    }
+
     fun loadDevices() {
         viewModelScope.launch {
             settingsState = settingsState.copy(devicesLoading = true)
@@ -998,12 +2306,26 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { actionMessage = readable(it) }
         }
     }
+    fun revokeAllDevices(){viewModelScope.launch{runCatching{repo.revokeAllDevices()}.onSuccess{logout()}.onFailure{actionMessage=readable(it)}}}
 
     fun changePassword(current: String, next: String, onDone: (Boolean) -> Unit) {
         viewModelScope.launch {
             runCatching { repo.changePassword(current, next) }
                 .onSuccess { actionMessage = "Đã đổi mật khẩu."; onDone(true) }
                 .onFailure { actionMessage = readable(it); onDone(false) }
+        }
+    }
+
+    /** Xác minh mật khẩu hiện tại trước khi xóa PIN cục bộ trong luồng "Quên mã bảo mật". */
+    fun verifyAccountPassword(password: String, onDone: (Boolean, String?) -> Unit) {
+        if (password.isBlank()) {
+            onDone(false, "Vui lòng nhập mật khẩu tài khoản.")
+            return
+        }
+        viewModelScope.launch {
+            runCatching { repo.verifyPassword(password) }
+                .onSuccess { onDone(true, null) }
+                .onFailure { onDone(false, readable(it)) }
         }
     }
 
@@ -1029,6 +2351,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * Gọi lúc đăng nhập và mỗi khi app quay lại foreground; tự chặn gọi dồn trong 10 phút.
      * Lỗi mạng thì im lặng — người dùng vẫn có nút "Kiểm tra cập nhật" thủ công trong Cài đặt.
      */
+    @Suppress("SuspiciousIndentation")
     fun autoCheckForUpdate(force: Boolean = false) {
         if (authState !is AuthState.SignedIn) return
         val now = System.currentTimeMillis()
@@ -1075,6 +2398,26 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             actionMessage = "Hãy cho phép cài ứng dụng không rõ nguồn rồi bấm cập nhật lại."
             return
         }
+        // Dữ liệu di động + bản cập nhật lớn (>20MB) → HỎI trước khi tải. Wi-Fi (không tính phí) tải thẳng.
+        if (release.apkSize > AppUpdater.LARGE_UPDATE_BYTES && AppUpdater.isMeteredConnection(context)) {
+            meteredUpdateSize = AppUpdater.formatSize(context, release.apkSize)
+            meteredUpdatePrompt = true
+            return
+        }
+        downloadAndInstall(context, release)
+    }
+
+    /** Người dùng đồng ý tải bản cập nhật lớn dù đang dùng dữ liệu di động. */
+    fun confirmMeteredUpdate(context: Context) {
+        meteredUpdatePrompt = false
+        val release = settingsState.updateInfo ?: availableUpdate ?: return
+        downloadAndInstall(context, release)
+    }
+
+    /** Người dùng chọn chờ Wi-Fi — đóng hộp thoại, không tải. */
+    fun dismissMeteredUpdate() { meteredUpdatePrompt = false }
+
+    private fun downloadAndInstall(context: Context, release: ReleaseInfo) {
         viewModelScope.launch {
             settingsState = settingsState.copy(installing = true)
             runCatching {
@@ -1106,7 +2449,19 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Đếm lại số bản chấm ngoại tuyến đang chờ đồng bộ (cho badge/nhãn). */
     fun refreshPendingCount() {
-        viewModelScope.launch { attendancePending = runCatching { repo.offlineCount() }.getOrDefault(0) }
+        viewModelScope.launch {
+            attendanceQueued = runCatching { repo.offlineItems() }.getOrDefault(emptyList())
+            attendancePending = attendanceQueued.size
+        }
+    }
+
+    fun refreshAttendanceContext() {
+        refreshPendingCount()
+        attendanceLocation = readLastLocation()
+        viewModelScope.launch {
+            attendancePolicy = runCatching { repo.attendancePolicy() }.getOrNull()
+            attendanceHistory = runCatching { repo.myOfflineAttendance() }.getOrDefault(attendanceHistory)
+        }
     }
 
     /** Đồng bộ hàng đợi ngoại tuyến khi có mạng; báo người dùng nếu có bản được gửi. */
@@ -1139,6 +2494,20 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun startOfflineCapture() {
         captureOffline = true
         attendanceCapture = AttendanceCapture.Collecting
+    }
+
+    fun submitQrAttendance(token: String) {
+        if (token.isBlank()) return
+        attendanceCapture = AttendanceCapture.Submitting
+        viewModelScope.launch {
+            runCatching { repo.qrAttendance(token) }
+                .onSuccess {
+                    attendanceCapture = AttendanceCapture.Done(it)
+                    (authState as? AuthState.SignedIn)?.user?.let { user -> refreshHome(user, silent = true) }
+                    loadTimesheet(timesheetState.month, silent = true)
+                }
+                .onFailure { attendanceCapture = AttendanceCapture.Done(ChamCongResult(status = "error", message = readable(it))) }
+        }
     }
 
     fun resetCapture() { attendanceCapture = AttendanceCapture.Idle }
@@ -1207,7 +2576,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val occurredAt = java.time.Instant.now().toString()
             val loc = readLastLocation()
-            runCatching { repo.saveOfflineAttendance(images, occurredAt, loc?.first, loc?.second) }
+            runCatching { repo.saveOfflineAttendance(images, occurredAt, loc?.latitude, loc?.longitude) }
             attendancePending = runCatching { repo.offlineCount() }.getOrDefault(attendancePending + 1)
             attendanceCapture = AttendanceCapture.Done(
                 ChamCongResult(
@@ -1268,6 +2637,43 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Mở lớp camera hướng dẫn chụp chân dung (phủ toàn màn hình). */
     fun startPortraitCapture() { portraitCapture = PortraitCapture.Capturing }
 
+    fun loadProfileDocuments() {
+        viewModelScope.launch {
+            profileDocumentsLoading = true
+            runCatching { repo.myDocuments() }
+                .onSuccess { profileDocuments = it }
+                .onFailure { actionMessage = readable(it) }
+            profileDocumentsLoading = false
+        }
+    }
+
+    fun loadTalent() {
+        viewModelScope.launch {
+            talentState = talentState.copy(loading=true,error=null)
+            val onboarding = runCatching { repo.onboarding() }
+            val performance = runCatching { repo.performance() }
+            val training = runCatching { repo.training() }
+            val benefits = runCatching { repo.benefits() }
+            talentState = TalentUiState(false,onboarding.getOrNull(),performance.getOrNull(),training.getOrDefault(emptyList()),benefits.getOrNull(),
+                listOfNotNull(onboarding.exceptionOrNull(),performance.exceptionOrNull(),training.exceptionOrNull(),benefits.exceptionOrNull()).firstOrNull()?.let(::readable))
+        }
+    }
+    fun completeOnboarding(id:String)=viewModelScope.launch{runCatching{repo.completeOnboarding(id)}.onSuccess{loadTalent()}.onFailure{actionMessage=readable(it)}}
+    fun updateGoal(id:String,p:Double)=viewModelScope.launch{runCatching{repo.updateGoal(id,p)}.onSuccess{loadTalent()}.onFailure{actionMessage=readable(it)}}
+    fun submitSelfReview(id:String,text:String)=viewModelScope.launch{runCatching{repo.selfReview(id,text)}.onSuccess{loadTalent()}.onFailure{actionMessage=readable(it)}}
+    fun updateTraining(id:String,p:Int,s:Int)=viewModelScope.launch{runCatching{repo.trainingProgress(id,p,s)}.onSuccess{loadTalent()}.onFailure{actionMessage=readable(it)}}
+    fun submitTrainingQuiz(id:String,answers:List<String>)=viewModelScope.launch{runCatching{repo.submitQuiz(id,answers)}.onSuccess{actionMessage="Điểm bài kiểm tra: ${it.score}%";loadTalent()}.onFailure{actionMessage=readable(it)}}
+
+    fun uploadProfileDocument(uri: android.net.Uri?, type: String, title: String, number: String, expiresAt: String, issuedBy: String) {
+        viewModelScope.launch {
+            profileDocumentsLoading = true
+            runCatching { repo.uploadMyDocument(getApplication(), uri, type, title, number, expiresAt, issuedBy) }
+                .onSuccess { actionMessage = "Đã gửi hồ sơ, đang chờ HR duyệt."; loadProfileDocuments() }
+                .onFailure { actionMessage = readable(it) }
+            profileDocumentsLoading = false
+        }
+    }
+
     /** Đóng camera chụp chân dung (bấm Đóng / Back). */
     fun cancelPortraitCapture() { portraitCapture = PortraitCapture.Idle }
 
@@ -1306,7 +2712,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Đọc vị trí GPS gần nhất (nỗ lực tốt nhất) nếu đã có quyền — dùng cho kiểm tra geofence khi duyệt. */
     @android.annotation.SuppressLint("MissingPermission")
-    private fun readLastLocation(): Pair<Double, Double>? {
+    private fun readLastLocation(): android.location.Location? {
         val ctx = getApplication<Application>()
         val granted =
             ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
@@ -1319,7 +2725,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 val l = lm.getLastKnownLocation(p) ?: continue
                 if (best == null || l.time > best.time) best = l
             }
-            best?.let { it.latitude to it.longitude }
+            best
         } catch (_: SecurityException) {
             null
         }
@@ -1339,5 +2745,6 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         /** Sentinel target của thông báo "bản cập nhật mới" (khớp với backend PushService). */
         const val UPDATE_TARGET = "AppUpdate"
+        private const val AUDIT_PAGE_SIZE = 50
     }
 }

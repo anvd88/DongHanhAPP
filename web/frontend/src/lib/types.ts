@@ -12,8 +12,20 @@ export interface User {
   /** Tích xanh (giống Facebook): Admin luôn có, hoặc được admin cấp thủ công. */
   verified?: boolean;
   isDiamond?: boolean;
+  /** MỌI vai trò (vai trò chính + vai trò phụ như "Warehouse"/Thủ kho). */
+  roles?: string[];
+  /** Có quyền giao việc & nghiệm thu (Admin hoặc Thủ kho). Backend chốt quyền thật. */
+  canAssignTasks?: boolean;
 }
 export const isAdmin = (u?: User | null) => u?.role?.toLowerCase() === "admin";
+/** Có vai trò Thủ kho (hoặc Admin) → được giao việc & nghiệm thu. Chỉ để ẩn/hiện UI; server chốt quyền. */
+export const canAssignTasks = (u?: User | null) =>
+  isAdmin(u) || Boolean(u?.canAssignTasks) || Boolean(u?.roles?.some((r) => r?.toLowerCase() === "warehouse"));
+/**
+ * Chỉ là role kế toán — CHƯA đủ để lập/duyệt phiếu chi. Quyền thật còn đòi tài khoản thuộc phòng ban
+ * có cờ is_accounting và luôn do server chốt lại; cờ này chỉ dùng để ẩn/hiện menu cho đỡ rối mắt.
+ */
+export const isAccountingRole = (u?: User | null) => u?.role?.toLowerCase() === "accounting";
 
 export interface Dashboard {
   activeCustomers: number;
@@ -102,6 +114,8 @@ export interface UserAdmin {
   lastSeen?: string;
   verified: boolean;
   isDiamond: boolean;
+  /** Vai trò phụ đã cấp thêm (vd "Warehouse" = Thủ kho). */
+  secondaryRoles: string[];
 }
 
 export interface FeedbackItem {
@@ -160,13 +174,15 @@ export interface ChatMessage {
   removed: boolean;
   forwarded: boolean;
   reactions?: ChatReaction[] | null;
-  /** "text" (mặc định) hoặc "file" — tin nhắn ghi lại một tệp đã gửi qua LAN (chỉ metadata). */
-  kind?: "text" | "file";
+  /** "voice" có blob bền vững; "file" là tệp LAN/store-and-forward; "text" là mặc định. */
+  kind?: "text" | "file" | "voice";
   fileName?: string | null;
   fileSize?: number | null;
   fileMime?: string | null;
-  /** Server đang giữ tạm nội dung tệp (người nhận offline lúc gửi) → có thể bấm Tải xuống. */
+  /** Nội dung đang sẵn sàng tải; với voice cờ này không bị tắt sau lượt tải đầu. */
   hasBlob?: boolean;
+  /** Ít nhất một thành viên khác đã đọc tin nhắn (cùng contract với Ketoanapk). */
+  read?: boolean;
 }
 
 // Dung lượng DB mục Trò chuyện (admin xem trong trang Hệ thống). Đơn vị KB.

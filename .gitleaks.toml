@@ -1,0 +1,20 @@
+# Cấu hình gitleaks (quét lộ bí mật) cho KetoanMini. Dùng bộ luật mặc định + bỏ qua file mẫu/placeholder.
+title = "KetoanMini gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Bỏ qua file mẫu, cấu hình rỗng, và thư mục build/vendor."
+paths = [
+  '''.*\.example\.json$''',                              # appsettings.Local.example.json (chỉ có placeholder)
+  '''web/backend/KetoanMini\.Api/appsettings\.json$''',  # secrets để TRỐNG ở đây (đọc từ Local.json/env)
+  '''.*[\\/](bin|obj|node_modules|build|dist|\.gradle)[\\/].*''',
+  '''.*\.(png|jpg|jpeg|gif|webp|ico|svg|tflite|task|wasm|onnx)$''',
+]
+# Giá trị placeholder / bí mật DEV vô hại (không phải secret thật) — tránh báo giả.
+regexes = [
+  '''DAT_[A-Z0-9_]+''',        # placeholder trong file mẫu (DAT_MAT_KHAU_DB…)
+  '''changeit''',              # mật khẩu chứng chỉ TLS dev tự ký (certs/ketoanmini.pfx)
+  '''doi-chuoi-bi-mat-nay[a-z0-9-]*''',  # khóa JWT placeholder mặc định (bị Program.cs chặn ở Production)
+]

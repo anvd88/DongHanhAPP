@@ -3,7 +3,7 @@ import { ChevronDown, KeyRound, LogOut, UserCog } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
-import { isAdmin } from "../lib/types";
+import { isAccountingRole, isAdmin } from "../lib/types";
 import { APP_BRAND_NAME } from "../lib/branding";
 import { HR_APK_NAV_KEYS, IS_HR_APK } from "../lib/appConfig";
 import { initials } from "../lib/format";
@@ -57,6 +57,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { unreadCount } = useChatNotifications();
   const location = useLocation();
   const admin = isAdmin(user);
+  const accounting = isAccountingRole(user);
   const [profileOpen, setProfileOpen] = useState(false);
   const [modal, setModal] = useState<null | "profile" | "password">(null);
   const navRef = useRef<HTMLElement | null>(null);
@@ -70,9 +71,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     () =>
       NAV.map((section) => ({
         ...section,
-        items: section.items.filter((it) => (!IS_HR_APK || HR_APK_NAV_KEYS.has(it.key)) && (!it.adminOnly || admin)),
+        items: section.items.filter(
+          (it) =>
+            (!IS_HR_APK || HR_APK_NAV_KEYS.has(it.key)) &&
+            (!it.adminOnly || admin) &&
+            (!it.accountingOnly || admin || accounting),
+        ),
       })).filter((section) => section.items.length),
-    [admin],
+    [admin, accounting],
   );
 
   const activeKey = useMemo(() => {

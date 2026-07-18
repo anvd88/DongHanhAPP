@@ -499,8 +499,8 @@ html[data-theme="dark"] .hr-page--payroll .hr-day-row {
 
 .hr-employee-card-qr {
   display: grid;
-  width: 98px;
-  height: 98px;
+  width: 128px;
+  height: 128px;
   place-items: center;
   border-radius: 8px;
   background: #fff;

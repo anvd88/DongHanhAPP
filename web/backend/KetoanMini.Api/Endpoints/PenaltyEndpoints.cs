@@ -53,6 +53,62 @@ public static class PenaltyEndpoints
             ALTER TABLE hr_penalties ADD COLUMN IF NOT EXISTS start_period varchar(7) NOT NULL DEFAULT '';
             CREATE INDEX IF NOT EXISTS ix_hr_penalties_emp ON hr_penalties (employee_id, penalty_date DESC);
             CREATE INDEX IF NOT EXISTS ix_hr_penalties_status ON hr_penalties (status, penalty_date DESC);
+
+            -- Sổ cái: số tiền phạt THỰC trừ của mỗi quyết định phạt trong mỗi kỳ lương đã phát hành.
+            -- collected(penalty) = SUM(amount). Là nguồn sự thật cho "đã thu bao nhiêu / còn nợ bao nhiêu".
+            CREATE TABLE IF NOT EXISTS hr_penalty_ledger (
+                penalty_id uuid NOT NULL REFERENCES hr_penalties(id) ON DELETE CASCADE,
+                period varchar(7) NOT NULL,
+                amount numeric(18,2) NOT NULL DEFAULT 0,
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (penalty_id, period)
+            );
+            """).ExecuteNonQueryAsync(ct);
+
+        await SeedLedgerFromLegacyAsync(conn, ct);
+    }
+
+    /// <summary>
+    /// Di trú một lần: phạt tiền có từ TRƯỚC khi có sổ cái sẽ chưa có dòng ghi nào. Nạp sổ theo lịch cũ —
+    /// mỗi đợt trong <see cref="BuildSchedule"/> ứng với một kỳ mà nhân viên ĐÃ có phiếu lương phát hành thì
+    /// coi như đã trừ đúng phần đó (đúng bằng logic suy luận cũ, nên số dư khớp trạng thái hiện tại). Chỉ
+    /// nạp cho phạt CHƯA có dòng sổ nào (idempotent), rồi đánh "Đã tất toán" cho phạt đã thu đủ.
+    /// </summary>
+    private static async Task SeedLedgerFromLegacyAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        var legacy = new List<(Guid Id, decimal Amount, int Inst, string Start, Guid Emp)>();
+        await using (var r = await conn.Cmd("""
+            SELECT p.id, p.amount, p.installments, p.start_period, p.employee_id
+            FROM hr_penalties p
+            WHERE p.penalty_type='fine' AND p.amount > 0 AND p.status IN ('Active','Settled')
+              AND NOT EXISTS (SELECT 1 FROM hr_penalty_ledger l WHERE l.penalty_id = p.id)
+            """).ExecuteReaderAsync(ct))
+        {
+            while (await r.ReadAsync(ct))
+                legacy.Add((r.Guid("id"), r.Dec("amount"), r.Int("installments"), r.Str("start_period"), r.Guid("employee_id")));
+        }
+        if (legacy.Count == 0) return;
+
+        var published = await LoadPublishedPeriods(conn, legacy.ConvertAll(x => x.Emp));
+        foreach (var f in legacy)
+        {
+            if (!published.TryGetValue(f.Emp, out var periods)) continue;
+            var schedule = BuildSchedule(f.Amount, f.Inst);
+            for (var i = 0; i < schedule.Length; i++)
+            {
+                var period = AddPeriod(f.Start, i);
+                if (!periods.Contains(period)) continue;
+                await conn.Cmd("""
+                    INSERT INTO hr_penalty_ledger (penalty_id, period, amount)
+                    VALUES (@pid, @period, @amt) ON CONFLICT (penalty_id, period) DO NOTHING
+                    """).With("@pid", f.Id).With("@period", period).With("@amt", schedule[i]).ExecuteNonQueryAsync(ct);
+            }
+        }
+
+        await conn.Cmd("""
+            UPDATE hr_penalties p SET status='Settled', updated_at=CURRENT_TIMESTAMP
+            WHERE p.penalty_type='fine' AND p.status='Active' AND p.amount > 0
+              AND (SELECT COALESCE(SUM(amount),0) FROM hr_penalty_ledger l WHERE l.penalty_id=p.id) >= p.amount
             """).ExecuteNonQueryAsync(ct);
     }
 
@@ -77,34 +133,152 @@ public static class PenaltyEndpoints
         return result.ToArray();
     }
 
-    public sealed record PenaltyDeductionLine(string PenaltyNo, string Reason, decimal Amount,
+    public sealed record PenaltyDeductionLine(Guid PenaltyId, string PenaltyNo, string Reason, decimal Amount,
         int Installments, int InstallmentNo, decimal MonthAmount);
 
-    /// <summary>Tổng tiền phạt cần khấu trừ + chi tiết từng đợt cho một nhân viên trong một kỳ lương.</summary>
+    /// <summary>
+    /// Tổng tiền phạt cần khấu trừ + chi tiết từng khoản cho một nhân viên trong một kỳ lương.
+    /// Nguyên tắc: tổng thực thu của mỗi phạt KHÔNG vượt <c>amount</c>; mỗi kỳ chỉ trừ trong phạm vi
+    /// <paramref name="availableForPenalties"/> (lương còn lại, không để âm); phần chưa thu tự CHUYỂN
+    /// sang kỳ sau. Lịch <see cref="BuildSchedule"/> chỉ dùng để GIỮ NHỊP "trả góp/chia N tháng" —
+    /// một kỳ có thể thu bù cả phần thiếu của các kỳ trước. Đọc phần đã thu từ sổ cái (loại kỳ đang lập).
+    /// Truyền <paramref name="availableForPenalties"/> = <see cref="decimal.MaxValue"/> để xem trước KHÔNG cap.
+    /// </summary>
     public static async Task<(decimal Total, List<PenaltyDeductionLine> Items)> ComputeDeductionsAsync(
-        NpgsqlConnection conn, Guid employeeId, string period)
+        NpgsqlConnection conn, Guid employeeId, string period, decimal availableForPenalties = decimal.MaxValue)
     {
         var items = new List<PenaltyDeductionLine>();
-        decimal total = 0;
-        await using var r = await conn.Cmd("""
-            SELECT penalty_no, amount, installments, start_period, reason
+        var fines = new List<(Guid Id, string No, decimal Amount, int Inst, string Start, string Reason)>();
+        await using (var r = await conn.Cmd("""
+            SELECT id, penalty_no, amount, installments, start_period, reason
             FROM hr_penalties
             WHERE employee_id=@emp AND status='Active' AND penalty_type='fine' AND amount > 0
-            ORDER BY penalty_date
-            """).With("@emp", employeeId).ExecuteReaderAsync();
-        while (await r.ReadAsync())
+            ORDER BY penalty_date, created_at
+            """).With("@emp", employeeId).ExecuteReaderAsync())
         {
-            var amount = r.Dec("amount");
-            var inst = r.Int("installments");
-            var schedule = BuildSchedule(amount, inst);
-            var off = MonthOffset(r.Str("start_period"), period);
-            if (off is null || off < 0 || off >= schedule.Length) continue;
-            var due = schedule[off.Value];
+            while (await r.ReadAsync())
+                fines.Add((r.Guid("id"), r.Str("penalty_no"), r.Dec("amount"), r.Int("installments"),
+                    r.Str("start_period"), r.Str("reason")));
+        }
+        if (fines.Count == 0) return (0, items);
+
+        var collected = await LoadCollectedAsync(conn, fines.ConvertAll(f => f.Id), period);
+        var availableLeft = availableForPenalties;
+        decimal total = 0;
+
+        foreach (var f in fines)
+        {
+            if (availableLeft <= 0) break;
+            collected.TryGetValue(f.Id, out var already);
+            var remaining = f.Amount - already;
+            if (remaining <= 0) continue;                       // đã thu đủ (sẽ được đánh "Đã tất toán")
+            var off = MonthOffset(f.Start, period);
+            if (off is null || off < 0) continue;               // kỳ trước khi phạt bắt đầu → chưa trừ
+
+            var schedule = BuildSchedule(f.Amount, f.Inst);
+            // Mục tiêu luỹ kế phải thu tính đến hết kỳ này; vượt lịch → phải thu hết (gom nốt carry-over).
+            decimal cumTarget;
+            if (off.Value >= schedule.Length) cumTarget = f.Amount;
+            else { cumTarget = 0; for (var i = 0; i <= off.Value; i++) cumTarget += schedule[i]; }
+
+            var catchUp = Math.Min(remaining, cumTarget - already);
+            if (catchUp <= 0) continue;                         // kỳ này chưa tới hạn thu thêm
+            var due = Math.Min(catchUp, availableLeft);
             if (due <= 0) continue;
             total += due;
-            items.Add(new PenaltyDeductionLine(r.Str("penalty_no"), r.Str("reason"), amount, inst, off.Value + 1, due));
+            availableLeft -= due;
+            items.Add(new PenaltyDeductionLine(f.Id, f.No, f.Reason, f.Amount, f.Inst, off.Value + 1, due));
         }
         return (total, items);
+    }
+
+    /// <summary>Tổng đã thu (sổ cái) theo từng phạt; <paramref name="excludePeriod"/> để loại kỳ đang lập lại.</summary>
+    public static async Task<Dictionary<Guid, decimal>> LoadCollectedAsync(NpgsqlConnection conn,
+        List<Guid> penaltyIds, string? excludePeriod = null)
+    {
+        var map = new Dictionary<Guid, decimal>();
+        var ids = new List<Guid>(new HashSet<Guid>(penaltyIds));
+        if (ids.Count == 0) return map;
+        var sql = "SELECT penalty_id, COALESCE(SUM(amount),0)::numeric AS c FROM hr_penalty_ledger "
+            + "WHERE penalty_id = ANY(@ids)" + (excludePeriod is null ? "" : " AND period <> @ex")
+            + " GROUP BY penalty_id";
+        var cmd = conn.Cmd(sql).With("@ids", ids.ToArray());
+        if (excludePeriod is not null) cmd.With("@ex", excludePeriod);
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync()) map[r.Guid("penalty_id")] = r.Dec("c");
+        return map;
+    }
+
+    /// <summary>Tổng đã thu (sổ cái) của MỘT phạt; <paramref name="excludePeriod"/> để loại kỳ đang lập lại.</summary>
+    public static async Task<decimal> GetCollectedAsync(NpgsqlConnection conn, Guid penaltyId, string? excludePeriod = null)
+    {
+        var sql = "SELECT COALESCE(SUM(amount),0)::numeric FROM hr_penalty_ledger WHERE penalty_id=@id"
+            + (excludePeriod is null ? "" : " AND period <> @ex");
+        var cmd = conn.Cmd(sql).With("@id", penaltyId);
+        if (excludePeriod is not null) cmd.With("@ex", excludePeriod);
+        var v = await cmd.ExecuteScalarAsync();
+        return v is null or DBNull ? 0m : Convert.ToDecimal(v);
+    }
+
+    /// <summary>
+    /// Ghi sổ tiền phạt THỰC trừ của một kỳ khi PHÁT HÀNH phiếu lương (idempotent theo penalty+kỳ).
+    /// Xóa các dòng cũ của nhân viên trong kỳ này không còn trong lần tính mới (vd. phạt vừa bị bỏ), rồi
+    /// đánh "Đã tất toán" cho phạt đã thu đủ.
+    /// </summary>
+    public static async Task RecordDeductionsAsync(NpgsqlConnection conn, Guid employeeId, string period,
+        IReadOnlyList<PenaltyDeductionLine> lines)
+    {
+        var keepIds = new List<Guid>();
+        foreach (var l in lines) if (!keepIds.Contains(l.PenaltyId)) keepIds.Add(l.PenaltyId);
+
+        if (keepIds.Count == 0)
+        {
+            await ClearDeductionsForPeriod(conn, employeeId, period);
+            return;
+        }
+
+        await conn.Cmd("""
+            DELETE FROM hr_penalty_ledger l USING hr_penalties p
+            WHERE l.penalty_id = p.id AND p.employee_id = @emp AND l.period = @period
+              AND NOT (l.penalty_id = ANY(@keep))
+            """).With("@emp", employeeId).With("@period", period).With("@keep", keepIds.ToArray())
+            .ExecuteNonQueryAsync();
+
+        foreach (var l in lines)
+            await conn.Cmd("""
+                INSERT INTO hr_penalty_ledger (penalty_id, period, amount, updated_at)
+                VALUES (@pid, @period, @amt, CURRENT_TIMESTAMP)
+                ON CONFLICT (penalty_id, period) DO UPDATE SET amount=@amt, updated_at=CURRENT_TIMESTAMP
+                """).With("@pid", l.PenaltyId).With("@period", period).With("@amt", l.MonthAmount)
+                .ExecuteNonQueryAsync();
+
+        await MarkSettledAsync(conn, employeeId);
+    }
+
+    /// <summary>Xóa ghi sổ phạt của một kỳ cho nhân viên (khi lưu nháp/không phát hành hoặc xóa phiếu lương),
+    /// rồi trả phạt "Đã tất toán" về "Còn hiệu lực" nếu vì thế mà chưa còn thu đủ.</summary>
+    public static async Task ClearDeductionsForPeriod(NpgsqlConnection conn, Guid employeeId, string period)
+    {
+        await conn.Cmd("""
+            DELETE FROM hr_penalty_ledger l USING hr_penalties p
+            WHERE l.penalty_id = p.id AND p.employee_id=@emp AND l.period=@period
+            """).With("@emp", employeeId).With("@period", period).ExecuteNonQueryAsync();
+
+        await conn.Cmd("""
+            UPDATE hr_penalties p SET status='Active', updated_at=CURRENT_TIMESTAMP
+            WHERE p.employee_id=@emp AND p.status='Settled' AND p.penalty_type='fine'
+              AND (SELECT COALESCE(SUM(amount),0) FROM hr_penalty_ledger l WHERE l.penalty_id=p.id) < p.amount
+            """).With("@emp", employeeId).ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Đánh "Đã tất toán" cho các phạt tiền còn hiệu lực đã thu đủ (collected ≥ amount).</summary>
+    private static async Task MarkSettledAsync(NpgsqlConnection conn, Guid employeeId)
+    {
+        await conn.Cmd("""
+            UPDATE hr_penalties p SET status='Settled', updated_at=CURRENT_TIMESTAMP
+            WHERE p.employee_id=@emp AND p.status='Active' AND p.penalty_type='fine' AND p.amount > 0
+              AND (SELECT COALESCE(SUM(amount),0) FROM hr_penalty_ledger l WHERE l.penalty_id=p.id) >= p.amount
+            """).With("@emp", employeeId).ExecuteNonQueryAsync();
     }
 
     /// <summary>Số tháng chênh lệch giữa hai kỳ "yyyy-MM" (target - start); null nếu kỳ không hợp lệ.</summary>
@@ -132,14 +306,16 @@ public static class PenaltyEndpoints
 
         // Tổng tiền phạt cần khấu trừ cho một nhân viên trong một kỳ lương (yyyy-MM) + chi tiết từng đợt.
         // Dùng khi lập phiếu lương để tự cộng vào khấu trừ.
-        g.MapGet("/deductions", async (ClaimsPrincipal u, Database db, Guid employeeId, string period) =>
+        g.MapGet("/deductions", async (ClaimsPrincipal u, Database db, Guid employeeId, string period, decimal? available) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (employeeId == Guid.Empty || string.IsNullOrWhiteSpace(period))
                 return Results.BadRequest(new { message = "Thiếu nhân viên hoặc kỳ lương." });
 
             await using var conn = await db.OpenAsync();
-            var (total, items) = await ComputeDeductionsAsync(conn, employeeId, period);
+            // available = lương còn lại có thể trừ (base+phụ cấp+tăng ca − khấu trừ khác). Không truyền → không cap (xem trước).
+            var (total, items) = await ComputeDeductionsAsync(conn, employeeId, period,
+                available is > 0 ? available.Value : (available is null ? decimal.MaxValue : 0));
             return Results.Ok(new
             {
                 total,
@@ -201,11 +377,10 @@ public static class PenaltyEndpoints
                 while (await r.ReadAsync())
                     recs.Add(ReadPenaltyRec(r));
 
-            // Tiến trình khấu trừ (chỉ phạt tiền còn hiệu lực): dựa trên các kỳ lương ĐÃ phát hành
-            // (hr_payslips.published) của nhân viên — mỗi kỳ có phiếu lương coi như đã trừ đợt tương ứng.
-            var paidPeriods = await LoadPublishedPeriods(conn, recs.ConvertAll(p => p.EmployeeId));
+            // Tiến trình khấu trừ (phạt tiền): lấy số THỰC trừ từ sổ cái theo từng kỳ.
+            var ledger = await LoadLedgerAsync(conn, recs.ConvertAll(p => p.Id));
 
-            var list = recs.ConvertAll(p => ProjectPenalty(p, paidPeriods));
+            var list = recs.ConvertAll(p => ProjectPenalty(p, ledger));
             return Results.Ok(list);
         });
 
@@ -295,7 +470,7 @@ public static class PenaltyEndpoints
         r.Dec("amount"), r.Int("installments"), r.Str("start_period"), r.Str("reason"), r.Str("note"),
         r.Str("status"), r.Str("created_by"), r.Dt("created_at"));
 
-    private static object ProjectPenalty(PenaltyRec p, Dictionary<Guid, HashSet<string>> paidPeriods) => new
+    private static object ProjectPenalty(PenaltyRec p, Dictionary<Guid, Dictionary<string, decimal>> ledger) => new
     {
         id = p.Id,
         penaltyNo = p.PenaltyNo,
@@ -313,21 +488,26 @@ public static class PenaltyEndpoints
         status = p.Status,
         createdBy = p.CreatedBy,
         createdAt = p.CreatedAt,
-        progress = BuildProgress(p, paidPeriods),
+        progress = BuildProgress(p, ledger),
     };
 
     /// <summary>
-    /// Tiến trình khấu trừ của một quyết định phạt tiền còn hiệu lực: mỗi kỳ trong lịch trừ mà nhân viên
-    /// ĐÃ có phiếu lương phát hành coi như đã trừ. Trả null cho phạt không phải "fine", đã miễn, hoặc ≤ 0₫.
+    /// Tiến trình khấu trừ của một quyết định phạt tiền: số THỰC trừ lấy từ sổ cái theo từng kỳ. Kỳ nào
+    /// đã có dòng sổ = đã trừ (hiển thị số thực trừ); kỳ chưa trừ hiển thị số dự kiến theo lịch. Trả null
+    /// cho phạt không phải "fine", đã miễn (Waived), hoặc ≤ 0₫. Phạt đã thu đủ → <c>settled=true</c>.
     /// </summary>
-    private static object? BuildProgress(PenaltyRec p, Dictionary<Guid, HashSet<string>> paidPeriods)
+    private static object? BuildProgress(PenaltyRec p, Dictionary<Guid, Dictionary<string, decimal>> ledger)
     {
-        if (p.PenaltyType != "fine" || p.Status != "Active" || p.Amount <= 0) return null;
+        if (p.PenaltyType != "fine" || p.Status == "Waived" || p.Amount <= 0) return null;
         var schedule = BuildSchedule(p.Amount, p.Installments);
         if (schedule.Length == 0) return null;
-        paidPeriods.TryGetValue(p.EmployeeId, out var paid);
+        ledger.TryGetValue(p.Id, out var paid);
 
         decimal deducted = 0;
+        if (paid is not null) foreach (var v in paid.Values) deducted += v;
+        if (deducted > p.Amount) deducted = p.Amount;
+        var remaining = p.Amount - deducted;
+
         var paidMonths = 0;
         string? nextPeriod = null;
         decimal nextAmount = 0;
@@ -335,46 +515,52 @@ public static class PenaltyEndpoints
         for (var i = 0; i < schedule.Length; i++)
         {
             var period = AddPeriod(p.StartPeriod, i);
-            var isPaid = paid is not null && paid.Contains(period);
-            if (isPaid) { deducted += schedule[i]; paidMonths++; }
-            else if (nextPeriod is null) { nextPeriod = period; nextAmount = schedule[i]; }
-            periods.Add(new { period, amount = schedule[i], paid = isPaid, installmentNo = i + 1 });
+            var isPaid = paid is not null && paid.TryGetValue(period, out var actual);
+            var shown = isPaid ? paid![period] : schedule[i];
+            if (isPaid) paidMonths++;
+            else if (nextPeriod is null && remaining > 0)
+            {
+                nextPeriod = period;
+                nextAmount = Math.Min(schedule[i], remaining);
+            }
+            periods.Add(new { period, amount = shown, paid = isPaid, installmentNo = i + 1 });
         }
 
         return new
         {
             total = p.Amount,
             deducted,
-            remaining = p.Amount - deducted,
+            remaining,
+            settled = p.Status == "Settled" || remaining <= 0,
             totalMonths = schedule.Length,
             paidMonths,
-            remainingMonths = schedule.Length - paidMonths,
+            remainingMonths = remaining <= 0 ? 0 : Math.Max(1, schedule.Length - paidMonths),
             nextPeriod,
             nextAmount,
             periods,
         };
     }
 
-    /// <summary>
-    /// Tổng tiền phạt của MỘT quyết định đã thực sự bị trừ vào lương = tổng các đợt (theo lịch) rơi vào
-    /// các kỳ mà nhân viên ĐÃ có phiếu lương phát hành. Dùng khi khiếu nại được duyệt để tính tiền hoàn.
-    /// </summary>
-    public static async Task<decimal> ComputeDeductedForPenaltyAsync(NpgsqlConnection conn, Guid employeeId,
-        string startPeriod, decimal amount, int installments)
+    /// <summary>Sổ cái theo từng phạt: penalty_id → (kỳ "yyyy-MM" → số tiền thực trừ).</summary>
+    private static async Task<Dictionary<Guid, Dictionary<string, decimal>>> LoadLedgerAsync(
+        NpgsqlConnection conn, List<Guid> penaltyIds)
     {
-        if (amount <= 0) return 0;
-        var schedule = BuildSchedule(amount, installments);
-        if (schedule.Length == 0) return 0;
-        var paidMap = await LoadPublishedPeriods(conn, new List<Guid> { employeeId });
-        paidMap.TryGetValue(employeeId, out var paid);
-        if (paid is null) return 0;
-        decimal deducted = 0;
-        for (var i = 0; i < schedule.Length; i++)
-            if (paid.Contains(AddPeriod(startPeriod, i))) deducted += schedule[i];
-        return deducted;
+        var map = new Dictionary<Guid, Dictionary<string, decimal>>();
+        var ids = new List<Guid>(new HashSet<Guid>(penaltyIds));
+        if (ids.Count == 0) return map;
+        await using var r = await conn.Cmd("""
+            SELECT penalty_id, period, amount FROM hr_penalty_ledger WHERE penalty_id = ANY(@ids)
+            """).With("@ids", ids.ToArray()).ExecuteReaderAsync();
+        while (await r.ReadAsync())
+        {
+            var pid = r.Guid("penalty_id");
+            if (!map.TryGetValue(pid, out var d)) map[pid] = d = new Dictionary<string, decimal>();
+            d[r.Str("period")] = r.Dec("amount");
+        }
+        return map;
     }
 
-    /// <summary>Các kỳ lương ĐÃ phát hành của từng nhân viên (employee_id → tập "yyyy-MM").</summary>
+    /// <summary>Các kỳ lương ĐÃ phát hành của từng nhân viên (employee_id → tập "yyyy-MM"). Dùng cho di trú sổ cái.</summary>
     private static async Task<Dictionary<Guid, HashSet<string>>> LoadPublishedPeriods(NpgsqlConnection conn, List<Guid> employeeIds)
     {
         var map = new Dictionary<Guid, HashSet<string>>();

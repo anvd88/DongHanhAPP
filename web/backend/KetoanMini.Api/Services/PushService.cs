@@ -89,6 +89,66 @@ public sealed class PushService
         await SendToUserAsync(username, title, body, notifId, target);
     }
 
+    /// <summary>
+    /// Đẩy LỜI MỜI GỌI (thoại/video) tới mọi thiết bị của người nhận — để máy đổ chuông kể cả khi app
+    /// đang ĐÓNG/nền (SignalR chỉ chạy khi app mở). Data-only, ưu tiên cao, TTL ngắn 30s để cuộc gọi
+    /// nhỡ không "đổ chuông trễ". Bắt tay + media thật vẫn đi qua WebRTC (mã hóa DTLS-SRTP).
+    /// </summary>
+    public async Task SendCallInviteAsync(string? toUsername, string fromUsername, string callerName, string callId, string media)
+    {
+        if (!_enabled || string.IsNullOrWhiteSpace(toUsername)) return;
+        var tokens = await LoadTokensAsync(
+            "SELECT token FROM hr_device_tokens WHERE lower(username)=lower(@u)", ("@u", toUsername!));
+        await DispatchCallAsync(tokens, new Dictionary<string, string>
+        {
+            ["type"] = "call_invite",
+            ["call_id"] = callId,
+            // "from" là KHÓA BỊ CẤM trong data payload của FCM (bị từ chối INVALID_ARGUMENT) → dùng "caller".
+            ["caller"] = fromUsername,
+            ["caller_name"] = callerName,
+            ["media"] = media,
+        });
+    }
+
+    /// <summary>Báo HỦY/nhỡ cuộc gọi để tắt chuông + thông báo ở máy người nhận (khi người gọi cúp trước).</summary>
+    public async Task SendCallCancelAsync(string? toUsername, string fromUsername, string callId)
+    {
+        if (!_enabled || string.IsNullOrWhiteSpace(toUsername)) return;
+        var tokens = await LoadTokensAsync(
+            "SELECT token FROM hr_device_tokens WHERE lower(username)=lower(@u)", ("@u", toUsername!));
+        await DispatchCallAsync(tokens, new Dictionary<string, string>
+        {
+            ["type"] = "call_cancel",
+            ["call_id"] = callId,
+            ["caller"] = fromUsername, // "from" là khóa bị cấm trong FCM data payload
+        });
+    }
+
+    private async Task DispatchCallAsync(List<string> tokens, Dictionary<string, string> data)
+    {
+        if (tokens.Count == 0) return;
+        for (var offset = 0; offset < tokens.Count; offset += 500)
+        {
+            var batch = tokens.GetRange(offset, Math.Min(500, tokens.Count - offset));
+            try
+            {
+                var message = new MulticastMessage
+                {
+                    Tokens = batch,
+                    Data = data,
+                    // Ưu tiên cao + TTL ngắn: cuộc gọi cần tới ngay, và không còn ý nghĩa sau ~30s.
+                    Android = new AndroidConfig { Priority = Priority.High, TimeToLive = TimeSpan.FromSeconds(30) },
+                };
+                var response = await FirebaseMessaging.DefaultInstance.SendEachForMulticastAsync(message);
+                if (response.FailureCount > 0) await PruneDeadTokensAsync(batch, response);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("PushService gửi FCM cuộc gọi lỗi: {Msg}", ex.Message);
+            }
+        }
+    }
+
     private async Task<List<string>> LoadTokensAsync(string sql, params (string Name, object Value)[] ps)
     {
         var tokens = new List<string>();
@@ -153,7 +213,10 @@ public sealed class PushService
             var r = response.Responses[i];
             if (r.IsSuccess) continue;
             var code = r.Exception?.MessagingErrorCode;
-            if (code is MessagingErrorCode.Unregistered or MessagingErrorCode.InvalidArgument)
+            // CHỈ xóa khi token thực sự không còn hợp lệ (Unregistered = app gỡ/hết hạn). KHÔNG xóa khi
+            // InvalidArgument: lỗi đó thường do PAYLOAD sai (vd trước đây dùng khóa cấm "from") chứ không
+            // phải token hỏng — xóa nhầm sẽ làm mất token tốt và không gọi được nữa.
+            if (code is MessagingErrorCode.Unregistered)
                 dead.Add(tokens[i]);
         }
         if (dead.Count == 0) return;

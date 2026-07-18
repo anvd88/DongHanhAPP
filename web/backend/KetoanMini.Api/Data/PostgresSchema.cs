@@ -10,7 +10,22 @@ public static class PostgresSchema
         await db.EnsureDatabaseExistsAsync(ct);
         await using var conn = await db.OpenAsync(ct);
         await conn.Cmd(SchemaSql).ExecuteNonQueryAsync(ct);
+        await RecordBaselineMigrationAsync(conn, ct);
         await SeedAdminAsync(conn, config, logger, ct);
+    }
+
+    private static async Task RecordBaselineMigrationAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        await conn.Cmd("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version varchar(64) PRIMARY KEY,
+                description text NOT NULL,
+                applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_migrations(version, description)
+            VALUES ('001_baseline', 'Versioned baseline for the consolidated KetoanMini schema')
+            ON CONFLICT (version) DO NOTHING;
+            """).ExecuteNonQueryAsync(ct);
     }
 
     private static async Task SeedAdminAsync(NpgsqlConnection conn, IConfiguration config, ILogger logger, CancellationToken ct)
@@ -21,8 +36,8 @@ public static class PostgresSchema
         if (hasAdmin is not null and not DBNull)
             return;
 
-        var username = (config["Bootstrap:AdminUsername"] ?? "admin").Trim();
-        var password = config["Bootstrap:AdminPassword"] ?? "admin123";
+        var username = (config["Bootstrap:AdminUsername"] ?? "").Trim();
+        var password = config["Bootstrap:AdminPassword"] ?? "";
         var fullName = (config["Bootstrap:AdminFullName"] ?? "Administrator").Trim();
         var email = (config["Bootstrap:AdminEmail"] ?? "").Trim();
 
@@ -60,7 +75,7 @@ public static class PostgresSchema
             username varchar(128) NOT NULL UNIQUE,
             full_name varchar(256) NOT NULL DEFAULT '',
             email varchar(256) NOT NULL DEFAULT '',
-            role varchar(32) NOT NULL DEFAULT 'User',
+            role varchar(32) NOT NULL DEFAULT 'Employee',
             password_hash text NOT NULL,
             is_active boolean NOT NULL DEFAULT TRUE,
             approval_status varchar(32) NOT NULL DEFAULT 'Approved',
@@ -72,6 +87,18 @@ public static class PostgresSchema
 
         ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email varchar(256) NOT NULL DEFAULT '';
         ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_deleted boolean NOT NULL DEFAULT FALSE;
+        UPDATE app_users SET role = 'Employee' WHERE lower(role) = 'user';
+
+        -- Vai trò THỨ HAI cấp thêm cho một tài khoản (ngoài cột role chính). Nhờ đó một người có thể
+        -- vừa giữ vai trò chính (Kế toán/Nhân viên…) vừa được cấp thêm "Thủ kho" để giao việc & nghiệm thu.
+        CREATE TABLE IF NOT EXISTS user_roles (
+            username varchar(128) NOT NULL,
+            role varchar(32) NOT NULL,
+            granted_by varchar(128) NOT NULL DEFAULT '',
+            granted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (username, role)
+        );
+        CREATE INDEX IF NOT EXISTS ix_user_roles_username ON user_roles (username);
 
         CREATE TABLE IF NOT EXISTS customers (
             id uuid NOT NULL PRIMARY KEY,
@@ -169,6 +196,9 @@ public static class PostgresSchema
             apk_mime_type varchar(128) NOT NULL DEFAULT 'application/vnd.android.package-archive',
             apk_size bigint NOT NULL DEFAULT 0,
             apk_sha256 varchar(64) NOT NULL DEFAULT '',
+            -- APK nằm trên ĐĨA (ReleaseStorage), DB chỉ giữ metadata + cờ này. Cột apk_data là di sản
+            -- của cách lưu cũ: ReleaseStorage.MigrateDatabaseBlobsAsync chuyển ra đĩa rồi bỏ trống.
+            has_apk boolean NOT NULL DEFAULT FALSE,
             apk_data bytea NULL,
             created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -183,6 +213,7 @@ public static class PostgresSchema
         ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_size bigint NOT NULL DEFAULT 0;
         ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_sha256 varchar(64) NOT NULL DEFAULT '';
         ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_data bytea NULL;
+        ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS has_apk boolean NOT NULL DEFAULT FALSE;
         ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
         ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
         CREATE INDEX IF NOT EXISTS ix_app_releases_latest
@@ -199,6 +230,18 @@ public static class PostgresSchema
             username varchar(128) NOT NULL DEFAULT '',
             resolved_by varchar(128) NOT NULL DEFAULT ''
         );
+
+        -- Mã khôi phục mật khẩu do admin cấp (thay cho reset bằng khuôn mặt đã tắt). Lưu HASH, một lần dùng.
+        CREATE TABLE IF NOT EXISTS password_recovery_codes (
+            id bigserial NOT NULL PRIMARY KEY,
+            username varchar(128) NOT NULL,
+            code_hash text NOT NULL,
+            created_by varchar(128) NOT NULL DEFAULT '',
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at timestamptz NULL,
+            used_at timestamptz NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_recovery_username ON password_recovery_codes(username);
 
         CREATE TABLE IF NOT EXISTS registration_codes (
             id bigserial NOT NULL PRIMARY KEY,

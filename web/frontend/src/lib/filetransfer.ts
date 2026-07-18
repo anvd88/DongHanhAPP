@@ -91,6 +91,14 @@ function newTid() {
   );
 }
 
+function isInlineMedia(name: string, mime?: string) {
+  const normalizedMime = (mime ?? "").toLowerCase();
+  const normalizedName = name.toLowerCase().split(/[?#]/)[0];
+  if (normalizedMime.startsWith("image/") || normalizedMime.startsWith("video/")) return true;
+  if (/^ghi-am-/.test(normalizedName)) return false;
+  return /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp|3gp|avi|m4v|mkv|mov|mp4|mpeg|mpg|ogv|webm)$/.test(normalizedName);
+}
+
 function send(peer: string, msg: Record<string, unknown>) {
   void sendSignal(peer, JSON.stringify(msg));
 }
@@ -129,6 +137,7 @@ function cleanup(tid: string, keepBlob = false) {
 export function startSend(peer: string, file: File, msgId: number, convId: string, peerOnline: boolean) {
   const tid = newTid();
   const mime = file.type || undefined;
+  const blobUrl = isInlineMedia(file.name, mime) ? URL.createObjectURL(file) : undefined;
   store.set(tid, {
     tid,
     msgId,
@@ -140,6 +149,7 @@ export function startSend(peer: string, file: File, msgId: number, convId: strin
     mime,
     status: peerOnline ? "inviting" : "uploading",
     transferred: 0,
+    blobUrl,
   });
   byMsgId.set(msgId, tid);
   const rt: Runtime = { file, pendingIce: [] };
@@ -210,7 +220,7 @@ async function beginOffer(tid: string) {
     if (typeof e.data === "string") {
       if (e.data === "done") {
         setStatus(tid, { status: "done", transferred: info.size });
-        cleanup(tid);
+        cleanup(tid, !!info.blobUrl);
       } else if (e.data === "error") {
         setStatus(tid, { status: "error", error: "Người nhận gặp lỗi khi nhận tệp." });
         cleanup(tid);
@@ -312,7 +322,7 @@ function finishReceive(tid: string) {
     const url = URL.createObjectURL(blob);
     setStatus(tid, { status: "done", transferred: info.size, blobUrl: url });
     rt.channel?.send("done"); // báo phía gửi đã nhận xong
-    triggerDownload(url, info.name);
+    if (!isInlineMedia(info.name, info.mime)) triggerDownload(url, info.name);
     cleanup(tid, true); // giữ blobUrl để cho phép tải lại
   } catch {
     rt.channel?.send("error");

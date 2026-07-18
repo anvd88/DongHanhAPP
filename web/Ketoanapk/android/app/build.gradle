@@ -2,8 +2,18 @@ apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 apply plugin: 'org.jetbrains.kotlin.plugin.serialization'
-// Firebase Cloud Messaging: cần file app/google-services.json tải từ Firebase Console.
-apply plugin: 'com.google.gms.google-services'
+// Firebase Cloud Messaging: production/staging supply app/google-services.json outside source control.
+// Keeping the plugin conditional lets pull-request CI compile and test without exposing Firebase config.
+def googleServicesFile = file('google-services.json')
+if (googleServicesFile.exists()) {
+    apply plugin: 'com.google.gms.google-services'
+} else {
+    logger.warn('google-services.json is absent; FCM runtime delivery is disabled for this build.')
+    def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
+    if (releaseRequested && !project.hasProperty('allowMissingGoogleServices')) {
+        throw new GradleException('Release requires app/google-services.json. CI validation may opt out with -PallowMissingGoogleServices=true; that artifact must not be deployed.')
+    }
+}
 
 // Đọc thông tin keystore ký release từ android/keystore.properties (không commit vào git).
 def keystorePropsFile = rootProject.file("keystore.properties")
@@ -19,8 +29,8 @@ android {
         applicationId "com.ketoanapk.hr"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 37
-        versionName "1.2.31"
+        versionCode 68
+        versionName "1.2.62"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Địa chỉ API backend qua Cloudflare Tunnel (public, cert hợp lệ, cổng 443).
         // Đổi tại đây nếu đổi domain. Dùng cho MỌI tính năng TRỪ chấm công.
@@ -30,6 +40,16 @@ android {
         // Cert tự ký (mkcert) cho IP này được tin qua res/xml/network_security_config.xml (raw/ketoanmini_ca).
         // Đổi IP tại đây nếu máy chủ đổi địa chỉ LAN (nhớ đổi kèm domain trong network_security_config.xml).
         buildConfigField "String", "ATTENDANCE_BASE_URL", "\"https://192.168.1.88:5443\""
+        // --- TURN cho gọi thoại/video (BẮT BUỘC khi gọi khác mạng qua Internet) ---
+        // Để trống nếu 2 máy LUÔN cùng mạng LAN. Nhân viên gọi nhau qua Internet (4G ↔ WiFi, sau NAT
+        // đối xứng) thì STUN không xuyên được → cần TURN chuyển tiếp media (vẫn mã hóa DTLS-SRTP đầu-cuối).
+        // TURN_URL: NHIỀU url cách nhau bởi dấu phẩy (udp + tcp dự phòng khi mạng chặn UDP). Xem hướng dẫn
+        // dựng coturn ở deploy/coturn/. USER/PASS phải KHỚP dòng `user=` trong turnserver.conf.
+        //   TURN_URL  = "turn:turn.ketoancp.click:3478?transport=udp,turn:turn.ketoancp.click:3478?transport=tcp"
+        //   TURN_USER = "ketoan"   /   TURN_PASS = "<đổi-mật-khẩu-mạnh>"
+        buildConfigField "String", "TURN_URL", "\"\""
+        buildConfigField "String", "TURN_USER", "\"\""
+        buildConfigField "String", "TURN_PASS", "\"\""
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -52,6 +72,27 @@ android {
             if (keystorePropsFile.exists()) {
                 signingConfig signingConfigs.release
             }
+            // Bản phát hành chỉ mang CPU của ĐIỆN THOẠI THẬT. x86/x86_64 chỉ máy ảo mới dùng, mà nhân
+            // viên lại tải APK này qua tunnel → đo 2026-07-17: bỏ hai ABI đó cắt 42,3 MB thư viện native
+            // (72,7 → 30,4 MB), APK release 130 → 87,5 MB.
+            //
+            // Đặt ở release chứ KHÔNG ở defaultConfig, nhưng KHÔNG phải vì máy ảo hết chạy được: AVD
+            // Pixel_9_Pro báo abilist "x86_64,arm64-v8a" nên bản chỉ-ARM vẫn cài & chạy (đã thử). Lý do
+            // thật là TỐC ĐỘ: giữ x86_64 cho bản debug thì native chạy THẲNG trên máy ảo, không phải qua
+            // lớp dịch ARM→x86 (chậm và dễ trục trặc với đống native nặng: ONNX/MediaPipe nhận diện
+            // khuôn mặt, WebRTC). Debug để kiểm thử, release để nhẹ.
+            //
+            // Giữ armeabi-v7a cho máy 32-bit đời cũ: bỏ nó tiết kiệm thêm 11,4 MB nhưng máy 32-bit sẽ
+            // KHÔNG cài nổi bản cập nhật (INSTALL_FAILED_NO_MATCHING_ABIS) — không đáng để đổi.
+            ndk {
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
+            }
+            // ĐỪNG bật minify/shrink nếu chưa viết luật giữ lớp: R8 đổi tên org.webrtc.* thì JNI_OnLoad
+            // của libjingle_peerconnection_so.so không tìm ra lớp theo tên nữa và abort() — app chết ngay
+            // lúc khởi động, chưa kịp vẽ gì. Đã dính đúng vậy ở bản 1.2.44-code50 (2026-07-15).
+            // SignalR (reflection) và ML Kit cũng cùng loại rủi ro. Muốn bật lại thì phải thêm luật giữ
+            // cho từng thư viện rồi thử bản RELEASE trên máy thật, chứ bản debug không hề bị R8 đụng nên
+            // test debug không bao giờ lộ ra lỗi này.
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -87,7 +128,13 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation 'androidx.test:core:1.6.1'
+    // GrantPermissionRule cho test màn quét QR (chỉ nằm trong APK test, không vào bản phát hành).
+    androidTestImplementation 'androidx.test:rules:1.6.1'
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    androidTestImplementation platform('androidx.compose:compose-bom:2024.10.01')
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
 
     // --- Giao diện native Jetpack Compose + Material 3 ---
     implementation platform('androidx.compose:compose-bom:2024.10.01')
@@ -130,4 +177,15 @@ dependencies {
     // --- Nhận diện khuôn mặt on-device (ML Kit, chạy offline) để căn khung 2 bước +
     //     liveness chớp mắt cho luồng chấm công kiểu sinh trắc học ngân hàng ---
     implementation 'com.google.mlkit:face-detection:16.1.7'
+    // Bộ model nằm sẵn trong APK để QR vẫn quét được ngay cả khi thiết bị không có mạng/Google Play.
+    // ML Kit ĐỌC toàn bộ mã QR trong app (QrLoginCaptureActivity trên CameraX).
+    implementation 'com.google.mlkit:barcode-scanning:17.3.0'
+    // zxing:core chỉ còn để SINH mã QR (phiếu chi). Thư viện zxing-android-embedded đã bỏ hẳn: cụm quét
+    // Camera1 của nó không còn chỗ nào dùng, còn BarcodeEncoder thay bằng QRCodeWriter trong PayoutScreens.
+    implementation 'com.google.zxing:core:3.5.4'
+
+    // --- Gọi thoại / gọi video P2P (WebRTC). Media mã hóa bắt buộc bằng DTLS-SRTP;
+    //     bắt tay (offer/answer/ICE) đi qua SignalR đã xác thực JWT. Bản io.github.webrtc-sdk
+    //     là nhánh WebRTC của Google được duy trì, gói `org.webrtc`. ---
+    implementation 'io.github.webrtc-sdk:android:125.6422.07'
 }

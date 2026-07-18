@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, UserPlus, Wifi, WifiOff, BadgeCheck } from "lucide-react";
+import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, KeySquare, UserPlus, Wifi, WifiOff, BadgeCheck } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Table } from "../components/Table";
@@ -9,19 +9,35 @@ import { DiamondLabel, VerifiedBadge } from "../components/VerifiedBadge";
 import { Button, Input, Select, Field, Badge } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { date, dateTime } from "../lib/format";
 import type { UserAdmin } from "../lib/types";
 
 const ROLES = [
   { key: "", label: "Tất cả vai trò" },
   { key: "Admin", label: "Admin" },
+  { key: "Accounting", label: "Kế toán" },
+  { key: "HR", label: "Nhân sự (HR)" },
   { key: "User", label: "User" },
   { key: "Pending", label: "Chờ duyệt" },
   { key: "Locked", label: "Đã khóa" },
 ];
 
+/**
+ * Vai trò gán được cho một tài khoản. Phải khớp AppRoles ở backend — riêng "Kế toán" là điều kiện bắt
+ * buộc (cùng với việc thuộc phòng ban kế toán) để lập/duyệt phiếu chi tiền mặt.
+ */
+const ASSIGNABLE_ROLES = [
+  { key: "Admin", label: "Admin" },
+  { key: "Accounting", label: "Kế toán" },
+  { key: "HR", label: "Nhân sự (HR)" },
+  // "User" là bí danh cũ của Employee (backend tự quy đổi) nên không đưa vào đây cho khỏi trùng.
+  { key: "Employee", label: "Nhân viên" },
+];
+
 export function NhanSu() {
   const { notify, confirm } = useAppNotifications();
+  const { user } = useAuth();
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("");
   const [adding, setAdding] = useState(false);
@@ -42,6 +58,26 @@ export function NhanSu() {
     if (u.role === "Admin") return;
     void act(() => api.post(`/api/users/${u.id}/diamond`, { isDiamond }));
   };
+  // Cấp/thu vai trò phụ "Thủ kho" (quyền giao việc & nghiệm thu). Admin luôn có sẵn quyền này.
+  const setWarehouse = (u: UserAdmin, grant: boolean) => {
+    if (u.role === "Admin") return;
+    void act(() => api.post(`/api/users/${u.id}/secondary-role`, { role: "Warehouse", grant }));
+  };
+  const changeRole = async (u: UserAdmin, newRole: string) => {
+    if (newRole === u.role) return;
+    const label = ASSIGNABLE_ROLES.find((x) => x.key === newRole)?.label ?? newRole;
+    const ok = await confirm({
+      title: `Đổi vai trò thành "${label}"?`,
+      description:
+        newRole === "Accounting"
+          ? `"${u.username}" sẽ lập & duyệt được phiếu chi tiền mặt — với điều kiện hồ sơ nhân sự của họ thuộc phòng ban được đánh dấu là phòng kế toán.`
+          : `Vai trò của "${u.username}" sẽ đổi thành ${label}.`,
+      confirmLabel: "Đổi vai trò",
+      tone: newRole === "Admin" ? "warning" : "info",
+    });
+    if (!ok) return;
+    void act(() => api.post(`/api/users/${u.id}/role`, { role: newRole }));
+  };
   const resetPw = async (u: UserAdmin) => {
     try {
       const r = await api.post<{ code: string }>(`/api/users/${u.id}/reset-password`);
@@ -50,6 +86,17 @@ export function NhanSu() {
         message: `Tài khoản "${u.username}":\n${r.code}\nHãy gửi cho người dùng.`,
         tone: "info",
         duration: 20000,
+      });
+    } catch (e) { notify.error(e instanceof Error ? e.message : "Lỗi"); }
+  };
+  const recoveryCode = async (u: UserAdmin) => {
+    try {
+      const r = await api.post<{ code: string }>(`/api/users/${u.id}/recovery-code`);
+      notify.show({
+        title: "Mã khôi phục mật khẩu",
+        message: `Tài khoản "${u.username}":\n${r.code}\nĐưa mã cho người dùng để tự đặt lại mật khẩu (mục "Quên mật khẩu?"). Hết hạn sau 7 ngày, dùng một lần.`,
+        tone: "info",
+        duration: 30000,
       });
     } catch (e) { notify.error(e instanceof Error ? e.message : "Lỗi"); }
   };
@@ -101,7 +148,29 @@ export function NhanSu() {
                 </span>
               ) },
               { header: "Email", cell: (r) => r.email || "—" },
-              { header: "Vai trò", cell: (r) => <Badge color={r.role === "Admin" ? "purple" : "muted"}>{r.role}</Badge> },
+              { header: "Vai trò", cell: (r) => (
+                <Select
+                  value={r.role}
+                  disabled={r.username === user?.username}
+                  title={r.username === user?.username ? "Không thể tự đổi vai trò của chính mình" : "Đổi vai trò"}
+                  onChange={(e) => changeRole(r, e.target.value)}
+                  className="min-w-[132px] py-1.5 text-xs font-semibold"
+                >
+                  {ASSIGNABLE_ROLES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+                </Select>
+              ) },
+              { header: "Thủ kho", cell: (r) => (
+                <Select
+                  value={r.role === "Admin" || r.secondaryRoles?.includes("Warehouse") ? "yes" : "no"}
+                  disabled={r.role === "Admin"}
+                  title={r.role === "Admin" ? "Admin luôn có quyền giao việc & nghiệm thu" : "Cấp quyền giao việc & nghiệm thu"}
+                  onChange={(e) => setWarehouse(r, e.target.value === "yes")}
+                  className="min-w-[104px] py-1.5 text-xs font-semibold"
+                >
+                  <option value="no">Không</option>
+                  <option value="yes">Thủ kho</option>
+                </Select>
+              ) },
               { header: "Hội viên", cell: (r) => (
                 <Select
                   value={r.isDiamond ? "diamond" : "normal"}
@@ -141,6 +210,7 @@ export function NhanSu() {
                     <IconBtn title="Cấp tích xanh" onClick={() => act(() => api.post(`/api/users/${r.id}/verify`, { verified: true }))}><BadgeCheck className="h-4 w-4" /></IconBtn>
                   )}
                   <IconBtn title="Đặt lại mật khẩu" onClick={() => resetPw(r)}><KeyRound className="h-4 w-4" /></IconBtn>
+                  <IconBtn title="Tạo mã khôi phục (người dùng tự đặt lại)" onClick={() => recoveryCode(r)}><KeySquare className="h-4 w-4" /></IconBtn>
                   {r.role !== "Admin" && (r.isActive ? (
                     <IconBtn title="Khóa" color="warning" onClick={() => act(() => api.post(`/api/users/${r.id}/lock`, { locked: true }))}><Lock className="h-4 w-4" /></IconBtn>
                   ) : (
@@ -178,7 +248,7 @@ function AddUser({ onClose, onSaved }: { onClose: () => void; onSaved: () => voi
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("User");
+  const [role, setRole] = useState("Employee");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -198,7 +268,7 @@ function AddUser({ onClose, onSaved }: { onClose: () => void; onSaved: () => voi
         <Field label="Họ tên"><Input value={fullName} onChange={(e) => setFullName(e.target.value)} /></Field>
         <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
         <Field label="Mật khẩu *"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
-        <Field label="Vai trò"><Select value={role} onChange={(e) => setRole(e.target.value)} className="w-full"><option value="User">User</option><option value="Admin">Admin</option></Select></Field>
+        <Field label="Vai trò"><Select value={role} onChange={(e) => setRole(e.target.value)} className="w-full">{ASSIGNABLE_ROLES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</Select></Field>
         {error && <div className="rounded-xl bg-red-500/10 px-3 py-2.5 text-sm font-medium text-[var(--danger)]">{error}</div>}
       </div>
     </Modal>

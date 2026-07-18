@@ -28,6 +28,7 @@ public static class RequestEndpoints
         ("shift_swap", "Đổi ca / nhờ nhận ca", "Công"),
         ("payment", "Đề nghị thanh toán", "Tài chính"),
         ("advance", "Tạm ứng", "Tài chính"),
+        ("reimbursement", "Hoàn ứng / quyết toán", "Tài chính"),
         ("purchase", "Mua sắm vật tư", "Tài chính"),
         ("booking", "Đăng ký xe / phòng họp", "Hành chính"),
         ("penalty_appeal", "Khiếu nại án phạt", "Kỷ luật"),
@@ -91,8 +92,10 @@ public static class RequestEndpoints
         },
         ["shift_swap"] = new[]
         {
+            new ReqField("action", "Hình thức", "select", "Đổi ca của bạn hoặc đăng ký nhận ca trống",
+                Options: new[] { new ReqOption("swap", "Xin đổi ca"), new ReqOption("take", "Xin nhận ca") }),
             new ReqField("date", "Ngày đổi ca", "date", "Ngày cần đổi ca"),
-            new ReqField("withPerson", "Người nhận ca", "text", "Tên đồng nghiệp nhận ca giúp"),
+            new ReqField("withPerson", "Người đổi / bàn giao ca", "text", "Tên hoặc mã nhân viên đồng nghiệp", Required: false),
             new ReqField("reason", "Lý do", "textarea", "Vì sao bạn cần đổi ca?"),
         },
         ["payment"] = new[]
@@ -104,6 +107,14 @@ public static class RequestEndpoints
         {
             new ReqField("amount", "Số tiền tạm ứng", "money", "Số tiền bạn muốn tạm ứng"),
             new ReqField("reason", "Lý do", "textarea", "Bạn tạm ứng để làm gì?"),
+        },
+        ["reimbursement"] = new[]
+        {
+            new ReqField("advanceRef", "Mã đơn tạm ứng", "text", "Mã đơn đã được duyệt", Required:false),
+            new ReqField("advancedAmount", "Số đã ứng", "money", "Tổng tiền công ty đã tạm ứng"),
+            new ReqField("spentAmount", "Số đã chi", "money", "Tổng chi phí theo các hóa đơn"),
+            new ReqField("receiptSummary", "Danh sách chi phí", "textarea", "Mỗi dòng ghi ngày, nội dung và số tiền"),
+            new ReqField("reason", "Ghi chú quyết toán", "textarea", "Giải thích khoản cần hoàn hoặc cần thanh toán thêm", Required:false),
         },
         ["purchase"] = new[]
         {
@@ -173,6 +184,18 @@ public static class RequestEndpoints
             );
             CREATE INDEX IF NOT EXISTS ix_hr_requests_requester ON hr_requests (requester_username, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_hr_requests_status ON hr_requests (status, created_at DESC);
+            ALTER TABLE hr_requests ADD COLUMN IF NOT EXISTS due_at timestamptz NULL;
+            ALTER TABLE hr_requests ADD COLUMN IF NOT EXISTS last_reminded_at timestamptz NULL;
+            UPDATE hr_requests SET due_at=created_at + INTERVAL '2 days' WHERE due_at IS NULL;
+
+            CREATE TABLE IF NOT EXISTS hr_approval_delegations (
+                from_username varchar(128) PRIMARY KEY,
+                to_username varchar(128) NOT NULL,
+                from_date date NOT NULL,
+                to_date date NOT NULL,
+                active boolean NOT NULL DEFAULT TRUE,
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
 
             CREATE TABLE IF NOT EXISTS hr_request_approvals (
                 id bigserial PRIMARY KEY,
@@ -189,6 +212,18 @@ public static class RequestEndpoints
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_request_approvals ON hr_request_approvals (request_id, step_no);
             CREATE INDEX IF NOT EXISTS ix_hr_request_approvals_approver ON hr_request_approvals (approver_username, status);
+
+            CREATE TABLE IF NOT EXISTS hr_request_attachments (
+                id bigserial PRIMARY KEY,
+                request_id uuid NOT NULL REFERENCES hr_requests(id) ON DELETE CASCADE,
+                file_name varchar(260) NOT NULL,
+                mime_type varchar(120) NOT NULL DEFAULT 'application/octet-stream',
+                file_size bigint NOT NULL,
+                content bytea NOT NULL,
+                uploaded_by varchar(128) NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_hr_request_attachments_request ON hr_request_attachments(request_id, id);
             """).ExecuteNonQueryAsync(ct);
     }
 
@@ -282,7 +317,7 @@ public static class RequestEndpoints
             string requester = "";
             await using (var r = await conn.Cmd("""
                 SELECT r.id, r.request_no, r.req_type, r.title, r.requester_username, r.payload::text AS payload,
-                       r.status, r.current_step, r.created_at, e.full_name AS emp_name, e.employee_code,
+                       r.status, r.current_step, r.created_at, r.due_at, e.full_name AS emp_name, e.employee_code,
                        COALESCE(d.name,'') AS dept_name
                 FROM hr_requests r JOIN hr_employees e ON e.id=r.employee_id
                 LEFT JOIN hr_departments d ON d.id=e.department_id
@@ -306,6 +341,7 @@ public static class RequestEndpoints
                     status = r.Str("status"),
                     currentStep = r.Int("current_step"),
                     createdAt = r.Dt("created_at"),
+                    dueAt = r.DtNull("due_at"),
                 };
             }
 
@@ -341,7 +377,52 @@ public static class RequestEndpoints
             }
 
             if (requester != me && admin == false && !iAmApprover) return Results.Forbid();
-            return Results.Ok(new { request = head, approvals });
+            var attachments = new List<object>();
+            await using (var ar = await conn.Cmd("SELECT id, file_name, mime_type, file_size FROM hr_request_attachments WHERE request_id=@id ORDER BY id")
+                .With("@id", id).ExecuteReaderAsync())
+            {
+                while (await ar.ReadAsync()) attachments.Add(new { id = ar.Long("id"), fileName = ar.Str("file_name"), mimeType = ar.Str("mime_type"), fileSize = ar.Long("file_size") });
+            }
+            return Results.Ok(new { request = head, approvals, attachments });
+        });
+
+        g.MapPost("/{id:guid}/attachments", async (Guid id, string fileName, HttpContext ctx, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var owner = await conn.Cmd("SELECT requester_username FROM hr_requests WHERE id=@id AND status='Pending'").With("@id", id).ExecuteScalarAsync() as string;
+            if (owner is null) return Results.BadRequest(new { message = "Chỉ có thể đính kèm khi đơn còn chờ duyệt." });
+            if (!string.Equals(owner, u.Username(), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            const int max = 15 * 1024 * 1024;
+            await using var ms = new MemoryStream();
+            var buffer = new byte[81920]; int read;
+            while ((read = await ctx.Request.Body.ReadAsync(buffer)) > 0)
+            {
+                if (ms.Length + read > max) return Results.BadRequest(new { message = "Mỗi tệp tối đa 15 MB." });
+                await ms.WriteAsync(buffer.AsMemory(0, read));
+            }
+            var safe = Path.GetFileName(fileName).Trim();
+            if (safe.Length == 0) safe = "dinh-kem";
+            var mime = ctx.Request.ContentType ?? "application/octet-stream";
+            var attachmentId = Convert.ToInt64(await conn.Cmd("""
+                INSERT INTO hr_request_attachments(request_id,file_name,mime_type,file_size,content,uploaded_by)
+                VALUES (@r,@n,@m,@s,@c,@u) RETURNING id
+                """).With("@r", id).With("@n", safe[..Math.Min(safe.Length,260)]).With("@m", mime[..Math.Min(mime.Length,120)])
+                .With("@s", ms.Length).With("@c", ms.ToArray()).With("@u", u.Username()).ExecuteScalarAsync());
+            return Results.Ok(new { id = attachmentId, fileName = safe, mimeType = mime, fileSize = ms.Length });
+        });
+
+        g.MapGet("/{id:guid}/attachments/{attachmentId:long}", async (Guid id, long attachmentId, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var allowed = u.IsAdmin() || Convert.ToInt32(await conn.Cmd("""
+                SELECT COUNT(*) FROM hr_requests r LEFT JOIN hr_request_approvals a ON a.request_id=r.id
+                WHERE r.id=@id AND (r.requester_username=@u OR a.approver_username=@u)
+                """).With("@id", id).With("@u", u.Username()).ExecuteScalarAsync()) > 0;
+            if (!allowed) return Results.Forbid();
+            await using var r = await conn.Cmd("SELECT file_name,mime_type,content FROM hr_request_attachments WHERE id=@a AND request_id=@id")
+                .With("@a", attachmentId).With("@id", id).ExecuteReaderAsync();
+            if (!await r.ReadAsync()) return Results.NotFound();
+            return Results.File((byte[])r.GetValue(r.GetOrdinal("content")), r.Str("mime_type"), r.Str("file_name"));
         });
 
         g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
@@ -370,6 +451,27 @@ public static class RequestEndpoints
             var reqId = Guid.NewGuid();
             var no = $"DT{Convert.ToInt64(await conn.Cmd("SELECT nextval('hr_request_seq')").ExecuteScalarAsync()):D5}";
             var payloadJson = req.Payload.HasValue ? req.Payload.Value.GetRawText() : "{}";
+
+            if (req.Type == "shift_swap")
+            {
+                var dateText = ReadString(payloadJson, "date");
+                if (!DateOnly.TryParse(dateText, out var workDate))
+                    return Results.BadRequest(new { message = "Vui lòng chọn ngày đổi/nhận ca hợp lệ." });
+                var duplicate = Convert.ToInt32(await conn.Cmd("""
+                    SELECT COUNT(*) FROM hr_requests
+                    WHERE employee_id=@emp AND req_type='shift_swap' AND status='Pending'
+                      AND payload->>'date'=@date
+                    """).With("@emp", empId).With("@date", dateText).ExecuteScalarAsync());
+                if (duplicate > 0)
+                    return Results.Conflict(new { message = "Bạn đã có một yêu cầu đổi/nhận ca đang chờ cho ngày này." });
+
+                var action = ReadString(payloadJson, "action");
+                var assigned = Convert.ToInt32(await conn.Cmd("""
+                    SELECT COUNT(*) FROM hr_shift_assignments WHERE employee_id=@emp AND work_date=@date
+                    """).With("@emp", empId).With("@date", workDate).ExecuteScalarAsync()) > 0;
+                if (action != "take" && !assigned)
+                    return Results.Conflict(new { message = "Ngày đã chọn chưa có ca của bạn để đổi. Hãy chọn Nhận ca nếu muốn đăng ký ca trống." });
+            }
 
             await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync();
             try
@@ -418,6 +520,24 @@ public static class RequestEndpoints
             return Results.Ok(new { id = reqId, requestNo = no });
         });
 
+        g.MapPut("/{id:guid}", async (Guid id, CreateRequestReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Type) || Array.FindIndex(Types, t => t.Type == req.Type) < 0)
+                return Results.BadRequest(new { message = "Loại đơn không hợp lệ." });
+            var payload = req.Payload.HasValue ? req.Payload.Value.GetRawText() : "{}";
+            await using var conn = await db.OpenAsync();
+            var n = await conn.Cmd("""
+                UPDATE hr_requests SET req_type=@type,title=@title,payload=@payload::jsonb,updated_at=CURRENT_TIMESTAMP
+                WHERE id=@id AND requester_username=@u AND status='Pending'
+                """).With("@id", id).With("@u", u.Username()).With("@type", req.Type)
+                .With("@title", string.IsNullOrWhiteSpace(req.Title) ? TypeLabel(req.Type) : req.Title.Trim())
+                .With("@payload", payload).ExecuteNonQueryAsync();
+            if (n == 0) return Results.BadRequest(new { message = "Đơn không còn đủ điều kiện chỉnh sửa." });
+            await db.RecordAudit(u.Username(), "Sửa đơn từ", "Request", id.ToString(), TypeLabel(req.Type));
+            await hub.Clients.All.SendAsync("changed", "data");
+            return Results.NoContent();
+        });
+
         g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
             await Decide(id, req, u, db, hub, push, approve: true));
 
@@ -436,10 +556,58 @@ public static class RequestEndpoints
             await hub.Clients.All.SendAsync("changed", "hr");
             return Results.NoContent();
         });
+
+        g.MapPost("/{id:guid}/remind", async (Guid id, ClaimsPrincipal u, Database db, PushService push) =>
+        {
+            await using var conn = await db.OpenAsync();
+            string approver = "", no = "";
+            await using (var r = await conn.Cmd("""
+                SELECT r.request_no, COALESCE(a.approver_username,'') approver, r.last_reminded_at
+                FROM hr_requests r LEFT JOIN hr_request_approvals a ON a.request_id=r.id AND a.step_no=r.current_step
+                WHERE r.id=@id AND r.requester_username=@u AND r.status='Pending'
+                """).With("@id", id).With("@u", u.Username()).ExecuteReaderAsync())
+            {
+                if (!await r.ReadAsync()) return Results.BadRequest(new { message = "Đơn không còn chờ duyệt." });
+                if (r.DtNull("last_reminded_at") is DateTime last && last > DateTime.UtcNow.AddHours(-24))
+                    return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+                approver = r.Str("approver"); no = r.Str("request_no");
+            }
+            await conn.Cmd("UPDATE hr_requests SET last_reminded_at=CURRENT_TIMESTAMP WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
+            if (approver.Length > 0) await push.SendToUserAsync(approver, "Nhắc duyệt đơn", $"{no} đang chờ bạn xử lý.", $"inbox:{id}:remind", "Approval");
+            else await push.SendToAdminsAsync("Nhắc duyệt đơn", $"{no} đang chờ xử lý.", $"inbox:{id}:remind", "Approval");
+            return Results.NoContent();
+        });
+
+        g.MapPut("/delegations/me", async (ApprovalDelegationReq req, ClaimsPrincipal u, Database db) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.ToUsername) || req.ToDate < req.FromDate)
+                return Results.BadRequest(new { message = "Thông tin ủy quyền không hợp lệ." });
+            await using var conn = await db.OpenAsync();
+            var exists = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM hr_employees WHERE username=@u AND status='Active'")
+                .With("@u", req.ToUsername.Trim()).ExecuteScalarAsync()) > 0;
+            if (!exists) return Results.BadRequest(new { message = "Người được ủy quyền không tồn tại hoặc đã nghỉ." });
+            await conn.Cmd("""
+                INSERT INTO hr_approval_delegations(from_username,to_username,from_date,to_date,active)
+                VALUES (@f,@t,@d1,@d2,TRUE) ON CONFLICT(from_username) DO UPDATE
+                SET to_username=@t,from_date=@d1,to_date=@d2,active=TRUE,updated_at=CURRENT_TIMESTAMP
+                """).With("@f", u.Username()).With("@t", req.ToUsername.Trim()).With("@d1", req.FromDate).With("@d2", req.ToDate).ExecuteNonQueryAsync();
+            return Results.NoContent();
+        });
     }
 
     private static async Task InsertStep(NpgsqlConnection conn, NpgsqlTransaction tx, Guid reqId, int step, string role, string username, string name)
     {
+        if (username.Length > 0)
+        {
+            await using (var delegated = await new NpgsqlCommand("""
+                    SELECT d.to_username, COALESCE(e.full_name,d.to_username) full_name
+                    FROM hr_approval_delegations d LEFT JOIN hr_employees e ON e.username=d.to_username
+                    WHERE d.from_username=@u AND d.active=TRUE AND CURRENT_DATE BETWEEN d.from_date AND d.to_date
+                    """, conn, tx) { Parameters = { new("@u", username) } }.ExecuteReaderAsync())
+            {
+                if (await delegated.ReadAsync()) { username = delegated.GetString(0); name = delegated.GetString(1) + " (được ủy quyền)"; }
+            }
+        }
         await new NpgsqlCommand("""
             INSERT INTO hr_request_approvals (request_id, step_no, approver_role, approver_username, approver_name, status)
             VALUES (@r, @s, @role, @u, @n, 'Pending')
@@ -475,35 +643,49 @@ public static class RequestEndpoints
         }
         if (reqStatus != "Pending") return Results.BadRequest(new { message = "Đơn không còn ở trạng thái chờ duyệt." });
 
-        // Bước duyệt hiện tại + kiểm quyền.
+        // Từ chối BẮT BUỘC nêu lý do (ghi vào comment) — để người gửi biết vì sao và có dấu vết xử lý.
+        var comment = (req.Comment ?? "").Trim();
+        if (!approve && comment.Length == 0)
+            return Results.BadRequest(new { message = "Vui lòng nhập lý do từ chối đơn." });
+
+        // Bước duyệt hiện tại + kiểm quyền. Đọc KHÔNG lọc theo trạng thái để phân biệt rõ:
+        // sai người duyệt → 403 (Forbid); bước vừa có người khác xử lý (đua thiết bị) → 409 (Conflict).
         long stepId = 0;
-        string stepRole = "", stepUser = "";
+        string stepRole = "", stepUser = "", stepStatus = "";
         await using (var r = await conn.Cmd("""
-            SELECT id, approver_role, approver_username FROM hr_request_approvals
-            WHERE request_id=@id AND step_no=@step AND status='Pending'
+            SELECT id, approver_role, approver_username, status FROM hr_request_approvals
+            WHERE request_id=@id AND step_no=@step
             """).With("@id", id).With("@step", currentStep).ExecuteReaderAsync())
         {
             if (!await r.ReadAsync()) return Results.BadRequest(new { message = "Không tìm thấy bước duyệt hiện tại." });
             stepId = r.Long("id");
             stepRole = r.Str("approver_role");
             stepUser = r.Str("approver_username");
+            stepStatus = r.Str("status");
         }
         var canDecide = stepUser == me || (stepRole == "Admin" && admin);
         if (!canDecide) return Results.Forbid();
+        if (stepStatus != "Pending")
+            return Results.Conflict(new { message = "Bước duyệt này vừa được người khác xử lý. Vui lòng tải lại." });
 
+        // GHI QUYẾT ĐỊNH KIỂU "GIÀNH CHỖ" NGUYÊN TỬ: chỉ đổi được khi bước còn 'Pending'. Nếu hai thiết bị
+        // cùng duyệt, PostgreSQL tuần tự hóa UPDATE này nên đúng MỘT lệnh chạm 1 dòng; lệnh thua chạm 0 dòng
+        // → trả 409 và các tác động phụ (trừ phép, hoàn phạt, bù công…) chỉ chạy đúng một lần cho người thắng.
         var newStepStatus = approve ? "Approved" : "Rejected";
-        await conn.Cmd("""
+        var claimed = await conn.Cmd("""
             UPDATE hr_request_approvals SET status=@st, decided_at=CURRENT_TIMESTAMP, decided_by=@me,
-                comment=@comment, signature=@sig WHERE id=@id
+                comment=@comment, signature=@sig WHERE id=@id AND status='Pending'
             """)
-            .With("@st", newStepStatus).With("@me", me).With("@comment", req.Comment ?? "")
+            .With("@st", newStepStatus).With("@me", me).With("@comment", comment)
             .With("@sig", (object?)req.Signature ?? DBNull.Value).With("@id", stepId)
             .ExecuteNonQueryAsync();
+        if (claimed == 0)
+            return Results.Conflict(new { message = "Đơn vừa được người khác xử lý. Vui lòng tải lại." });
 
         var pushBody = $"{TypeLabel(reqType)} · {requestNo}";
         if (!approve)
         {
-            await conn.Cmd("UPDATE hr_requests SET status='Rejected', updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+            await conn.Cmd("UPDATE hr_requests SET status='Rejected', updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'")
                 .With("@id", id).ExecuteNonQueryAsync();
             await push.SendToUserAsync(requester, "Đơn bị từ chối", pushBody, $"req:{id}:rejected", "Requests");
         }
@@ -514,7 +696,7 @@ public static class RequestEndpoints
                 .With("@id", id).ExecuteScalarAsync();
             if (next is int nextStep)
             {
-                await conn.Cmd("UPDATE hr_requests SET current_step=@s, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                await conn.Cmd("UPDATE hr_requests SET current_step=@s, updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'")
                     .With("@s", nextStep).With("@id", id).ExecuteNonQueryAsync();
 
                 // Đẩy thông báo tới người duyệt của bước kế tiếp.
@@ -532,14 +714,15 @@ public static class RequestEndpoints
             }
             else
             {
-                await conn.Cmd("UPDATE hr_requests SET status='Approved', updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                await conn.Cmd("UPDATE hr_requests SET status='Approved', updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'")
                     .With("@id", id).ExecuteNonQueryAsync();
                 await ApplyApprovedEffects(conn, reqType, employeeId, payloadJson, req, requestNo, me);
                 await push.SendToUserAsync(requester, "Đơn đã được duyệt", pushBody, $"req:{id}:approved", "Requests");
             }
         }
 
-        await db.RecordAudit(me, approve ? "Duyệt đơn từ" : "Từ chối đơn từ", "Request", requestNo, TypeLabel(reqType));
+        await db.RecordAudit(me, approve ? "Duyệt đơn từ" : "Từ chối đơn từ", "Request", requestNo,
+            approve ? TypeLabel(reqType) : $"{TypeLabel(reqType)} — Lý do từ chối: {comment}");
         // Báo cho người gửi biết đơn đã được xử lý (tín hiệu chung + nhắm riêng người gửi).
         await hub.Clients.All.SendAsync("changed", "data");
         await hub.Clients.All.SendAsync("changed", "hr");
@@ -599,13 +782,13 @@ public static class RequestEndpoints
         var penaltyNo = ReadString(payloadJson, "penaltyNo");
         if (string.IsNullOrWhiteSpace(penaltyNo)) return;
 
-        // Tra án phạt tiền còn hiệu lực đúng người.
+        // Tra án phạt tiền còn hiệu lực HOẶC đã tất toán (đã thu đủ vẫn được khiếu nại để hoàn).
         Guid penaltyId = default;
-        decimal amount = 0; int installments = 1; string startPeriod = "", note = "";
+        decimal amount = 0; int installments = 1; string note = "";
         var found = false;
         await using (var r = await conn.Cmd("""
-            SELECT id, amount, installments, start_period, note FROM hr_penalties
-            WHERE penalty_no=@no AND employee_id=@emp AND penalty_type='fine' AND status='Active'
+            SELECT id, amount, installments, note FROM hr_penalties
+            WHERE penalty_no=@no AND employee_id=@emp AND penalty_type='fine' AND status IN ('Active','Settled')
             """).With("@no", penaltyNo).With("@emp", employeeId).ExecuteReaderAsync())
         {
             if (await r.ReadAsync())
@@ -614,13 +797,13 @@ public static class RequestEndpoints
                 penaltyId = r.Guid("id");
                 amount = r.Dec("amount");
                 installments = r.Int("installments");
-                startPeriod = r.Str("start_period");
                 note = r.Str("note");
             }
         }
         if (!found) return;
 
-        var deducted = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(conn, employeeId, startPeriod, amount, installments);
+        // Đã thu bao nhiêu (sổ cái) — nền tảng để chốt: tổng thực thu KHÔNG BAO GIỜ vượt mức phạt hiện tại.
+        var collected = await PenaltyEndpoints.GetCollectedAsync(conn, penaltyId);
 
         // Hình thức xử lý: ưu tiên chỉ định của người duyệt (web admin); nếu không có thì theo ĐỀ NGHỊ
         // của nhân viên ghi trong đơn (appealKind): dispute → bác bỏ, reduce → giảm tiền, installment → chia đóng.
@@ -634,19 +817,19 @@ public static class RequestEndpoints
 
         if (outcome == "installment")
         {
-            // Chia nhỏ tiền phạt ra nhiều tháng (KHÔNG đổi tổng tiền). Nếu các kỳ ĐÃ trừ thu vượt so với
-            // lịch mới thì hoàn phần vượt; các kỳ còn lại tự trừ theo lịch mới nên tổng thu vẫn = mức phạt.
+            // Chia nhỏ tiền phạt ra nhiều tháng (KHÔNG đổi tổng tiền → không hoàn). Các kỳ sau tự trừ theo
+            // lịch mới nhưng tổng thực thu vẫn bị chặn ở mức phạt, nên không thu quá.
             var months = req.NewInstallments is > 0
                 ? req.NewInstallments!.Value
                 : (int)Math.Round(ReadNumber(payloadJson, "requestedMonths"));
             months = Math.Clamp(months, 1, 60);
-            var newScheduledForPaid = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(
-                conn, employeeId, startPeriod, amount, months);
-            await conn.Cmd("UPDATE hr_penalties SET installments=@inst, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
-                .With("@id", penaltyId).With("@inst", months)
+            // collected < amount vì tổng không đổi → giữ Active để thu nốt phần còn thiếu theo nhịp mới.
+            var status = collected >= amount ? "Settled" : "Active";
+            await conn.Cmd("UPDATE hr_penalties SET installments=@inst, status=@st, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                .With("@id", penaltyId).With("@inst", months).With("@st", status)
                 .With("@note", Append(note, $"Chia đóng {months} tháng theo khiếu nại {requestNo}"))
                 .ExecuteNonQueryAsync();
-            refund = Math.Max(0, deducted - newScheduledForPaid);
+            refund = 0;
             appended = $"Chia đóng {months} tháng phạt {penaltyNo}";
         }
         else
@@ -662,25 +845,24 @@ public static class RequestEndpoints
             if (reduceTo is not null)
             {
                 var newAmount = reduceTo.Value;
-                // Quy đổi các kỳ ĐÃ trừ sang LỊCH MỚI: chỉ hoàn phần đã thu vượt so với mức mới cho những kỳ đó.
-                // Các kỳ còn lại sẽ tự trừ theo lịch mới, nên tổng thu cuối cùng = mức phạt mới (không thừa/thiếu).
-                var newScheduledForPaid = await PenaltyEndpoints.ComputeDeductedForPenaltyAsync(
-                    conn, employeeId, startPeriod, newAmount, installments);
-                await conn.Cmd("UPDATE hr_penalties SET amount=@amt, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
-                    .With("@id", penaltyId).With("@amt", newAmount)
+                // CHỐT THEO TỔNG ĐÃ THU: hoàn phần đã thu vượt mức mới; nếu đã thu ≥ mức mới → tất toán,
+                // DỪNG HẲN các kỳ sau; nếu chưa đủ → còn hiệu lực để thu nốt (mức mới − đã thu).
+                refund = Math.Max(0, collected - newAmount);
+                var status = collected >= newAmount ? "Settled" : "Active";
+                await conn.Cmd("UPDATE hr_penalties SET amount=@amt, status=@st, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                    .With("@id", penaltyId).With("@amt", newAmount).With("@st", status)
                     .With("@note", Append(note, $"Giảm còn {newAmount:0} theo khiếu nại {requestNo}"))
                     .ExecuteNonQueryAsync();
-                refund = Math.Max(0, deducted - newScheduledForPaid);
                 appended = $"Giảm tiền phạt {penaltyNo}";
             }
             else
             {
-                // Bác bỏ = miễn toàn bộ (mặc định, kể cả khi outcome trống hoặc mức giảm không hợp lệ).
+                // Bác bỏ = miễn toàn bộ + hoàn TẤT CẢ phần đã thu (mặc định, kể cả khi mức giảm không hợp lệ).
                 await conn.Cmd("UPDATE hr_penalties SET status='Waived', note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                     .With("@id", penaltyId)
                     .With("@note", Append(note, $"Miễn theo khiếu nại {requestNo}"))
                     .ExecuteNonQueryAsync();
-                refund = deducted;
+                refund = collected;
                 appended = $"Bác bỏ phạt {penaltyNo}";
             }
         }
@@ -809,4 +991,5 @@ public static class RequestEndpoints
 
     public record CreateRequestReq(string? Type, string? Title, JsonElement? Payload);
     public record DecideReq(string? Comment, string? Signature, string? PenaltyOutcome, decimal? NewAmount, int? NewInstallments);
+    public record ApprovalDelegationReq(string ToUsername, DateOnly FromDate, DateOnly ToDate);
 }

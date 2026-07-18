@@ -1,0 +1,8 @@
+# Hook chặn commit lộ bí mật. Cài một lần: `pip install pre-commit` rồi `pre-commit install`.
+# Từ đó mỗi `git commit` sẽ tự quét; muốn quét toàn repo: `pre-commit run --all-files`.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        name: Quét bí mật (gitleaks)

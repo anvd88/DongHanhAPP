@@ -35,7 +35,6 @@ builder-debug.yml
 !.env.example
 .codex-logs/
 .codex-build/
-tools/video-bridge/runtime/
 
 # Chung chi HTTPS LAN - chua khoa bi mat, KHONG commit
 backend/KetoanMini.Api/certs/

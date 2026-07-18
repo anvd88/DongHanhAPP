@@ -182,7 +182,7 @@ function CardTab({ me }: { me: EmployeeDetail }) {
               <div><dt className="inline text-slate-400">Vào làm: </dt><dd className="inline font-medium">{me.hireDate ? date(me.hireDate) : "—"}</dd></div>
             </dl>
             <div className="rounded-lg bg-white p-1 ring-1 ring-slate-200">
-              <QRCodeSVG value={qr} size={84} level="M" />
+              <QRCodeSVG value={qr} size={116} level="M" marginSize={4} />
             </div>
           </div>
         </div>

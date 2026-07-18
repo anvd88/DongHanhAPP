@@ -146,7 +146,7 @@ public static class PayrollEndpoints
             var list = new List<object>();
             await using var r = await conn.Cmd("""
                 SELECT id, period, overtime_hours, base_salary, allowance, overtime_pay,
-                       deductions, net_pay, note, details::text AS details, created_at
+                       deductions, net_pay, note, details::text AS details, created_at, acknowledged_at
                 FROM hr_payslips
                 WHERE employee_id=@id AND published = TRUE
                 ORDER BY period DESC
@@ -177,10 +177,28 @@ public static class PayrollEndpoints
                     netPay = det.NetPay != 0 ? det.NetPay : colNet,
                     note = r.Str("note"),
                     createdAt = r.Dt("created_at"),
+                    acknowledgedAt = r.DtNull("acknowledged_at"),
                 });
             }
             return Results.Ok(list);
         });
+
+        g.MapPost("/my-payslips/{id:guid}/ack", async(Guid id,ClaimsPrincipal u,Database db)=>{
+            await using var c=await db.OpenAsync();var n=await c.Cmd("""
+              UPDATE hr_payslips p SET acknowledged_at=COALESCE(acknowledged_at,CURRENT_TIMESTAMP)
+              FROM hr_employees e WHERE p.id=@id AND p.employee_id=e.id AND e.username=@u AND p.published=TRUE
+              """).With("@id",id).With("@u",u.Username()).ExecuteNonQueryAsync();return n==0?Results.NotFound():Results.NoContent();});
+        g.MapPost("/my-payslips/{id:guid}/inquiries",async(Guid id,PayslipInquiryReq req,ClaimsPrincipal u,Database db)=>{
+            if(string.IsNullOrWhiteSpace(req.Message))return Results.BadRequest(new{message="Vui lòng nhập nội dung thắc mắc."});await using var c=await db.OpenAsync();
+            var emp=await c.Cmd("SELECT p.employee_id FROM hr_payslips p JOIN hr_employees e ON e.id=p.employee_id WHERE p.id=@id AND e.username=@u AND p.published=TRUE").With("@id",id).With("@u",u.Username()).ExecuteScalarAsync();if(emp is not Guid eid)return Results.NotFound();
+            var qid=Guid.NewGuid();await c.Cmd("INSERT INTO hr_payslip_inquiries(id,payslip_id,employee_id,line_label,message) VALUES(@q,@p,@e,@l,@m)").With("@q",qid).With("@p",id).With("@e",eid).With("@l",req.LineLabel??"").With("@m",req.Message.Trim()).ExecuteNonQueryAsync();return Results.Ok(new{id=qid,status="open"});});
+        g.MapGet("/my-payslips/{id:guid}/pdf",async(Guid id,ClaimsPrincipal u,Database db)=>{
+            await using var c=await db.OpenAsync();await using var r=await c.Cmd("""
+              SELECT p.period,p.net_pay,p.base_salary,p.allowance,p.overtime_pay,p.deductions,e.full_name,e.employee_code
+              FROM hr_payslips p JOIN hr_employees e ON e.id=p.employee_id WHERE p.id=@id AND e.username=@u AND p.published=TRUE
+              """).With("@id",id).With("@u",u.Username()).ExecuteReaderAsync();if(!await r.ReadAsync())return Results.NotFound();
+            var lines=new[]{"PAYSLIP "+r.Str("period"),"Employee: "+r.Str("full_name")+" ("+r.Str("employee_code")+")","Base salary: "+r.Dec("base_salary"),"Allowance: "+r.Dec("allowance"),"Overtime: "+r.Dec("overtime_pay"),"Deductions: "+r.Dec("deductions"),"NET PAY: "+r.Dec("net_pay")};
+            var bytes=SimplePdf(lines);return Results.File(bytes,"application/pdf",$"Payslip_{r.Str("period")}.pdf");});
 
         // ---------------- Tính & lập phiếu lương ----------------
 
@@ -211,27 +229,45 @@ public static class PayrollEndpoints
             var result = await ComputePayroll(conn, req.EmployeeId, req.Period, req.Adjustments, approvedOt);
             if (result is null) return Results.NotFound();
 
-            var pid = Guid.NewGuid();
             var detailsJson = JsonSerializer.Serialize(result.Details);
-            await conn.Cmd("""
+            // RETURNING id: lập lại phiếu của kỳ cũ thì DO UPDATE trả về id của DÒNG ĐANG CÓ, không phải
+            // guid vừa sinh — phiếu chi lương bám theo id này nên phải là id thật.
+            var pid = (Guid)(await conn.Cmd("""
                 INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, details, published)
                 VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @details::jsonb, @pub)
                 ON CONFLICT (employee_id, period) DO UPDATE SET
                     work_days=@wd, overtime_hours=@ot, base_salary=@base, allowance=@allow,
                     overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, details=@details::jsonb, published=@pub
+                RETURNING id
                 """)
-                .With("@id", pid).With("@emp", req.EmployeeId).With("@period", req.Period)
+                .With("@id", Guid.NewGuid()).With("@emp", req.EmployeeId).With("@period", req.Period)
                 .With("@wd", (decimal)result.WorkedDays).With("@ot", result.OvertimeHours)
                 .With("@base", result.BaseSalary).With("@allow", result.Allowance).With("@otp", result.OvertimePay)
                 .With("@ded", result.TotalDeductions).With("@net", result.NetPay)
                 .With("@note", req.Note ?? "").With("@details", detailsJson).With("@pub", req.Published)
-                .ExecuteNonQueryAsync();
+                .ExecuteScalarAsync())!;
 
-            // Đánh dấu các khoản hoàn "cộng vào lương" đã áp dụng vào phiếu kỳ này (đúng các dòng vừa cộng ở trên).
-            await conn.Cmd("""
-                UPDATE hr_penalty_refunds SET status='Paid', applied_period=@period, decided_at=CURRENT_TIMESTAMP
-                WHERE employee_id=@emp AND status='Approved' AND payout_method='payroll' AND applied_period=''
-                """).With("@emp", req.EmployeeId).With("@period", req.Period).ExecuteNonQueryAsync();
+            if (req.Published)
+            {
+                // Ghi sổ tiền phạt THỰC trừ của kỳ (nguồn sự thật "đã thu bao nhiêu"); đánh "Đã tất toán" nếu đủ.
+                await PenaltyEndpoints.RecordDeductionsAsync(conn, req.EmployeeId, req.Period, result.PenaltyLines);
+                // Đánh dấu các khoản hoàn "cộng vào lương" đã áp dụng vào phiếu kỳ này (đúng các dòng vừa cộng ở trên).
+                await conn.Cmd("""
+                    UPDATE hr_penalty_refunds SET status='Paid', applied_period=@period, decided_at=CURRENT_TIMESTAMP
+                    WHERE employee_id=@emp AND status='Approved' AND payout_method='payroll' AND applied_period=''
+                    """).With("@emp", req.EmployeeId).With("@period", req.Period).ExecuteNonQueryAsync();
+            }
+            else
+            {
+                // Bản nháp: không ghi nhận thực thu (xóa sổ kỳ này nếu có), chưa "tiêu" khoản hoàn.
+                await PenaltyEndpoints.ClearDeductionsForPeriod(conn, req.EmployeeId, req.Period);
+            }
+
+            // Phát hành phiếu lương = tiền lương sắp được trao tay → sinh phiếu chi để người nhận ký nhận
+            // bằng QR. Phiếu nháp (chưa phát hành) không sinh gì.
+            if (req.Published)
+                await PayoutVoucherEndpoints.SyncPayslipVoucherAsync(conn, pid, req.EmployeeId, req.Period,
+                    result.NetPay, u.Username());
 
             await Signal(hub, db, conn, u, req.EmployeeId, "Lập phiếu lương", "Payslip");
             return Results.Ok(new { id = pid, netPay = result.NetPay });
@@ -257,6 +293,19 @@ public static class PayrollEndpoints
     private sealed record PayslipDetail(List<object> Earnings, List<object> Deductions,
         decimal WorkedDays, decimal AbsentDays, decimal LateDays, decimal OvertimeHours,
         decimal TotalEarnings, decimal TotalDeductions, decimal NetPay);
+
+    private static byte[] SimplePdf(IEnumerable<string> lines)
+    {
+        static string Safe(string value) => value.Replace("\\", "/").Replace("(", "[").Replace(")", "]");
+        var text = string.Join("\n", lines.Select((x, i) => $"BT /F1 12 Tf 50 {780-i*24} Td ({Safe(x)}) Tj ET"));
+        var objects = new[] { "1 0 obj<< /Type /Catalog /Pages 2 0 R>>endobj", "2 0 obj<< /Type /Pages /Kids[3 0 R] /Count 1>>endobj", "3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox[0 0 595 842] /Resources<< /Font<< /F1 5 0 R>>>> /Contents 4 0 R>>endobj", $"4 0 obj<< /Length {System.Text.Encoding.ASCII.GetByteCount(text)}>>stream\n{text}\nendstream endobj", "5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica>>endobj" };
+        var sb = new System.Text.StringBuilder("%PDF-1.4\n"); var offsets = new List<int>{0};
+        foreach(var o in objects){offsets.Add(System.Text.Encoding.ASCII.GetByteCount(sb.ToString()));sb.Append(o).Append('\n');}
+        var xref=System.Text.Encoding.ASCII.GetByteCount(sb.ToString());sb.Append($"xref\n0 {objects.Length+1}\n0000000000 65535 f \n");
+        for(var i=1;i<offsets.Count;i++)sb.Append(offsets[i].ToString("D10")).Append(" 00000 n \n");
+        sb.Append($"trailer<< /Size {objects.Length+1} /Root 1 0 R>>\nstartxref\n{xref}\n%%EOF");return System.Text.Encoding.ASCII.GetBytes(sb.ToString());
+    }
+    public record PayslipInquiryReq(string? LineLabel,string? Message);
 
     /// <summary>Phân giải cột details (jsonb) của phiếu lương ra khoản cộng/trừ + số liệu bảng công + các tổng.</summary>
     private static PayslipDetail ParsePayslipDetail(string json)
@@ -334,7 +383,7 @@ public static class PayrollEndpoints
         int WorkedDays, int AbsentDays, int LateDays, decimal OvertimeHours,
         List<PayLine> Earnings, List<PayLine> Deductions,
         decimal TotalEarnings, decimal TotalDeductions, decimal NetPay,
-        List<OtDay> OvertimeDays, object Details);
+        List<OtDay> OvertimeDays, List<PenaltyEndpoints.PenaltyDeductionLine> PenaltyLines, object Details);
 
     /// <summary>
     /// Tính toàn bộ phiếu lương cho (nhân viên, kỳ). Trả null nếu không tìm thấy nhân viên.
@@ -389,16 +438,8 @@ public static class PayrollEndpoints
                 else earnings.Add(new(label, a.Amount));
             }
 
-        // Tiền phạt trong kỳ.
-        var (penaltyTotal, penaltyItems) = await PenaltyEndpoints.ComputeDeductionsAsync(conn, employeeId, period);
-        foreach (var p in penaltyItems)
-        {
-            var label = $"Phạt {p.PenaltyNo}" + (p.Installments > 1 ? $" (đợt {p.InstallmentNo}/{p.Installments})" : "")
-                + (string.IsNullOrWhiteSpace(p.Reason) ? "" : $" · {p.Reason}");
-            deductions.Add(new(label, p.MonthAmount));
-        }
-
         // Hoàn tiền phạt đã được kế toán duyệt (hình thức "cộng vào lương"), chưa áp dụng vào phiếu nào → cộng thu nhập.
+        // Tính TRƯỚC phạt để khoản hoàn cũng được kể vào lương còn có thể trừ.
         await using (var rr = await conn.Cmd("""
             SELECT penalty_no, amount FROM hr_penalty_refunds
             WHERE employee_id=@emp AND status='Approved' AND payout_method='payroll' AND applied_period=''
@@ -407,6 +448,19 @@ public static class PayrollEndpoints
         {
             while (await rr.ReadAsync())
                 earnings.Add(new($"Hoàn tiền phạt {rr.Str("penalty_no")}", rr.Dec("amount")));
+        }
+
+        // Tiền phạt trong kỳ — CAP theo lương còn lại (tổng thu nhập gồm tăng ca đã duyệt + hoàn phạt,
+        // trừ đi các khấu trừ KHÁC). Phạt không được làm âm lương; phần chưa thu tự chuyển sang kỳ sau (sổ cái).
+        var availableForPenalties = Math.Max(0m,
+            earnings.Sum(e => e.Amount) + overtimePay - deductions.Sum(e => e.Amount));
+        var (penaltyTotal, penaltyItems) = await PenaltyEndpoints.ComputeDeductionsAsync(
+            conn, employeeId, period, availableForPenalties);
+        foreach (var p in penaltyItems)
+        {
+            var label = $"Phạt {p.PenaltyNo}" + (p.Installments > 1 ? $" (đợt {p.InstallmentNo}/{p.Installments})" : "")
+                + (string.IsNullOrWhiteSpace(p.Reason) ? "" : $" · {p.Reason}");
+            deductions.Add(new(label, p.MonthAmount));
         }
 
         var totalEarnings = earnings.Sum(e => e.Amount) + overtimePay;
@@ -446,7 +500,7 @@ public static class PayrollEndpoints
             employeeId, empName, empCode, period,
             salary.BaseSalary, salary.Allowance, salary.OvertimeRate, overtimePay,
             ts.WorkedDays, ts.AbsentDays, ts.LateDays, overtimeHours,
-            earnings, deductions, totalEarnings, totalDeductions, net, otCandidates, details);
+            earnings, deductions, totalEarnings, totalDeductions, net, otCandidates, penaltyItems, details);
     }
 
     // ---- Mức lương ----

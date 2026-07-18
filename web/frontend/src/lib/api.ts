@@ -1,11 +1,20 @@
 import { appUrl, redirectToLogin } from "./appConfig";
 
 const TOKEN_KEY = "km_token";
+const KIOSK_KEY = "km_kiosk_key";
 
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
   set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
   clear: () => localStorage.removeItem(TOKEN_KEY),
+};
+
+/** Khóa kiosk cấp riêng cho THIẾT BỊ chấm công (không phải tài khoản). Lưu cục bộ, gửi qua header
+ *  X-Kiosk-Key để backend cho phép chấm công ẩn danh khi hệ thống mở ra Internet. */
+export const kioskKeyStore = {
+  get: () => { try { return localStorage.getItem(KIOSK_KEY); } catch { return null; } },
+  set: (k: string) => { try { localStorage.setItem(KIOSK_KEY, k.trim()); } catch { /* ignore */ } },
+  clear: () => { try { localStorage.removeItem(KIOSK_KEY); } catch { /* ignore */ } },
 };
 
 export class ApiError extends Error {
@@ -15,6 +24,13 @@ export class ApiError extends Error {
     this.status = status;
   }
 }
+
+type RequestOptions = {
+  /** Endpoint công khai: không gửi Bearer/kiosk cũ và không redirect khi nhận 401. */
+  anonymous?: boolean;
+  signal?: AbortSignal;
+  cache?: RequestCache;
+};
 
 function isPublicNoAuthRoute() {
   const path = location.pathname.replace(/\/+$/, "") || "/";
@@ -28,19 +44,34 @@ function handleUnauthorized(): never {
   throw new ApiError(401, "Phiên đăng nhập đã hết hạn.");
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {};
-  const token = tokenStore.get();
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (!options.anonymous) {
+    const token = tokenStore.get();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const kioskKey = kioskKeyStore.get();
+    if (kioskKey) headers["X-Kiosk-Key"] = kioskKey;
+  }
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   const res = await fetch(appUrl(path), {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    cache: options.cache,
+    credentials: options.anonymous ? "omit" : "same-origin",
+    signal: options.signal,
   });
 
   if (res.status === 401) {
+    if (options.anonymous) {
+      const data = await res.clone().json().catch(() => null);
+      throw new ApiError(401, (data as { message?: string } | null)?.message || "Yêu cầu công khai không được chấp nhận.");
+    }
+    // Kiosk chưa được cấp quyền → KHÔNG đá về trang đăng nhập; để màn kiosk hiện ô nhập mã.
+    const data = await res.clone().json().catch(() => null);
+    if (data && (data as { code?: string }).code === "kiosk_key_required")
+      throw new ApiError(401, (data as { message?: string }).message || "Cần mã kiosk.");
     handleUnauthorized();
   }
 
@@ -126,6 +157,8 @@ async function requestForm<T>(method: string, path: string, form: FormData): Pro
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, body?: unknown) => request<T>("POST", p, body ?? {}),
+  postPublic: <T>(p: string, body?: unknown, signal?: AbortSignal) =>
+    request<T>("POST", p, body ?? {}, { anonymous: true, cache: "no-store", signal }),
   put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body ?? {}),
   del: <T>(p: string) => request<T>("DELETE", p),
   getBlob: (p: string) => requestBlob(p),

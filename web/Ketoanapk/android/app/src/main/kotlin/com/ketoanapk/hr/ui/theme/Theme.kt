@@ -78,11 +78,19 @@ private val AppTypography = Typography(
 @Composable
 fun KetoanTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    fontScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
-        typography = AppTypography,
+        typography = AppTypography.copy(
+            bodySmall=AppTypography.bodySmall.copy(fontSize=AppTypography.bodySmall.fontSize*fontScale),
+            bodyMedium=AppTypography.bodyMedium.copy(fontSize=AppTypography.bodyMedium.fontSize*fontScale),
+            bodyLarge=AppTypography.bodyLarge.copy(fontSize=AppTypography.bodyLarge.fontSize*fontScale),
+            titleSmall=AppTypography.titleSmall.copy(fontSize=AppTypography.titleSmall.fontSize*fontScale),
+            titleMedium=AppTypography.titleMedium.copy(fontSize=AppTypography.titleMedium.fontSize*fontScale),
+            titleLarge=AppTypography.titleLarge.copy(fontSize=AppTypography.titleLarge.fontSize*fontScale),
+        ),
         content = content,
     )
 }

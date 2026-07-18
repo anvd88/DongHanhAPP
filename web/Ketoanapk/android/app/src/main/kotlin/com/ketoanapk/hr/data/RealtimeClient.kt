@@ -23,12 +23,15 @@ import kotlinx.coroutines.runBlocking
  */
 class RealtimeClient(private val tokenStore: TokenStore) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var hub: HubConnection? = null
+    @Volatile private var hub: HubConnection? = null
     private var job: Job? = null
     @Volatile private var wantConnected = false
+    @Volatile private var selfUsername: String = ""
+    fun isConnected(): Boolean = hub?.connectionState == HubConnectionState.CONNECTED
 
     @Synchronized
-    fun start() {
+    fun start(selfUsername: String) {
+        this.selfUsername = selfUsername
         if (wantConnected) return
         wantConnected = true
         job = scope.launch { connectLoop() }
@@ -41,7 +44,19 @@ class RealtimeClient(private val tokenStore: TokenStore) {
         job = null
         val h = hub
         hub = null
+        CallManager.unbindSignaling()
         if (h != null) scope.launch { runCatching { h.stop().blockingAwait() } }
+    }
+
+    /**
+     * Gửi một gói tín hiệu WebRTC (bắt tay cuộc gọi) tới đúng MỘT username qua hub `Relay`.
+     * Backend chỉ chuyển tiếp cho [toUser] đang đăng nhập — kẻ lạ không chen được. Media của cuộc
+     * gọi KHÔNG đi qua đây (mã hóa DTLS-SRTP, truyền thẳng P2P). Chạy nền để không chặn UI.
+     */
+    fun sendCallSignal(toUser: String, payload: String) {
+        val h = hub ?: return
+        if (h.connectionState != HubConnectionState.CONNECTED) return
+        scope.launch { runCatching { h.send("Relay", toUser, payload) } }
     }
 
     /** Vòng kết nối bền: giữ kết nối khi còn muốn; rớt/ lỗi thì đợi rồi thử lại. */
@@ -58,17 +73,30 @@ class RealtimeClient(private val tokenStore: TokenStore) {
                 delay(3000)
                 continue
             }
+            // Đã kết nối → cắm kênh gửi tín hiệu cuộc gọi cho CallManager (nhận qua listener "signal").
+            CallManager.bindSignaling(selfUsername) { to, payload -> sendCallSignal(to, payload) }
+            // Vừa (kết nối lại) WS → đồng bộ MỘT nhịp để bắt các thay đổi xảy ra lúc đang mất kết nối
+            // (thay cho vòng poll định kỳ đã tắt khi WS khỏe). ViewModel nghe qua AppEvents.dataChanged.
+            AppEvents.signalDataChanged()
             // Đã kết nối → chờ tới khi rớt (poll trạng thái nhẹ), rồi thử lại nếu vẫn muốn.
             while (wantConnected && connection.connectionState == HubConnectionState.CONNECTED) {
                 delay(2000)
             }
+            CallManager.unbindSignaling()
             runCatching { connection.stop().blockingAwait() }
             if (wantConnected) delay(2000)
         }
     }
 
     private fun build(): HubConnection {
-        val url = BuildConfig.API_BASE_URL.trimEnd('/') + "/hubs/changes"
+        // Gắn token vào CẢ query "access_token" trên URL LẪN accessTokenProvider (header). Lý do: qua
+        // reverse proxy/Cloudflare Tunnel, header Authorization có thể bị lược trên bước nâng cấp
+        // WebSocket → hub sẽ kết nối ẨN DANH (UserIdentifier null) → Relay bị bỏ → KHÔNG nhận được cuộc
+        // gọi. Backend đọc "access_token" từ query cho đường /hubs (Program.cs OnMessageReceived), nên
+        // đưa token vào query đảm bảo hub luôn có định danh dù header bị mất. Token JWT ký tự URL-safe.
+        val token = runBlocking { tokenStore.token() ?: "" }
+        val base = BuildConfig.API_BASE_URL.trimEnd('/') + "/hubs/changes"
+        val url = if (token.isNotBlank()) "$base?access_token=$token" else base
         val connection = HubConnectionBuilder.create(url)
             .withAccessTokenProvider(Single.defer { Single.just(runBlocking { tokenStore.token() ?: "" }) })
             .build()
@@ -77,7 +105,29 @@ class RealtimeClient(private val tokenStore: TokenStore) {
             "changed",
             { scopeName: String ->
                 // Chỉ quan tâm nghiệp vụ HR/đơn từ/dữ liệu chung → báo ViewModel làm mới màn đang xem.
-                if (scopeName == "hr" || scopeName == "data" || scopeName == "all") AppEvents.signalDataChanged()
+                if (scopeName == "hr" || scopeName == "data" || scopeName == "chat" || scopeName == "all") AppEvents.signalDataChanged()
+            },
+            String::class.java,
+        )
+        // Backend chuyển tiếp tín hiệu bắt tay WebRTC qua sự kiện "signal" (from, payload). Cuộc gọi
+        // dùng khung JSON có "k":"call"; CallManager tự lọc, bỏ qua tín hiệu gửi tệp.
+        connection.on(
+            "signal",
+            { from: String, payload: String -> CallManager.onSignal(from, payload) },
+            String::class.java,
+            String::class.java,
+        )
+        // ĐĂNG NHẬP 1 MÁY: server đẩy "kicked" kèm sid của phiên MỚI khi tài khoản đăng nhập ở máy khác.
+        // Nếu sid đó KHÁC sid của máy này → máy này vừa bị đá → tự đăng xuất NGAY.
+        connection.on(
+            "kicked",
+            { activeSid: String ->
+                scope.launch {
+                    val mySid = runCatching { tokenStore.sessionId() }.getOrNull().orEmpty()
+                    if (mySid.isNotEmpty() && activeSid.isNotEmpty() && activeSid != mySid) {
+                        AppEvents.signalForceLogout("Tài khoản của bạn vừa đăng nhập trên thiết bị khác.")
+                    }
+                }
             },
             String::class.java,
         )

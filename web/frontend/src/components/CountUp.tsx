@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * Hiệu ứng "số chạy": nhận vào một CHUỖI đã định dạng sẵn (vd "1.234.567 ₫", "0",
  * "12 phiếu") hoặc một SỐ, tách phần số ra rồi chạy từ 0 → giá trị thật khi xuất hiện.
  * Giữ nguyên tiền tố/hậu tố (₫, %, chữ...) và cách ngăn nghìn kiểu vi-VN.
  *
- * Tôn trọng "prefers-reduced-motion" và chế độ nhẹ (html.perf-lite): khi đó hiện thẳng
- * số cuối, không chạy — để máy yếu / người dùng nhạy cảm chuyển động không bị ảnh hưởng.
+ * Đây là chuyển động chức năng do người dùng chủ động yêu cầu, vì vậy vẫn chạy khi Windows
+ * đang tắt hiệu ứng chuyển động. Các animation trang trí khác vẫn tôn trọng chế độ giảm chuyển động.
  */
 
 const easeOutExpo = (t: number) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
@@ -21,19 +21,9 @@ function parseViNumber(token: string): { value: number; decimals: number } {
   return { value: Number.isNaN(value) ? 0 : value, decimals };
 }
 
-/**
- * Có nên bỏ qua animation không. Chỉ tôn trọng "prefers-reduced-motion" (yêu cầu trợ năng).
- * KHÔNG gắn với chế độ nhẹ (perf-lite): số chạy chỉ là hiệu ứng một-lần rất nhẹ (vài lần
- * setState trong ~1s, không blur/GPU), khác với animation trang trí lặp vô hạn mà perf-lite tắt.
- */
-function prefersStatic(): boolean {
-  if (typeof window === "undefined") return true;
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-}
-
 export function CountUp({
   text,
-  duration = 1000,
+  duration = 3000,
 }: {
   /** Giá trị hiển thị: chuỗi đã định dạng hoặc số thô. */
   text: string | number;
@@ -46,17 +36,24 @@ export function CountUp({
   const target = parsed?.value ?? 0;
   const decimals = parsed?.decimals ?? 0;
   const hasNumber = match !== null;
+  const formatter = useMemo(
+    () =>
+      new Intl.NumberFormat("vi-VN", {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      }),
+    [decimals],
+  );
 
-  const staticMode = useRef(prefersStatic()).current;
-  const [display, setDisplay] = useState(staticMode ? target : 0);
-  const fromRef = useRef(staticMode ? target : 0);
+  const [display, setDisplay] = useState(0);
+  const fromRef = useRef(0);
   const rafRef = useRef<number | null>(null);
 
   // CHÚ Ý: chỉ phụ thuộc các GIÁ TRỊ NGUYÊN THUỶ ổn định. Không đưa `match` (một object
   // mới sinh mỗi lần render) vào deps — nếu không, mỗi khung hình setDisplay → re-render →
   // match mới → effect chạy lại → animation bị KHỞI ĐỘNG LẠI liên tục và số đứng yên ở 0.
   useEffect(() => {
-    if (!hasNumber || staticMode) {
+    if (!hasNumber) {
       setDisplay(target);
       fromRef.current = target;
       return;
@@ -82,16 +79,13 @@ export function CountUp({
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [target, decimals, duration, staticMode, hasNumber]);
+  }, [target, decimals, duration, hasNumber]);
 
   if (!match) return <>{str}</>;
 
   const prefix = str.slice(0, match.index);
   const suffix = str.slice((match.index ?? 0) + match[0].length);
-  const formatted = new Intl.NumberFormat("vi-VN", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }).format(display);
+  const formatted = formatter.format(display);
 
   return (
     <>

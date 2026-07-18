@@ -1,6 +1,7 @@
 package com.ketoanapk.hr.ui
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -77,6 +78,7 @@ fun PortalScreen(
 ) {
     // Đang mở chi tiết một bài → hiển thị toàn bộ nội dung ở màn riêng.
     if (detail != null) {
+        BackHandler { onBack() } // Back lùi về danh sách trước, chưa rời tab
         PortalDetailScreen(detail, onBack)
         return
     }

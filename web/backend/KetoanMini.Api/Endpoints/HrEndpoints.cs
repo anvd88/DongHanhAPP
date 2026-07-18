@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Realtime;
+using KetoanMini.Api.Security;
 using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
@@ -58,6 +59,8 @@ public static class HrEndpoints
             CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_employees_username ON hr_employees (username) WHERE username <> '';
             CREATE INDEX IF NOT EXISTS ix_hr_employees_department ON hr_employees (department_id);
             CREATE INDEX IF NOT EXISTS ix_hr_employees_manager ON hr_employees (manager_id);
+            ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS show_phone_in_directory boolean NOT NULL DEFAULT FALSE;
+            ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS show_email_in_directory boolean NOT NULL DEFAULT FALSE;
 
             -- Địa điểm/chi nhánh làm việc (phục vụ phân quyền theo địa điểm).
             CREATE TABLE IF NOT EXISTS hr_locations (
@@ -106,6 +109,11 @@ public static class HrEndpoints
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}';
+            ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz NULL;
+            CREATE TABLE IF NOT EXISTS hr_payslip_inquiries(
+              id uuid PRIMARY KEY,payslip_id uuid NOT NULL REFERENCES hr_payslips(id) ON DELETE CASCADE,
+              employee_id uuid NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,line_label varchar(200) NOT NULL DEFAULT '',
+              message text NOT NULL,status varchar(20) NOT NULL DEFAULT 'open',response text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_payslips_emp_period ON hr_payslips (employee_id, period);
 
             CREATE TABLE IF NOT EXISTS hr_leave_balances (
@@ -130,6 +138,12 @@ public static class HrEndpoints
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS ix_hr_documents_emp ON hr_documents (employee_id, doc_type);
+            ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS doc_number varchar(120) NOT NULL DEFAULT '';
+            ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS expires_at date NULL;
+            ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS approval_status varchar(20) NOT NULL DEFAULT 'approved';
+            ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS file_name varchar(260) NOT NULL DEFAULT '';
+            ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS mime_type varchar(120) NOT NULL DEFAULT '';
+            ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS file_content bytea NULL;
             """).ExecuteNonQueryAsync(ct);
 
         await BackfillMissingDepartments(conn, ct);
@@ -210,7 +224,7 @@ public static class HrEndpoints
 
     public static void MapHr(this WebApplication app)
     {
-        var g = app.MapGroup("/api/hr").RequireAuthorization();
+        var g = app.MapGroup("/api/hr").RequireAuthorization("Workforce");
 
         // ---------------- Phòng ban ----------------
         g.MapGet("/departments", async (Database db) =>
@@ -404,6 +418,46 @@ public static class HrEndpoints
             return Results.Ok(await ReadEmployeeDetail(conn, id));
         });
 
+        g.MapGet("/me/documents", async (ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var emp = await EnsureEmployeeForUser(conn, u.Username());
+            var list = new List<object>();
+            await using var r = await conn.Cmd("""
+                SELECT id,doc_type,title,issued_by,issued_date,doc_number,expires_at,approval_status,file_name,mime_type,note
+                FROM hr_documents WHERE employee_id=@e ORDER BY created_at DESC
+                """).With("@e", emp).ExecuteReaderAsync();
+            while (await r.ReadAsync()) list.Add(new {
+                id=r.Guid("id"), docType=r.Str("doc_type"), title=r.Str("title"), issuedBy=r.Str("issued_by"),
+                issuedDate=DateOrNull(r,"issued_date"), docNumber=r.Str("doc_number"), expiresAt=DateOrNull(r,"expires_at"),
+                approvalStatus=r.Str("approval_status"), fileName=r.Str("file_name"), mimeType=r.Str("mime_type"), note=r.Str("note")
+            });
+            return Results.Ok(list);
+        });
+
+        g.MapPost("/me/documents", async (string docType, string title, string? docNumber, string? expiresAt,
+            string? issuedBy, HttpContext ctx, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        {
+            var allowed = new[] { "cccd", "contract", "degree", "certificate", "emergency_contact" };
+            if (!allowed.Contains(docType)) return Results.BadRequest(new { message = "Loại hồ sơ không hợp lệ." });
+            if (string.IsNullOrWhiteSpace(title)) return Results.BadRequest(new { message = "Tên hồ sơ là bắt buộc." });
+            const int max = 15 * 1024 * 1024;
+            await using var ms = new MemoryStream(); var buffer = new byte[81920]; int read;
+            while ((read = await ctx.Request.Body.ReadAsync(buffer)) > 0) { if (ms.Length + read > max) return Results.BadRequest(new { message = "Tệp tối đa 15 MB." }); await ms.WriteAsync(buffer.AsMemory(0, read)); }
+            DateOnly? expiry = DateOnly.TryParse(expiresAt, out var d) ? d : null;
+            await using var conn = await db.OpenAsync();
+            var emp = await EnsureEmployeeForUser(conn, u.Username()); var id = Guid.NewGuid();
+            var fileName = Path.GetFileName(ctx.Request.Headers["X-File-Name"].FirstOrDefault() ?? "");
+            await conn.Cmd("""
+                INSERT INTO hr_documents(id,employee_id,doc_type,title,issued_by,doc_number,expires_at,approval_status,file_name,mime_type,file_content)
+                VALUES(@id,@e,@t,@title,@by,@no,@exp,'pending',@fn,@mime,@content)
+                """).With("@id",id).With("@e",emp).With("@t",docType).With("@title",title.Trim()).With("@by",issuedBy ?? "")
+                .With("@no",docNumber ?? "").With("@exp",(object?)expiry ?? DBNull.Value).With("@fn",fileName)
+                .With("@mime",ctx.Request.ContentType ?? "application/octet-stream").With("@content",ms.Length == 0 ? DBNull.Value : ms.ToArray()).ExecuteNonQueryAsync();
+            await Signal(hub,db,u,"Gửi cập nhật hồ sơ","EmployeeDocument",title);
+            return Results.Ok(new { id, approvalStatus="pending" });
+        });
+
         // Cập nhật ảnh chân dung của CHÍNH người đang đăng nhập (app tự chụp có hướng dẫn).
         // Nhận data URL JPEG (data:image/jpeg;base64,...); gửi chuỗi rỗng/null để xoá ảnh.
         g.MapPut("/me/avatar", async (SaveAvatarReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
@@ -411,15 +465,18 @@ public static class HrEndpoints
             await using var conn = await db.OpenAsync();
             var id = await EnsureEmployeeForUser(conn, u.Username());
             var avatar = string.IsNullOrWhiteSpace(req.Avatar) ? null : req.Avatar;
+            if (avatar is not null && !PayloadLimits.TryDecodeImage(avatar, out _))
+                return Results.BadRequest(new { message = $"Ảnh chân dung phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
             await conn.Cmd("UPDATE hr_employees SET avatar=@a, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                 .With("@a", (object?)avatar ?? DBNull.Value).With("@id", id).ExecuteNonQueryAsync();
             await Signal(hub, db, u, "Cập nhật ảnh chân dung", "Employee", u.Username());
             return Results.NoContent();
         });
 
-        g.MapGet("/employees/{id:guid}", async (Guid id, Database db) =>
+        g.MapGet("/employees/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
+            if (!u.IsHrManager() && !await IsEmployeeOwner(conn, id, u.Username())) return Results.Forbid();
             var detail = await ReadEmployeeDetail(conn, id);
             return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
@@ -519,9 +576,10 @@ public static class HrEndpoints
         });
 
         // ---------------- Hợp đồng ----------------
-        g.MapGet("/employees/{id:guid}/contracts", async (Guid id, Database db) =>
+        g.MapGet("/employees/{id:guid}/contracts", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
+            if (!u.IsHrManager() && !await IsEmployeeOwner(conn, id, u.Username())) return Results.Forbid();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
                 SELECT id, contract_no, contract_type, start_date, end_date, base_salary, allowance, status, note
@@ -626,8 +684,16 @@ public static class HrEndpoints
             if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Period)) return Results.BadRequest(new { message = "Thiếu kỳ lương (yyyy-MM)." });
             await using var conn = await db.OpenAsync();
+            var period = req.Period.Trim();
             var pid = Guid.NewGuid();
-            var net = req.BaseSalary + req.Allowance + req.OvertimePay - req.Deductions;
+
+            // BACKEND làm chủ tiền phạt: req.Deductions = khấu trừ KHÁC (không gồm phạt). Phạt được CAP theo
+            // lương còn lại (không làm âm lương); phần chưa thu tự chuyển sang kỳ sau (theo sổ cái).
+            var available = Math.Max(0m, req.BaseSalary + req.Allowance + req.OvertimePay - req.Deductions);
+            var (penaltyTotal, penaltyItems) = await PenaltyEndpoints.ComputeDeductionsAsync(conn, id, period, available);
+            var totalDeductions = req.Deductions + penaltyTotal;
+            var net = req.BaseSalary + req.Allowance + req.OvertimePay - totalDeductions;
+
             await conn.Cmd("""
                 INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, published)
                 VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @pub)
@@ -635,19 +701,35 @@ public static class HrEndpoints
                     work_days=@wd, overtime_hours=@ot, base_salary=@base, allowance=@allow,
                     overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, published=@pub
                 """)
-                .With("@id", pid).With("@emp", id).With("@period", req.Period.Trim())
+                .With("@id", pid).With("@emp", id).With("@period", period)
                 .With("@wd", req.WorkDays).With("@ot", req.OvertimeHours).With("@base", req.BaseSalary)
-                .With("@allow", req.Allowance).With("@otp", req.OvertimePay).With("@ded", req.Deductions)
+                .With("@allow", req.Allowance).With("@otp", req.OvertimePay).With("@ded", totalDeductions)
                 .With("@net", net).With("@note", req.Note ?? "").With("@pub", req.Published)
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Lập phiếu lương", "Payslip", req.Period);
-            return Results.Ok(new { id = pid });
+
+            // Ghi sổ tiền phạt thực trừ khi phát hành; nháp thì xóa sổ kỳ này (chưa tính là đã thu).
+            if (req.Published)
+                await PenaltyEndpoints.RecordDeductionsAsync(conn, id, period, penaltyItems);
+            else
+                await PenaltyEndpoints.ClearDeductionsForPeriod(conn, id, period);
+
+            await Signal(hub, db, u, "Lập phiếu lương", "Payslip", period);
+            return Results.Ok(new { id = pid, penaltyTotal });
         });
 
         g.MapDelete("/payslips/{pid:guid}", async (Guid pid, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
+
+            // Trước khi xóa: gỡ ghi sổ tiền phạt của kỳ này (coi như chưa thu) để phạt còn nợ được thu lại kỳ sau.
+            Guid emp = default; string period = "";
+            await using (var r = await conn.Cmd("SELECT employee_id, period FROM hr_payslips WHERE id=@id")
+                .With("@id", pid).ExecuteReaderAsync())
+                if (await r.ReadAsync()) { emp = r.Guid("employee_id"); period = r.Str("period"); }
+            if (emp == default) return Results.NotFound();
+            await PenaltyEndpoints.ClearDeductionsForPeriod(conn, emp, period);
+
             var n = await conn.Cmd("DELETE FROM hr_payslips WHERE id=@id").With("@id", pid).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(hub, db, u, "Xóa phiếu lương", "Payslip", pid.ToString());
@@ -655,9 +737,10 @@ public static class HrEndpoints
         });
 
         // ---------------- Số ngày phép ----------------
-        g.MapGet("/employees/{id:guid}/leave-balances", async (Guid id, Database db) =>
+        g.MapGet("/employees/{id:guid}/leave-balances", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
+            if (!u.IsHrManager() && !await IsEmployeeOwner(conn, id, u.Username())) return Results.Forbid();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
                 SELECT id, year, leave_type, total_days, used_days
@@ -694,9 +777,10 @@ public static class HrEndpoints
         });
 
         // ---------------- Bằng cấp / chứng chỉ / khen thưởng ----------------
-        g.MapGet("/employees/{id:guid}/documents", async (Guid id, Database db) =>
+        g.MapGet("/employees/{id:guid}/documents", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
+            if (!u.IsHrManager() && !await IsEmployeeOwner(conn, id, u.Username())) return Results.Forbid();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
                 SELECT id, doc_type, title, issued_by, issued_date, file_url, note
@@ -1638,7 +1722,7 @@ public static class HrEndpoints
     /// phòng của mình; quản lý địa điểm = địa điểm của mình; còn lại = chỉ chính mình.</summary>
     private static async Task<AccessScope> ResolveScopeAsync(NpgsqlConnection conn, ClaimsPrincipal u)
     {
-        if (u.IsAdmin()) return new AccessScope(ScopeKind.All, null, null);
+        if (u.IsHrManager()) return new AccessScope(ScopeKind.All, null, null);
         await using var r = await conn.Cmd(
             "SELECT access_role, department_id, location_id FROM hr_employees WHERE username=@u LIMIT 1")
             .With("@u", u.Username()).ExecuteReaderAsync();
@@ -1652,6 +1736,14 @@ public static class HrEndpoints
             "location_manager" when loc is not null => new AccessScope(ScopeKind.Location, dept, loc),
             _ => new AccessScope(ScopeKind.SelfOnly, dept, loc),
         };
+    }
+
+    private static async Task<bool> IsEmployeeOwner(NpgsqlConnection conn, Guid employeeId, string username)
+    {
+        var owner = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id LIMIT 1")
+            .With("@id", employeeId).ExecuteScalarAsync() as string;
+        return !string.IsNullOrWhiteSpace(owner)
+               && string.Equals(owner, username, StringComparison.OrdinalIgnoreCase);
     }
 
     private static DateOnly? DateOrNull(NpgsqlDataReader r, string col)

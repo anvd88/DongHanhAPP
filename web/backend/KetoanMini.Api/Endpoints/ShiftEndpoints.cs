@@ -304,6 +304,7 @@ public static class ShiftEndpoints
     /// <summary>Một dòng bảng công (một ngày).</summary>
     public sealed record TimesheetDayInfo(
         DateOnly Date, string ShiftName, string HolidayName, string HolidayType,
+        string ShiftStart, string ShiftEnd, string EventType,
         string? CheckIn, string? CheckOut, int LateMinutes, int EarlyMinutes,
         int OvertimeMinutes, double WorkedHours, string Status);
 
@@ -330,6 +331,9 @@ public static class ShiftEndpoints
                 shiftName = d.ShiftName,
                 holidayName = d.HolidayName,
                 holidayType = d.HolidayType,
+                shiftStart = d.ShiftStart,
+                shiftEnd = d.ShiftEnd,
+                eventType = d.EventType,
                 checkIn = d.CheckIn,
                 checkOut = d.CheckOut,
                 lateMinutes = d.LateMinutes,
@@ -407,6 +411,38 @@ public static class ShiftEndpoints
                 holidays[d] = new HolidayInfo("Chủ nhật", "weekly");
         }
 
+        // 4) Các đơn lịch đã duyệt. API trả loại sự kiện tường minh để mobile tô màu đúng,
+        // không phải suy đoán từ chuỗi trạng thái đã bản địa hoá.
+        var calendarEvents = new Dictionary<DateOnly, string>();
+        await using (var r = await conn.Cmd("""
+            SELECT req_type, payload::text AS payload
+            FROM hr_requests
+            WHERE employee_id=@id AND status='Approved'
+              AND req_type IN ('leave','sick','business_trip','overtime')
+              AND created_at < (@to::date + INTERVAL '2 months')
+            """).With("@id", employeeId).With("@to", to).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+            {
+                var type = r.Str("req_type") switch
+                {
+                    "leave" or "sick" => "leave",
+                    "business_trip" => "business_trip",
+                    "overtime" => "overtime",
+                    _ => ""
+                };
+                if (type.Length == 0) continue;
+                var payload = r.Str("payload");
+                var startText = ReadJsonString(payload, type == "leave" ? "fromDate" : "date");
+                if (!DateOnly.TryParse(startText, out var start)) continue;
+                var endText = type == "leave" ? ReadJsonString(payload, "toDate") : startText;
+                if (!DateOnly.TryParse(endText, out var end)) end = start;
+                if (end < start) (start, end) = (end, start);
+                for (var d = start; d <= end; d = d.AddDays(1))
+                    if (d >= from && d <= to) calendarEvents[d] = type;
+            }
+        }
+
         var days = new List<TimesheetDayInfo>();
         int workedDays = 0, lateDays = 0, earlyDays = 0, absentDays = 0;
         int totalLate = 0, totalEarly = 0, totalOt = 0;
@@ -415,12 +451,14 @@ public static class ShiftEndpoints
         var allDates = new SortedSet<DateOnly>(logs.Keys);
         foreach (var d in shifts.Keys) allDates.Add(d);
         foreach (var d in holidays.Keys) allDates.Add(d);
+        foreach (var d in calendarEvents.Keys) allDates.Add(d);
 
         foreach (var d in allDates)
         {
             shifts.TryGetValue(d, out var shift);
             var hasLog = logs.TryGetValue(d, out var log);
             holidays.TryGetValue(d, out var holiday);
+            calendarEvents.TryGetValue(d, out var eventType);
             string status;
             int lateMin = 0, earlyMin = 0, otMin = 0;
             double workedH = 0;
@@ -467,8 +505,14 @@ public static class ShiftEndpoints
             }
             else
             {
-                status = "Vắng"; // có phân ca nhưng không có log
-                absentDays++;
+                status = eventType switch
+                {
+                    "leave" => "Nghỉ phép",
+                    "business_trip" => "Công tác",
+                    "overtime" => "Tăng ca đã duyệt",
+                    _ => "Vắng"
+                };
+                if (eventType is not ("leave" or "business_trip")) absentDays++;
             }
 
             if (!hasLog && holiday is not null)
@@ -482,6 +526,9 @@ public static class ShiftEndpoints
                 shift?.Name ?? "",
                 holiday?.Name ?? "",
                 holiday?.Type ?? "",
+                shift?.Start.ToString("HH:mm") ?? "",
+                shift?.End.ToString("HH:mm") ?? "",
+                eventType ?? "",
                 checkIn,
                 checkOut,
                 lateMin,
@@ -499,6 +546,16 @@ public static class ShiftEndpoints
 
     private sealed record ShiftInfo(string Name, TimeOnly Start, TimeOnly End, int Break, int Grace, decimal StandardHours);
     private sealed record HolidayInfo(string Name, string Type);
+
+    private static string ReadJsonString(string json, string name)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty(name, out var value) ? value.ToString() : "";
+        }
+        catch { return ""; }
+    }
 
     private static string NormalizeHolidayType(string? type)
         => string.Equals(type, "public", StringComparison.OrdinalIgnoreCase) ? "public" : "company";

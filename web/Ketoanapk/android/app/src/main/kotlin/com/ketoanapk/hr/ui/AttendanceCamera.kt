@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.os.SystemClock
 import android.util.Base64
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
@@ -95,6 +97,8 @@ import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.ketoanapk.hr.data.CapturedFrame
 import com.ketoanapk.hr.data.ChamCongResult
+import com.ketoanapk.hr.data.AttendancePolicy
+import com.ketoanapk.hr.data.OfflineAttendanceRecord
 import com.ketoanapk.hr.ui.theme.Danger
 import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning
@@ -134,6 +138,11 @@ fun AttendanceScreen(vm: HrViewModel) {
     val server = vm.attendanceServer
     val capture = vm.attendanceCapture
 
+    // Đang trong luồng chấm công (căn khung, quét, chờ xác nhận...) → Back huỷ luồng về trạng thái nghỉ
+    // trước, chưa rời tab. Lớp camera phủ toàn màn hình được dựng ở HrApp nhưng màn này vẫn nằm dưới nên
+    // handler ở đây vẫn nhận được Back.
+    BackHandler(enabled = capture != AttendanceCapture.Idle) { vm.resetCapture() }
+
     var hasCamera by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
@@ -142,8 +151,14 @@ fun AttendanceScreen(vm: HrViewModel) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hasCamera = granted
     }
+    // Dùng chung màn quét CameraX + ML Kit với các chỗ quét khác (auto-zoom, chạm lấy nét, đèn pin).
+    // Chế độ Raw vì chấm công đã có endpoint riêng, không đi qua /api/qr/resolve.
+    val qrLauncher = rememberLauncherForActivityResult(QrCaptureContract()) { result ->
+        result.value?.takeIf { it.isNotBlank() }?.let(vm::submitQrAttendance)
+    }
     // Quyền vị trí (tùy chọn) cho chấm công ngoại tuyến: xin lần đầu rồi bắt đầu quét dù cấp hay không.
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        vm.refreshAttendanceContext()
         vm.startOfflineCapture()
     }
     val startOffline: () -> Unit = {
@@ -182,16 +197,23 @@ fun AttendanceScreen(vm: HrViewModel) {
             result = capture.result,
             onRescan = vm::rescanAttendance,
             onClose = vm::resetCapture,
+            onExplain = { vm.startAttendanceExplanation(capture.result) },
         )
 
         else -> AttendanceLanding(
             server = server,
             hasCamera = hasCamera,
             pending = vm.attendancePending,
+            policy = vm.attendancePolicy,
+            location = vm.attendanceLocation,
+            history = vm.attendanceHistory,
             onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
             onRetryServer = vm::checkAttendanceServer,
             onStart = vm::startCapture,
             onStartOffline = startOffline,
+            onScanQr = {
+                qrLauncher.launch(QrCaptureRequest(QrCaptureMode.Raw, prompt = "Quét mã QR chấm công"))
+            },
         )
     }
 }
@@ -264,10 +286,14 @@ private fun AttendanceLanding(
     server: AttendanceServerState,
     hasCamera: Boolean,
     pending: Int,
+    policy: AttendancePolicy?,
+    location: android.location.Location?,
+    history: List<OfflineAttendanceRecord>,
     onRequestPermission: () -> Unit,
     onRetryServer: () -> Unit,
     onStart: () -> Unit,
     onStartOffline: () -> Unit,
+    onScanQr: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -277,7 +303,9 @@ private fun AttendanceLanding(
     ) {
         PageHead("Chấm công", "Xác thực khuôn mặt kiểu sinh trắc học")
         ServerStatusCard(server, onRetry = onRetryServer)
+        AttendanceLocationCard(policy, location)
         if (pending > 0) PendingOfflineChip(pending)
+        if (history.isNotEmpty()) OfflineHistorySummary(history)
 
         Box(
             modifier = Modifier
@@ -353,6 +381,49 @@ private fun AttendanceLanding(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+        }
+        if (hasCamera) {
+            OutlinedButton(onClick = onScanQr, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Quét QR dự phòng / công trình")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttendanceLocationCard(policy: AttendancePolicy?, location: android.location.Location?) {
+    val distance = if (policy?.geofenceLat != null && policy.geofenceLng != null && location != null) {
+        val out = FloatArray(1)
+        android.location.Location.distanceBetween(location.latitude, location.longitude, policy.geofenceLat, policy.geofenceLng, out)
+        out[0].toDouble()
+    } else null
+    val inside = distance != null && policy != null && distance <= policy.geofenceRadiusM
+    HrCard {
+        Text("Địa điểm chấm công", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Text(
+            when {
+                location == null -> "Chưa có vị trí. Cấp quyền vị trí khi chấm ngoại tuyến để kiểm tra phạm vi."
+                distance == null -> "Độ chính xác GPS ±${location.accuracy.toInt()} m · Đơn vị chưa cấu hình geofence."
+                inside -> "Trong phạm vi hợp lệ · cách tâm ${distance.toInt()} m · chính xác ±${location.accuracy.toInt()} m"
+                else -> "Ngoài geofence ${distance.toInt()} m (bán kính ${policy?.geofenceRadiusM?.toInt()} m) · lượt chấm sẽ cần duyệt"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (distance != null && !inside) Danger else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun OfflineHistorySummary(history: List<OfflineAttendanceRecord>) {
+    HrCard {
+        Text("Lịch sử chấm công ngoại tuyến", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        history.take(3).forEach { item ->
+            val label = when (item.status.lowercase()) { "approved" -> "Đã duyệt"; "rejected" -> "Bị từ chối"; else -> "Chờ duyệt" }
+            Text("$label · ${item.loai} · ${formatIsoDateTime(item.occurredAt)}${item.reviewNote.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}",
+                style = MaterialTheme.typography.bodySmall,
+                color = when (item.status.lowercase()) { "approved" -> Success; "rejected" -> Danger; else -> Warning })
         }
     }
 }
@@ -532,7 +603,7 @@ private fun ConfirmScreen(
 
 /** Màn hình KẾT QUẢ RIÊNG sau khi ghi công (hoặc lỗi nhận diện): nền ứng dụng + nút Quét lại / Đóng. */
 @Composable
-private fun ResultScreen(result: ChamCongResult, onRescan: () -> Unit, onClose: () -> Unit) {
+private fun ResultScreen(result: ChamCongResult, onRescan: () -> Unit, onClose: () -> Unit, onExplain: () -> Unit) {
     val (tone, title, icon) = attendanceVisual(result.status)
     val color = when (tone) {
         Tone.Success -> Success
@@ -592,6 +663,9 @@ private fun ResultScreen(result: ChamCongResult, onRescan: () -> Unit, onClose: 
             Text("Quét lại", fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(10.dp))
+        if (!result.status.equals("ok", true) && !result.status.equals("offline", true)) {
+            OutlinedButton(onClick = onExplain, modifier = Modifier.fillMaxWidth()) { Text("Gửi giải trình kèm ảnh/tài liệu") }
+        }
         OutlinedButton(
             onClick = onClose,
             modifier = Modifier

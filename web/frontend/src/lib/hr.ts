@@ -277,11 +277,13 @@ export interface PenaltyProgressPeriod {
   installmentNo: number;
 }
 
-/** Tiến trình khấu trừ phạt tiền (chỉ có ở phạt "fine" còn hiệu lực). */
+/** Tiến trình khấu trừ phạt tiền (chỉ có ở phạt "fine" chưa miễn). */
 export interface PenaltyProgress {
   total: number;
   deducted: number;
   remaining: number;
+  /** Đã thu đủ (remaining ≤ 0) → đã tất toán. */
+  settled: boolean;
   totalMonths: number;
   paidMonths: number;
   remainingMonths: number;
@@ -480,7 +482,10 @@ export const penaltyTypeColor = (t: string) =>
   ({ reminder: "muted", warning: "warning", fine: "danger", suspension: "danger", other: "muted" } as Record<string, string>)[t] ?? "muted";
 
 export const penaltyStatusLabel = (s: string) =>
-  ({ Active: "Còn hiệu lực", Waived: "Đã miễn" } as Record<string, string>)[s] ?? s;
+  ({ Active: "Còn hiệu lực", Waived: "Đã miễn", Settled: "Đã tất toán" } as Record<string, string>)[s] ?? s;
+
+export const penaltyStatusColor = (s: string) =>
+  ({ Active: "warning", Waived: "muted", Settled: "success" } as Record<string, string>)[s] ?? "muted";
 
 export const refundStatusLabel = (s: string) =>
   ({ PendingAccounting: "Chờ kế toán duyệt", Approved: "Đã duyệt", Paid: "Đã chi trả", Rejected: "Từ chối" } as Record<string, string>)[s] ?? s;
@@ -490,6 +495,87 @@ export const refundStatusColor = (s: string) =>
 
 export const payoutMethodLabel = (m: string) =>
   ({ payroll: "Cộng vào lương", cash: "Chi tiền mặt" } as Record<string, string>)[m] ?? "";
+
+/** Loại chi (danh mục quản trị tự thêm/sửa được). */
+export interface PayoutCategory {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  isActive: boolean;
+  /** Danh mục lõi (lương, hoàn tiền phạt) — hệ thống tự sinh phiếu nên không xóa/tắt được. */
+  isSystem: boolean;
+  sortOrder: number;
+}
+
+/** Phiếu chi: kế toán lập → người nhận quét QR ký nhận → kế toán duyệt chi. */
+export interface PayoutVoucher {
+  id: string;
+  voucherNo: string;
+  categoryId?: string | null;
+  categoryName: string;
+  categoryCode: string;
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  amount: number;
+  sourceKind: string; // manual | refund | payslip
+  sourceNo: string;
+  reason: string;
+  note: string;
+  status: string; // AwaitingScan | Confirmed | Paid | Cancelled
+  createdBy: string;
+  confirmedAt?: string | null;
+  approvedBy: string;
+  paidAt?: string | null;
+  cancelReason: string;
+  createdAt: string;
+  /** Chỉ kế toán mới nhận được (server ẩn với người khác) — nội dung để vẽ mã QR. */
+  qrValue?: string | null;
+  qrExpiresAt?: string | null;
+}
+
+/** Khoản hoàn tiền phạt đang chờ chi — kế toán chọn là ra đúng số tiền phải chi. */
+export interface PayoutRefundSource {
+  id: string;
+  refundNo: string;
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  penaltyNo: string;
+  appealRequestNo: string;
+  amount: number;
+  reason: string;
+  createdAt: string;
+}
+
+export interface PayoutSummary {
+  month: string;
+  totalPaid: number;
+  totalPending: number;
+  byCategory: {
+    categoryId?: string | null;
+    categoryName: string;
+    count: number;
+    paidAmount: number;
+    pendingAmount: number;
+  }[];
+}
+
+export const voucherStatusLabel = (s: string) =>
+  ({
+    AwaitingScan: "Chờ người nhận quét QR",
+    Confirmed: "Đã ký nhận · chờ duyệt chi",
+    Paid: "Đã chi",
+    Cancelled: "Đã hủy",
+  } as Record<string, string>)[s] ?? s;
+
+export const voucherStatusColor = (s: string) =>
+  ({ AwaitingScan: "warning", Confirmed: "info", Paid: "success", Cancelled: "muted" } as Record<string, string>)[s] ??
+  "muted";
+
+export const voucherSourceLabel = (k: string) =>
+  ({ manual: "Nhập tay", refund: "Hoàn tiền phạt", payslip: "Phiếu lương" } as Record<string, string>)[k] ?? k;
 
 export const docTypeLabel = (t: string) =>
   ({ degree: "Bằng cấp", certificate: "Chứng chỉ", reward: "Khen thưởng" } as Record<string, string>)[t] ?? t;

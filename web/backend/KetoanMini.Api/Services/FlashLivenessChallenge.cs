@@ -121,7 +121,7 @@ public sealed class FlashLivenessChallenge
         IReadOnlyList<(int Slot, FaceSkinColor Color)> samples, bool enforce, bool consume)
     {
         // Ghi mọi lần đo vào vòng đệm (kể cả các trường hợp cho qua) để panel hiển thị hiệu chỉnh.
-        Result Log(Result r) { AddMetric(user, r); return r; }
+        Result Log(Result r) { AddMetric(user ?? string.Empty, r); return r; }
 
         // Sai/hết hạn/nhầm user: không có cơ sở đối chiếu ⇒ không kết luận (Silent-Face vẫn gác).
         if (string.IsNullOrWhiteSpace(challengeId)) return Log(Pass("missing"));

@@ -15,6 +15,7 @@ import com.ketoanapk.hr.R
 object AppNotifier {
     const val CHANNEL_ID = "hr_general"
     const val EXTRA_TARGET = "notif_target"
+    const val EXTRA_ENTITY_ID = "notif_entity_id"
 
     /** Tạo kênh thông báo (bắt buộc từ Android 8). Gọi được nhiều lần, không tạo trùng. */
     fun ensureChannel(context: Context) {
@@ -41,6 +42,7 @@ object AppNotifier {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_TARGET, notification.target)
+            putExtra(EXTRA_ENTITY_ID, notification.entityId)
         }
         val pendingIntent = PendingIntent.getActivity(
             context,

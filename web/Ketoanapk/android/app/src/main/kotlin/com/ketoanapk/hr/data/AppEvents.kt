@@ -16,4 +16,12 @@ object AppEvents {
     fun signalDataChanged() {
         dataChanged.tryEmit(Unit)
     }
+
+    // Buộc đăng xuất NGAY (tài khoản vừa đăng nhập ở thiết bị khác → 1 máy/tài khoản). Kèm lý do hiện ở
+    // màn đăng nhập. RealtimeClient phát khi nhận "kicked"; HrViewModel lắng nghe rồi đăng xuất tức thì.
+    val forceLogout = MutableSharedFlow<String>(extraBufferCapacity = 4)
+
+    fun signalForceLogout(reason: String) {
+        forceLogout.tryEmit(reason)
+    }
 }

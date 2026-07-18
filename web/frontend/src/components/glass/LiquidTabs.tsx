@@ -1,4 +1,5 @@
-import { motion } from "motion/react";
+import { useId, useState } from "react";
+import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import { cn } from "../../lib/cn";
 
 export interface LiquidTab {
@@ -23,35 +24,56 @@ export function LiquidTabs({
   onChange: (key: string) => void;
   className?: string;
 }) {
+  const layoutGroupId = useId();
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const indicatorKey = previewKey ?? value;
+
   return (
-    <div role="tablist" aria-orientation="horizontal" className={cn("gc-tabs gc-capsule", className)}>
-      {tabs.map((tab) => {
-        const active = tab.key === value;
-        return (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            data-active={active}
-            className="gc-tab"
-            onClick={() => onChange(tab.key)}
-          >
-            {active && (
-              <motion.span
-                layoutId="gc-active-tab"
-                className="gc-tab-indicator"
-                transition={tabSpring}
-                aria-hidden="true"
+    <MotionConfig reducedMotion="never">
+      <LayoutGroup id={layoutGroupId}>
+        <div
+          role="tablist"
+          aria-orientation="horizontal"
+          className={cn("gc-tabs gc-capsule", className)}
+          onPointerLeave={() => setPreviewKey(null)}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setPreviewKey(null);
+          }}
+        >
+          {tabs.map((tab) => {
+            const active = tab.key === value;
+            const showsIndicator = tab.key === indicatorKey;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                data-active={active}
+                className="gc-tab"
+                onPointerEnter={(event) => {
+                  if (event.pointerType !== "touch") setPreviewKey(tab.key);
+                }}
+                onFocus={() => setPreviewKey(tab.key)}
+                onClick={() => onChange(tab.key)}
               >
-                <span className="gc-tab-indicator-shine" />
-                <span className="gc-tab-indicator-glow" />
-              </motion.span>
-            )}
-            <span className="relative z-[1]">{tab.label}</span>
-          </button>
-        );
-      })}
-    </div>
+                {showsIndicator && (
+                  <motion.span
+                    layoutId="gc-active-tab"
+                    className="gc-tab-indicator"
+                    transition={tabSpring}
+                    aria-hidden="true"
+                  >
+                    <span className="gc-tab-indicator-shine" />
+                    <span className="gc-tab-indicator-glow" />
+                  </motion.span>
+                )}
+                <span className="relative z-[1]">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </LayoutGroup>
+    </MotionConfig>
   );
 }

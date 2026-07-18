@@ -1,0 +1,42 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 3 * * 1'   # hằng tuần
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Phân tích (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'csharp', 'javascript-typescript' ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Khởi tạo CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          language: ${{ matrix.language }}
+
+      # C# cần biên dịch để CodeQL phân tích; không có .sln nên build thẳng project API.
+      - if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - if: matrix.language == 'csharp'
+        run: dotnet build web/backend/KetoanMini.Api/KetoanMini.Api.csproj -c Release
+
+      - name: Phân tích CodeQL
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

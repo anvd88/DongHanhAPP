@@ -51,10 +51,7 @@ import com.ketoanapk.hr.ui.theme.InfoBlue
 import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning as WarningColor
 
-/**
- * Màn theo dõi đơn của nhân sự (CHỈ ĐỌC). App không phê duyệt nữa — việc duyệt thực hiện trên bản web.
- * Người quản lý/admin xem nhanh các đơn đang chờ mình, bấm vào để xem chi tiết + tiến trình.
- */
+/** Màn xử lý đơn của nhân sự trực tiếp trên Android. */
 @Composable
 fun StaffRequestsScreen(vm: HrViewModel) {
     val detail = vm.requestDetailState
@@ -63,7 +60,8 @@ fun StaffRequestsScreen(vm: HrViewModel) {
         RequestDetailView(
             state = detail,
             onBack = vm::closeRequestDetail,
-            onCancel = {}, // đơn của nhân sự khác: chỉ đọc, không có thao tác
+            onCancel = {},
+            onDecide = vm::decideRequest,
         )
         return
     }
@@ -75,36 +73,11 @@ fun StaffRequestsScreen(vm: HrViewModel) {
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHeader(Icons.Filled.Inbox, "Đơn chờ duyệt", "${pending.size} đơn của nhân sự đang chờ", Tone.Warning) }
-        item { WebApprovalNotice() }
         if (state.loading && state.inbox.isEmpty()) item { LoadingBlock() }
         if (state.inbox.isEmpty()) {
             item { EmptyState("Không có đơn chờ", state.error ?: "Hiện không có đơn nào của nhân sự chờ bạn xử lý.") }
         } else {
             items(state.inbox, key = { it.id }) { req -> StaffRequestCard(req) { vm.openStaffDetail(req.id) } }
-        }
-    }
-}
-
-/** Nhắc rằng việc phê duyệt được thực hiện trên bản web (app chỉ để xem/theo dõi). */
-@Composable
-private fun WebApprovalNotice() {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.primaryContainer,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(Icons.Filled.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(
-                "Xem nhanh trạng thái tại đây. Việc phê duyệt đơn được thực hiện trên bản web.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
         }
     }
 }
@@ -143,7 +116,6 @@ fun PenaltyScreen(user: HrUser, state: HomeUiState, onAppeal: (Penalty) -> Unit)
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHeader(Icons.Filled.Gavel, "Kỷ luật", if (user.isAdmin) "Toàn công ty" else "Của tôi", Tone.Warning) }
         if (state.loading && state.penalties.isEmpty()) item { LoadingBlock() }
         if (state.penalties.isEmpty()) {
             item { EmptyState("Không có quyết định phạt", state.error ?: "Danh sách hiện đang trống.") }
@@ -271,7 +243,6 @@ fun PayrollScreen(state: HomeUiState) {
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHeader(Icons.Filled.Payments, "Bảng lương", "Mức lương nhân viên", Tone.Success) }
         if (state.loading && state.salaries.isEmpty()) item { LoadingBlock() }
         if (state.salaries.isEmpty()) {
             item { EmptyState("Không có dữ liệu lương", state.error ?: "Chưa có cấu trúc lương hoặc không có quyền xem.") }

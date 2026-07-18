@@ -73,7 +73,7 @@ public static class GiaCongEndpoints
 
     public static void MapGiaCong(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/giacong").RequireAuthorization();
+        var g = app.MapGroup("/api/giacong").RequireAuthorization("Accounting");
 
         g.MapGet("/", async (Database db, string? filter, string? search) =>
         {
@@ -309,10 +309,10 @@ public static class GiaCongEndpoints
                 "GiaCong", phieuId.ToString(), $"{(id is null ? "Tạo" : "Cập nhật")} phiếu gia công (web).");
             return Results.Ok(new { id = phieuId });
         }
-        catch (NpgsqlException ex)
+        catch (NpgsqlException)
         {
             await tx.RollbackAsync();
-            return Results.Json(new { message = "Lỗi lưu phiếu gia công: " + ex.Message }, statusCode: 400);
+            return Results.Json(new { message = "Không lưu được phiếu gia công (dữ liệu không hợp lệ hoặc trùng lặp)." }, statusCode: 400);
         }
     }
 

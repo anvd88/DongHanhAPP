@@ -3,6 +3,7 @@ using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
+using Microsoft.AspNetCore.RateLimiting;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -120,6 +121,15 @@ public static class ChamCongEndpoints
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS ix_cham_cong_offline_status ON cham_cong_offline (status, synced_at DESC);
+
+            CREATE TABLE IF NOT EXISTS cham_cong_qr_sites (
+                id uuid PRIMARY KEY,
+                name varchar(160) NOT NULL,
+                project_name varchar(160) NOT NULL DEFAULT '',
+                qr_token varchar(120) NOT NULL UNIQUE,
+                active boolean NOT NULL DEFAULT TRUE,
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """).ExecuteNonQueryAsync();
 
         // AdaFace R50 emits 512-float embeddings. SFace embeddings from older versions are incompatible,
@@ -165,7 +175,7 @@ public static class ChamCongEndpoints
 
     public static void MapChamCong(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/chamcong").RequireAuthorization();
+        var g = app.MapGroup("/api/chamcong").RequireAuthorization().RequireRateLimiting("attendance");
 
         // Cho frontend/kiosk biết tên engine + ngưỡng khớp.
         // Ẩn danh: màn hình kiosk (ngoài trang đăng nhập) cần đọc trạng thái này.
@@ -187,6 +197,44 @@ public static class ChamCongEndpoints
             return Results.Ok(new MotionConfigDto(
                 await GetSettingBoolAsync(conn, CfgMotionEnabled, DefaultMotionEnabled),
                 await GetSettingBoolAsync(conn, CfgMotionEnforce, DefaultMotionEnforce)));
+        });
+
+        // QR dự phòng do HR/công trình cấp. Token là chuỗi ngẫu nhiên, có thể thu hồi bằng cách tắt địa điểm.
+        g.MapPost("/qr", async (QrAttendanceRequest req, ClaimsPrincipal u, Database db) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Token)) return Results.BadRequest(new { message = "Mã QR trống." });
+            await using var conn = await db.OpenAsync();
+            string site = "", project = "";
+            await using (var r = await conn.Cmd("SELECT name, project_name FROM cham_cong_qr_sites WHERE qr_token=@t AND active=TRUE")
+                .With("@t", req.Token.Trim()).ExecuteReaderAsync())
+            {
+                if (!await r.ReadAsync()) return Results.BadRequest(new { message = "Mã QR không hợp lệ hoặc đã bị thu hồi." });
+                site = r.Str("name"); project = r.Str("project_name");
+            }
+            var username = u.Username();
+            var fullName = await conn.Cmd("SELECT full_name FROM hr_employees WHERE username=@u LIMIT 1")
+                .With("@u", username).ExecuteScalarAsync() as string ?? username;
+            var last = await conn.Cmd("SELECT loai FROM cham_cong_log WHERE username=@u AND (occurred_at AT TIME ZONE @tz)::date=(CURRENT_TIMESTAMP AT TIME ZONE @tz)::date ORDER BY occurred_at DESC LIMIT 1")
+                .With("@u", username).With("@tz", "Asia/Ho_Chi_Minh").ExecuteScalarAsync() as string;
+            var loai = string.Equals(last, "Vào", StringComparison.OrdinalIgnoreCase) ? "Ra" : "Vào";
+            var note = $"QR dự phòng · {site}" + (project.Length > 0 ? $" · Công trình: {project}" : "");
+            await conn.Cmd("INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu) VALUES (@u,@n,@l,1,CURRENT_TIMESTAMP,@note)")
+                .With("@u", username).With("@n", fullName).With("@l", loai).With("@note", note).ExecuteNonQueryAsync();
+            await db.RecordAudit(username, "Chấm công QR", "ChamCong", site, note);
+            return Results.Ok(new ChamCongResult("ok", true, username, fullName, 1, loai, DateTime.UtcNow, 1,
+                $"Đã chấm công tại {site}" + (project.Length > 0 ? $" ({project})" : "") + ".", null));
+        });
+
+        g.MapPost("/qr-sites", async (CreateQrSiteRequest req, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.IsAdmin()) return Results.Forbid();
+            if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { message = "Tên địa điểm là bắt buộc." });
+            var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+            await using var conn = await db.OpenAsync();
+            var id = Guid.NewGuid();
+            await conn.Cmd("INSERT INTO cham_cong_qr_sites (id,name,project_name,qr_token) VALUES (@id,@n,@p,@t)")
+                .With("@id", id).With("@n", req.Name.Trim()).With("@p", req.ProjectName?.Trim() ?? "").With("@t", token).ExecuteNonQueryAsync();
+            return Results.Ok(new { id, token });
         });
 
         g.MapPut("/motion-config", async (MotionConfigDto cfg, ClaimsPrincipal u, Database db) =>
@@ -297,6 +345,10 @@ public static class ChamCongEndpoints
             if (string.IsNullOrWhiteSpace(me)) return Results.Unauthorized();
             if (req?.Poses is null || req.Poses.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh khuôn mặt." });
+            if (req.Poses.Sum(p => p?.Images?.Count ?? 0) > PayloadLimits.MaxImagesPerEnrollRequest)
+                return Results.BadRequest(new { message = $"Tối đa {PayloadLimits.MaxImagesPerEnrollRequest} ảnh mỗi yêu cầu." });
+            if (req.Poses.SelectMany(p => p?.Images ?? []).Any(img => !PayloadLimits.TryDecodeImage(img, out _)))
+                return Results.BadRequest(new { message = $"Mỗi ảnh phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
 
             await using var conn = await db.OpenAsync();
 
@@ -412,8 +464,11 @@ public static class ChamCongEndpoints
 
         // Chấm công: chụp ảnh -> liveness -> trích vector -> so khớp -> ghi Vào/Ra.
         // Ẩn danh: cho phép chấm công ở kiosk màn hình đăng nhập (không cần tài khoản).
-        g.MapPost("/nhandien", async (NhanDienRequest req, Database db, IFaceEngine engine, FieldCipher cipher) =>
+        g.MapPost("/nhandien", async (NhanDienRequest req, Database db, IFaceEngine engine, FieldCipher cipher, HttpContext http) =>
         {
+            // Ẩn danh (kiosk, chưa đăng nhập) ⇒ KHÔNG trả username/họ tên đầy đủ để tránh thu thập danh
+            // tính. Đăng nhập rồi (chấm cho chính mình) ⇒ trả đủ thông tin như trước.
+            var anon = http.User.Identity?.IsAuthenticated != true;
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
                 return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
 
@@ -447,9 +502,14 @@ public static class ChamCongEndpoints
                 return Results.Ok(new NhanDienResult(false, null, null, best, null, null,
                     "Không nhận diện được. Khuôn mặt chưa được đăng ký hoặc ảnh chưa rõ."));
 
-            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser);
+            // Tên hiển thị cho phản hồi + thông điệp: che khi ẩn danh (message của policy có kèm tên).
+            var display = anon ? MaskName(bestName ?? bestUser) : (bestName ?? bestUser);
+            var outUser = anon ? null : bestUser;
+            var outName = anon ? display : bestName;
+
+            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, display);
             if (!decision.ShouldRecord)
-                return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, decision.Loai, decision.ExistingAt,
+                return Results.Ok(new NhanDienResult(true, outUser, outName, best, decision.Loai, decision.ExistingAt,
                     decision.Message));
 
             var loai = decision.Loai;
@@ -470,9 +530,9 @@ public static class ChamCongEndpoints
             try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, best, cipher); }
             catch { /* bỏ qua, chấm công vẫn thành công */ }
 
-            return Results.Ok(new NhanDienResult(true, bestUser, bestName, best, loai, DateTime.UtcNow,
+            return Results.Ok(new NhanDienResult(true, outUser, outName, best, loai, DateTime.UtcNow,
                 decision.Message));
-        }).AllowAnonymous();
+        }).AllowAnonymous().AddEndpointFilter<KioskAccessFilter>();
 
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
@@ -481,6 +541,10 @@ public static class ChamCongEndpoints
         {
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
+            if (req.Images.Count > PayloadLimits.MaxImagesPerRequest)
+                return Results.BadRequest(new { message = $"Tối đa {PayloadLimits.MaxImagesPerRequest} ảnh mỗi yêu cầu." });
+            if (req.Images.Any(img => !PayloadLimits.TryDecodeImage(img, out _)))
+                return Results.BadRequest(new { message = $"Mỗi ảnh phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
 
             // CHẶN CỨNG chế độ "chỉ chấm cho chính mình": xác định TỪ TOKEN phía server, KHÔNG tin cờ
             // client (req.SelfOnly). Mọi tài khoản ĐÃ đăng nhập không phải admin đều bắt buộc chỉ chấm
@@ -488,6 +552,8 @@ public static class ChamCongEndpoints
             // miễn (chấm hộ mọi người). Kiosk ẩn danh (không có token) → currentUser rỗng → so khớp mở.
             var currentUser = u.Username();
             var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.IsAdmin();
+            // Ẩn danh (kiosk, chưa đăng nhập) ⇒ che username/họ tên trong phản hồi để tránh thu thập danh tính.
+            var anon = string.IsNullOrWhiteSpace(currentUser);
 
             // 1) Lấy mọi khung CÓ MẶT, xếp theo chất lượng giảm dần (nét, đủ sáng, mặt to & chính diện).
             var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
@@ -652,7 +718,11 @@ public static class ChamCongEndpoints
             // Đồng bộ ngoại tuyến: dùng giờ chấm thật (req.OccurredAt) cho cả quyết định Vào/Ra lẫn log.
             var occurredAtUtc = req.OccurredAt?.ToUniversalTime();
             var isOffline = occurredAtUtc is not null;
-            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, bestName ?? bestUser, atUtc: occurredAtUtc);
+            // Tên hiển thị cho phản hồi + thông điệp policy: che khi ẩn danh. DB/audit vẫn ghi tên thật.
+            var display = anon ? MaskName(bestName ?? bestUser) : (bestName ?? bestUser);
+            var outUser = anon ? null : bestUser;
+            var outName = anon ? display : bestName;
+            var decision = await AttendancePolicy.DecideAsync(conn, bestUser, display, atUtc: occurredAtUtc);
 
             // Chế độ XEM TRƯỚC: đã nhận diện chắc chắn + đã qua liveness, nhưng CHƯA ghi nhật ký.
             // Trả về ai + Vào/Ra dự kiến + giờ dự kiến để app hiện form xác nhận. App bấm "Xác nhận"
@@ -660,7 +730,7 @@ public static class ChamCongEndpoints
             if (req.PreviewOnly)
             {
                 var previewAt = decision.ShouldRecord ? (occurredAtUtc ?? DateTime.UtcNow) : decision.ExistingAt;
-                return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, decision.Loai,
+                return Results.Ok(new ChamCongResult("ok", true, outUser, outName, bestSim, decision.Loai,
                     previewAt, best.Score, decision.Message, null));
             }
 
@@ -672,12 +742,12 @@ public static class ChamCongEndpoints
                     bestSim, best.Score, occurredAtUtc!.Value, req.GpsLat, req.GpsLng);
                 await db.RecordAudit(bestUser, "Chấm công ngoại tuyến (chờ duyệt)", "ChamCong", bestUser,
                     $"Chờ duyệt · độ khớp {bestSim:0.000} · giờ chấm {occurredAtUtc:yyyy-MM-dd HH:mm} (UTC).");
-                return Results.Ok(new ChamCongResult("pending", true, bestUser, bestName, bestSim, decision.Loai,
+                return Results.Ok(new ChamCongResult("pending", true, outUser, outName, bestSim, decision.Loai,
                     occurredAtUtc, best.Score, "Đã đồng bộ — chờ quản lý duyệt.", null));
             }
 
             if (!decision.ShouldRecord)
-                return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, decision.Loai,
+                return Results.Ok(new ChamCongResult("ok", true, outUser, outName, bestSim, decision.Loai,
                     decision.ExistingAt, best.Score, decision.Message, null));
 
             var loai = decision.Loai;
@@ -696,9 +766,9 @@ public static class ChamCongEndpoints
             try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, bestSim, cipher); }
             catch { /* tự học là phụ trợ, lỗi không được làm hỏng chấm công */ }
 
-            return Results.Ok(new ChamCongResult("ok", true, bestUser, bestName, bestSim, loai,
+            return Results.Ok(new ChamCongResult("ok", true, outUser, outName, bestSim, loai,
                 occurredAtUtc ?? DateTime.UtcNow, best.Score, decision.Message, null));
-        }).AllowAnonymous();
+        }).AllowAnonymous().AddEndpointFilter<KioskAccessFilter>();
 
         // Nhật ký chấm công (lọc theo ngày yyyy-MM-dd và/hoặc từ khóa).
         g.MapGet("/log", async (Database db, string? date, string? search) =>
@@ -725,6 +795,40 @@ public static class ChamCongEndpoints
 
         // ── Chấm công ngoại tuyến chờ duyệt (Admin) ─────────────────────────────
         // Danh sách bản chờ duyệt (mặc định status=pending; truyền status=all để xem cả đã xử lý).
+        g.MapGet("/offline/mine", async (ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var list = new List<ChamCongOfflineDto>();
+            await using var r = await conn.Cmd("""
+                SELECT id, username, full_name, loai, similarity, quality, occurred_at, synced_at,
+                       backdate_minutes, client_ip, on_company_lan, gps_lat, gps_lng, distance_m,
+                       in_geofence, flags, status, reviewed_by, reviewed_at, review_note
+                FROM cham_cong_offline WHERE username=@u ORDER BY synced_at DESC LIMIT 100
+                """).With("@u", u.Username()).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new ChamCongOfflineDto(
+                    r.Long("id"), r.Str("username"), r.Str("full_name"), r.Str("loai"),
+                    r.GetDouble(r.GetOrdinal("similarity")), r.GetDouble(r.GetOrdinal("quality")),
+                    r.Dt("occurred_at"), r.Dt("synced_at"), r.Int("backdate_minutes"), r.Str("client_ip"),
+                    r.Bool("on_company_lan"),
+                    r.IsDBNull(r.GetOrdinal("gps_lat")) ? null : r.GetDouble(r.GetOrdinal("gps_lat")),
+                    r.IsDBNull(r.GetOrdinal("gps_lng")) ? null : r.GetDouble(r.GetOrdinal("gps_lng")),
+                    r.IsDBNull(r.GetOrdinal("distance_m")) ? null : r.GetDouble(r.GetOrdinal("distance_m")),
+                    r.IsDBNull(r.GetOrdinal("in_geofence")) ? null : r.Bool("in_geofence"),
+                    r.Str("flags"), r.Str("status"), r.Str("reviewed_by"), r.DtNull("reviewed_at"), r.Str("review_note")));
+            return Results.Ok(list);
+        });
+
+        g.MapGet("/offline-policy", async (Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            return Results.Ok(new OfflineConfigDto(
+                await GetSettingDoubleAsync(conn, CfgGeofenceLat),
+                await GetSettingDoubleAsync(conn, CfgGeofenceLng),
+                await GetSettingDoubleAsync(conn, CfgGeofenceRadius) ?? DefaultGeofenceRadiusM,
+                (int)(await GetSettingDoubleAsync(conn, CfgMaxBackdate) ?? DefaultMaxBackdateMinutes)));
+        });
+
         g.MapGet("/offline", async (Database db, string? status) =>
         {
             await using var conn = await db.OpenAsync();
@@ -989,12 +1093,22 @@ public static class ChamCongEndpoints
 
     /// <summary>Giải mã ảnh base64 (chấp nhận cả tiền tố data URL "data:image/...;base64,").</summary>
     private static bool TryDecodeImage(string? b64, out byte[] bytes)
+        => PayloadLimits.TryDecodeImage(b64, out bytes);
+
+    /// <summary>
+    /// Che họ tên khi trả về cho lời gọi ẨN DANH (kiosk): giữ tên gọi (từ cuối) để người chấm nhận ra
+    /// mình, che các từ họ/đệm còn lại thành chữ cái đầu. "Nguyễn Văn An" → "N. V. An". Đủ phản hồi mà
+    /// không lộ danh tính đầy đủ cho kẻ dò khuôn mặt.
+    /// </summary>
+    private static string MaskName(string? name)
     {
-        bytes = [];
-        if (string.IsNullOrWhiteSpace(b64)) return false;
-        var comma = b64.IndexOf(',');
-        if (b64.StartsWith("data:") && comma >= 0) b64 = b64[(comma + 1)..];
-        try { bytes = Convert.FromBase64String(b64); return bytes.Length > 0; }
-        catch { return false; }
+        var n = (name ?? "").Trim();
+        if (n.Length == 0) return "•••";
+        var parts = n.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1)
+            return parts[0].Length <= 2 ? parts[0] : parts[0][..1] + new string('•', parts[0].Length - 1);
+        var given = parts[^1];
+        var initials = string.Join(" ", parts[..^1].Select(p => char.ToUpperInvariant(p[0]) + "."));
+        return $"{initials} {given}";
     }
 }

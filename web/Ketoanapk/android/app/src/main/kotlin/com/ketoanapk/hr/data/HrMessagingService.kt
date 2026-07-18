@@ -23,23 +23,35 @@ class HrMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         val repo = HrRepository(applicationContext)
-        scope.launch {
-            if (repo.pushNotificationsEnabled()) {
-                runCatching { repo.registerPushToken(token) }
-            }
-        }
+        // Đăng ký token BẤT KỂ công tắc thông báo — để server luôn gọi được tới máy này (cuộc gọi cần
+        // token dù người dùng tắt thông báo nghiệp vụ). Chưa đăng nhập thì API tự lỗi, bỏ qua an toàn.
+        scope.launch { runCatching { repo.registerPushToken(token) } }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
-        val pushEnabled = runBlocking { HrRepository(applicationContext).pushNotificationsEnabled() }
-        if (!pushEnabled) return
-
         val data = message.data
+
+        // CUỘC GỌI đến/hủy: LUÔN xử lý (đổ chuông toàn màn hình) — KHÔNG phụ thuộc công tắc "thông báo
+        // push" của người dùng, vì cuộc gọi quan trọng và phải reo được kể cả khi họ tắt thông báo
+        // nghiệp vụ. (Trước đây return sớm ở đây khiến nhiều nhân viên không nhận được cuộc gọi.)
+        when (data["type"]) {
+            "call_invite" -> { handleCallInvite(data); return }
+            "call_cancel" -> { handleCallCancel(data); return }
+        }
+
         val title = data["title"] ?: message.notification?.title ?: "Thông báo"
         val body = data["body"] ?: message.notification?.body ?: ""
         val target = data["notif_target"]?.takeIf { it.isNotBlank() }
         val notifId = data["notif_id"].orEmpty()
         val kind = kindOf(notifId, target)
+
+        // Tắt thông báo chỉ tắt phần HIỂN THỊ, không được tắt tín hiệu đồng bộ dữ liệu. Nếu không,
+        // tin chat/voice đã tới FCM nhưng màn đang mở vẫn đứng im khi SignalR vừa reconnect.
+        val pushEnabled = runBlocking { HrRepository(applicationContext).pushNotificationsEnabled() }
+        if (!pushEnabled) {
+            if (kind != NotificationKind.System) AppEvents.signalDataChanged()
+            return
+        }
 
         // Chạy đồng bộ để chắc chắn kho "chữ ký" đã lưu trước khi trả về (đảm bảo chống trùng).
         val created = runBlocking {
@@ -52,13 +64,38 @@ class HrMessagingService : FirebaseMessagingService() {
         if (kind != NotificationKind.System) AppEvents.signalDataChanged()
     }
 
+    /** Lời mời gọi đến: dựng phiên "đang đổ chuông" + reo toàn màn hình (nếu app không ở tiền cảnh). */
+    private fun handleCallInvite(data: Map<String, String>) {
+        val callId = data["call_id"].orEmpty()
+        // "caller" = username người gọi (KHÔNG dùng "from" vì đó là khóa bị FCM cấm trong data payload).
+        val from = data["caller"].orEmpty()
+        if (callId.isBlank() || from.isBlank()) return
+        val name = data["caller_name"].orEmpty()
+        val media = data["media"].orEmpty()
+        CallManager.init(applicationContext) // đảm bảo có context (cold-start từ push)
+        // Dựng phiên để lớp phủ CallHost hiện màn nghe máy khi app mở lên (idempotent theo callId).
+        CallManager.ingestIncomingFromPush(callId, from, name, media)
+        // App đang mở → SignalR + overlay lo hết, khỏi reo trùng bằng thông báo hệ thống.
+        if (!AppForeground.isForeground) {
+            CallNotifier.showIncoming(applicationContext, callId, from, name, media)
+        }
+    }
+
+    /** Người gọi hủy trước khi bắt máy → tắt màn đổ chuông + thông báo. */
+    private fun handleCallCancel(data: Map<String, String>) {
+        data["call_id"]?.takeIf { it.isNotBlank() }?.let { CallManager.cancelIncomingFromPush(it) }
+        CallNotifier.dismiss(applicationContext)
+    }
+
     private fun kindOf(notifId: String, target: String?): NotificationKind = when {
         notifId.startsWith("req:") -> NotificationKind.Request
         notifId.startsWith("inbox:") -> NotificationKind.Approval
         notifId.startsWith("pen:") -> NotificationKind.Penalty
+        notifId.startsWith("chat:") -> NotificationKind.Chat
         target == "Requests" -> NotificationKind.Request
         target == "Approval" -> NotificationKind.Approval
         target == "Penalty" -> NotificationKind.Penalty
+        target == "Chat" -> NotificationKind.Chat
         else -> NotificationKind.System
     }
 }

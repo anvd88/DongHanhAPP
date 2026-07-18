@@ -4,8 +4,8 @@ using KetoanMini.Api.Endpoints;
 namespace KetoanMini.Api.Services;
 
 /// <summary>
-/// Dọn các tệp "giữ tạm" (store-and-forward cho gửi tệp qua LAN khi người nhận offline) khỏi đĩa:
-/// xóa tệp đã quá hạn (blob_expires_at) và tệp "mồ côi" không còn cờ has_blob. Chạy mỗi giờ.
+/// Dọn blob file thường đã quá hạn và file mồ côi. Voice, ảnh và video là nội dung bền vững của
+/// tin nhắn nên không bị sweep theo TTL; chỉ thao tác gỡ tin mới xóa chúng. Chạy mỗi giờ.
 /// </summary>
 public sealed class LanFileCleanupService(Database db, ILogger<LanFileCleanupService> logger) : BackgroundService
 {
@@ -24,14 +24,29 @@ public sealed class LanFileCleanupService(Database db, ILogger<LanFileCleanupSer
     {
         await using var conn = await db.OpenAsync(ct);
 
-        // 1) Các tin đã quá hạn nhưng vẫn còn cờ has_blob → xóa tệp + bỏ cờ.
+        // Metadata voice chưa upload xong không bao giờ được phát realtime. Nếu tiến trình/client chết,
+        // dọn cứng sau 2 giờ để không tạo bong bóng rỗng hoặc phình DB.
+        await conn.Cmd(
+            @"DELETE FROM web_chat_messages
+              WHERE kind = 'voice' AND has_blob = FALSE AND is_removed = FALSE
+                AND created_at < CURRENT_TIMESTAMP - INTERVAL '2 hours'")
+            .ExecuteNonQueryAsync(ct);
+
+        // 1) Các FILE THƯỜNG đã quá hạn nhưng vẫn còn cờ has_blob → xóa tệp + bỏ cờ.
+        // Lọc thêm bằng policy để bảo vệ voice, ảnh/video và bản ghi ghi-am-* từ APK cũ.
         var expired = new List<long>();
         await using (var r = await conn.Cmd(
-            @"SELECT id FROM web_chat_messages
+            @"SELECT id, kind, file_name, file_mime FROM web_chat_messages
               WHERE has_blob = TRUE AND blob_expires_at IS NOT NULL AND blob_expires_at < CURRENT_TIMESTAMP")
             .ExecuteReaderAsync(ct))
         {
-            while (await r.ReadAsync(ct)) expired.Add(r.GetInt64(0));
+            while (await r.ReadAsync(ct))
+            {
+                var kind = r.IsDBNull(1) ? "" : r.GetString(1);
+                var name = r.IsDBNull(2) ? "" : r.GetString(2);
+                var mime = r.IsDBNull(3) ? "" : r.GetString(3);
+                if (!ChatAttachmentPolicy.IsPersistentAttachment(kind, name, mime)) expired.Add(r.GetInt64(0));
+            }
         }
         foreach (var id in expired)
         {
@@ -51,6 +66,17 @@ public sealed class LanFileCleanupService(Database db, ILogger<LanFileCleanupSer
             {
                 try { File.Delete(f); } catch { /* đang khóa → để lần sau */ }
             }
+        }
+
+        // 3) Tiến trình chết giữa upload có thể để lại file staging; final .bin không bị ảnh hưởng.
+        foreach (var f in Directory.EnumerateFiles(ChatEndpoints.BlobDir(), "*.upload"))
+        {
+            if (ct.IsCancellationRequested) break;
+            try
+            {
+                if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.Subtract(TimeSpan.FromHours(2))) File.Delete(f);
+            }
+            catch { /* đang upload/đang khóa → để lần sau */ }
         }
     }
 }

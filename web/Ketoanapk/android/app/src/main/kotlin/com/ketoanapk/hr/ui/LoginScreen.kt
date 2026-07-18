@@ -67,7 +67,7 @@ import com.ketoanapk.hr.ui.theme.BrandGradientBottom
 import com.ketoanapk.hr.ui.theme.BrandGradientTop
 import com.ketoanapk.hr.ui.theme.Success
 
-private enum class ForgotPhase { Form, Scanning, Submitting, Success }
+private enum class ForgotPhase { Form, Submitting, Success }
 
 @Composable
 fun LoginScreen(
@@ -76,7 +76,7 @@ fun LoginScreen(
     resetLoading: Boolean,
     rememberedUsername: String,
     onLogin: (String, String, Boolean) -> Unit,
-    onResetPasswordWithFace: (String, String, List<String>, (Boolean, String?) -> Unit) -> Unit,
+    onResetPasswordWithCode: (String, String, String, (Boolean, String?) -> Unit) -> Unit,
 ) {
     var username by rememberSaveable(rememberedUsername) { mutableStateOf(rememberedUsername) }
     var password by rememberSaveable { mutableStateOf("") }
@@ -204,7 +204,7 @@ fun LoginScreen(
                 username = username,
                 onUsernameChange = { username = it },
                 resetLoading = resetLoading,
-                onResetPasswordWithFace = onResetPasswordWithFace,
+                onResetPasswordWithCode = onResetPasswordWithCode,
                 onClose = { forgotOpen = false },
             )
         }
@@ -216,41 +216,38 @@ private fun ForgotPasswordOverlay(
     username: String,
     onUsernameChange: (String) -> Unit,
     resetLoading: Boolean,
-    onResetPasswordWithFace: (String, String, List<String>, (Boolean, String?) -> Unit) -> Unit,
+    onResetPasswordWithCode: (String, String, String, (Boolean, String?) -> Unit) -> Unit,
     onClose: () -> Unit,
 ) {
-    val context = LocalContext.current
     var phase by rememberSaveable { mutableStateOf(ForgotPhase.Form) }
+    var code by rememberSaveable { mutableStateOf("") }
     var newPassword by rememberSaveable { mutableStateOf("") }
     var confirmPassword by rememberSaveable { mutableStateOf("") }
     var showNewPassword by remember { mutableStateOf(false) }
     var showConfirmPassword by remember { mutableStateOf(false) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
-    var hasCamera by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
-        )
-    }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        hasCamera = granted
-        if (granted) phase = ForgotPhase.Scanning
-        else localError = "Ứng dụng cần quyền camera để xác thực khuôn mặt."
-    }
 
-    fun validate(): Boolean {
-        val u = username.trim()
+    fun submit() {
         localError = when {
-            u.isBlank() -> "Vui lòng nhập tên đăng nhập."
+            username.trim().isBlank() -> "Vui lòng nhập tên đăng nhập."
+            code.trim().isBlank() -> "Vui lòng nhập mã khôi phục."
             newPassword.length < 6 -> "Mật khẩu mới cần ít nhất 6 ký tự."
             newPassword != confirmPassword -> "Mật khẩu nhập lại chưa khớp."
             else -> null
         }
-        return localError == null
-    }
-
-    fun startScan() {
-        if (!validate()) return
-        if (hasCamera) phase = ForgotPhase.Scanning else permissionLauncher.launch(Manifest.permission.CAMERA)
+        if (localError != null) return
+        phase = ForgotPhase.Submitting
+        onResetPasswordWithCode(username.trim(), code, newPassword) { ok, message ->
+            if (ok) {
+                phase = ForgotPhase.Success
+                newPassword = ""
+                confirmPassword = ""
+                code = ""
+            } else {
+                phase = ForgotPhase.Form
+                localError = message ?: "Không đặt lại được mật khẩu. Vui lòng thử lại."
+            }
+        }
     }
 
     fun close() {
@@ -258,30 +255,11 @@ private fun ForgotPasswordOverlay(
     }
 
     BackHandler(enabled = phase != ForgotPhase.Submitting && !resetLoading) {
-        if (phase == ForgotPhase.Scanning) phase = ForgotPhase.Form else onClose()
+        onClose()
     }
 
-    when (phase) {
-        ForgotPhase.Scanning -> FullScreenCameraScan(
-            onCaptured = { frames ->
-                phase = ForgotPhase.Submitting
-                localError = null
-                // Đăng nhập/đặt lại mật khẩu không chạy active-flash → chỉ lấy ảnh, bỏ nhãn slot.
-                onResetPasswordWithFace(username.trim(), newPassword, frames.map { it.image }) { ok, message ->
-                    if (ok) {
-                        phase = ForgotPhase.Success
-                        newPassword = ""
-                        confirmPassword = ""
-                    } else {
-                        phase = ForgotPhase.Form
-                        localError = message ?: "Không đặt lại được mật khẩu. Vui lòng thử lại."
-                    }
-                }
-            },
-            onCancel = { phase = ForgotPhase.Form },
-        )
-
-        else -> Box(
+    run {
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xF20E0F12))
@@ -304,7 +282,7 @@ private fun ForgotPasswordOverlay(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Icon(
-                        if (phase == ForgotPhase.Success) Icons.Filled.CheckCircle else Icons.Filled.Face,
+                        if (phase == ForgotPhase.Success) Icons.Filled.CheckCircle else Icons.Filled.Lock,
                         contentDescription = null,
                         tint = if (phase == ForgotPhase.Success) Success else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(44.dp),
@@ -321,7 +299,7 @@ private fun ForgotPasswordOverlay(
                         ForgotPhase.Submitting -> {
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                             Text(
-                                "Đang xác thực khuôn mặt và cập nhật mật khẩu…",
+                                "Đang cập nhật mật khẩu…",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
@@ -347,11 +325,27 @@ private fun ForgotPasswordOverlay(
                         }
 
                         else -> {
+                            Text(
+                                "Nhập mã khôi phục do quản trị viên cấp để đặt lại mật khẩu.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
                             OutlinedTextField(
                                 value = username,
                                 onValueChange = onUsernameChange,
                                 label = { Text("Tên đăng nhập") },
                                 leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            )
+                            OutlinedTextField(
+                                value = code,
+                                onValueChange = { code = it },
+                                label = { Text("Mã khôi phục") },
+                                leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
                                 singleLine = true,
                                 shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier.fillMaxWidth(),
@@ -375,16 +369,14 @@ private fun ForgotPasswordOverlay(
                             )
                             localError?.let { ErrorText(it) }
                             Button(
-                                onClick = { startScan() },
+                                onClick = { submit() },
                                 enabled = !resetLoading,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(50.dp),
                                 shape = RoundedCornerShape(14.dp),
                             ) {
-                                Icon(Icons.Filled.Face, contentDescription = null, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Quét mặt để đổi mật khẩu", fontWeight = FontWeight.Bold)
+                                Text("Đặt lại mật khẩu", fontWeight = FontWeight.Bold)
                             }
                         }
                     }

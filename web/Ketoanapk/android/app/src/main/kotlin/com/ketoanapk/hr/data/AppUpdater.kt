@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import android.net.Uri
+import android.text.format.Formatter
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
@@ -38,6 +40,21 @@ object AppUpdater {
     fun canInstallPackages(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
 
+    /** Bản cập nhật LỚN cần hỏi trước khi tải bằng dữ liệu di động (20 MB). */
+    const val LARGE_UPDATE_BYTES = 20L * 1024 * 1024
+
+    /**
+     * Mạng hiện tại có TÍNH PHÍ dữ liệu không (mạng di động, hoặc Wi-Fi bị đánh dấu tốn phí). Dùng để hỏi
+     * người dùng trước khi tải bản cập nhật lớn — Wi-Fi thường (không tính phí) thì tải thẳng không hỏi.
+     */
+    fun isMeteredConnection(context: Context): Boolean {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        return cm.isActiveNetworkMetered
+    }
+
+    /** Kích thước dễ đọc theo chuẩn hệ thống, ví dụ "135 MB". */
+    fun formatSize(context: Context, bytes: Long): String = Formatter.formatShortFileSize(context, bytes)
+
     fun openUnknownSourcesSettings(context: Context) {
         val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
@@ -47,23 +64,30 @@ object AppUpdater {
         context.startActivity(intent)
     }
 
+    /** Thư mục riêng chứa APK cập nhật (cacheDir/apk) — đúng phạm vi <cache-path path="apk/"> của FileProvider. */
+    private fun apkDir(context: Context): File =
+        File(context.cacheDir, "apk").apply { mkdirs() }
+
     /**
-     * File đích trong cacheDir (đã khai báo <cache-path> trong file_paths.xml cho FileProvider).
+     * File đích trong cacheDir/apk (đã khai báo <cache-path path="apk/"> trong file_paths.xml cho FileProvider).
      *
-     * Dọn SẠCH mọi file .apk cũ còn sót trong cacheDir trước khi tải bản mới. Nếu không, mỗi lần
-     * cập nhật tải về một file mang tên khác (tên do admin đặt, thường kèm phiên bản) nên các APK cũ
-     * (mỗi cái vài chục MB) tích lại mãi → dung lượng ứng dụng phình dần sau nhiều lần cập nhật.
+     * Dọn SẠCH mọi file .apk cũ còn sót trước khi tải bản mới. Nếu không, mỗi lần cập nhật tải về một
+     * file mang tên khác (tên do admin đặt, thường kèm phiên bản) nên các APK cũ (mỗi cái vài chục MB)
+     * tích lại mãi → dung lượng ứng dụng phình dần sau nhiều lần cập nhật.
      */
     fun apkCacheFile(context: Context, fileName: String): File {
         purgeCachedApks(context)
         val safe = fileName.substringAfterLast('/').substringAfterLast('\\')
             .takeIf { it.endsWith(".apk", ignoreCase = true) } ?: "ketoan-hr-update.apk"
-        return File(context.cacheDir, safe).also { if (it.exists()) it.delete() }
+        return File(apkDir(context), safe).also { if (it.exists()) it.delete() }
     }
 
-    /** Xóa mọi APK cũ trong cacheDir (bản cập nhật lần trước đã cài xong, không còn cần giữ). */
+    /** Xóa mọi APK cũ (bản cập nhật lần trước đã cài xong, không còn cần giữ) — cả thư mục apk lẫn cacheDir cũ. */
     fun purgeCachedApks(context: Context) {
         runCatching {
+            apkDir(context).listFiles { f -> f.isFile && f.name.endsWith(".apk", ignoreCase = true) }
+                ?.forEach { it.delete() }
+            // Dọn cả APK do bản cũ tải thẳng vào cacheDir (trước khi chuyển sang thư mục apk).
             context.cacheDir.listFiles { f -> f.isFile && f.name.endsWith(".apk", ignoreCase = true) }
                 ?.forEach { it.delete() }
         }

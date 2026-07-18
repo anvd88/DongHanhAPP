@@ -93,19 +93,21 @@ data class ChatConversationUi(
 data class ChatInboxUiState(
     val query: String = "",
     val selectedFilter: ChatFilter = ChatFilter.All,
-    val conversations: List<ChatConversationUi> = sampleChatConversations(),
+    val conversations: List<ChatConversationUi> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
 )
 
 data class ChatContactUi(
-    val id: String = "am",
-    val name: String = "Nguyễn Anh Minh",
-    val initials: String = "AM",
-    val status: String = "Đang hoạt động",
+    val id: String = "",
+    val name: String = "",
+    val initials: String = "?",
+    val status: String = "Ngoại tuyến",
     val badge: String = "Nhân viên",
-    val department: String = "Kế toán tổng hợp",
-    val phone: String = "090 123 4567",
-    val email: String = "minh@congty.vn",
-    val role: String = "Nhân viên",
+    val department: String = "",
+    val phone: String = "",
+    val email: String = "",
+    val role: String = "",
 )
 
 sealed interface ChatMessageUi {
@@ -145,7 +147,11 @@ sealed interface ChatMessageUi {
 data class ChatThreadUiState(
     val contact: ChatContactUi = ChatContactUi(),
     val input: String = "",
-    val messages: List<ChatMessageUi> = sampleChatMessages(),
+    val messages: List<ChatMessageUi> = emptyList(),
+    val conversationId: String? = null,
+    val loading: Boolean = false,
+    val sending: Boolean = false,
+    val error: String? = null,
 )
 
 data class ChatSharedItemUi(
@@ -157,7 +163,7 @@ data class ChatSharedItemUi(
 
 data class ChatProfileUiState(
     val contact: ChatContactUi = ChatContactUi(),
-    val sharedItems: List<ChatSharedItemUi> = sampleSharedItems(),
+    val sharedItems: List<ChatSharedItemUi> = emptyList(),
     val muted: Boolean = false,
     val pinned: Boolean = false,
 )
@@ -331,9 +337,6 @@ private fun ChatInboxHeader(onNewConversation: () -> Unit) {
             color = ChatTextPrimary,
             modifier = Modifier.weight(1f),
         )
-        IconButton(onClick = { }) {
-            Icon(Icons.Filled.Search, contentDescription = "Tìm kiếm", tint = ChatTextPrimary)
-        }
         IconButton(onClick = onNewConversation) {
             Icon(Icons.Filled.Add, contentDescription = "Tạo hội thoại", tint = ChatTextPrimary)
         }
@@ -1045,94 +1048,6 @@ private fun ChatAvatar(
         }
     }
 }
-
-fun sampleChatConversations(): List<ChatConversationUi> = listOf(
-    ChatConversationUi(
-        id = "am",
-        name = "Nguyễn Anh Minh",
-        preview = "Mai nộp bảng công giúp em nhé",
-        time = "16:32",
-        initials = "AM",
-        online = true,
-        unread = 2,
-        pinned = true,
-    ),
-    ChatConversationUi(
-        id = "hr",
-        name = "Phòng Nhân sự",
-        preview = "Bảng công tháng này đã cập nhật",
-        time = "15:08",
-        initials = "HR",
-        unread = 5,
-        group = true,
-    ),
-    ChatConversationUi(
-        id = "accounting",
-        name = "Kế toán",
-        preview = "Có file mới cần kiểm tra",
-        time = "Hôm qua",
-        initials = "KT",
-        group = true,
-        muted = true,
-    ),
-    ChatConversationUi(
-        id = "attendance",
-        name = "Tổ Chấm công",
-        preview = "Nhắc xác nhận ca làm hôm nay",
-        time = "Thứ 3",
-        initials = "CC",
-        unread = 1,
-        group = true,
-    ),
-    ChatConversationUi(
-        id = "news",
-        name = "Thông báo công ty",
-        preview = "Lịch nghỉ và sự kiện nội bộ",
-        time = "12/07",
-        initials = "TB",
-        group = true,
-    ),
-)
-
-fun sampleChatMessages(): List<ChatMessageUi> = listOf(
-    ChatMessageUi.ExpiredFile(
-        id = "file-1",
-        title = "BANGCONG_T07.xlsx",
-        meta = "XLSX · 248 KB",
-        status = "File đã hết hạn",
-        time = "09:25",
-        mine = true,
-    ),
-    ChatMessageUi.DateChip(
-        id = "date-1",
-        label = "17:13 07/01/2026",
-    ),
-    ChatMessageUi.ExpiredImage(
-        id = "image-1",
-        label = "Ảnh đã hết hạn",
-        time = "17:13",
-        mine = false,
-    ),
-    ChatMessageUi.TextBubble(
-        id = "text-1",
-        text = "Anh gửi em file bảng công nhé.",
-        time = "17:15",
-        mine = false,
-    ),
-    ChatMessageUi.TextBubble(
-        id = "text-2",
-        text = "Em nhận được rồi ạ.",
-        time = "17:16",
-        mine = true,
-        reaction = "👍 2",
-    ),
-)
-
-fun sampleSharedItems(): List<ChatSharedItemUi> = listOf(
-    ChatSharedItemUi("file-1", "BANGCONG_T07.xlsx", "XLSX · 248 KB", Icons.AutoMirrored.Filled.InsertDriveFile),
-    ChatSharedItemUi("photo-1", "Ảnh chấm công", "3 ảnh", Icons.Filled.Image),
-    ChatSharedItemUi("folder-1", "Tài liệu nhân sự", "5 file", Icons.Filled.Folder),
-)
 
 private val ChatAccent = Color(0xFFC62828)
 private val ChatBackground = Color(0xFFF5F6F8)
