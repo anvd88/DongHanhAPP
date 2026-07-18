@@ -66,12 +66,15 @@ public sealed class InfrastructureTests
     [Fact]
     public void RealtimeChanges_UseStatementLevelDatabasePubSub()
     {
-        var sql = DatabaseChangePublisher.TriggerSql;
+        var sql = DatabaseChangePublisher.FunctionSql;
 
         Assert.Contains("pg_notify('ketoanmini_changes'", sql, StringComparison.Ordinal);
-        Assert.Contains("FOR EACH STATEMENT", sql, StringComparison.Ordinal);
-        Assert.Contains("ARRAY['data', 'hr']", sql, StringComparison.Ordinal);
+        // Vòng quét checksum toàn bảng 1.5 giây đã bị thay hẳn bằng LISTEN/NOTIFY.
         Assert.DoesNotContain("COUNT(*) FROM documents", sql, StringComparison.Ordinal);
+
+        // Một hành động nghiệp vụ có thể chạm nhiều dòng; trigger mức STATEMENT chỉ phát một lần.
+        var chamCong = Array.Find(DatabaseChangePublisher.Watched, w => w.Table == "cham_cong_log");
+        Assert.Equal(["data", "hr"], chamCong.Scopes);
     }
 
     [Fact]

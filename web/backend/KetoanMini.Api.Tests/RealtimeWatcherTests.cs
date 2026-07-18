@@ -132,6 +132,46 @@ public sealed class RealtimeWatcherTests
     }
 
     /// <summary>
+    /// Bảng nằm trong danh sách theo dõi nhưng chưa tồn tại phải được BÁO TÊN ra, không im lặng bỏ qua.
+    /// Đây từng là lỗ hổng: khối DO trong SQL lặng lẽ CONTINUE, nên một bảng tạo hụt đồng nghĩa màn
+    /// hình đó vĩnh viễn không tự cập nhật mà không có dấu vết nào để lần.
+    /// </summary>
+    [Fact]
+    public async Task EnsureAsync_ReportsWatchedTablesThatDoNotExist()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Database>();
+
+        (string, string[])[] watched =
+        [
+            ("customers", ["data"]),                      // có thật → phải cài được trigger
+            ("bang_khong_ton_tai_de_kiem_thu", ["hr"]),   // không có → phải bị nêu tên
+        ];
+
+        var skipped = await DatabaseChangePublisher.EnsureAsync(db, watched);
+
+        Assert.Contains("bang_khong_ton_tai_de_kiem_thu", skipped);
+        Assert.DoesNotContain("customers", skipped);
+    }
+
+    /// <summary>
+    /// Lược đồ THẬT phải phủ trọn danh sách theo dõi: không bảng nào bị bỏ qua. Test này đỏ khi ai đó
+    /// thêm bảng vào Watched mà gõ sai tên, hoặc quên tạo bảng trong lược đồ.
+    /// </summary>
+    [Fact]
+    public async Task EveryWatchedTable_ExistsInTheRealSchema()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Database>();
+
+        var skipped = await DatabaseChangePublisher.EnsureAsync(db);
+
+        Assert.True(skipped.Count == 0,
+            "Bảng có trong danh sách theo dõi realtime nhưng KHÔNG có trong lược đồ (gõ sai tên, hay " +
+            "quên tạo bảng?): " + string.Join(", ", skipped));
+    }
+
+    /// <summary>
     /// Gộp nhịp KHÔNG được nuốt tín hiệu. Đây là điểm chết người của phần hiện diện online: nhịp tim
     /// 45 giây/người là thứ duy nhất kéo màn hình "ai đang online" cập nhật, nên nếu một nhịp rơi vào
     /// cửa sổ gộp rồi bị bỏ luôn thì danh sách đứng im — người đã tắt máy vẫn hiện đang online.

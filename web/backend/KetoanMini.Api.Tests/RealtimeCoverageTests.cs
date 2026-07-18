@@ -73,10 +73,7 @@ public sealed class RealtimeCoverageTests
     }
 
     private static HashSet<string> TablesWithTrigger()
-    {
-        var matches = Regex.Matches(DatabaseChangePublisher.TriggerSql, @"\('([a-z_][a-z0-9_]*)',\s*ARRAY\[");
-        return new HashSet<string>(matches.Select(m => m.Groups[1].Value), StringComparer.Ordinal);
-    }
+        => new(DatabaseChangePublisher.Watched.Select(w => w.Table), StringComparer.Ordinal);
 
     [Fact]
     public void EveryWrittenTable_PublishesRealtimeOrIsExplicitlyExempt()

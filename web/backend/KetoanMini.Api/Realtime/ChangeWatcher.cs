@@ -42,9 +42,20 @@ public sealed class ChangeWatcher(
             {
                 if (!triggersReady)
                 {
-                    await DatabaseChangePublisher.EnsureAsync(db, stoppingToken);
+                    var skipped = await DatabaseChangePublisher.EnsureAsync(db, stoppingToken);
                     triggersReady = true;
                     logger.LogInformation("Realtime database Pub/Sub triggers are ready.");
+
+                    // Bảng có trong danh sách theo dõi nhưng CHƯA tồn tại thì bị bỏ qua. Không dừng
+                    // hệ thống (một module tắt không được kéo sập realtime của module khác), nhưng
+                    // phải kêu to: nếu im lặng thì màn hình của những bảng đó vĩnh viễn không tự cập
+                    // nhật mà không ai biết. Thường là do thứ tự khởi động: EnsureTables của module
+                    // chạy SAU khi trigger được cài, hoặc lần tạo bảng đó đã lỗi.
+                    if (skipped.Count > 0)
+                        logger.LogWarning(
+                            "Realtime KHÔNG theo dõi được {Count} bảng vì chưa tồn tại: {Tables}. " +
+                            "Màn hình liên quan sẽ không tự làm mới cho tới lần khởi động sau khi bảng " +
+                            "đã được tạo.", skipped.Count, string.Join(", ", skipped));
                 }
 
                 await ListenAsync(stoppingToken);
