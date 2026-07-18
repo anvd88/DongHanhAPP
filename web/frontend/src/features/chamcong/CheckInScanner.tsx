@@ -212,11 +212,9 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>, selfOnly = fals
         // Mất mạng: đã xếp hàng, coi như xong lượt này (server sẽ nhận diện khi đồng bộ).
         setPhase("success");
         setHint(res.message);
-        stop();
       } else if (res.matched && res.status === "ok") {
         setPhase("success");
         setHint(`${res.fullName || res.username || "Nhân viên"} đã chấm công`);
-        stop();
       } else {
         setPhase("warning");
         setHint(res.guidance || res.message);
@@ -227,6 +225,13 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>, selfOnly = fals
       setResult(null);
     } finally {
       runningRef.current = false;
+      // TẮT CAMERA ở MỌI đường kết thúc, không riêng lúc thành công. Trước đây chỉ nhánh thành công
+      // mới gọi stop(), nên máy kiosk đặt ở cửa chỉ cần quét hụt một lần (hết giờ ngắm, không gom được
+      // khung, lỗi mạng) là camera cứ thế bật cho tới khi có người đi qua bấm lại — có thể hàng giờ
+      // chĩa vào hành lang.
+      // Đặt ở finally chứ không rải từng nhánh: thêm nhánh kết thúc mới sau này cũng không thể quên.
+      // Bấm "Thử lại" vẫn chạy bình thường vì run() tự mở lại camera khi thấy chưa bật.
+      stop();
     }
   }, [active, start, stop, captureBurst, framingRef, aimAndCapture, setHold, selfOnly]);
 
