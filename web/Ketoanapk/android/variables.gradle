@@ -9,6 +9,9 @@ ext {
     androidxFragmentVersion = '1.8.9'
     coreSplashScreenVersion = '1.2.0'
     androidxWebkitVersion = '1.14.0'
+    // CameraX dùng CHUNG cho mọi màn có camera (chấm công khuôn mặt, đăng ký khuôn mặt,
+    // chụp chân dung, quét QR). Nâng cấp ở đúng một chỗ này để cả hệ thống đi cùng bản.
+    cameraxVersion = '1.6.1'
     junitVersion = '4.13.2'
     androidxJunitVersion = '1.3.0'
     androidxEspressoCoreVersion = '3.7.0'

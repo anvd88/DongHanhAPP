@@ -700,7 +700,21 @@ public static class AuthEndpoints
 
             await conn.Cmd("UPDATE app_users SET password_hash = @ph WHERE username = @u AND is_deleted = FALSE")
                 .With("@ph", PasswordHasher.Hash(newPass)).With("@u", username).ExecuteNonQueryAsync();
-            await db.RecordAudit(username, "Đổi mật khẩu", "User", username, "Đổi mật khẩu (web).");
+
+            // Đổi mật khẩu phải đá được kẻ đang giữ token cũ ra. Token sống tới 365 ngày nên nếu không
+            // thu hồi thì người bị lộ mật khẩu có đổi cũng vô ích — kẻ gian vẫn dùng tiếp token đã lấy được.
+            // NHƯNG chỉ thu hồi các thiết bị KHÁC: phiên đang thao tác (sid) được giữ nguyên để người
+            // vừa đổi mật khẩu không bị văng ra giữa chừng — liền mạch cho nhân viên, vẫn chặn được kẻ gian.
+            var currentSid = principal.FindFirst("sid")?.Value ?? "";
+            var kicked = await conn.Cmd(
+                @"UPDATE user_sessions
+                     SET revoked = TRUE, revoked_at = CURRENT_TIMESTAMP, revoked_by = @u,
+                         is_active = FALSE, ended_at = CURRENT_TIMESTAMP, end_reason = 'Đổi mật khẩu'
+                   WHERE username = @u AND revoked = FALSE AND session_token <> @sid")
+                .With("@u", username).With("@sid", currentSid).ExecuteNonQueryAsync();
+
+            await db.RecordAudit(username, "Đổi mật khẩu", "User", username,
+                $"Đổi mật khẩu (web). Thu hồi {kicked} thiết bị khác, giữ thiết bị hiện tại.");
             return Results.NoContent();
         }).RequireAuthorization();
 

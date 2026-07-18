@@ -1,64 +1,123 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Màn quét QR chạy trên CameraX (thay cụm Camera1 của zxing). PreviewView dùng FILL_CENTER +
-  PERFORMANCE để khớp đúng cách QrLoginCaptureActivity quy đổi toạ độ ML Kit sang toạ độ màn hình.
+  Camera preview stays edge-to-edge. Interactive controls receive system-bar/cutout insets in
+  QrLoginCaptureActivity so the scanner remains usable on Android 15+ and gesture-navigation devices.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/qr_capture_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@android:color/black">
+    tools:ignore="MergeRootFrame">
 
     <androidx.camera.view.PreviewView
         android:id="@+id/qr_preview"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:importantForAccessibility="no"
         app:implementationMode="performance"
         app:scaleType="fillCenter" />
 
     <com.ketoanapk.hr.ui.QrOverlayView
         android:id="@+id/qr_overlay"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no" />
 
-    <TextView
-        android:id="@+id/qr_status_view"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:id="@+id/qr_top_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|center_horizontal"
-        android:layout_marginHorizontal="24dp"
-        android:layout_marginTop="28dp"
-        android:background="@android:color/transparent"
-        android:paddingHorizontal="16dp"
-        android:paddingVertical="10dp"
-        android:shadowColor="#99000000"
-        android:shadowDx="0"
-        android:shadowDy="1"
-        android:shadowRadius="4"
-        android:text="Đưa mã QR vào khung"
-        android:textColor="@android:color/white"
-        android:textSize="14sp" />
+        android:layout_gravity="top"
+        android:clipToPadding="false"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp">
 
-    <!-- Bật đèn pin: kho/phòng tối là lý do hỏng quét phổ biến nhất mà người dùng tự khắc phục được.
-         Ẩn đi khi máy không có đèn hoặc khi bảng kết quả đang che phần dưới màn hình. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/qr_exit_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/qr_result_close_button"
+                android:backgroundTint="@null"
+                android:contentDescription="@string/qr_close_scanner"
+                android:padding="12dp"
+                android:src="@drawable/ic_qr_close"
+                android:stateListAnimator="@null"
+                android:tooltipText="@string/qr_close_scanner" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_marginHorizontal="12dp"
+                android:layout_weight="1"
+                android:background="@drawable/qr_top_pill_background"
+                android:gravity="center"
+                android:maxLines="1"
+                android:paddingHorizontal="16dp"
+                android:text="@string/qr_screen_title"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/qr_gallery_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/qr_result_close_button"
+                android:backgroundTint="@null"
+                android:contentDescription="@string/qr_pick_image"
+                android:padding="12dp"
+                android:src="@drawable/ic_qr_gallery"
+                android:stateListAnimator="@null"
+                android:tooltipText="@string/qr_pick_image" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/qr_status_view"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="10dp"
+            android:accessibilityLiveRegion="polite"
+            android:background="@drawable/qr_status_background"
+            android:gravity="center"
+            android:maxLines="2"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="9dp"
+            android:text="@string/qr_default_prompt"
+            android:textColor="@android:color/white"
+            android:textSize="14sp" />
+    </LinearLayout>
+
     <Button
         android:id="@+id/qr_torch_button"
         android:layout_width="wrap_content"
         android:layout_height="48dp"
         android:layout_gravity="bottom|end"
         android:layout_marginEnd="18dp"
-        android:layout_marginBottom="36dp"
+        android:layout_marginBottom="24dp"
         android:background="@drawable/qr_result_close_button"
         android:backgroundTint="@null"
-        android:minHeight="0dp"
-        android:minWidth="0dp"
+        android:minHeight="48dp"
+        android:minWidth="48dp"
         android:paddingHorizontal="20dp"
         android:stateListAnimator="@null"
-        android:text="Bật đèn"
+        android:text="@string/qr_torch_on"
         android:textAllCaps="false"
         android:textColor="@android:color/white"
         android:textSize="15sp"
-        android:textStyle="bold" />
+        android:textStyle="bold"
+        android:visibility="gone" />
 
     <LinearLayout
         android:id="@+id/qr_result_sheet"
@@ -66,21 +125,15 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         android:layout_marginTop="24dp"
+        android:accessibilityPaneTitle="@string/qr_result_pane"
         android:background="@drawable/qr_result_sheet_background"
         android:elevation="18dp"
         android:orientation="vertical"
         android:paddingStart="20dp"
-        android:paddingTop="12dp"
+        android:paddingTop="18dp"
         android:paddingEnd="20dp"
         android:paddingBottom="20dp"
         android:visibility="gone">
-
-        <View
-            android:layout_width="48dp"
-            android:layout_height="5dp"
-            android:layout_gravity="center_horizontal"
-            android:layout_marginBottom="16dp"
-            android:background="@drawable/qr_result_drag_handle" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -93,13 +146,14 @@
                 android:id="@+id/qr_result_title"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="#5A91FF"
+                android:accessibilityHeading="true"
+                android:textColor="#75A4FF"
                 android:textSize="16sp"
                 android:textStyle="bold" />
 
             <ScrollView
                 android:layout_width="match_parent"
-                android:layout_height="140dp"
+                android:layout_height="112dp"
                 android:layout_marginTop="10dp"
                 android:fadeScrollbars="false"
                 android:fillViewport="true">
@@ -110,52 +164,77 @@
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="3dp"
                     android:textColor="@android:color/white"
-                    android:textSize="17sp" />
+                    android:textIsSelectable="true"
+                    android:textSize="16sp" />
             </ScrollView>
         </LinearLayout>
+
+        <Button
+            android:id="@+id/qr_open_button"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/qr_result_copy_button"
+            android:backgroundTint="@null"
+            android:drawableStart="@drawable/ic_qr_open"
+            android:drawablePadding="10dp"
+            android:gravity="center"
+            android:minHeight="56dp"
+            android:minWidth="48dp"
+            android:paddingHorizontal="18dp"
+            android:stateListAnimator="@null"
+            android:text="@string/qr_open_link"
+            android:textAllCaps="false"
+            android:textColor="@android:color/white"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
+            android:layout_marginTop="12dp"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            tools:ignore="ButtonStyle">
 
             <Button
                 android:id="@+id/qr_copy_button"
                 android:layout_width="0dp"
-                android:layout_height="56dp"
+                android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:background="@drawable/qr_result_copy_button"
+                android:background="@drawable/qr_result_close_button"
                 android:backgroundTint="@null"
                 android:drawableStart="@drawable/ic_qr_copy"
-                android:drawablePadding="10dp"
+                android:drawablePadding="8dp"
                 android:gravity="center"
-                android:minHeight="0dp"
-                android:minWidth="0dp"
-                android:paddingHorizontal="18dp"
+                android:minHeight="52dp"
+                android:minWidth="48dp"
+                android:paddingHorizontal="14dp"
                 android:stateListAnimator="@null"
-                android:text="Sao chép"
+                android:text="@string/qr_copy"
                 android:textAllCaps="false"
                 android:textColor="@android:color/white"
-                android:textSize="17sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
             <Button
                 android:id="@+id/qr_close_button"
-                android:layout_width="92dp"
-                android:layout_height="56dp"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
                 android:layout_marginStart="12dp"
+                android:layout_weight="1"
                 android:background="@drawable/qr_result_close_button"
                 android:backgroundTint="@null"
                 android:gravity="center"
-                android:minHeight="0dp"
-                android:minWidth="0dp"
+                android:minHeight="52dp"
+                android:minWidth="48dp"
+                android:paddingHorizontal="14dp"
                 android:stateListAnimator="@null"
-                android:text="Đóng"
+                android:text="@string/qr_scan_next"
                 android:textAllCaps="false"
                 android:textColor="@android:color/white"
-                android:textSize="16sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
         </LinearLayout>
     </LinearLayout>

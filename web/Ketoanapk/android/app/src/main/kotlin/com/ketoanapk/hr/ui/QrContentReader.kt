@@ -30,6 +30,26 @@ internal object QrContentReader {
     /** Bằng giới hạn message của máy chủ để dialog đọc tại chỗ không dài hơn dialog do server trả về. */
     private const val MaxBodyLength = 1_500
 
+    /**
+     * Các chuẩn QR phổ thông được đọc hoàn toàn trên máy. Ngoài việc phản hồi nhanh như một máy quét
+     * thông thường, điều này tránh gửi mật khẩu Wi-Fi, danh thiếp, vị trí hoặc URL của người dùng tới
+     * máy chủ chỉ để nhận câu trả lời "không có nghiệp vụ". Chuỗi riêng/không rõ định dạng vẫn đi qua
+     * bộ phân giải server-driven để các nghiệp vụ Ketoan cấu hình động tiếp tục hoạt động.
+     */
+    fun isStandardFormat(raw: String): Boolean {
+        val value = raw.trim()
+        return value.startsWith("WIFI:", true) ||
+            value.startsWith("MECARD:", true) ||
+            value.startsWith("BEGIN:VCARD", true) ||
+            value.startsWith("http://", true) ||
+            value.startsWith("https://", true) ||
+            value.startsWith("tel:", true) ||
+            value.startsWith("mailto:", true) ||
+            value.startsWith("SMSTO:", true) ||
+            value.startsWith("sms:", true) ||
+            value.startsWith("geo:", true)
+    }
+
     fun read(raw: String): QrLocalRead {
         val value = raw.trim()
         return when {
@@ -119,7 +139,10 @@ internal object QrContentReader {
 
     private fun link(value: String): QrLocalRead {
         val safeUrl = QrExternalUrlPolicy.normalize(value)
-        val host = runCatching { URI(value).host }.getOrNull()?.trimEnd('.')?.lowercase().orEmpty()
+        // URL Unicode được normalize sang ASCII/punycode trước khi bóc host; URI(value) trực tiếp thường
+        // trả host=null và vô tình làm mất dòng tên miền quan trọng nhất trong cảnh báo liên kết.
+        val hostSource = safeUrl ?: value
+        val host = runCatching { URI(hostSource).host }.getOrNull()?.trimEnd('.')?.lowercase().orEmpty()
         val lines = buildList {
             // Tên miền đứng riêng một dòng: liên kết dài dễ giấu tên miền thật ở giữa đống tham số.
             if (host.isNotEmpty()) add("Tên miền: $host")

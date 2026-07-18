@@ -96,7 +96,7 @@ internal object QrExternalUrlPolicy {
             return null
         val host = uri.host.trimEnd('.').lowercase()
         if (host == "localhost" || host.endsWith(".localhost") || ':' in host || '[' in host ||
-            host.all { it.isDigit() || it == '.' } || isHexIpLiteral(host)) return null
+            '.' !in host || host.all { it.isDigit() || it == '.' } || isHexIpLiteral(host)) return null
         return uri.toASCIIString()
     }
 

@@ -82,6 +82,37 @@ object AppUpdater {
         return File(apkDir(context), safe).also { if (it.exists()) it.delete() }
     }
 
+    /**
+     * APK của [release] đã tải xong từ lần trước và còn nguyên vẹn? Trả về file để cài thẳng, khỏi tải lại.
+     *
+     * Vì sao cần: gói cập nhật ~90 MB. Người dùng bấm "Cập nhật ngay", tải xong, rồi lỡ tay thoát màn
+     * xác nhận cài của hệ thống — trước đây lần sau phải tải lại từ đầu toàn bộ. Giờ chỉ cần đối chiếu
+     * dung lượng + SHA-256 (vài giây) là mở lại được trình cài đặt.
+     */
+    fun verifiedCachedApk(context: Context, expectedSize: Long, expectedSha256: String): File? {
+        if (expectedSha256.isBlank()) return null
+        val candidates = apkDir(context).listFiles { f -> f.isFile && f.name.endsWith(".apk", ignoreCase = true) }
+            ?: return null
+        return candidates.firstOrNull { file ->
+            (expectedSize <= 0 || file.length() == expectedSize) &&
+                sha256(file).equals(expectedSha256, ignoreCase = true)
+        }
+    }
+
+    /** SHA-256 của file dạng hex thường; chuỗi rỗng nếu đọc lỗi. */
+    private fun sha256(file: File): String = runCatching {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }.getOrDefault("")
+
     /** Xóa mọi APK cũ (bản cập nhật lần trước đã cài xong, không còn cần giữ) — cả thư mục apk lẫn cacheDir cũ. */
     fun purgeCachedApks(context: Context) {
         runCatching {

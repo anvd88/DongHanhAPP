@@ -47,5 +47,8 @@ class QrContinuousScanGateTest {
         assertFalse(selection.owns("qr-a"))
         assertTrue(selection.owns("qr-b"))
         assertFalse(selection.activate("qr-b"))
+
+        selection.clear()
+        assertFalse(selection.owns("qr-b"))
     }
 }

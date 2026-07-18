@@ -1,7 +1,7 @@
 package com.ketoanapk.hr.ui
 
 /**
- * De-duplicates the repeated successful decode frames emitted by continuous ZXing scanning.
+ * De-duplicates the repeated successful decode frames emitted by continuous ML Kit scanning.
  *
  * A different QR is accepted immediately. The same QR is accepted again only after it has not
  * been decoded for [visibleHoldMs], which covers the natural remove-and-present-again gesture.
@@ -42,4 +42,8 @@ internal class QrOverlaySelection {
     }
 
     fun owns(value: String): Boolean = activeValue == value
+
+    fun clear() {
+        activeValue = null
+    }
 }

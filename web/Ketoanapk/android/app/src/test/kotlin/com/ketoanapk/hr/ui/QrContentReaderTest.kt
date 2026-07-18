@@ -9,6 +9,24 @@ import org.junit.Test
 
 class QrContentReaderTest {
     @Test
+    fun standardPersonalPayloadsAreRecognisedForOnDeviceReading() {
+        listOf(
+            "WIFI:T:WPA;S:Office;P:secret;;",
+            "BEGIN:VCARD\nFN:An\nEND:VCARD",
+            "https://example.com/help",
+            "http://example.com/help",
+            "tel:0901234567",
+            "mailto:hr@example.com",
+            "SMSTO:0901234567:hello",
+            "geo:21.0,105.8",
+        ).forEach { assertTrue("Expected local format: $it", QrContentReader.isStandardFormat(it)) }
+
+        assertFalse(QrContentReader.isStandardFormat("ketoanmini-login:opaque"))
+        assertFalse(QrContentReader.isStandardFormat("ketoanmini:configured-action"))
+        assertFalse(QrContentReader.isStandardFormat("generic private text"))
+    }
+
+    @Test
     fun unicodeBidiAndFormatCharactersAreHiddenButCopyKeepsOriginalText() {
         val raw = "abc\u202Edef\u202C\u2066ghi\u2069\u200F\u061C\u200B"
 
@@ -79,6 +97,10 @@ class QrContentReaderTest {
         assertNull(QrContentReader.read("http://example.com/a").openUrl)
         assertNull(QrContentReader.read("https://192.168.1.9/a").openUrl)
         assertTrue(QrContentReader.read("http://example.com/a").body.contains("không mở trực tiếp"))
+
+        val idn = QrContentReader.read("https://thử.example.com/hướng-dẫn")
+        assertTrue(idn.body.contains("Tên miền: xn--th-yct.example.com"))
+        assertTrue(idn.openUrl?.startsWith("https://xn--th-yct.example.com/") == true)
     }
 
     @Test

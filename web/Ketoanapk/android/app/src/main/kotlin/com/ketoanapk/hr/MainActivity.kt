@@ -47,7 +47,9 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         AppForeground.isForeground = true
         CallManager.onForegroundChanged()
-        viewModel.autoCheckForUpdate(force = true)
+        // force = false: giữ đúng nhịp tiết chế 10 phút. Trước đây ép force ở mỗi lần mở lại app nên
+        // throttle thành vô nghĩa — cứ chuyển app qua lại là gọi mạng và dựng lại bảng nhắc cập nhật.
+        viewModel.autoCheckForUpdate()
         viewModel.refreshPushPermissionState()
         viewModel.onAppResumed()
     }

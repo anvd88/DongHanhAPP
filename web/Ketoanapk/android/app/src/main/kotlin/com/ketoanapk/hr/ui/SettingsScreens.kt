@@ -752,20 +752,22 @@ private fun AppVersionScreen(vm: HrViewModel, onBack: () -> Unit) {
             item {
                 HrCard {
                     Text("Bản cập nhật ${info.version}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "Dung lượng ${AppUpdater.formatSize(context, info.apkSize)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     if (info.releaseNotes.isNotBlank()) {
                         Text(info.releaseNotes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    // Bấm là mở BẢNG cập nhật dùng chung (có tiến độ tải), không tải ngầm sau lưng nữa.
                     Button(
                         onClick = { vm.installUpdate(context) },
-                        enabled = !state.installing,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp),
-                    ) {
-                        if (state.installing) CircularProgressIndicator(Modifier.size(20.dp), MaterialTheme.colorScheme.onPrimary, 2.dp)
-                        else Text("Cập nhật ngay", fontWeight = FontWeight.Bold)
-                    }
+                    ) { Text("Cập nhật ngay", fontWeight = FontWeight.Bold) }
                 }
             }
         }

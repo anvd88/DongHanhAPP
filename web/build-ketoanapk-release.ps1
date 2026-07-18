@@ -281,7 +281,7 @@ try {
     # Controlled Folder Access chặn ghi vào Desktop), nên Gradle ném FileAlreadyExistsException và trả mã
     # thoát ≠ 0 => script này Fail dù APK ĐÃ build xong. Cờ này bỏ hẳn bước sinh report (Gradle 8.6+;
     # wrapper của dự án đang là 8.14.3). Báo cáo đó chỉ để chẩn đoán, không ảnh hưởng APK.
-    & $gradlew assembleRelease --no-problems-report
+    & $gradlew --no-daemon assembleRelease --no-problems-report
     $buildExit = $LASTEXITCODE
 } finally {
     Pop-Location

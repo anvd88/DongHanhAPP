@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -351,7 +352,6 @@ app.UseRouting();
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
-app.UseAuthorization();
 
 // Số ngày một phiên được phép "nhàn rỗi" trước khi hết hiệu lực (đăng nhập bền cho người dùng năng
 // động, nhưng phiên bỏ không dùng quá lâu thì tự vô hiệu → phải đăng nhập lại). 0 = tắt (giữ 365 ngày).
@@ -363,6 +363,11 @@ var sessionIdleDays = app.Configuration.GetValue("Security:SessionIdleDays", 7);
 // Kết hợp tín hiệu realtime "changed" (đổi is_active) → web refetch → bị đá ra gần như tức thì.
 // ĐỒNG THỜI: phiên nhàn rỗi > sessionIdleDays (last_seen quá cũ) → 401 (tự hết hạn); mỗi request có
 // hoạt động sẽ làm mới last_seen (giới hạn ghi 2 phút/lần) nên người dùng năng động không bị đá ra.
+//
+// VỊ TRÍ TRONG PIPELINE RẤT QUAN TRỌNG: middleware này phải nằm GIỮA UseAuthentication và
+// UseAuthorization. AuthorizationMiddleware chấm policy (RequireRole...) ngay tại vị trí của nó, nên
+// nếu đặt sau UseAuthorization thì role trong JWT đã được dùng để quyết định xong xuôi rồi — làm tươi
+// lúc đó là vô nghĩa. Đứng trước UseAuthorization thì claim vai trò được thay bằng dữ liệu DB kịp lúc.
 app.Use(async (ctx, next) =>
 {
     // Endpoint AllowAnonymous phải thực sự độc lập với Bearer cũ. Nếu trình duyệt còn JWT của tài
@@ -376,6 +381,9 @@ app.Use(async (ctx, next) =>
             var locked = false;
             var revoked = false;
             var idleExpired = false;
+            // Vai trò HIỆN HÀNH đọc từ DB (chính + phụ) để thay cho claim trong JWT — xem phần ghi
+            // claim bên dưới. null = chưa đọc được (DB lỗi) → giữ nguyên claim cũ, không đá người dùng.
+            List<string>? freshRoles = null;
             // sid (nếu token có) → kiểm tra thiết bị đã bị thu hồi từ xa hay chưa.
             var sid = ctx.User.FindFirst("sid")?.Value;
             try
@@ -387,7 +395,10 @@ app.Use(async (ctx, next) =>
                     @"SELECT u.is_active, COALESCE(s.revoked, FALSE) AS revoked,
                              (s.session_token IS NOT NULL AND s.last_seen IS NOT NULL
                               AND @idleDays > 0
-                              AND s.last_seen < CURRENT_TIMESTAMP - make_interval(days => @idleDays)) AS idle_expired
+                              AND s.last_seen < CURRENT_TIMESTAMP - make_interval(days => @idleDays)) AS idle_expired,
+                             u.role,
+                             COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
+                                       FROM user_roles ur WHERE ur.username = u.username), '') AS secondary_roles
                       FROM app_users u
                       LEFT JOIN user_sessions s ON s.session_token = @sid
                       WHERE u.username = @u AND u.is_deleted = FALSE
@@ -405,6 +416,13 @@ app.Use(async (ctx, next) =>
                         revoked = !r.IsDBNull(1) && Convert.ToBoolean(r.GetValue(1));
                         idleExpired = !r.IsDBNull(2) && Convert.ToBoolean(r.GetValue(2));
                         sessionAlive = !locked && !revoked && !idleExpired && !string.IsNullOrEmpty(sid);
+
+                        // Gộp vai trò chính + phụ theo đúng cách TokenService dựng claim lúc đăng nhập
+                        // (chính thiếu/không hợp lệ thì coi là Employee) để hai đường cho kết quả giống nhau.
+                        var roles = new List<string> { AppRoles.Normalize(r.IsDBNull(3) ? null : r.GetString(3)) ?? AppRoles.Employee };
+                        foreach (var extra in (r.IsDBNull(4) ? "" : r.GetString(4)).Split(',', StringSplitOptions.RemoveEmptyEntries))
+                            if (AppRoles.Normalize(extra) is { } norm && !roles.Contains(norm)) roles.Add(norm);
+                        freshRoles = roles;
                     }
                 }
 
@@ -441,11 +459,27 @@ app.Use(async (ctx, next) =>
                 await ctx.Response.WriteAsJsonAsync(new { message = "Phiên đăng nhập đã hết hạn do lâu không hoạt động. Vui lòng đăng nhập lại." });
                 return;
             }
+
+            // VAI TRÒ LẤY TỪ DB, KHÔNG TIN CLAIM TRONG JWT. Token sống tới 365 ngày, nên nếu cứ tin
+            // claim thì admin bị hạ quyền vẫn qua được mọi endpoint RequireRole("Admin") cho tới khi
+            // token hết hạn. Thay claim ở đây => cấp/thu quyền có hiệu lực ngay từ request kế tiếp mà
+            // KHÔNG phải đăng xuất ai — người dùng không hề bị gián đoạn.
+            // DB lỗi (freshRoles == null) thì giữ nguyên claim cũ, đồng bộ với hướng fail-open ở trên.
+            if (freshRoles is not null && ctx.User.Identity is ClaimsIdentity identity)
+            {
+                foreach (var stale in identity.FindAll(identity.RoleClaimType).ToList())
+                    identity.TryRemoveClaim(stale);
+                foreach (var role in freshRoles)
+                    identity.AddClaim(new Claim(identity.RoleClaimType, role));
+            }
         }
     }
 
     await next();
 });
+
+// Chấm quyền SAU khi claim vai trò đã được làm tươi từ DB ở middleware trên.
+app.UseAuthorization();
 
 // Bắt lỗi DB không kết nối được → trả JSON chung (KHÔNG lộ chi tiết ngoại lệ ra client); ghi log server.
 app.Use(async (ctx, next) =>

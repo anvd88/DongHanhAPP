@@ -41,6 +41,12 @@ class QrCaptureScreenUiTest {
                 // Layout inflate được = theme QrCaptureTheme tồn tại và hợp lệ.
                 assertNotNull(activity.findViewById<View>(R.id.qr_preview))
                 assertNotNull(activity.findViewById<View>(R.id.qr_overlay))
+                assertNotNull(activity.findViewById<View>(R.id.qr_exit_button))
+                assertNotNull(activity.findViewById<View>(R.id.qr_gallery_button))
+                assertEquals(
+                    activity.getString(R.string.qr_close_scanner),
+                    activity.findViewById<View>(R.id.qr_exit_button).contentDescription,
+                )
                 // Bảng kết quả phải ẩn lúc mới mở, chưa quét được gì.
                 assertEquals(View.GONE, activity.findViewById<View>(R.id.qr_result_sheet).visibility)
             }

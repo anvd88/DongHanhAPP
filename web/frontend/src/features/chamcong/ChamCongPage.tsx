@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, MapPin, ShieldAlert, Trash2, UserPlus, Wifi, WifiOff, X } from "lucide-react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useApi } from "../../lib/useApi";
@@ -246,11 +246,7 @@ function MotionConfigPanel() {
 
 /* -------- Số đo Silent-Face (chống ảnh/màn hình) — hiệu chỉnh ngưỡng có số liệu -------- */
 function LivenessMetricsPanel() {
-  const { data, reload } = useApi<LivenessMetric[]>("/api/chamcong/liveness-metrics");
-  useEffect(() => {
-    const t = setInterval(reload, 4000);
-    return () => clearInterval(t);
-  }, [reload]);
+  const { data } = useApi<LivenessMetric[]>("/api/chamcong/liveness-metrics");
 
   const hhmmss = (iso: string) => {
     const d = new Date(iso);

@@ -2,7 +2,6 @@ package com.ketoanapk.hr
 
 import java.net.URI
 import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 
 /** Phân tích deep-link từ web mà không phụ thuộc Android SDK để có thể kiểm thử bằng JVM thuần. */
 internal object AppDeepLink {
@@ -48,7 +47,8 @@ internal object AppDeepLink {
             ?.substringAfter('=', missingDelimiterValue = "")
             ?: return null
         val decoded = runCatching {
-            URLDecoder.decode(encoded, StandardCharsets.UTF_8).trim()
+            // Charset overload is available below API 33; the Charset overload would crash on API 29–32.
+            URLDecoder.decode(encoded, "UTF-8").trim()
         }.getOrNull() ?: return null
         return decoded.takeIf { it.isNotEmpty() && it.length <= MaxQrValueLength }
     }

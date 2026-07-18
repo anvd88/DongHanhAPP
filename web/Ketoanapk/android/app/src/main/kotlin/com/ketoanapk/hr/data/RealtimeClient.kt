@@ -22,6 +22,10 @@ import kotlinx.coroutines.runBlocking
  * (backend đọc ở `Program.cs` cho đường `/hubs`).
  */
 class RealtimeClient(private val tokenStore: TokenStore) {
+    private companion object {
+        val RefreshScopes = setOf("hr", "data", "chat", "tasks", "portal", "config", "audit", "talent", "all")
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var hub: HubConnection? = null
     private var job: Job? = null
@@ -77,7 +81,7 @@ class RealtimeClient(private val tokenStore: TokenStore) {
             CallManager.bindSignaling(selfUsername) { to, payload -> sendCallSignal(to, payload) }
             // Vừa (kết nối lại) WS → đồng bộ MỘT nhịp để bắt các thay đổi xảy ra lúc đang mất kết nối
             // (thay cho vòng poll định kỳ đã tắt khi WS khỏe). ViewModel nghe qua AppEvents.dataChanged.
-            AppEvents.signalDataChanged()
+            AppEvents.signalDataChanged("all")
             // Đã kết nối → chờ tới khi rớt (poll trạng thái nhẹ), rồi thử lại nếu vẫn muốn.
             while (wantConnected && connection.connectionState == HubConnectionState.CONNECTED) {
                 delay(2000)
@@ -104,8 +108,10 @@ class RealtimeClient(private val tokenStore: TokenStore) {
         connection.on(
             "changed",
             { scopeName: String ->
-                // Chỉ quan tâm nghiệp vụ HR/đơn từ/dữ liệu chung → báo ViewModel làm mới màn đang xem.
-                if (scopeName == "hr" || scopeName == "data" || scopeName == "chat" || scopeName == "all") AppEvents.signalDataChanged()
+                // Giữ nguyên scope để ViewModel chỉ nạp đúng phần bị cũ. Trước đây một tin chat cũng
+                // kéo lại đơn từ + công việc, tạo nhiều request không cần thiết trên server.
+                if (scopeName in RefreshScopes)
+                    AppEvents.signalDataChanged(scopeName)
             },
             String::class.java,
         )

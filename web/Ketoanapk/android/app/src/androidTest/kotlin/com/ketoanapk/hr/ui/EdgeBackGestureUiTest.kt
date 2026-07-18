@@ -33,7 +33,7 @@ class EdgeBackGestureUiTest {
         compose.setContent {
             val dispatcher = LocalOnBackPressedDispatcherOwner.current!!.onBackPressedDispatcher
             MaterialTheme {
-                RightEdgeBackContainer(onBack = dispatcher::onBackPressed) {
+                EdgeBackContainer(onBack = dispatcher::onBackPressed) {
                     BackHandler {
                         backCount.intValue += 1
                         screen.value = "Màn trước"
@@ -55,6 +55,54 @@ class EdgeBackGestureUiTest {
         compose.waitForIdle()
         assertEquals(1, backCount.intValue)
         compose.onNodeWithText("Màn trước").assertIsDisplayed()
+    }
+
+    @Test
+    fun leftEdgeSwipeInvokesHighestPriorityBackHandlerAndShowsPreviousContent() {
+        val backCount = mutableIntStateOf(0)
+        val screen = mutableStateOf("Màn chi tiết")
+        compose.setContent {
+            val dispatcher = LocalOnBackPressedDispatcherOwner.current!!.onBackPressedDispatcher
+            MaterialTheme {
+                EdgeBackContainer(onBack = dispatcher::onBackPressed) {
+                    BackHandler {
+                        backCount.intValue += 1
+                        screen.value = "Màn trước"
+                    }
+                    Box(Modifier.fillMaxSize()) { Text(screen.value) }
+                }
+            }
+        }
+
+        compose.onNodeWithTag("app-edge-back-root").performTouchInput {
+            swipe(
+                start = Offset(2f, centerY),
+                end = Offset(width * 0.58f, centerY),
+                durationMillis = 240,
+            )
+        }
+
+        compose.waitUntil(timeoutMillis = 2_000) { backCount.intValue == 1 }
+        compose.waitForIdle()
+        assertEquals(1, backCount.intValue)
+        compose.onNodeWithText("Màn trước").assertIsDisplayed()
+    }
+
+    @Test
+    fun horizontalSwipeAwayFromLeftEdgeDoesNotNavigateBack() {
+        val backCount = mutableIntStateOf(0)
+        showScreen { backCount.intValue += 1 }
+
+        compose.onNodeWithTag("app-edge-back-root").performTouchInput {
+            swipe(
+                start = Offset(width * 0.30f, centerY),
+                end = Offset(width * 0.80f, centerY),
+                durationMillis = 240,
+            )
+        }
+        compose.waitForIdle()
+
+        assertEquals(0, backCount.intValue)
     }
 
     @Test
@@ -115,7 +163,7 @@ class EdgeBackGestureUiTest {
         val monthOffset = mutableIntStateOf(0)
         compose.setContent {
             MaterialTheme {
-                RightEdgeBackContainer(onBack = { backCount.intValue += 1 }) {
+                EdgeBackContainer(onBack = { backCount.intValue += 1 }) {
                     TimesheetScreen(
                         state = TimesheetUiState(
                             month = "2026-07",
@@ -148,7 +196,7 @@ class EdgeBackGestureUiTest {
     private fun showScreen(onBack: () -> Unit) {
         compose.setContent {
             MaterialTheme {
-                RightEdgeBackContainer(onBack = onBack) {
+                EdgeBackContainer(onBack = onBack) {
                     Box(Modifier.fillMaxSize()) { Text("Nội dung") }
                 }
             }
