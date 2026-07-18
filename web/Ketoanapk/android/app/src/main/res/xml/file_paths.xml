@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider CHỈ chia sẻ thư mục chứa APK cập nhật (cacheDir/apk), không phơi toàn bộ cache/SD. -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+    <cache-path name="apk_cache" path="apk/" />
+    <cache-path name="chat_downloads" path="chat/" />
+    <cache-path name="profile_documents" path="profile/" />
+    <cache-path name="payslip_documents" path="payslips/" />
 </paths>

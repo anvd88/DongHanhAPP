@@ -13,7 +13,7 @@ import kotlinx.serialization.json.Json
 
 /** Nhóm thông báo, dùng để chọn icon/màu và điểm đến khi bấm vào. */
 @Serializable
-enum class NotificationKind { Request, Approval, Penalty, Attendance, System }
+enum class NotificationKind { Request, Approval, Penalty, Attendance, Chat, System }
 
 /**
  * Một thông báo hiển thị trong chuông. Lưu bền vững trên máy (DataStore) kèm trạng thái đã đọc.
@@ -28,6 +28,7 @@ data class AppNotification(
     val createdAt: Long,
     val read: Boolean = false,
     val target: String? = null,
+    val entityId: String? = null,
 )
 
 @Serializable
@@ -136,6 +137,7 @@ class NotificationCenter(context: Context) {
             body = body,
             createdAt = System.currentTimeMillis(),
             target = target,
+            entityId = entityIdFromNotificationId(notifId),
         )
         items = (listOf(n) + items).distinctBy { it.id }
         store.save(items, seen)
@@ -179,6 +181,7 @@ class NotificationCenter(context: Context) {
                     body = "${r.typeLabel.ifBlank { r.title }} · ${r.requestNo}",
                     createdAt = now,
                     target = "Requests",
+                    entityId = r.id,
                 )
             }
         }
@@ -196,6 +199,7 @@ class NotificationCenter(context: Context) {
                     body = "${r.employeeName.ifBlank { r.requesterUsername }} · ${r.typeLabel.ifBlank { r.title }}",
                     createdAt = now,
                     target = "Approval",
+                    entityId = r.id,
                 )
             }
         }
@@ -223,4 +227,15 @@ class NotificationCenter(context: Context) {
         }
         return if (firstRun) emptyList() else fresh
     }
+}
+
+internal fun requestIdFromNotificationId(value: String): String? {
+    val parts = value.split(':')
+    if (parts.size < 2 || parts[0] !in setOf("req", "inbox")) return null
+    return parts[1].takeIf { it.isNotBlank() }
+}
+
+internal fun entityIdFromNotificationId(value: String): String? {
+    if (value.startsWith("chat:")) return value.split(':').getOrNull(1)?.takeIf { it.isNotBlank() }
+    return requestIdFromNotificationId(value)
 }

@@ -476,7 +476,7 @@ function HRProfileCard({ me }: { me: EmployeeDetail }) {
             <strong>{me.employeeCode}</strong>
           </div>
           <div className="hr-employee-card-qr">
-            <QRCodeSVG value={qr} size={86} level="M" />
+            <QRCodeSVG value={qr} size={116} level="M" marginSize={4} />
           </div>
         </div>
         <dl className="hr-employee-card-meta">
@@ -962,9 +962,10 @@ export function HRPenaltyPage() {
   const [approvingRefund, setApprovingRefund] = useState<PenaltyRefund | null>(null);
 
   const items = data ?? [];
+  // Tổng phạt tiền CÒN NỢ (đang hiệu lực): lấy số CÒN LẠI, không phải mức phạt gốc — phạt đã tất toán không tính.
   const activeFines = items
     .filter((p) => p.status === "Active" && p.penaltyType === "fine")
-    .reduce((sum, p) => sum + (p.amount || 0), 0);
+    .reduce((sum, p) => sum + (p.progress?.remaining ?? p.amount ?? 0), 0);
 
   const waive = async (p: Penalty) => {
     const ok = await confirm({ title: "Miễn phạt?", description: `${p.penaltyNo} sẽ chuyển sang trạng thái đã miễn.`, confirmLabel: "Miễn phạt", tone: "warning" });
@@ -1095,6 +1096,7 @@ export function HRPenaltyPage() {
 
 function PenaltyRow({ p, admin, onEdit, onWaive, onDelete, onAppeal }: { p: Penalty; admin: boolean; onEdit: () => void; onWaive: () => void; onDelete: () => void; onAppeal: () => void }) {
   const waived = p.status === "Waived";
+  const settled = p.status === "Settled";
   const progress = p.progress ?? null;
   return (
     <article className="hr-day-row hr-penalty-row" style={waived ? { opacity: 0.6 } : undefined}>
@@ -1112,13 +1114,13 @@ function PenaltyRow({ p, admin, onEdit, onWaive, onDelete, onAppeal }: { p: Pena
         </small>
       </div>
       <div className="hr-penalty-right">
-        <HrStatus status={waived ? "muted" : (penaltyTypeColor(p.penaltyType) as Tone)}>
-          {waived ? penaltyStatusLabel(p.status) : p.penaltyTypeLabel}
+        <HrStatus status={waived ? "muted" : settled ? "success" : (penaltyTypeColor(p.penaltyType) as Tone)}>
+          {waived || settled ? penaltyStatusLabel(p.status) : p.penaltyTypeLabel}
         </HrStatus>
         {admin ? (
           <div className="hr-penalty-actions">
             <button type="button" className="hr-icon-btn" onClick={onEdit} aria-label="Sửa"><Pencil className="h-4 w-4" /></button>
-            {!waived && <button type="button" className="hr-icon-btn" onClick={onWaive} aria-label="Miễn phạt"><Ban className="h-4 w-4" /></button>}
+            {!waived && !settled && <button type="button" className="hr-icon-btn" onClick={onWaive} aria-label="Miễn phạt"><Ban className="h-4 w-4" /></button>}
             <button type="button" className="hr-icon-btn" onClick={onDelete} aria-label="Xóa"><Trash2 className="h-4 w-4" /></button>
           </div>
         ) : (
@@ -1139,7 +1141,7 @@ function PenaltyRow({ p, admin, onEdit, onWaive, onDelete, onAppeal }: { p: Pena
 function PenaltyProgressView({ progress }: { progress: NonNullable<Penalty["progress"]> }) {
   const [open, setOpen] = useState(false);
   const pct = progress.total > 0 ? Math.min(100, Math.round((progress.deducted / progress.total) * 100)) : 0;
-  const done = progress.remainingMonths === 0;
+  const done = progress.settled || progress.remaining <= 0;
   return (
     <div className="hr-penalty-progress">
       <div className="hr-penalty-progress-bar">
@@ -1148,7 +1150,7 @@ function PenaltyProgressView({ progress }: { progress: NonNullable<Penalty["prog
       <div className="hr-penalty-progress-meta">
         <span>Đã trừ <b>{moneyVnd(progress.deducted)}</b> / {moneyVnd(progress.total)}</span>
         <span>Còn lại <b>{moneyVnd(progress.remaining)}</b></span>
-        <span>{done ? "Đã trừ xong" : `Còn ${progress.remainingMonths}/${progress.totalMonths} kỳ`}</span>
+        <span>{done ? "Đã tất toán" : `Còn ${progress.remainingMonths}/${progress.totalMonths} kỳ`}</span>
       </div>
       {!done && progress.nextPeriod && (
         <small className="hr-penalty-progress-next">
@@ -1391,6 +1393,7 @@ function PenaltyModal({ penalty, onClose, onSaved }: { penalty: Penalty | null; 
             <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full">
               <option value="Active">Còn hiệu lực</option>
               <option value="Waived">Đã miễn</option>
+              {status === "Settled" && <option value="Settled">Đã tất toán (đã thu đủ)</option>}
             </Select>
           </Field>
         )}

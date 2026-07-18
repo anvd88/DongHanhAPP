@@ -16,10 +16,12 @@ function scopesForPath(path: string): RealtimeScope[] {
   if (
     path.startsWith("/api/hr") ||
     path.startsWith("/api/requests") ||
+    path.startsWith("/api/tasks") ||
     path.startsWith("/api/shifts") ||
     path.startsWith("/api/timesheet") ||
     path.startsWith("/api/bank-accounts") ||
     path.startsWith("/api/penalt") ||
+    path.startsWith("/api/payout-vouchers") ||
     path.startsWith("/api/payroll") ||
     path.startsWith("/api/chamcong")
   )

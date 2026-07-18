@@ -1,6 +1,8 @@
 package com.ketoanapk.hr.ui
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -28,16 +30,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -46,39 +48,36 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -95,25 +94,59 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ReleaseInfo
+import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.ui.theme.KetoanTheme
-import kotlinx.coroutines.launch
 
 @Composable
 fun HrApp(vm: HrViewModel) {
-    KetoanTheme {
+    val personalizationContext=LocalContext.current
+    AppPersonalization.init(personalizationContext)
+    val dark=when(AppPersonalization.themeMode){"dark"->true;"light"->false;else->androidx.compose.foundation.isSystemInDarkTheme()}
+    KetoanTheme(darkTheme=dark,fontScale=AppPersonalization.fontScale) {
+        val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+        // Keep one QR controller at the app root so deep-link dialogs can appear above every overlay.
+        val qrScanner = rememberQrScanController(vm)
+
+        LaunchedEffect(vm.authState, vm.pendingQrLoginCode, qrScanner.busy) {
+            val code = vm.pendingQrLoginCode
+            if (vm.authState is AuthState.SignedIn && code != null && !qrScanner.busy) {
+                vm.consumePendingQrLoginCode()
+                qrScanner.resolveValue(code)
+            }
+        }
+        LaunchedEffect(vm.authState, vm.pendingMobileAppLoginCode) {
+            vm.processPendingMobileAppLogin()
+        }
         // Intro mở app chạy 1 lần mỗi phiên (không lặp lại khi xoay màn hình).
         var showIntro by rememberSaveable { mutableStateOf(true) }
+        val hasPendingWebLogin = vm.pendingQrLoginCode != null || vm.pendingMobileAppLoginCode != null
+        LaunchedEffect(hasPendingWebLogin) {
+            if (hasPendingWebLogin) showIntro = false
+        }
+        val appContext = LocalContext.current
+        val permissionPrefs = remember { appContext.getSharedPreferences("permission_onboarding", android.content.Context.MODE_PRIVATE) }
+        var showPermissionOnboarding by rememberSaveable {
+            mutableStateOf(!permissionPrefs.getBoolean("seen", false))
+        }
+        fun finishPermissionOnboarding() {
+            permissionPrefs.edit().putBoolean("seen", true).apply()
+            showPermissionOnboarding = false
+        }
         // Bấm ra vùng trống bất kỳ → thu bàn phím + bỏ focus ô nhập (nút/ô bấm con vẫn tự nuốt sự
         // kiện của chúng nên không bị ảnh hưởng). Áp ở gốc app nên có tác dụng trên MỌI màn hình nhập.
         val focusManager = LocalFocusManager.current
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(onTap = { focusManager.clearFocus() })
-                    },
+            RightEdgeBackContainer(
+                enabled = backDispatcher != null,
+                onBack = { backDispatcher?.onBackPressed() },
             ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(onTap = { focusManager.clearFocus() })
+                        },
+                ) {
                 // Chuyển cảnh mượt khi vào ứng dụng (Loading → Đăng nhập / Trang chủ).
                 AnimatedContent(
                     targetState = vm.authState,
@@ -132,9 +165,9 @@ fun HrApp(vm: HrViewModel) {
                             resetLoading = vm.resetPasswordLoading,
                             rememberedUsername = vm.rememberedUsername,
                             onLogin = vm::login,
-                            onResetPasswordWithFace = vm::resetPasswordWithFace,
+                            onResetPasswordWithCode = vm::resetPasswordWithCode,
                         )
-                        is AuthState.SignedIn -> HrShell(state.user, vm)
+                        is AuthState.SignedIn -> HrShell(state.user, vm, qrScanner)
                     }
                 }
 
@@ -142,17 +175,132 @@ fun HrApp(vm: HrViewModel) {
                 if (showIntro) {
                     IntroOverlay(onFinished = { showIntro = false })
                 }
+
+                if (!showIntro && showPermissionOnboarding && !hasPendingWebLogin) {
+                    PermissionOnboardingDialog(
+                        onSkip = ::finishPermissionOnboarding,
+                        onDone = ::finishPermissionOnboarding,
+                    )
+                }
+
+                // Lớp phủ cuộc gọi (thoại/video) — luôn trên cùng, hiện khi có cuộc gọi đến/đi.
+                CallHost(vm)
+
+                // Keep the web-login confirmation above intro, onboarding and all feature dialogs.
+                QrScanDialog(qrScanner)
+                MobileAppLoginDialog(vm)
+                }
             }
         }
     }
 }
 
+@Composable
+private fun MobileAppLoginDialog(vm: HrViewModel) {
+    val activity = LocalContext.current as? Activity
+    when (val state = vm.mobileAppLoginState) {
+        MobileAppLoginState.Idle -> Unit
+        MobileAppLoginState.Received, MobileAppLoginState.Resolving -> AlertDialog(
+            onDismissRequest = {},
+            icon = { CircularProgressIndicator(modifier = Modifier.size(30.dp), strokeWidth = 3.dp) },
+            title = { Text("Đang nhận yêu cầu đăng nhập") },
+            text = { Text("Ứng dụng đang kiểm tra yêu cầu từ trình duyệt mobile.") },
+            confirmButton = {},
+        )
+        MobileAppLoginState.AwaitingAppLogin -> AlertDialog(
+            onDismissRequest = vm::dismissMobileAppLogin,
+            title = { Text("Cần đăng nhập ứng dụng") },
+            text = {
+                Text("Phiên ứng dụng đã hết hoặc chưa đăng nhập. Hãy đăng nhập ứng dụng; yêu cầu đăng nhập web sẽ tiếp tục tự động ngay sau đó.")
+            },
+            confirmButton = {
+                Button(onClick = vm::dismissMobileAppLogin) { Text("Đăng nhập ứng dụng") }
+            },
+        )
+        is MobileAppLoginState.Confirmation -> AlertDialog(
+            onDismissRequest = vm::dismissMobileAppLogin,
+            title = { Text(state.challenge.title) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(state.challenge.message)
+                    state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !state.submitting,
+                    onClick = { vm.decideMobileAppLogin(true) },
+                ) {
+                    if (state.submitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Đăng nhập")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !state.submitting,
+                    onClick = { vm.decideMobileAppLogin(false) },
+                ) { Text("Từ chối") }
+            },
+        )
+        is MobileAppLoginState.Finished -> if (state.accepted) {
+            // Xác nhận xong là quay thẳng về trình duyệt. Web đang poll phiên riêng và sẽ
+            // nhận JWT ngay, người dùng không phải bấm thêm nút "Đóng" trong ứng dụng.
+            LaunchedEffect(state) {
+                vm.dismissMobileAppLogin()
+                if (activity?.moveTaskToBack(true) != true) activity?.finish()
+            }
+        } else {
+            AlertDialog(
+                onDismissRequest = vm::dismissMobileAppLogin,
+                title = { Text("Không thể đăng nhập") },
+                text = { Text(state.message) },
+                confirmButton = {
+                    Button(onClick = vm::dismissMobileAppLogin) { Text("Đóng") }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PermissionOnboardingDialog(onSkip: () -> Unit, onDone: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onSkip,
+        title = { Text("Quyền riêng tư trên điện thoại") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("KetoanAPK chỉ hỏi quyền khi bạn dùng tính năng liên quan:")
+                Text("• Thông báo: đơn từ, tin nhắn và cuộc gọi đến")
+                Text("• Camera: chấm công, hồ sơ và gọi video")
+                Text("• Micro: cuộc gọi thoại/video")
+                Text("• Vị trí: kiểm tra địa điểm chấm công")
+                Text(
+                    "Bạn có thể bỏ qua và xem lại tại Cài đặt → Quyền ứng dụng.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { Button(onClick = onDone) { Text("Đã hiểu") } },
+        dismissButton = { TextButton(onClick = onSkip) { Text("Bỏ qua") } },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HrShell(user: HrUser, vm: HrViewModel) {
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
+private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) {
     val snackbar = remember { SnackbarHostState() }
+    // Giữ trạng thái riêng cho TỪNG màn (vị trí cuộn, ô nhập...). Không có cái này thì khối `when` bên
+    // dưới dựng lại composable mỗi lần đổi tab, nên cuộn giữa danh sách rồi sang tab khác và quay lại là
+    // mất chỗ, phải cuộn từ đầu.
+    val screenState = rememberSaveableStateHolder()
     // Đóng banner nhắc đăng ký khuôn mặt cho hết phiên (không nhắc lại tới khi mở lại app).
     var faceBannerDismissed by rememberSaveable { mutableStateOf(false) }
     // Thông báo (remote config) đã đóng — lưu theo nội dung để admin đổi nội dung thì hiện lại.
@@ -165,27 +313,18 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
         }
     }
 
-    // Xử lý nút Back của điện thoại: ưu tiên đóng ngăn kéo → thoát camera đang quét → về Trang chủ.
-    // Chỉ bật khi có việc để lùi; khi đang ở Trang chủ (không mở gì) thì để hệ thống thoát app như thường.
-    val inScanFlow = vm.selected == HrDestination.Scan && vm.attendanceCapture != AttendanceCapture.Idle
-    val inFaceEnroll = vm.faceEnroll == FaceEnrollCapture.Capturing
-    // Đang ở một màn con của tab Cài đặt (Đổi mật khẩu, Thiết bị, ...) → Back lùi về Cài đặt gốc trước.
-    val inSettingsSub = vm.selected == HrDestination.Settings && vm.settingsRoute != SettingsRoute.Home
-    // Đang mở chi tiết một bài trong cổng thông tin → Back lùi về danh sách trước.
-    val inPortalDetail = vm.selected == HrDestination.Portal && vm.portalDetail != null
-    // Đang mở chi tiết một phiếu lương → Back lùi về danh sách thẻ tháng trước.
-    val inPayslipDetail = vm.selected == HrDestination.MyPayslips && vm.payslipOpenPeriod != null
-    BackHandler(enabled = drawerState.isOpen || inScanFlow || inFaceEnroll || inSettingsSub || inPortalDetail || inPayslipDetail || vm.selected != HrDestination.Home) {
-        when {
-            drawerState.isOpen -> scope.launch { drawerState.close() }
-            inFaceEnroll -> vm.cancelFaceEnroll()
-            inScanFlow -> vm.resetCapture()
-            inSettingsSub -> vm.settingsRoute = SettingsRoute.Home
-            inPortalDetail -> vm.closePortalDetail()
-            inPayslipDetail -> vm.closePayslip()
-            else -> vm.select(HrDestination.Home)
-        }
-    }
+    // Deep-link từ trang đăng nhập mobile dùng cùng bộ xử lý QR đang có. Chỉ tiêu thụ sau khi phiên
+    // app đã được khôi phục/đăng nhập và bộ xử lý rảnh, nên cold start không làm mất yêu cầu.
+    // Back của điện thoại xếp theo ĐỘ ƯU TIÊN = THỨ TỰ KHAI BÁO: BackHandler khai sau (lồng sâu hơn) luôn
+    // thắng cái khai trước. Cái dưới đây khai đầu tiên nên là mức THẤP NHẤT — chỉ chạy khi không màn nào
+    // trong app nhận Back — và chỉ làm một việc: lùi ngăn xếp màn.
+    //
+    // Mỗi màn con tự khai BackHandler của nó ngay chỗ nó được dựng (Cài đặt, Cổng thông tin, Phiếu lương,
+    // Chấm công, Chat, Đơn từ, Quản lý nhân sự...). Nhờ vậy thêm màn con mới KHÔNG phải sửa gì ở đây.
+    BackHandler(enabled = vm.canGoBack) { vm.goBack() }
+
+    // Khai SAU cái trên nên được ưu tiên hơn: đang mở tìm kiếm thì Back đóng tìm kiếm, chưa rời màn.
+    BackHandler(enabled = vm.searchOpen) { vm.closeSearch() }
 
     val isRefreshing = when (vm.selected) {
         HrDestination.People -> vm.managerState.loading
@@ -194,72 +333,68 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
         HrDestination.Timesheet -> vm.timesheetState.loading
         HrDestination.MySalary -> vm.payEstimateState.loading
         HrDestination.MyPayslips -> vm.payslipsState.loading
+        HrDestination.Payout -> vm.payoutState.loading
         HrDestination.Portal -> vm.portalState.loading
+        HrDestination.Tasks -> vm.homeState.loading
+        HrDestination.WorkTasks -> vm.workTasksState.loading
+        HrDestination.Chat -> vm.realChatState.loading
+        HrDestination.Directory -> vm.directoryState.loading
+        HrDestination.Calls -> vm.callHistoryState.loading
         else -> vm.homeState.loading
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            DrawerContent(
-                user = user,
-                selected = vm.selected,
-                groups = vm.visibleNavGroups(user),
-                approvalCount = vm.pendingApprovalCount,
-                onSelect = {
-                    vm.select(it)
-                    scope.launch { drawerState.close() }
-                },
-                onClose = { scope.launch { drawerState.close() } },
-                onLogout = vm::logout,
-            )
-        },
-    ) {
+        // Chat là "mini app": chiếm trọn màn, tự dựng header + thanh tab riêng nên ẩn hẳn header và
+        // thanh dưới của HR ở đây.
+        val chatFullScreen = vm.selected == HrDestination.Chat
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
-                TopAppBar(
+                if (chatFullScreen) Unit
+                else if (vm.searchOpen) SearchTopBar(
+                    query = vm.searchQuery,
+                    onQuery = vm::typeSearch,
+                    onClose = vm::closeSearch,
+                )
+                else TopAppBar(
+                    // Bỏ chữ "KETOANAPK": người dùng đã ở trong app rồi, tên app chiếm gần nửa header mà
+                    // không nói thêm điều gì. Giữ lại đúng tên màn đang xem.
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "KETOANAPK",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.ExtraBold,
-                            )
-                            Box(
-                                Modifier
-                                    .padding(horizontal = 10.dp)
-                                    .width(1.dp)
-                                    .height(20.dp)
-                                    .background(MaterialTheme.colorScheme.outline),
-                            )
-                            Text(
-                                vm.selected.title,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Filled.Menu, contentDescription = "Điều hướng")
-                        }
+                        Text(
+                            vm.selected.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     },
                     actions = {
+                        IconButton(onClick = vm::openSearch) {
+                            Icon(Icons.Filled.Search, contentDescription = "Tìm kiếm")
+                        }
+                        IconButton(enabled = !qrScanner.busy, onClick = qrScanner.startScan) {
+                            Icon(Icons.Filled.QrCodeScanner, contentDescription = "Quét mã QR")
+                        }
                         NotificationBell(count = vm.unreadCount, onClick = vm::openNotifications)
-                        UserAvatar(user.displayName, 34, modifier = Modifier.padding(start = 4.dp, end = 12.dp))
+                        // Ảnh đại diện mở màn Cá nhân — nơi ở của nhóm mục cá nhân sau khi bỏ ngăn kéo.
+                        UserAvatar(
+                            user.displayName,
+                            34,
+                            modifier = Modifier
+                                .padding(start = 4.dp, end = 12.dp)
+                                .clip(CircleShape)
+                                .clickable { vm.select(HrDestination.Personal) },
+                        )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
                 )
             },
             bottomBar = {
-                BottomBar(
-                    items = vm.bottomDestinations,
+                if (!chatFullScreen) BottomBar(
+                    items = vm.bottomDestinations(user),
                     selected = vm.selected,
+                    badgeCount = vm::badgeCount,
                     onSelect = vm::select,
                 )
             },
@@ -281,7 +416,9 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                 }
                 // Banner nhắc đăng ký khuôn mặt: chỉ hiện khi CHẮC CHẮN chưa đăng ký (cờ đi kèm đăng nhập),
                 // admin không tắt từ xa, chưa bị đóng, và không phải đang ở màn Cài đặt.
-                if (vm.showFaceEnrollBanner && !faceBannerDismissed && vm.selected != HrDestination.Settings) {
+                // Không nhắc trên các màn "chứa"/cấu hình — ở đó banner chỉ chiếm chỗ của danh sách.
+                val bannerFreeScreens = setOf(HrDestination.Settings, HrDestination.Personal)
+                if (vm.showFaceEnrollBanner && !faceBannerDismissed && vm.selected !in bannerFreeScreens) {
                     FaceEnrollBanner(
                         onEnroll = vm::requestFaceEnroll,
                         onDismiss = { faceBannerDismissed = true },
@@ -294,37 +431,67 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                         .fillMaxWidth()
                         .weight(1f),
                 ) {
+                    if (vm.searchOpen) SearchResults(
+                        query = vm.searchQuery,
+                        results = vm.searchResults(user),
+                        badgeCount = vm::badgeCount,
+                        onSelect = { vm.closeSearch(); vm.select(it) },
+                    ) else screenState.SaveableStateProvider(vm.selected) {
                     when (vm.selected) {
-                    HrDestination.Home -> HomeScreen(user, vm.homeState, vm.managerState, vm::select)
+                    HrDestination.Home -> HomeScreen(user, vm.homeState, vm.managerState, vm.hubFor(HrDestination.Home), vm.workTasksState, vm::select)
+                    HrDestination.Personal -> PersonalHubScreen(user, vm.homeState, vm::select)
                     HrDestination.Portal -> PortalScreen(vm.portalState, vm.portalDetail, vm::openPortalPost, vm::closePortalDetail)
-                    HrDestination.Profile -> ProfileScreen(vm.homeState, vm::startPortraitCapture)
+                    HrDestination.Profile -> ElectronicProfileScreen(vm)
+                    HrDestination.Onboarding -> OnboardingScreen(vm)
+                    HrDestination.Performance -> PerformanceScreen(vm)
+                    HrDestination.Training -> TrainingScreen(vm)
+                    HrDestination.Benefits -> BenefitsScreen(vm)
+                    HrDestination.Feedback -> SurveyFeedbackScreen(vm)
+                    HrDestination.Help -> HelpCenterScreen(vm)
                     HrDestination.Scan -> AttendanceScreen(vm)
-                    HrDestination.Timesheet -> TimesheetScreen(vm.timesheetState, vm::changeTimesheetMonth, vm::setTimesheetMonth)
+                    HrDestination.Timesheet -> TimesheetScreen(vm.timesheetState, vm::changeTimesheetMonth, vm::setTimesheetMonth, vm::startShiftSwap)
                     HrDestination.MySalary -> MySalaryScreen(vm.payEstimateState)
                     HrDestination.MyPayslips -> MyPayslipsScreen(
                         state = vm.payslipsState,
                         openPeriod = vm.payslipOpenPeriod,
+                        username = user.username,
                         onOpen = vm::openPayslip,
                         onClose = vm::closePayslip,
+                        onAcknowledge = vm::acknowledgePayslip,
+                        onInquiry = vm::sendPayslipInquiry,
+                        onDownload = vm::downloadPayslip,
+                        onVerifyAccountPassword = vm::verifyAccountPassword,
                     )
+                    HrDestination.Payout -> PayoutScreen(vm)
                     HrDestination.Requests -> RequestsScreen(vm)
+                    HrDestination.Tasks -> TaskCenterScreen(vm)
+                    HrDestination.WorkTasks -> WorkTaskScreen(vm)
+                    HrDestination.Chat -> RealChatScreen(vm)
+                    HrDestination.Directory -> DirectoryScreen(vm)
+                    HrDestination.Calls -> CallHistoryScreen(vm)
                     HrDestination.Approval -> StaffRequestsScreen(vm)
                     HrDestination.Penalty -> PenaltyScreen(user, vm.homeState, vm::startPenaltyAppeal)
-                    HrDestination.People -> ManagerScreen(vm.managerState)
+                    HrDestination.People -> AdminPeopleScreen(vm)
+                    HrDestination.Dashboard -> ExecutiveDashboardScreen(vm)
                     HrDestination.Payroll -> PayrollScreen(vm.homeState)
-                    HrDestination.Audit -> SimpleScreen("Nhật ký hệ thống", "Chưa có nhật ký mới trong ứng dụng.")
-                    HrDestination.Settings -> SettingsScreen(user, vm, vm::logout)
+                    HrDestination.Audit -> AuditScreen(vm)
+                    HrDestination.Settings -> SettingsScreen(
+                        user = user,
+                        vm = vm,
+                        onScanQr = qrScanner.startScan,
+                        onLogout = vm::logout,
+                    )
                     HrDestination.Notifications -> NotificationsScreen(
                         notifications = vm.notifications,
-                        onOpen = { n -> vm.markNotificationRead(n.id); vm.navigateTo(n.target) },
+                        onOpen = { n -> vm.markNotificationRead(n.id); vm.navigateTo(n.target, n.entityId) },
                         onMarkAllRead = vm::markAllNotificationsRead,
                         onClear = vm::clearNotifications,
                     )
                 }
+                }
             }
             }
         }
-    }
 
         // Camera quét khuôn mặt phủ TOÀN MÀN HÌNH (ngoài Scaffold) → không dính thanh tiêu đề/điều hướng.
         if (vm.selected == HrDestination.Scan && vm.attendanceCapture == AttendanceCapture.Collecting) {
@@ -337,12 +504,14 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
 
         // Camera ĐĂNG KÝ khuôn mặt (quét nhiều góc) cũng phủ toàn màn hình như trên.
         if (vm.faceEnroll == FaceEnrollCapture.Capturing) {
+            BackHandler { vm.cancelFaceEnroll() }
             FaceEnrollCameraScan(onCompleted = vm::submitFaceEnroll, onCancel = vm::cancelFaceEnroll)
         }
 
         // Camera CHỤP ẢNH CHÂN DUNG (hồ sơ) phủ toàn màn hình; xong → lưu lên máy chủ.
         // Tham số cắt lấy từ remote config (AppConfig) → chỉnh trên trang Hệ thống, khỏi build APK.
         if (vm.portraitCapture == PortraitCapture.Capturing) {
+            BackHandler { vm.cancelPortraitCapture() }
             PortraitCaptureScan(
                 onCaptured = vm::submitPortrait,
                 onCancel = vm::cancelPortraitCapture,
@@ -383,6 +552,86 @@ private fun HrShell(user: HrUser, vm: HrViewModel) {
                 onConfirm = { vm.confirmUpdatePrompt(context) },
                 onDismiss = vm::dismissUpdatePrompt,
             )
+        }
+
+        // Cảnh báo tải bản cập nhật lớn khi đang dùng dữ liệu di động (hỏi trước khi tốn cước).
+        if (vm.meteredUpdatePrompt) {
+            val context = LocalContext.current
+            MeteredUpdateDialog(
+                sizeText = vm.meteredUpdateSize,
+                installing = vm.settingsState.installing,
+                onConfirm = { vm.confirmMeteredUpdate(context) },
+                onDismiss = vm::dismissMeteredUpdate,
+            )
+        }
+
+    }
+}
+
+/** Header biến thành ô nhập khi đang tìm kiếm. Tự bật bàn phím để gõ được ngay, khỏi chạm thêm lần nữa. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchTopBar(query: String, onQuery: (String) -> Unit, onClose: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    TopAppBar(
+        title = {
+            TextField(
+                value = query,
+                onValueChange = onQuery,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focus),
+                placeholder = { Text("Tìm màn hình…") },
+                singleLine = true,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                ),
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Đóng tìm kiếm")
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+    )
+}
+
+/** Kết quả tìm kiếm: danh sách màn khớp tên, bấm là nhảy thẳng tới. */
+@Composable
+private fun SearchResults(
+    query: String,
+    results: List<HrDestination>,
+    badgeCount: (HrDestination) -> Int,
+    onSelect: (HrDestination) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        when {
+            query.isBlank() -> item {
+                Text(
+                    "Gõ tên màn hình để nhảy thẳng tới, ví dụ: phiếu lương, phúc lợi, danh bạ.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            results.isEmpty() -> item {
+                Text(
+                    "Không có màn nào khớp \"$query\".",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            else -> item {
+                HrCard { HubList(destinations = results, badgeCount = badgeCount, onSelect = onSelect) }
+            }
         }
     }
 }
@@ -426,6 +675,41 @@ private fun UpdateDialog(
         } else {
             { TextButton(onClick = onDismiss) { Text("Để sau") } }
         },
+    )
+}
+
+/**
+ * Hỏi trước khi tải bản cập nhật LỚN khi đang dùng dữ liệu di động — kèm dung lượng thực (vd. "135 MB").
+ * Chọn "Để sau" để chờ Wi-Fi cho khỏi tốn cước. Không hiện khi đang ở Wi-Fi hay bản cập nhật nhỏ.
+ */
+@Composable
+private fun MeteredUpdateDialog(
+    sizeText: String,
+    installing: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("Bạn đang dùng dữ liệu di động") },
+        text = {
+            Text(
+                "Bản cập nhật này khoảng $sizeText. Tải bằng dữ liệu di động có thể tốn cước — bạn muốn tải ngay hay chờ kết nối Wi-Fi?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !installing) {
+                if (installing) {
+                    CircularProgressIndicator(Modifier.size(18.dp), MaterialTheme.colorScheme.onPrimary, 2.dp)
+                } else {
+                    Text("Tải ngay", fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Để sau (chờ Wi-Fi)") } },
     )
 }
 
@@ -569,16 +853,7 @@ private fun FaceEnrollBanner(onEnroll: () -> Unit, onDismiss: () -> Unit) {
 @Composable
 private fun NotificationBell(count: Int, onClick: () -> Unit) {
     IconButton(onClick = onClick) {
-        BadgedBox(
-            badge = {
-                if (count > 0) {
-                    Badge(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ) { Text(if (count > 99) "99+" else "$count") }
-                }
-            },
-        ) {
+        BadgedBox(badge = { if (count > 0) CountBadge(count) }) {
             Icon(
                 if (count > 0) Icons.Filled.Notifications else Icons.Filled.NotificationsNone,
                 contentDescription = "Thông báo",
@@ -593,6 +868,7 @@ private fun NotificationBell(count: Int, onClick: () -> Unit) {
 private fun BottomBar(
     items: List<HrDestination>,
     selected: HrDestination,
+    badgeCount: (HrDestination) -> Int,
     onSelect: (HrDestination) -> Unit,
 ) {
     Box(
@@ -622,16 +898,16 @@ private fun BottomBar(
                     if (item == HrDestination.Scan) {
                         Spacer(Modifier.weight(1f)) // chừa chỗ cho nút nổi ở giữa
                     } else {
-                        BottomItem(item.icon, item.label, active = selected == item, modifier = Modifier.weight(1f)) { onSelect(item) }
+                        BottomItem(
+                            icon = item.icon,
+                            label = item.label,
+                            active = selected == item,
+                            badge = badgeCount(item),
+                            modifier = Modifier.weight(1f),
+                            onClick = { onSelect(item) },
+                        )
                     }
                 }
-                BottomItem(
-                    HrDestination.Settings.icon,
-                    HrDestination.Settings.label,
-                    active = selected == HrDestination.Settings,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onSelect(HrDestination.Settings) },
-                )
             }
         }
 
@@ -647,6 +923,7 @@ private fun BottomItem(
     icon: ImageVector,
     label: String,
     active: Boolean,
+    badge: Int,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -659,9 +936,20 @@ private fun BottomItem(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp))
+        BadgedBox(badge = { if (badge > 0) CountBadge(badge) }) {
+            Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp))
+        }
         Text(label, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
     }
+}
+
+/** Huy hiệu số đỏ dùng chung cho thanh dưới, ngăn kéo và chuông thông báo. */
+@Composable
+private fun CountBadge(count: Int) {
+    Badge(
+        containerColor = MaterialTheme.colorScheme.error,
+        contentColor = MaterialTheme.colorScheme.onError,
+    ) { Text(if (count > 99) "99+" else "$count") }
 }
 
 @Composable
@@ -680,76 +968,6 @@ private fun ScanButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
             contentDescription = "Chấm công",
             tint = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier.size(30.dp),
-        )
-    }
-}
-
-@Composable
-private fun DrawerContent(
-    user: HrUser,
-    selected: HrDestination,
-    groups: List<NavGroup>,
-    approvalCount: Int,
-    onSelect: (HrDestination) -> Unit,
-    onClose: () -> Unit,
-    onLogout: () -> Unit,
-) {
-    ModalDrawerSheet(
-        drawerContainerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.width(316.dp),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            UserAvatar(user.displayName, 46)
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(user.displayName, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (user.isAdmin) "Quản trị nhân sự" else "Nhân viên", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Đóng") }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            groups.forEach { group ->
-                item(key = "title-${group.title}") {
-                    SectionTitle(group.title, modifier = Modifier.padding(horizontal = 6.dp))
-                }
-                items(group.destinations, key = { it.name }) { dest ->
-                    NavigationDrawerItem(
-                        label = { Text(dest.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        selected = selected == dest,
-                        icon = { Icon(dest.icon, contentDescription = null) },
-                        badge = {
-                            if (dest == HrDestination.Approval && approvalCount > 0) {
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.error,
-                                    contentColor = MaterialTheme.colorScheme.onError,
-                                ) { Text(if (approvalCount > 99) "99+" else "$approvalCount") }
-                            }
-                        },
-                        onClick = { onSelect(dest) },
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        ),
-                    )
-                }
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        NavigationDrawerItem(
-            label = { Text("Đăng xuất", fontWeight = FontWeight.Bold) },
-            selected = false,
-            icon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-            onClick = onLogout,
-            modifier = Modifier.padding(10.dp),
         )
     }
 }

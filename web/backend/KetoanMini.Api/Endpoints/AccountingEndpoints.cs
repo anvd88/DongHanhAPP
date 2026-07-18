@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -12,7 +13,7 @@ public static class AccountingEndpoints
 
     public static void MapAccounting(this IEndpointRouteBuilder app)
     {
-        var api = app.MapGroup("/api").RequireAuthorization();
+        var api = app.MapGroup("/api").RequireAuthorization("Accounting");
 
         // ---------- Dashboard ----------
         api.MapGet("/dashboard", async (Database db) =>
@@ -182,10 +183,10 @@ public static class AccountingEndpoints
                     $"Xóa vĩnh viễn khách hàng và dữ liệu liên quan (web). Phiếu: {deletedDocs}, dòng hàng: {deletedLines}, thanh toán: {deletedPayments}, alias: {deletedAliases}.");
                 return Results.NoContent();
             }
-            catch (NpgsqlException ex)
+            catch (NpgsqlException)
             {
                 await tx.RollbackAsync();
-                return Results.Json(new { message = "Lỗi xóa khách hàng: " + ex.Message }, statusCode: 400);
+                return Results.Json(new { message = "Không thể xóa khách hàng (dữ liệu liên quan hoặc ràng buộc)." }, statusCode: 400);
             }
         });
 
@@ -217,28 +218,8 @@ public static class AccountingEndpoints
             return Results.Ok(new ReportsDto(totalPayments, monthRevenue, totalDocuments, activeCustomers, monthly));
         });
 
-        // ---------- Audit log (Sao lưu) ----------
-        // Nhật ký thao tác quản trị chứa dấu vết mọi hành động nhạy cảm → chỉ Admin được xem.
-        // Hỗ trợ lọc theo từ khóa (người dùng/hành động/đối tượng/chi tiết) để tra cứu nhanh.
-        api.MapGet("/audit", async (Database db, int? take, string? search) =>
-        {
-            await using var conn = await db.OpenAsync();
-            var list = new List<AuditDto>();
-            var hasSearch = !string.IsNullOrWhiteSpace(search);
-            var where = hasSearch
-                ? "WHERE (username ILIKE @s OR action ILIKE @s OR entity ILIKE @s OR entity_name ILIKE @s OR details ILIKE @s)"
-                : "";
-            var cmd = conn.Cmd(
-                $@"SELECT occurred_at, username, action, entity, entity_name, details
-                   FROM audit_logs {where} ORDER BY occurred_at DESC LIMIT @n")
-                .With("@n", take is > 0 and <= 1000 ? take.Value : 100);
-            if (hasSearch) cmd.With("@s", $"%{search!.Trim()}%");
-            await using var r = await cmd.ExecuteReaderAsync();
-            while (await r.ReadAsync())
-                list.Add(new AuditDto(r.Dt("occurred_at"), r.Str("username"), r.Str("action"),
-                    r.Str("entity"), r.Str("entity_name"), r.Str("details")));
-            return Results.Ok(list);
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        // Nhật ký hệ thống (/api/audit) đã tách sang AuditEndpoints.MapAudit() — bản đầy đủ có phân trang,
+        // lọc theo người dùng/hành động/đối tượng/thời gian, che dữ liệu nhạy cảm và xuất CSV/Excel.
     }
 
     private static async Task<IResult> ListDocuments(Database db)
@@ -375,10 +356,10 @@ public static class AccountingEndpoints
                 "Customer", name, $"{(id is null ? "Tạo" : "Cập nhật")} khách hàng (web).");
             return Results.Ok(new { id = customerId });
         }
-        catch (NpgsqlException ex)
+        catch (NpgsqlException)
         {
             await tx.RollbackAsync();
-            return Results.Json(new { message = "Lỗi lưu khách hàng: " + ex.Message }, statusCode: 400);
+            return Results.Json(new { message = "Không lưu được khách hàng (dữ liệu không hợp lệ hoặc trùng lặp)." }, statusCode: 400);
         }
     }
 
@@ -446,10 +427,10 @@ public static class AccountingEndpoints
                 "Document", req.VoucherNo, $"{(id is null ? "Tạo" : "Cập nhật")} phiếu kế toán (web).");
             return Results.Ok(new { id = docId });
         }
-        catch (NpgsqlException ex)
+        catch (NpgsqlException)
         {
             await tx.RollbackAsync();
-            return Results.Json(new { message = "Lỗi lưu phiếu kế toán: " + ex.Message }, statusCode: 400);
+            return Results.Json(new { message = "Không lưu được phiếu kế toán (dữ liệu không hợp lệ hoặc trùng lặp)." }, statusCode: 400);
         }
     }
 

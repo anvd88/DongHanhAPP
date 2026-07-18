@@ -1,0 +1,12 @@
+# Cách chạy coturn nhanh bằng Docker (dùng network_mode: host để mở đúng dải cổng relay UDP).
+# Đặt turnserver.conf cùng thư mục này. Chạy:  docker compose up -d
+services:
+  coturn:
+    image: coturn/coturn:4.6
+    container_name: coturn
+    restart: unless-stopped
+    network_mode: host   # cần cho dải cổng relay UDP (49160-49200) hoạt động đúng
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./log:/var/log/turnserver
+    command: ["-c", "/etc/coturn/turnserver.conf"]

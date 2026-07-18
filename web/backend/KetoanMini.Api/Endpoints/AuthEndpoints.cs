@@ -1,8 +1,11 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
+using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.RateLimiting;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -13,7 +16,7 @@ public static class AuthEndpoints
     {
         var g = app.MapGroup("/api/auth");
 
-        g.MapPost("/login", async (LoginRequest req, Database db, TokenService tokens, HttpContext http) =>
+        g.MapPost("/login", async (LoginRequest req, Database db, TokenService tokens, HttpContext http, IHubContext<ChangesHub> hub, PushService push) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mật khẩu." });
@@ -54,16 +57,407 @@ public static class AuthEndpoints
                 AvatarUrl = await LoadAvatarUrl(conn, user.Id),
                 Verified = await LoadVerified(conn, user.Username, user.Role),
                 IsDiamond = await LoadDiamond(conn, user.Username, user.Role),
-                FaceRegistered = await LoadFaceRegistered(conn, user.Username)
+                FaceRegistered = await LoadFaceRegistered(conn, user.Username),
+                Roles = await ApiHelpers.LoadAllRolesAsync(conn, user.Username, user.Role)
             };
             // Ghi nhận thiết bị đăng nhập ngay để hiện trong "Quản lý thiết bị" + gắn sid vào token
             // (phục vụ thu hồi từ xa). Đăng nhập mới luôn gỡ cờ thu hồi cũ của chính thiết bị đó.
+            var isNative = IsNativeClient(req.Client);
+            var clientKind = isNative ? "App" : "Web";
             var sid = WebSessionId(req.Sid, user.Username);
-            await RegisterDeviceSessionAsync(conn, user.Username, sid, UserAgentOf(http));
-            await db.RecordAudit(user.Username, "Đăng nhập web", "Auth", user.Username, "Đăng nhập phiên bản web.");
+            var knownDevice = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM user_sessions WHERE username=@u AND session_token=@sid")
+                .With("@u",user.Username).With("@sid",sid).ExecuteScalarAsync()) > 0;
+            if (!knownDevice)
+                await push.SendToUserAsync(user.Username,"Đăng nhập trên thiết bị mới",$"Tài khoản vừa đăng nhập từ {clientKind}: {UserAgentOf(http)}",$"security:{sid}","Settings");
+            await RegisterDeviceSessionAsync(conn, user.Username, sid, UserAgentOf(http), clientKind);
+
+            // MỖI TÀI KHOẢN CHỈ 1 APP (nhưng cho phép dùng web song song). Chỉ áp khi đăng nhập từ ỨNG
+            // DỤNG: thu hồi các phiên APP khác (KHÔNG đụng phiên Web) → app cũ bị đá (request kế nhận 401);
+            // xóa token đẩy cũ để cuộc gọi/thông báo không tới app đã bị đá (app hiện tại tự đăng ký lại).
+            // Đăng nhập từ WEB thì không đá ai — web + app dùng đồng thời thoải mái.
+            if (isNative)
+            {
+                await conn.Cmd(
+                    @"UPDATE user_sessions
+                         SET revoked = TRUE, revoked_at = CURRENT_TIMESTAMP, revoked_by = @u, is_active = FALSE
+                       WHERE username = @u AND session_token <> @sid AND client_kind = 'App'")
+                    .With("@u", user.Username).With("@sid", sid).ExecuteNonQueryAsync();
+                await conn.Cmd("DELETE FROM hr_device_tokens WHERE lower(username) = lower(@u)")
+                    .With("@u", user.Username).ExecuteNonQueryAsync();
+
+                // Đá NGAY app cũ đang online qua SignalR: phát "kicked" kèm sid MỚI; app nào có sid khác
+                // thì tự đăng xuất tức thì (không chờ heartbeat). Web không nghe sự kiện này nên không sao.
+                try { await hub.Clients.User(user.Username).SendAsync("kicked", sid); } catch { /* không có kết nối → bỏ qua */ }
+            }
+
+            await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username, $"Đăng nhập ({clientKind}).");
 
             return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
-        });
+        }).AllowAnonymous().RequireRateLimiting("login");
+
+        // ── Đăng nhập web bằng QR ──────────────────────────────────────────────────
+        // Trình duyệt tạo phiên 5 phút. QR chỉ chứa scan token cho app; poll token độc lập không xuất
+        // hiện trong QR nên người chụp được QR không thể tự nhận JWT từ phía trình duyệt.
+        g.MapPost("/qr/start", (QrLoginStartRequest req, HttpContext http, QrLoginService qr) =>
+        {
+            NoStore(http);
+            if (!string.Equals(req.ClientMode?.Trim(), "desktop_qr", StringComparison.Ordinal))
+                return Results.BadRequest(new { message = "Chế độ đăng nhập QR desktop không hợp lệ." });
+            var sid = string.IsNullOrWhiteSpace(req.Sid)
+                ? "web:qr:" + Guid.NewGuid().ToString("N")[..24]
+                : WebSessionId(req.Sid, "qr");
+            var created = qr.Create(sid, UserAgentOf(http));
+            if (created is null)
+                return Results.Json(new { message = "Máy chủ đang có quá nhiều phiên QR. Vui lòng thử lại sau." }, statusCode: 503);
+
+            return Results.Ok(new QrLoginStartResponse(created.QrCode, created.PollToken, created.ExpiresAt));
+        }).AllowAnonymous().RequireRateLimiting("qr-start");
+
+        // App vừa đọc được QR: gắn tên tài khoản vào phiên để web hiển thị ngay, nhưng CHƯA cấp JWT.
+        // Chỉ trình duyệt giữ poll token bí mật mới đọc được tên này.
+        g.MapPost("/qr/scan", async (QrLoginConfirmRequest req, ClaimsPrincipal principal, Database db, QrLoginService qr, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var user = await ReadUserByUsername(conn, username);
+            if (user is null || user.IsPending || !user.IsActive)
+                return Results.Json(new { message = "Tài khoản không thể quét mã đăng nhập QR." }, statusCode: 403);
+            if (!await IsWebLoginEnabledAsync(conn, user.Username))
+                return Results.Json(new { message = "Đăng nhập trên web đang bị tắt cho tài khoản này." }, statusCode: 403);
+
+            var result = qr.Scan(req.QrCode, user.Username, user.FullName);
+            if (result == QrLoginScanResult.InvalidOrExpired)
+                return Results.Json(new { message = "Mã QR không hợp lệ, đã hết hạn hoặc đang được tài khoản khác xử lý." }, statusCode: 400);
+
+            if (result == QrLoginScanResult.Scanned)
+                await db.RecordAudit(user.Username, "Quét mã đăng nhập QR", "Auth", user.Username,
+                    "Đã quét QR web, đang chờ người dùng xác nhận trên ứng dụng.");
+
+            // App không cần nhận lại hồ sơ của chính nó; web lấy tên qua poll token riêng.
+            return Results.NoContent();
+        }).RequireAuthorization().RequireRateLimiting("qr-confirm");
+
+        // App đã đăng nhập xác nhận danh tính hiện tại. Kiểm tra lại trạng thái tài khoản và cờ cho
+        // phép đăng nhập web trước khi chuyển phiên Scanned -> Confirmed.
+        g.MapPost("/qr/confirm", async (QrLoginConfirmRequest req, ClaimsPrincipal principal, Database db, QrLoginService qr, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var user = await ReadUserByUsername(conn, username);
+            if (user is null || user.IsPending || !user.IsActive)
+                return Results.Json(new { message = "Tài khoản không thể xác nhận đăng nhập QR." }, statusCode: 403);
+            if (!await IsWebLoginEnabledAsync(conn, user.Username))
+                return Results.Json(new { message = "Đăng nhập trên web đang bị tắt cho tài khoản này." }, statusCode: 403);
+
+            var result = qr.Confirm(req.QrCode, user.Username, user.FullName);
+            if (result == QrLoginConfirmResult.InvalidOrExpired)
+                return Results.Json(new { message = "Mã QR không hợp lệ, đã hết hạn hoặc đã được sử dụng." }, statusCode: 400);
+
+            if (result == QrLoginConfirmResult.Confirmed)
+                await db.RecordAudit(user.Username, "Xác nhận đăng nhập QR", "Auth", user.Username,
+                    "Xác nhận trên ứng dụng cho một phiên đăng nhập web.");
+
+            return Results.Ok(new { message = "Đã xác nhận. Trình duyệt sẽ tự động đăng nhập." });
+        }).RequireAuthorization().RequireRateLimiting("qr-confirm");
+
+        // Ảnh đại diện được tải riêng đúng một lần sau khi web thấy trạng thái Scanned. Không lưu
+        // data URL ảnh trong session RAM và cũng không kéo ảnh từ PostgreSQL ở từng nhịp poll 3 giây.
+        g.MapPost("/qr/account", async (QrLoginPollRequest req, Database db, QrLoginService qr, HttpContext http) =>
+        {
+            NoStore(http);
+            var scanned = qr.GetScannedAccount(req.PollToken);
+            if (scanned is null) return Results.NotFound(new { message = "Phiên QR không còn chờ xác nhận." });
+
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var user = await ReadUserByUsername(conn, scanned.Username);
+            if (user is null || user.IsPending || !user.IsActive)
+                return Results.NotFound(new { message = "Phiên QR không còn chờ xác nhận." });
+
+            return Results.Ok(new { avatarUrl = await LoadAvatarUrl(conn, user.Id) });
+        }).AllowAnonymous().RequireRateLimiting("qr-poll");
+
+        // Người dùng từ chối tại màn xác nhận trên điện thoại: web hiển thị kết quả bị từ chối và yêu
+        // cầu tạo QR mới. Chỉ đúng tài khoản đã quét mới thay đổi được trạng thái này.
+        g.MapPost("/qr/reject", (QrLoginConfirmRequest req, ClaimsPrincipal principal, QrLoginService qr, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+            if (!qr.RejectScan(req.QrCode, username))
+                return Results.Json(new { message = "Mã QR không còn chờ xác nhận." }, statusCode: 400);
+            return Results.NoContent();
+        }).RequireAuthorization().RequireRateLimiting("qr-confirm");
+
+        // Poll trạng thái chỉ đọc RAM khi còn chờ. Chỉ lúc app đã xác nhận mới chạm DB một lần để kiểm
+        // tra tài khoản, ghi nhận thiết bị web và cấp JWT theo đúng luồng đăng nhập hiện có.
+        g.MapPost("/qr/poll", async (QrLoginPollRequest req, Database db, TokenService tokens, PushService push,
+            QrLoginService qr, HttpContext http) =>
+        {
+            NoStore(http);
+            var attempt = qr.BeginConsume(req.PollToken);
+            if (attempt.State == QrLoginPollState.Pending)
+                return Results.Ok(new { status = "pending", expiresAt = attempt.ExpiresAt });
+            if (attempt.State == QrLoginPollState.Scanned && attempt.Account is not null)
+                return Results.Ok(new
+                {
+                    status = "scanned",
+                    expiresAt = attempt.ExpiresAt,
+                    account = new { username = attempt.Account.Username, fullName = attempt.Account.FullName }
+                });
+            if (attempt.State == QrLoginPollState.Rejected)
+                return Results.Ok(new { status = "rejected", expiresAt = attempt.ExpiresAt });
+            if (attempt.State == QrLoginPollState.Expired || attempt.Session is null)
+                return Results.Ok(new { status = "expired", expiresAt = attempt.ExpiresAt });
+
+            var session = attempt.Session;
+            try
+            {
+                await using var conn = await db.OpenAsync(http.RequestAborted);
+                var user = await ReadUserByUsername(conn, session.Username);
+                if (user is null || user.IsPending || !user.IsActive)
+                {
+                    qr.Invalidate(session);
+                    return Results.Json(new { message = "Tài khoản không còn đủ điều kiện đăng nhập." }, statusCode: 403);
+                }
+                if (!await IsWebLoginEnabledAsync(conn, user.Username))
+                {
+                    qr.Invalidate(session);
+                    return Results.Json(new { message = "Đăng nhập trên web đang bị tắt cho tài khoản này." }, statusCode: 403);
+                }
+
+                user = user with
+                {
+                    AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                    FaceRegistered = await LoadFaceRegistered(conn, user.Username)
+                };
+
+                if (!session.AlreadyAuthorized)
+                {
+                    var knownDevice = Convert.ToInt32(await conn.Cmd(
+                            "SELECT COUNT(*) FROM user_sessions WHERE username=@u AND session_token=@sid")
+                        .With("@u", user.Username).With("@sid", session.BrowserSid).ExecuteScalarAsync()) > 0;
+                    if (!knownDevice)
+                        await push.SendToUserAsync(user.Username, "Đăng nhập trên thiết bị mới",
+                            $"Tài khoản vừa đăng nhập bằng QR từ Web: {session.UserAgent}",
+                            $"security:{session.BrowserSid}", "Settings");
+
+                    await RegisterDeviceSessionAsync(conn, user.Username, session.BrowserSid, session.UserAgent, "Web");
+                    await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username, "Đăng nhập web bằng QR.");
+                }
+
+                var login = new LoginResponse(tokens.CreateToken(user, session.BrowserSid), user);
+                qr.CompleteConsume(session, success: true);
+                return Results.Ok(new
+                {
+                    status = "authenticated",
+                    expiresAt = attempt.ExpiresAt,
+                    token = login.Token,
+                    user = login.User
+                });
+            }
+            catch
+            {
+                // Lỗi DB/mạng tạm thời không làm mất lượt xác nhận; poll sau có thể thử cấp token lại.
+                qr.CompleteConsume(session, success: false);
+                throw;
+            }
+        }).AllowAnonymous().RequireRateLimiting("qr-poll");
+
+        // Trình duyệt xác nhận đã nhận/lưu JWT; nếu response authenticated trước đó bị thất lạc thì
+        // chưa có ack và poll vẫn có thể lấy lại kết quả một cách idempotent.
+        g.MapPost("/qr/ack", (QrLoginPollRequest req, QrLoginService qr, HttpContext http) =>
+        {
+            NoStore(http);
+            qr.Acknowledge(req.PollToken);
+            return Results.NoContent();
+        }).AllowAnonymous().RequireRateLimiting("qr-poll");
+
+        // Đóng hộp thoại hoặc bấm tải lại sẽ hủy phiên cũ ngay, tránh app xác nhận nhầm QR không còn
+        // hiển thị. Endpoint idempotent và không tiết lộ token có tồn tại hay không.
+        g.MapPost("/qr/cancel", (QrLoginCancelRequest req, QrLoginService qr, HttpContext http) =>
+        {
+            NoStore(http);
+            qr.Cancel(req.PollToken);
+            return Results.NoContent();
+        }).AllowAnonymous().RequireRateLimiting("qr-poll");
+
+        // Mobile web -> Android app. This protocol is separate from desktop QR: it uses a
+        // different prefix, explicit client mode, dedicated endpoints and channel-bound tokens.
+        g.MapPost("/app-login/start", (MobileAppLoginStartRequest req, HttpContext http, QrLoginService logins) =>
+        {
+            NoStore(http);
+            if (!IsMobileAppMode(req.ClientMode))
+                return Results.BadRequest(new { message = "Chế độ đăng nhập ứng dụng không hợp lệ." });
+
+            var sid = string.IsNullOrWhiteSpace(req.Sid)
+                ? "web:app:" + Guid.NewGuid().ToString("N")[..24]
+                : WebSessionId(req.Sid, "app-login");
+            var created = logins.Create(sid, UserAgentOf(http), WebLoginChannel.MobileApp);
+            if (created is null)
+                return Results.Json(new { message = "Máy chủ đang có quá nhiều yêu cầu đăng nhập. Vui lòng thử lại sau." }, statusCode: 503);
+
+            return Results.Ok(new MobileAppLoginStartResponse(
+                created.QrCode, created.PollToken, created.ExpiresAt));
+        }).AllowAnonymous().RequireRateLimiting("qr-start");
+
+        g.MapPost("/app-login/resolve", async (MobileAppLoginCodeRequest req, ClaimsPrincipal principal,
+            Database db, QrLoginService logins, HttpContext http) =>
+        {
+            NoStore(http);
+            if (!IsMobileAppMode(req.ClientMode) || !QrLoginService.LooksLikeMobileAppLogin(req.RequestCode))
+                return Results.BadRequest(new { message = "Yêu cầu đăng nhập ứng dụng không hợp lệ." });
+
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var user = await ReadUserByUsername(conn, username);
+            if (user is null || user.IsPending || !user.IsActive)
+                return Results.Json(new { message = "Tài khoản không thể xác nhận đăng nhập web." }, statusCode: 403);
+            if (!await IsWebLoginEnabledAsync(conn, user.Username))
+                return Results.Json(new { message = "Đăng nhập trên web đang bị tắt cho tài khoản này." }, statusCode: 403);
+
+            var scan = logins.ScanDetailed(req.RequestCode, user.Username, user.FullName, WebLoginChannel.MobileApp);
+            if (scan.Result == QrLoginScanResult.InvalidOrExpired || scan.ExpiresAt is null)
+                return Results.BadRequest(new { message = "Yêu cầu đăng nhập không còn hiệu lực hoặc đã được sử dụng." });
+
+            if (scan.Result == QrLoginScanResult.Scanned)
+                await db.RecordAudit(user.Username, "Mở yêu cầu đăng nhập từ web mobile", "Auth", user.Username,
+                    "Ứng dụng Nhân sự đã nhận yêu cầu đăng nhập trực tiếp từ trình duyệt mobile.");
+
+            var displayName = string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName.Trim();
+            return Results.Ok(new MobileAppLoginChallengeResponse(
+                req.RequestCode,
+                "Xác nhận đăng nhập web?",
+                $"Tài khoản {displayName} sẽ đăng nhập trên trình duyệt mobile vừa mở ứng dụng. Chỉ xác nhận nếu chính bạn vừa bấm Đăng nhập bằng ứng dụng Nhân sự.",
+                scan.ExpiresAt.Value));
+        }).RequireAuthorization().RequireRateLimiting("qr-confirm");
+
+        g.MapPost("/app-login/confirm", async (MobileAppLoginCodeRequest req, ClaimsPrincipal principal,
+            Database db, QrLoginService logins, HttpContext http) =>
+        {
+            NoStore(http);
+            if (!IsMobileAppMode(req.ClientMode))
+                return Results.BadRequest(new { message = "Chế độ đăng nhập ứng dụng không hợp lệ." });
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var user = await ReadUserByUsername(conn, username);
+            if (user is null || user.IsPending || !user.IsActive)
+                return Results.Json(new { message = "Tài khoản không thể xác nhận đăng nhập web." }, statusCode: 403);
+            if (!await IsWebLoginEnabledAsync(conn, user.Username))
+                return Results.Json(new { message = "Đăng nhập trên web đang bị tắt cho tài khoản này." }, statusCode: 403);
+
+            var result = logins.Confirm(req.RequestCode, user.Username, user.FullName, WebLoginChannel.MobileApp);
+            if (result == QrLoginConfirmResult.InvalidOrExpired)
+                return Results.BadRequest(new { message = "Yêu cầu đăng nhập không còn hiệu lực hoặc đã được sử dụng." });
+            if (result == QrLoginConfirmResult.Confirmed)
+                await db.RecordAudit(user.Username, "Xác nhận đăng nhập web mobile", "Auth", user.Username,
+                    "Đã xác nhận trong ứng dụng Nhân sự cho phiên đăng nhập web mobile.");
+            return Results.Ok(new { message = "Đã xác nhận. Trình duyệt mobile sẽ tự động đăng nhập." });
+        }).RequireAuthorization().RequireRateLimiting("qr-confirm");
+
+        g.MapPost("/app-login/reject", (MobileAppLoginCodeRequest req, ClaimsPrincipal principal,
+            QrLoginService logins, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (!IsMobileAppMode(req.ClientMode) || string.IsNullOrWhiteSpace(username))
+                return Results.BadRequest(new { message = "Yêu cầu đăng nhập ứng dụng không hợp lệ." });
+            if (!logins.RejectScan(req.RequestCode, username, WebLoginChannel.MobileApp))
+                return Results.BadRequest(new { message = "Yêu cầu đăng nhập không còn chờ xác nhận." });
+            return Results.NoContent();
+        }).RequireAuthorization().RequireRateLimiting("qr-confirm");
+
+        g.MapPost("/app-login/poll", async (MobileAppLoginPollRequest req, Database db, TokenService tokens,
+            PushService push, QrLoginService logins, HttpContext http) =>
+        {
+            NoStore(http);
+            if (!IsMobileAppMode(req.ClientMode))
+                return Results.BadRequest(new { message = "Chế độ đăng nhập ứng dụng không hợp lệ." });
+            var attempt = logins.BeginConsume(req.PollToken, WebLoginChannel.MobileApp);
+            if (attempt.State == QrLoginPollState.Pending)
+                return Results.Ok(new { status = "pending", expiresAt = attempt.ExpiresAt });
+            if (attempt.State == QrLoginPollState.Scanned)
+                return Results.Ok(new { status = "opened", expiresAt = attempt.ExpiresAt });
+            if (attempt.State == QrLoginPollState.Rejected)
+                return Results.Ok(new { status = "rejected", expiresAt = attempt.ExpiresAt });
+            if (attempt.State == QrLoginPollState.Expired || attempt.Session is null)
+                return Results.Ok(new { status = "expired", expiresAt = attempt.ExpiresAt });
+
+            var session = attempt.Session;
+            try
+            {
+                await using var conn = await db.OpenAsync(http.RequestAborted);
+                var user = await ReadUserByUsername(conn, session.Username);
+                if (user is null || user.IsPending || !user.IsActive)
+                {
+                    logins.Invalidate(session);
+                    return Results.Json(new { message = "Tài khoản không còn đủ điều kiện đăng nhập." }, statusCode: 403);
+                }
+                if (!await IsWebLoginEnabledAsync(conn, user.Username))
+                {
+                    logins.Invalidate(session);
+                    return Results.Json(new { message = "Đăng nhập trên web đang bị tắt cho tài khoản này." }, statusCode: 403);
+                }
+
+                user = user with
+                {
+                    AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                    FaceRegistered = await LoadFaceRegistered(conn, user.Username)
+                };
+                if (!session.AlreadyAuthorized)
+                {
+                    var knownDevice = Convert.ToInt32(await conn.Cmd(
+                            "SELECT COUNT(*) FROM user_sessions WHERE username=@u AND session_token=@sid")
+                        .With("@u", user.Username).With("@sid", session.BrowserSid).ExecuteScalarAsync()) > 0;
+                    if (!knownDevice)
+                        await push.SendToUserAsync(user.Username, "Đăng nhập trên thiết bị mới",
+                            $"Tài khoản vừa đăng nhập bằng ứng dụng Nhân sự từ Web mobile: {session.UserAgent}",
+                            $"security:{session.BrowserSid}", "Settings");
+
+                    await RegisterDeviceSessionAsync(conn, user.Username, session.BrowserSid, session.UserAgent, "Web");
+                    await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username,
+                        "Đăng nhập web mobile bằng ứng dụng Nhân sự.");
+                }
+
+                var login = new LoginResponse(tokens.CreateToken(user, session.BrowserSid), user);
+                logins.CompleteConsume(session, success: true);
+                return Results.Ok(new
+                {
+                    status = "authenticated",
+                    expiresAt = attempt.ExpiresAt,
+                    token = login.Token,
+                    user = login.User
+                });
+            }
+            catch
+            {
+                logins.CompleteConsume(session, success: false);
+                throw;
+            }
+        }).AllowAnonymous().RequireRateLimiting("qr-poll");
+
+        g.MapPost("/app-login/ack", (MobileAppLoginPollRequest req, QrLoginService logins, HttpContext http) =>
+        {
+            NoStore(http);
+            if (IsMobileAppMode(req.ClientMode))
+                logins.Acknowledge(req.PollToken, WebLoginChannel.MobileApp);
+            return Results.NoContent();
+        }).AllowAnonymous().RequireRateLimiting("qr-poll");
+
+        g.MapPost("/app-login/cancel", (MobileAppLoginPollRequest req, QrLoginService logins, HttpContext http) =>
+        {
+            NoStore(http);
+            if (IsMobileAppMode(req.ClientMode))
+                logins.Cancel(req.PollToken, WebLoginChannel.MobileApp);
+            return Results.NoContent();
+        }).AllowAnonymous().RequireRateLimiting("qr-poll");
 
         // Quên mật khẩu bằng khuôn mặt: client nhập username + mật khẩu mới, quét loạt ảnh như
         // chấm công. Server CHỈ so khớp với mẫu đã đăng ký của username đó (1:1 theo tài khoản),
@@ -78,6 +472,10 @@ public static class AuthEndpoints
                 return Results.BadRequest(new { message = "Mật khẩu mới cần ít nhất 6 ký tự." });
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh khuôn mặt." });
+            if (req.Images.Count > PayloadLimits.MaxImagesPerRequest)
+                return Results.BadRequest(new { message = $"Tối đa {PayloadLimits.MaxImagesPerRequest} ảnh mỗi yêu cầu." });
+            if (req.Images.Any(img => !PayloadLimits.TryDecodeImage(img, out _)))
+                return Results.BadRequest(new { message = $"Mỗi ảnh phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
 
             await using var conn = await db.OpenAsync();
             var user = await ReadUserByUsername(conn, username);
@@ -146,7 +544,61 @@ public static class AuthEndpoints
                 $"Đặt lại mật khẩu bằng xác thực khuôn mặt 1:1 (độ khớp {bestSim:0.000}).");
 
             return Results.NoContent();
-        });
+        }).AllowAnonymous().RequireRateLimiting("face-reset");
+
+        // Khôi phục mật khẩu bằng MÃ do admin cấp (thay cho reset khuôn mặt đã tắt ngoài Development).
+        // "Recovery code + xác nhận admin": chính admin là bên cấp mã (một lần, hết hạn 7 ngày) → đây là
+        // bước admin chấp thuận. Thành công thì thu hồi mọi phiên đang mở để buộc đăng nhập lại.
+        g.MapPost("/reset-with-recovery-code", async (RecoveryResetRequest req, Database db) =>
+        {
+            var username = (req?.Username ?? "").Trim();
+            var code = RecoveryCodes.Normalize(req?.Code);
+            var newPass = (req?.NewPassword ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(code))
+                return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mã khôi phục." });
+            if (newPass.Length < 6)
+                return Results.BadRequest(new { message = "Mật khẩu mới cần ít nhất 6 ký tự." });
+
+            await using var conn = await db.OpenAsync();
+            var user = await ReadUserByUsername(conn, username);
+
+            // Không tiết lộ tài khoản có tồn tại/khóa/hết hạn hay không: chỉ 1 thông báo lỗi chung.
+            long? matchedId = null;
+            if (user is not null && user.IsActive && !user.IsPending)
+            {
+                await using var r = await conn.Cmd(
+                    @"SELECT id, code_hash FROM password_recovery_codes
+                      WHERE username = @u AND used_at IS NULL
+                        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                      ORDER BY created_at DESC")
+                    .With("@u", user.Username).ExecuteReaderAsync();
+                while (await r.ReadAsync())
+                {
+                    if (PasswordHasher.Verify(code, r.Str("code_hash")))
+                    {
+                        matchedId = r.GetInt64(0);
+                        break;
+                    }
+                }
+            }
+
+            if (matchedId is null)
+                return Results.Json(new { message = "Mã khôi phục không đúng hoặc đã hết hạn." }, statusCode: 400);
+
+            await conn.Cmd("UPDATE app_users SET password_hash = @ph WHERE username = @u AND is_deleted = FALSE")
+                .With("@ph", PasswordHasher.Hash(newPass)).With("@u", user!.Username).ExecuteNonQueryAsync();
+            await conn.Cmd("UPDATE password_recovery_codes SET used_at = CURRENT_TIMESTAMP WHERE id = @id")
+                .With("@id", matchedId.Value).ExecuteNonQueryAsync();
+            // Thu hồi mọi phiên để mật khẩu cũ (kể cả trên thiết bị khác) không còn dùng được.
+            await conn.Cmd(
+                @"UPDATE user_sessions SET revoked = TRUE, revoked_at = CURRENT_TIMESTAMP, revoked_by = 'recovery', is_active = FALSE
+                  WHERE username = @u AND revoked = FALSE")
+                .With("@u", user.Username).ExecuteNonQueryAsync();
+            await db.RecordAudit(user.Username, "Khôi phục mật khẩu bằng mã", "Auth", user.Username,
+                "Đặt lại mật khẩu bằng mã khôi phục do admin cấp.");
+
+            return Results.NoContent();
+        }).AllowAnonymous().RequireRateLimiting("face-reset");
 
         g.MapGet("/me", async (ClaimsPrincipal principal, Database db) =>
         {
@@ -190,6 +642,8 @@ public static class AuthEndpoints
             var dataUrl = (req.ImageDataUrl ?? "").Trim();
             if (string.IsNullOrWhiteSpace(dataUrl) || !dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
                 return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
+            if (!PayloadLimits.TryDecodeImage(dataUrl, out _))
+                return Results.BadRequest(new { message = $"Ảnh đại diện phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
             if (dataUrl.Length > 1_500_000)
                 return Results.BadRequest(new { message = "Ảnh quá lớn. Vui lòng chọn ảnh khác." });
 
@@ -250,6 +704,28 @@ public static class AuthEndpoints
             return Results.NoContent();
         }).RequireAuthorization();
 
+        // App dùng endpoint chỉ-xác-minh này cho luồng "Quên mã bảo mật ứng dụng". Không đăng nhập
+        // lại (tránh đá phiên app hiện tại), không đổi mật khẩu và không bao giờ trả password hash.
+        g.MapPost("/verify-password", async (VerifyPasswordRequest req, ClaimsPrincipal principal, Database db, HttpContext http) =>
+        {
+            NoStore(http);
+            if (string.IsNullOrWhiteSpace(req.Password))
+                return Results.BadRequest(new { message = "Vui lòng nhập mật khẩu tài khoản." });
+
+            var username = principal.Username();
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var hash = Convert.ToString(await conn.Cmd(
+                    "SELECT password_hash FROM app_users WHERE username = @u AND is_deleted = FALSE AND is_active = TRUE LIMIT 1")
+                .With("@u", username).ExecuteScalarAsync()) ?? "";
+            if (string.IsNullOrEmpty(hash)) return Results.Unauthorized();
+            if (!PasswordHasher.Verify(req.Password, hash))
+                return Results.Json(new { message = "Mật khẩu tài khoản không đúng." }, statusCode: 400);
+
+            await db.RecordAudit(username, "Xác minh bảo mật", "User", username,
+                "Xác minh mật khẩu để khôi phục mã bảo mật ứng dụng.");
+            return Results.NoContent();
+        }).RequireAuthorization().RequireRateLimiting("reauth");
+
         // Nhịp tim hiện diện cho bản web: cập nhật last_seen trong user_sessions để app desktop
         // thấy người dùng "đang online". Mỗi trình duyệt gửi một sid ổn định (lưu localStorage).
         // Phiên này là 'Web' nên KHÔNG bị single-login của desktop kết thúc và cũng không kết
@@ -267,12 +743,13 @@ public static class AuthEndpoints
                   VALUES (@t, @u, 'Web', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, 'Web')
                   ON CONFLICT (session_token) DO UPDATE SET
                       username = EXCLUDED.username,
-                      machine_name = 'Web',
                       last_seen = CURRENT_TIMESTAMP,
                       is_active = TRUE,
                       ended_at = NULL,
                       end_reason = '',
-                      client_kind = 'Web',
+                      -- GIU NGUYEN machine_name/client_kind da dat luc login (App hay Web); heartbeat
+                      -- KHONG ghi de ve Web nua, neu khong phien App se bi hieu nham thanh Web va
+                      -- rang buoc 1-app-moi-tai-khoan khong da dung thiet bi.
                       started_at = CASE
                           WHEN user_sessions.is_active = FALSE
                             OR user_sessions.last_seen < CURRENT_TIMESTAMP - INTERVAL '90 seconds'
@@ -310,7 +787,7 @@ public static class AuthEndpoints
             await using var r = await conn.Cmd(
                 @"SELECT session_token, machine_name, client_kind, user_agent, started_at, last_seen, is_active, revoked
                   FROM user_sessions
-                  WHERE username = @u AND client_kind = 'Web'
+                  WHERE username = @u
                   ORDER BY revoked ASC, last_seen DESC")
                 .With("@u", username).ExecuteReaderAsync();
             while (await r.ReadAsync())
@@ -341,6 +818,12 @@ public static class AuthEndpoints
             await db.RecordAudit(username, "Thu hồi thiết bị", "Auth", username, $"Thu hồi phiên đăng nhập từ xa (sid={sid}).");
             return Results.NoContent();
         }).RequireAuthorization();
+
+        g.MapPost("/devices/revoke-all", async(ClaimsPrincipal principal,Database db)=>{
+            var username=principal.Username();await using var conn=await db.OpenAsync();await conn.Cmd("""
+              UPDATE user_sessions SET revoked=TRUE,revoked_at=CURRENT_TIMESTAMP,revoked_by=@u,is_active=FALSE,ended_at=CURRENT_TIMESTAMP,end_reason='Đăng xuất tất cả thiết bị'
+              WHERE username=@u AND revoked=FALSE
+              """).With("@u",username).ExecuteNonQueryAsync();await conn.Cmd("DELETE FROM hr_device_tokens WHERE lower(username)=lower(@u)").With("@u",username).ExecuteNonQueryAsync();await db.RecordAudit(username,"Đăng xuất tất cả thiết bị","Auth",username,"Thu hồi toàn bộ phiên đăng nhập.");return Results.NoContent();}).RequireAuthorization();
 
         // ── Cài đặt đăng nhập (bật/tắt đăng nhập trên web cho chính tài khoản) ───────────
         g.MapGet("/account-settings", async (ClaimsPrincipal principal, Database db) =>
@@ -379,6 +862,9 @@ public static class AuthEndpoints
         return c is "apk" or "android" or "native" or "app";
     }
 
+    private static bool IsMobileAppMode(string? clientMode)
+        => string.Equals(clientMode?.Trim(), "mobile_app", StringComparison.Ordinal);
+
     // Tạo bảng web-only (không đụng schema dùng chung với app desktop) lưu cờ đăng nhập web mỗi tài khoản.
     private static async Task EnsureLoginSettingsTableAsync(NpgsqlConnection conn)
     {
@@ -407,41 +893,43 @@ public static class AuthEndpoints
         return ua.Length > 400 ? ua[..400] : ua;
     }
 
+    private static void NoStore(HttpContext http)
+    {
+        http.Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+        http.Response.Headers.Pragma = "no-cache";
+    }
+
     // Ghi/nâng cấp một phiên thiết bị web khi đăng nhập (hiện ngay trong "Quản lý thiết bị") và
     // gỡ mọi cờ thu hồi cũ của đúng thiết bị đó (đăng nhập lại = tin cậy lại thiết bị).
-    private static async Task RegisterDeviceSessionAsync(NpgsqlConnection conn, string username, string sid, string userAgent)
+    private static async Task RegisterDeviceSessionAsync(NpgsqlConnection conn, string username, string sid, string userAgent, string clientKind)
     {
+        // machine_name để hiển thị trong "Quản lý thiết bị"; client_kind để phân biệt App/Web (dùng cho
+        // ràng buộc "1 app/tài khoản" — web không bị đá).
+        var machine = clientKind == "App" ? "Ứng dụng" : "Web";
         await conn.Cmd(
             @"INSERT INTO user_sessions
                   (session_token, username, machine_name, user_agent, started_at, last_seen, is_active, client_kind, revoked, revoked_at, revoked_by)
-              VALUES (@t, @u, 'Web', @ua, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, 'Web', FALSE, NULL, '')
+              VALUES (@t, @u, @m, @ua, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, @k, FALSE, NULL, '')
               ON CONFLICT (session_token) DO UPDATE SET
                   username = EXCLUDED.username,
-                  machine_name = 'Web',
+                  machine_name = @m,
                   user_agent = EXCLUDED.user_agent,
                   last_seen = CURRENT_TIMESTAMP,
                   started_at = CURRENT_TIMESTAMP,
                   is_active = TRUE,
                   ended_at = NULL,
                   end_reason = '',
-                  client_kind = 'Web',
+                  client_kind = @k,
                   revoked = FALSE,
                   revoked_at = NULL,
                   revoked_by = '';")
-            .With("@t", sid).With("@u", username).With("@ua", userAgent)
+            .With("@t", sid).With("@u", username).With("@ua", userAgent).With("@m", machine).With("@k", clientKind)
             .ExecuteNonQueryAsync();
     }
 
     /// <summary>Giải mã ảnh base64 (chấp nhận cả tiền tố data URL "data:image/...;base64,").</summary>
     private static bool TryDecodeImage(string? b64, out byte[] bytes)
-    {
-        bytes = [];
-        if (string.IsNullOrWhiteSpace(b64)) return false;
-        var comma = b64.IndexOf(',');
-        if (b64.StartsWith("data:") && comma >= 0) b64 = b64[(comma + 1)..];
-        try { bytes = Convert.FromBase64String(b64); return bytes.Length > 0; }
-        catch { return false; }
-    }
+        => PayloadLimits.TryDecodeImage(b64, out bytes);
 
     // session_token là varchar(64); dùng sid của trình duyệt, fallback theo username nếu thiếu.
     private static string WebSessionId(string? sid, string username)
@@ -465,7 +953,8 @@ public static class AuthEndpoints
         return dto with
         {
             Verified = await LoadVerified(conn, dto.Username, dto.Role),
-            IsDiamond = await LoadDiamond(conn, dto.Username, dto.Role)
+            IsDiamond = await LoadDiamond(conn, dto.Username, dto.Role),
+            Roles = await ApiHelpers.LoadAllRolesAsync(conn, dto.Username, dto.Role)
         };
     }
 

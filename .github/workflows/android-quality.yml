@@ -1,0 +1,48 @@
+name: Android quality gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-lint-release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/Ketoanapk/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+      - name: Unit tests and compile device tests
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebugAndroidTest
+      - name: Lint and release bundle
+        run: ./gradlew --no-daemon lintRelease bundleRelease -PallowMissingGoogleServices=true
+      - name: Upload test and lint evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-quality-evidence-not-for-deployment
+          path: |
+            web/Ketoanapk/android/app/build/reports/tests/
+            web/Ketoanapk/android/app/build/reports/lint-results-release.*
+            web/Ketoanapk/android/app/build/outputs/apk/androidTest/debug/
+            web/Ketoanapk/android/app/build/outputs/bundle/release/
+          if-no-files-found: warn
+          retention-days: 14

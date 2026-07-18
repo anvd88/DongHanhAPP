@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   Ban,
-  Bell,
   CheckCheck,
   Download,
   EyeOff,
@@ -13,12 +12,16 @@ import {
   Home,
   Loader2,
   MessageCircle,
+  Mic,
   MoreHorizontal,
   Paperclip,
+  Pause,
   Pencil,
   Phone,
+  PhoneOff,
   Pin,
   PinOff,
+  Play,
   Search,
   Send,
   Smile,
@@ -28,6 +31,7 @@ import {
   Upload,
   User,
   Video,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -47,6 +51,12 @@ import {
   type TransferInfo,
 } from "../lib/filetransfer";
 import type { ChatContact, ChatConversation, ChatMessage, ChatReaction } from "../lib/types";
+import {
+  handoffIncomingWebCall,
+  hangupWebCall,
+  useWebCall,
+  type WebCallSession,
+} from "../lib/webcall";
 import "../features/giacong/giacong.css";
 
 /* =========================================================================
@@ -79,6 +89,42 @@ function fmtClock(iso?: string | null) {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "" : d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function fmtDuration(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** Nhận cả kind=voice mới và bản ghi APK cũ từng được lưu dưới kind=file. */
+function isVoiceMessage(msg: ChatMessage) {
+  if (msg.removed) return false;
+  if (msg.kind === "voice") return true;
+  if (msg.kind !== "file") return false;
+  const mime = (msg.fileMime ?? "").toLowerCase();
+  const name = (msg.fileName ?? "").toLowerCase();
+  if (mime.startsWith("audio/")) return true;
+  if (mime.startsWith("image/") || mime.startsWith("video/")) return false;
+  if (/^ghi-am-/.test(name)) return /\.(aac|amr|m4a|mp3|ogg|opus|wav|webm)$/.test(name);
+  return /\.(aac|amr|m4a|mp3|ogg|opus|wav)$/.test(name);
+}
+
+type InlineMediaKind = "image" | "video";
+
+function detectInlineMedia(nameValue?: string | null, mimeValue?: string | null): InlineMediaKind | null {
+  const mime = (mimeValue ?? "").toLowerCase();
+  const name = (nameValue ?? "").toLowerCase().split(/[?#]/)[0];
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (/\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/.test(name)) return "image";
+  if (/^ghi-am-/.test(name)) return null;
+  if (/\.(3gp|avi|m4v|mkv|mov|mp4|mpeg|mpg|ogv|webm)$/.test(name)) return "video";
+  return null;
+}
+
+/** APK và web cũ đều lưu ảnh/video dưới kind=file, nên nhận diện thêm bằng MIME và đuôi tệp. */
+function inlineMediaKind(msg: ChatMessage, transfer?: TransferInfo): InlineMediaKind | null {
+  return detectInlineMedia(msg.fileName ?? transfer?.name, msg.fileMime ?? transfer?.mime);
 }
 
 /** Trạng thái "Hoạt động X phút/giờ/ngày trước". Quá 1 giờ → "khoảng X giờ trước". */
@@ -529,7 +575,12 @@ function Bubble({
           >
             {msg.editedAt && <span>đã chỉnh sửa ·</span>}
             {fmtClock(msg.createdAt)}
-            {mine && <CheckCheck className="h-3.5 w-3.5" />}
+            {mine && (
+              <CheckCheck
+                className={`h-3.5 w-3.5 ${msg.read ? "opacity-100" : "opacity-60"}`}
+                aria-label={msg.read ? "Đã đọc" : "Đã gửi"}
+              />
+            )}
           </div>
         </div>
         {!mine && (
@@ -547,49 +598,329 @@ function Bubble({
   );
 }
 
-/** Bong bóng tin nhắn TỆP gửi qua LAN: tên + dung lượng + trạng thái (P2P trực tiếp hoặc tải từ server). */
+/** Trình phát tin thoại ngay trong bong bóng, tải lười và giữ URL trong vòng đời của tin. */
+function VoicePlayer({
+  msg,
+  mine,
+  onLoad,
+}: {
+  msg: ChatMessage;
+  mine: boolean;
+  onLoad: () => Promise<Blob>;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const autoplayRef = useRef(false);
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [position, setPosition] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => () => {
+    if (url) URL.revokeObjectURL(url);
+  }, [url]);
+
+  useEffect(() => {
+    if (!url || !autoplayRef.current) return;
+    autoplayRef.current = false;
+    audioRef.current?.play().catch(() => setError("Trình duyệt không phát được định dạng âm thanh này."));
+  }, [url]);
+
+  const toggle = async () => {
+    const audio = audioRef.current;
+    if (audio && url) {
+      if (audio.paused) await audio.play().catch(() => setError("Không phát được tin thoại."));
+      else audio.pause();
+      return;
+    }
+    if (loading || !msg.hasBlob) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const blob = await onLoad();
+      autoplayRef.current = true;
+      setUrl(URL.createObjectURL(blob));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Không tải được tin thoại.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const safeDuration = Number.isFinite(duration) ? duration : 0;
+  return (
+    <div className="min-w-[230px]">
+      <audio
+        ref={audioRef}
+        src={url ?? undefined}
+        preload="metadata"
+        onLoadedMetadata={(e) => setDuration(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0)}
+        onDurationChange={(e) => setDuration(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0)}
+        onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => { setPlaying(false); setPosition(0); }}
+      />
+      <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={() => void toggle()}
+          disabled={loading || !msg.hasBlob}
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full transition hover:opacity-85 disabled:opacity-50"
+          style={{ background: mine ? "rgba(255,255,255,0.2)" : "var(--accent-soft)", color: mine ? "#fff" : "var(--accent)" }}
+          aria-label={playing ? "Tạm dừng tin thoại" : "Phát tin thoại"}
+        >
+          {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : playing ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold">
+            <Mic className="h-3.5 w-3.5" />
+            Tin nhắn thoại
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(safeDuration, 0.01)}
+            step={0.05}
+            value={Math.min(position, Math.max(safeDuration, 0.01))}
+            disabled={!url || safeDuration <= 0}
+            onChange={(e) => {
+              const next = Number(e.target.value);
+              if (audioRef.current) audioRef.current.currentTime = next;
+              setPosition(next);
+            }}
+            className="block h-1.5 w-full cursor-pointer accent-current disabled:cursor-default"
+            aria-label="Vị trí phát tin thoại"
+          />
+        </div>
+        <span className={`w-10 text-right text-[0.68rem] tabular-nums ${mine ? "text-white/75" : "text-[var(--text-muted)]"}`}>
+          {fmtDuration((position || safeDuration) * 1000)}
+        </span>
+      </div>
+      {error && <div className={`mt-1.5 text-xs ${mine ? "text-white/85" : "text-[var(--danger)]"}`}>{error}</div>}
+    </div>
+  );
+}
+
+/** Xem ảnh/video trực tiếp từ blob P2P hoặc blob có xác thực trên máy chủ. */
+function InlineMedia({
+  kind,
+  messageId,
+  conversationId,
+  name,
+  transferUrl,
+  hasServerBlob,
+  receiving,
+  progress,
+}: {
+  kind: InlineMediaKind;
+  messageId: number;
+  conversationId: string;
+  name: string;
+  transferUrl?: string;
+  hasServerBlob: boolean;
+  receiving: boolean;
+  progress: number | null;
+}) {
+  const [serverUrl, setServerUrl] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [mediaError, setMediaError] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
+  const loadingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const ownedUrlsRef = useRef<string[]>([]);
+  const sourceUrl = transferUrl ?? serverUrl;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const url of ownedUrlsRef.current) URL.revokeObjectURL(url);
+      ownedUrlsRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    if (sourceUrl || !hasServerBlob || loadingRef.current) return;
+    loadingRef.current = true;
+    void api
+      .getBlob(`/api/chat/conversations/${conversationId}/messages/${messageId}/download`)
+      .then((blob) => {
+        if (!mountedRef.current) return;
+        const url = URL.createObjectURL(blob);
+        ownedUrlsRef.current.push(url);
+        setServerUrl(url);
+        setLoadError(null);
+      })
+      .catch((error: unknown) => {
+        if (mountedRef.current) setLoadError(error instanceof Error ? error.message : "Không tải được nội dung.");
+      })
+      .finally(() => {
+        loadingRef.current = false;
+      });
+  }, [conversationId, hasServerBlob, messageId, retryToken, sourceUrl]);
+
+  if (!sourceUrl) {
+    return (
+      <div className="grid min-h-44 w-[min(360px,72vw)] place-items-center rounded-xl bg-black/15 px-5 py-8 text-center">
+        <div>
+          {receiving || (hasServerBlob && !loadError) ? (
+            <Loader2 className="mx-auto h-7 w-7 animate-spin opacity-80" />
+          ) : (
+            <Video className="mx-auto h-8 w-8 opacity-65" />
+          )}
+          <div className="mt-2 text-xs font-semibold">
+            {receiving
+              ? `Đang nhận ${kind === "image" ? "ảnh" : "video"}${progress == null ? "…" : `… ${progress}%`}`
+              : loadError
+                ? "Không tải được nội dung"
+                : hasServerBlob
+                  ? `Đang tải ${kind === "image" ? "ảnh" : "video"}…`
+                  : `${kind === "image" ? "Ảnh" : "Video"} không còn sẵn sàng`}
+          </div>
+          {loadError && (
+            <button
+              type="button"
+              onClick={() => {
+                setLoadError(null);
+                setRetryToken((value) => value + 1);
+              }}
+              className="mt-2 rounded-full bg-white/15 px-3 py-1 text-xs font-bold hover:bg-white/25"
+            >
+              Thử lại
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === "video") {
+    return (
+      <div className="w-[min(420px,74vw)] overflow-hidden rounded-xl bg-black">
+        <video
+          src={sourceUrl}
+          controls
+          playsInline
+          preload="metadata"
+          onError={() => setMediaError(true)}
+          className="max-h-[420px] w-full object-contain"
+          aria-label={name}
+        />
+        {mediaError && <div className="px-3 py-2 text-center text-xs text-white/80">Trình duyệt không phát được định dạng video này.</div>}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <button type="button" onClick={() => setExpanded(true)} className="block overflow-hidden rounded-xl" aria-label={`Xem ảnh ${name}`}>
+        <img
+          src={sourceUrl}
+          alt={name}
+          loading="lazy"
+          onError={() => setMediaError(true)}
+          className="max-h-[420px] w-[min(380px,74vw)] object-contain"
+        />
+        {mediaError && <span className="block px-3 py-2 text-xs">Không hiển thị được ảnh này.</span>}
+      </button>
+      {expanded &&
+        createPortal(
+          <div className="fixed inset-0 z-[130] grid place-items-center bg-black/90 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={name}>
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="absolute right-4 top-4 z-10 grid h-11 w-11 place-items-center rounded-full bg-white/15 text-white hover:bg-white/25"
+              aria-label="Đóng ảnh"
+            >
+              <X className="h-6 w-6" />
+            </button>
+            <img src={sourceUrl} alt={name} className="max-h-full max-w-full object-contain" />
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/** Bong bóng ảnh/video, file LAN/store-and-forward hoặc voice bền vững dùng chung với APK. */
 function FileBubble({
   msg,
+  conversationId,
   transfer,
   serverBusy,
   onRedownload,
   onServerDownload,
+  onLoadVoice,
+  onReact,
 }: {
   msg: ChatMessage;
+  conversationId: string;
   transfer?: TransferInfo;
   serverBusy?: boolean;
   onRedownload: () => void;
   onServerDownload: () => void;
+  onLoadVoice: () => Promise<Blob>;
+  onReact: (emoji: string) => void;
 }) {
   const mine = msg.mine;
-  const name = msg.fileName ?? transfer?.name ?? "Tệp";
+  const voice = isVoiceMessage(msg);
+  const mediaKind = inlineMediaKind(msg, transfer);
+  const reactions = msg.reactions ?? [];
+  const name = voice ? "Tin nhắn thoại" : (msg.fileName ?? transfer?.name ?? "Tệp");
   const size = msg.fileSize ?? transfer?.size ?? 0;
   const st = transfer?.status;
   const pct =
     transfer && transfer.size > 0 ? Math.min(100, Math.floor((transfer.transferred / transfer.size) * 100)) : null;
   const showBar = st === "transferring";
 
-  // Người nhận có thể tải bản server giữ tạm khi không đang/đã nhận trực tiếp qua P2P.
+  // Người nhận có thể tải bản server khi không đang/đã nhận trực tiếp qua P2P. Voice vẫn còn trên
+  // server sau lượt tải này; file thường giữ chính sách store-and-forward cũ.
   const p2pReceiving = st === "connecting" || st === "transferring";
   const p2pGotBlob = st === "done" && !!transfer?.blobUrl;
   const canServerDownload = !mine && !!msg.hasBlob && !p2pReceiving && !p2pGotBlob;
   const canRedownload = !mine && p2pGotBlob;
 
   type Tone = "muted" | "accent" | "success" | "danger";
-  let statusText = mine ? "Đã gửi" : "Tệp đã gửi — cần gửi lại để tải";
+  let statusText = mine ? "Đã gửi" : (voice ? "Tin thoại chưa sẵn sàng" : "Tệp đã gửi — cần gửi lại để tải");
   let tone: Tone = "muted";
-  if (canServerDownload) (statusText = "Người gửi đã lưu trên máy chủ — bấm để tải"), (tone = "accent");
-  else if (st === "inviting") (statusText = "Đang chờ người nhận đồng ý…"), (tone = "muted");
-  else if (st === "incoming") (statusText = "Có lời mời nhận — xem thông báo"), (tone = "accent");
-  else if (st === "connecting") (statusText = "Đang kết nối…"), (tone = "accent");
-  else if (st === "transferring") (statusText = `${mine ? "Đang gửi" : "Đang nhận"}… ${pct ?? 0}%`), (tone = "accent");
-  else if (st === "uploading") (statusText = "Người nhận offline — đang lưu lên máy chủ…"), (tone = "accent");
-  else if (st === "stored") (statusText = "Đã lưu trên máy chủ — chờ người nhận tải"), (tone = "success");
-  else if (st === "done") (statusText = mine ? "Đã gửi xong" : "Đã nhận xong"), (tone = "success");
-  else if (st === "declined") (statusText = mine ? "Người nhận đã từ chối" : "Bạn đã từ chối"), (tone = "danger");
-  else if (st === "canceled") (statusText = "Đã hủy"), (tone = "danger");
-  else if (st === "error") (statusText = transfer?.error ?? "Truyền tệp lỗi"), (tone = "danger");
-  else if (mine && msg.hasBlob) (statusText = "Đã lưu trên máy chủ — chờ người nhận tải"), (tone = "muted");
+  if (canServerDownload) {
+    statusText = voice ? "Bấm để tải tin thoại" : "Người gửi đã lưu trên máy chủ — bấm để tải";
+    tone = "accent";
+  } else if (st === "inviting") {
+    statusText = "Đang chờ người nhận đồng ý…";
+  } else if (st === "incoming") {
+    statusText = "Có lời mời nhận — xem thông báo";
+    tone = "accent";
+  } else if (st === "connecting") {
+    statusText = "Đang kết nối…";
+    tone = "accent";
+  } else if (st === "transferring") {
+    statusText = `${mine ? "Đang gửi" : "Đang nhận"}… ${pct ?? 0}%`;
+    tone = "accent";
+  } else if (st === "uploading") {
+    statusText = "Người nhận offline — đang lưu lên máy chủ…";
+    tone = "accent";
+  } else if (st === "stored") {
+    statusText = "Đã lưu trên máy chủ — chờ người nhận tải";
+    tone = "success";
+  } else if (st === "done") {
+    statusText = mine ? "Đã gửi xong" : "Đã nhận xong";
+    tone = "success";
+  } else if (st === "declined") {
+    statusText = mine ? "Người nhận đã từ chối" : "Bạn đã từ chối";
+    tone = "danger";
+  } else if (st === "canceled") {
+    statusText = "Đã hủy";
+    tone = "danger";
+  } else if (st === "error") {
+    statusText = transfer?.error ?? "Truyền tệp lỗi";
+    tone = "danger";
+  } else if (mine && msg.hasBlob) {
+    statusText = voice ? "Tin thoại đã lưu trên máy chủ" : "Đã lưu trên máy chủ — chờ người nhận tải";
+  }
 
   const toneColor =
     tone === "success"
@@ -605,58 +936,80 @@ function FileBubble({
             : "var(--text-muted)";
 
   return (
-    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-      <div
-        className="chat-message-bubble max-w-[86%] rounded-2xl px-3 py-2.5 shadow-sm sm:max-w-[78%]"
-        style={
-          mine
-            ? { background: "var(--accent)", color: "#fff", borderTopRightRadius: 6, minWidth: 220 }
-            : {
-                background: "var(--glass-bg-strong)",
-                border: "1px solid var(--glass-border)",
-                color: "var(--text)",
-                borderTopLeftRadius: 6,
-                minWidth: 220,
-              }
-        }
-      >
-        <div className="flex items-center gap-2.5">
-          <span
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
-            style={{ background: mine ? "rgba(255,255,255,0.18)" : "var(--accent-soft)", color: mine ? "#fff" : "var(--accent)" }}
-          >
-            <FileText className="h-5 w-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[0.88rem] font-semibold" title={name}>
-              {name}
+    <div className="flex flex-col">
+      <div className={`group flex w-full items-center gap-1 ${mine ? "justify-end" : "justify-start"}`}>
+        {mine && <ReactionPicker mine onReact={onReact} />}
+        <div
+          className="chat-message-bubble max-w-[90%] rounded-2xl px-3 py-2.5 shadow-sm sm:max-w-[78%]"
+          style={
+            mine
+              ? { background: "var(--accent)", color: "#fff", borderTopRightRadius: 6, minWidth: 220 }
+              : {
+                  background: "var(--glass-bg-strong)",
+                  border: "1px solid var(--glass-border)",
+                  color: "var(--text)",
+                  borderTopLeftRadius: 6,
+                  minWidth: 220,
+                }
+          }
+        >
+          {voice ? (
+            <VoicePlayer msg={msg} mine={mine} onLoad={onLoadVoice} />
+          ) : mediaKind ? (
+            <InlineMedia
+              kind={mediaKind}
+              messageId={msg.id}
+              conversationId={conversationId}
+              name={name}
+              transferUrl={transfer?.blobUrl}
+              hasServerBlob={!!msg.hasBlob}
+              receiving={p2pReceiving}
+              progress={pct}
+            />
+          ) : (
+            <div className="flex items-center gap-2.5">
+              <span
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
+                style={{ background: mine ? "rgba(255,255,255,0.18)" : "var(--accent-soft)", color: mine ? "#fff" : "var(--accent)" }}
+              >
+                <FileText className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[0.88rem] font-semibold" title={name}>
+                  {name}
+                </div>
+                <div className={`text-[0.7rem] ${mine ? "text-white/75" : "text-[var(--text-muted)]"}`}>
+                  {formatBytes(size)}
+                </div>
+              </div>
+              {(canServerDownload || canRedownload) && (
+                <button
+                  type="button"
+                  onClick={canServerDownload ? onServerDownload : onRedownload}
+                  disabled={serverBusy}
+                  aria-label="Tải tệp"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition hover:opacity-80 disabled:opacity-50"
+                  style={{ background: mine ? "rgba(255,255,255,0.18)" : "var(--accent-soft)", color: mine ? "#fff" : "var(--accent)" }}
+                >
+                  {serverBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                </button>
+              )}
             </div>
-            <div className={`text-[0.7rem] ${mine ? "text-white/75" : "text-[var(--text-muted)]"}`}>
-              {formatBytes(size)} · {fmtClock(msg.createdAt)}
-            </div>
-          </div>
-          {(canServerDownload || canRedownload) && (
-            <button
-              type="button"
-              onClick={canServerDownload ? onServerDownload : onRedownload}
-              disabled={serverBusy}
-              aria-label="Tải tệp"
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition hover:opacity-80 disabled:opacity-50"
-              style={{ background: mine ? "rgba(255,255,255,0.18)" : "var(--accent-soft)", color: mine ? "#fff" : "var(--accent)" }}
-            >
-              {serverBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            </button>
           )}
-        </div>
-        {showBar && (
-          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full" style={{ background: mine ? "rgba(255,255,255,0.25)" : "var(--glass-border)" }}>
-            <div className="h-full rounded-full transition-[width]" style={{ width: `${pct ?? 0}%`, background: mine ? "#fff" : "var(--accent)" }} />
+          {showBar && !voice && !mediaKind && (
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full" style={{ background: mine ? "rgba(255,255,255,0.25)" : "var(--glass-border)" }}>
+              <div className="h-full rounded-full transition-[width]" style={{ width: `${pct ?? 0}%`, background: mine ? "#fff" : "var(--accent)" }} />
+            </div>
+          )}
+          {!voice && !mediaKind && <div className="mt-1.5 text-[0.72rem] font-medium" style={{ color: toneColor }}>{statusText}</div>}
+          <div className={`mt-1 flex items-center justify-end gap-1 text-[0.68rem] ${mine ? "text-white/75" : "text-[var(--text-muted)]"}`}>
+            {fmtClock(msg.createdAt)}
+            {mine && <CheckCheck className={`h-3.5 w-3.5 ${msg.read ? "opacity-100" : "opacity-60"}`} />}
           </div>
-        )}
-        <div className="mt-1.5 text-[0.72rem] font-medium" style={{ color: toneColor }}>
-          {statusText}
         </div>
+        {!mine && <ReactionPicker mine={false} onReact={onReact} />}
       </div>
+      <ReactionChips reactions={reactions} mine={mine} onReact={onReact} />
     </div>
   );
 }
@@ -720,19 +1073,22 @@ function CircleIconButton({
   label,
   onClick,
   active,
+  disabled,
 }: {
   children: React.ReactNode;
   label: string;
   onClick?: () => void;
   active?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       aria-pressed={active}
-      className={`grid h-9 w-9 place-items-center rounded-full transition ${
+      className={`grid h-9 w-9 place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-35 ${
         active
           ? "bg-[var(--accent-soft)] text-[var(--accent)]"
           : "text-[var(--text-secondary)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
@@ -993,10 +1349,46 @@ function DropOverlay({ icon, title, sub }: { icon: React.ReactNode; title: strin
   );
 }
 
+function IncomingCallOverlay({ call, onAccept }: { call: WebCallSession; onAccept: () => void }) {
+  return createPortal(
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/70 p-4 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="Cuộc gọi đến">
+      <div className="w-[min(390px,94vw)] rounded-[28px] border border-white/15 bg-slate-950 p-6 text-center text-white shadow-2xl">
+        <div className="mx-auto grid h-24 w-24 place-items-center rounded-full bg-gradient-to-br from-[var(--accent)] to-violet-500 text-3xl font-black shadow-xl">
+          {initials(call.peerName)}
+        </div>
+        <h2 className="mt-4 max-w-full truncate text-xl font-black">{call.peerName}</h2>
+        <div className="mt-1 text-sm font-semibold text-white/70">
+          Cuộc gọi {call.media === "video" ? "video" : "thoại"} đến
+        </div>
+        <div className="mt-6 flex items-center justify-center gap-6">
+          <button
+            type="button"
+            onClick={() => hangupWebCall("declined")}
+            className="grid h-14 w-14 place-items-center rounded-full bg-red-500 text-white shadow-lg transition hover:bg-red-600"
+            aria-label="Từ chối cuộc gọi"
+          >
+            <PhoneOff className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            onClick={onAccept}
+            className="grid h-14 w-14 place-items-center rounded-full bg-emerald-500 text-white shadow-lg transition hover:bg-emerald-600"
+            aria-label="Nghe máy trong tab mới"
+          >
+            <Phone className="h-6 w-6" />
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function Chats() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { notify, confirm } = useAppNotifications();
+  const call = useWebCall();
   const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -1010,6 +1402,13 @@ export function Chats() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [forwardMsg, setForwardMsg] = useState<ChatMessage | null>(null);
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false);
+  const [messageQuery, setMessageQuery] = useState("");
+  const [debouncedMessageQuery, setDebouncedMessageQuery] = useState("");
+  const [olderMessages, setOlderMessages] = useState<ChatMessage[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [paginationExhausted, setPaginationExhausted] = useState(false);
+  const [composerEmojiOpen, setComposerEmojiOpen] = useState(false);
   const [sendAsSupport, setSendAsSupport] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" ? window.matchMedia("(max-width: 767px)").matches : false,
@@ -1018,21 +1417,60 @@ export function Chats() {
   const draftInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceStartedAtRef = useRef(0);
+  const voiceSendOnStopRef = useRef(false);
+  const voiceTimerRef = useRef<number | null>(null);
+  const viewedMessageSetRef = useRef("");
+  const newestMessageIdRef = useRef<number | null>(null);
   const transfers = useTransfers();
   const [serverDownloading, setServerDownloading] = useState<number | null>(null);
   const [dragZone, setDragZone] = useState<null | "thread" | "composer">(null);
   const [previewFile, setPreviewFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const previewMediaKind = previewFile ? detectInlineMedia(previewFile.name, previewFile.type) : null;
+  const [recordingVoice, setRecordingVoice] = useState(false);
+  const [voiceElapsedMs, setVoiceElapsedMs] = useState(0);
+  const [voiceSending, setVoiceSending] = useState(false);
+  const [pendingVoice, setPendingVoice] = useState<{
+    blob: Blob;
+    name: string;
+    mime: string;
+    clientMessageId: string;
+  } | null>(null);
 
   const { data: convData, loading, reload: reloadConversations } = useApi<ChatConversation[]>("/api/chat/conversations");
   const allConversations = useMemo(() => convData ?? [], [convData]);
   const requestedConversationId = searchParams.get("conversation");
 
-  const { data: msgData, loading: msgLoading, reload: reloadMessages } = useApi<ChatMessage[]>(
-    activeId ? `/api/chat/conversations/${activeId}/messages` : null,
-    [activeId],
+  const messagePath = activeId
+    ? `/api/chat/conversations/${activeId}/messages?take=50${
+        debouncedMessageQuery ? `&search=${encodeURIComponent(debouncedMessageQuery)}` : ""
+      }`
+    : null;
+  const { data: msgData, loading: msgLoading, error: msgError, reload: reloadMessages } = useApi<ChatMessage[]>(
+    messagePath,
+    [activeId, debouncedMessageQuery],
   );
-  const messages = useMemo(() => msgData ?? [], [msgData]);
+  const messages = useMemo(() => {
+    const merged = new Map<number, ChatMessage>();
+    for (const message of olderMessages) merged.set(message.id, message);
+    for (const message of msgData ?? []) merged.set(message.id, message);
+    return [...merged.values()].sort((a, b) => a.id - b.id);
+  }, [msgData, olderMessages]);
+  const canLoadOlder = !paginationExhausted && (msgData?.length ?? 0) >= 50 && messages.length > 0;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setOlderMessages([]);
+      setPaginationExhausted(false);
+      setLoadingOlder(false);
+      setDebouncedMessageQuery(messageQuery.trim());
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [messageQuery]);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
@@ -1069,17 +1507,22 @@ export function Chats() {
 
   // Tự chọn hội thoại đầu tiên khi vào trang (nếu chưa chọn).
   useEffect(() => {
-    if (!isMobile && !activeId && chatConversations.length > 0) setActiveId(chatConversations[0].id);
+    if (isMobile || activeId || chatConversations.length === 0) return;
+    const timer = window.setTimeout(() => setActiveId(chatConversations[0].id), 0);
+    return () => window.clearTimeout(timer);
   }, [activeId, chatConversations, isMobile]);
 
   useEffect(() => {
     if (!requestedConversationId) return;
     const found = allConversations.find((c) => c.id === requestedConversationId);
     if (!found) return;
-    setActiveId(found.id);
-    setActiveFallback(found);
-    setProfileOpen(false);
-    setSearchParams({}, { replace: true });
+    const timer = window.setTimeout(() => {
+      setActiveId(found.id);
+      setActiveFallback(found);
+      setProfileOpen(false);
+      setSearchParams({}, { replace: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [allConversations, requestedConversationId, setSearchParams]);
 
   const conversations = useMemo(() => {
@@ -1105,28 +1548,82 @@ export function Chats() {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: smooth ? "smooth" : "auto" }),
     );
 
-  // Cuộn xuống cuối khi đổi hội thoại hoặc có tin nhắn mới.
+  // Đổi hội thoại/tìm kiếm thì về kết quả mới nhất. Khi đang đọc tin cũ, tin realtime không được
+  // giật người dùng xuống đáy; chỉ tự cuộn nếu họ vốn đang ở gần đáy.
   useEffect(() => {
-    scrollToBottom(false);
-  }, [activeId, messages.length]);
+    if (msgLoading) return;
+    const viewKey = `${activeId ?? ""}:${debouncedMessageQuery}`;
+    const newest = messages.at(-1)?.id ?? null;
+    if (viewedMessageSetRef.current !== viewKey) {
+      viewedMessageSetRef.current = viewKey;
+      newestMessageIdRef.current = newest;
+      scrollToBottom(false);
+      return;
+    }
+    if (newest != null && newest !== newestMessageIdRef.current) {
+      const scroller = scrollRef.current;
+      const nearBottom = !scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 180;
+      newestMessageIdRef.current = newest;
+      if (nearBottom) scrollToBottom();
+    }
+  }, [activeId, debouncedMessageQuery, messages, msgLoading]);
 
   // Hủy chỉnh sửa + xóa xem trước/kéo-thả khi chuyển sang hội thoại khác.
   useEffect(() => {
-    setEditingId(null);
-    setEditDraft("");
-    setPreviewFile(null);
-    setDragZone(null);
-    setSendAsSupport(!!active?.supportConversation && active.username !== SUPPORT_USERNAME);
+    const timer = window.setTimeout(() => {
+      setEditingId(null);
+      setEditDraft("");
+      setPreviewFile(null);
+      setDragZone(null);
+      setComposerEmojiOpen(false);
+      setSendAsSupport(!!active?.supportConversation && active.username !== SUPPORT_USERNAME);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [activeId, active?.supportConversation, active?.username]);
 
-  // Tạo ảnh thu nhỏ cho tệp đang xem trước (nếu là ảnh); thu hồi object URL khi đổi/đóng.
   useEffect(() => {
-    if (previewFile && previewFile.type.startsWith("image/")) {
+    voiceSendOnStopRef.current = false;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    voiceStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    if (voiceTimerRef.current != null) window.clearInterval(voiceTimerRef.current);
+    voiceTimerRef.current = null;
+    const resetTimer = window.setTimeout(() => {
+      setMessageSearchOpen(false);
+      setMessageQuery("");
+      setDebouncedMessageQuery("");
+      setOlderMessages([]);
+      setPaginationExhausted(false);
+      setLoadingOlder(false);
+      setPendingVoice(null);
+      setRecordingVoice(false);
+      setVoiceElapsedMs(0);
+    }, 0);
+    return () => window.clearTimeout(resetTimer);
+  }, [activeId]);
+
+  useEffect(() => () => {
+    voiceSendOnStopRef.current = false;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (voiceTimerRef.current != null) window.clearInterval(voiceTimerRef.current);
+  }, []);
+
+  // Tạo URL xem trước cho ảnh/video; thu hồi object URL khi đổi/đóng.
+  useEffect(() => {
+    if (previewFile && detectInlineMedia(previewFile.name, previewFile.type)) {
       const url = URL.createObjectURL(previewFile);
-      setPreviewUrl(url);
-      return () => URL.revokeObjectURL(url);
+      const timer = window.setTimeout(() => setPreviewUrl(url), 0);
+      return () => {
+        window.clearTimeout(timer);
+        URL.revokeObjectURL(url);
+      };
     }
-    setPreviewUrl(null);
+    const timer = window.setTimeout(() => setPreviewUrl(null), 0);
+    return () => window.clearTimeout(timer);
   }, [previewFile]);
 
   // Nhịp mỗi phút để cập nhật trạng thái "Hoạt động X phút trước" mà không cần tải lại.
@@ -1145,6 +1642,70 @@ export function Chats() {
 
   const notifyError = (e: unknown, fallback: string) => {
     notify.error(e instanceof Error ? e.message : fallback);
+  };
+
+  const openCallTab = (params: Record<string, string>) => {
+    const url = new URL("/call", window.location.origin);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    // This must stay synchronous inside the click handler so browsers do not
+    // classify the new call tab as an unsolicited popup.
+    const callTab = window.open(url.toString(), "ketoanmini-call");
+    if (!callTab) {
+      notify.warning("Trình duyệt đang chặn tab cuộc gọi. Hãy cho phép cửa sổ bật lên cho trang này.");
+      return null;
+    }
+    callTab.focus();
+    return callTab;
+  };
+
+  const beginCall = (media: "audio" | "video") => {
+    if (!active?.username || active.isGroup || active.username === SUPPORT_USERNAME) {
+      notify.warning("Cuộc gọi chỉ hỗ trợ hội thoại 1-1 với tài khoản nhân viên.");
+      return;
+    }
+    openCallTab({ peer: active.username, name: active.title, media });
+  };
+
+  const acceptIncomingCallInTab = () => {
+    if (!call || call.stage !== "incoming") return;
+    const callTab = openCallTab({
+      incoming: "1",
+      callId: call.callId,
+      peer: call.peerUsername,
+      name: call.peerName,
+      media: call.media,
+    });
+    if (!callTab) return;
+    handoffIncomingWebCall(call.callId);
+  };
+
+  const loadOlderMessages = async () => {
+    const beforeId = messages[0]?.id;
+    if (!activeId || beforeId == null || loadingOlder || !canLoadOlder) return;
+    const scroller = scrollRef.current;
+    const previousHeight = scroller?.scrollHeight ?? 0;
+    setLoadingOlder(true);
+    try {
+      const page = await api.get<ChatMessage[]>(
+        `/api/chat/conversations/${activeId}/messages?take=50&beforeId=${beforeId}${
+          debouncedMessageQuery ? `&search=${encodeURIComponent(debouncedMessageQuery)}` : ""
+        }`,
+      );
+      setOlderMessages((current) => {
+        const merged = new Map<number, ChatMessage>();
+        for (const message of page) merged.set(message.id, message);
+        for (const message of current) merged.set(message.id, message);
+        return [...merged.values()].sort((a, b) => a.id - b.id);
+      });
+      if (page.length < 50) setPaginationExhausted(true);
+      requestAnimationFrame(() => {
+        if (scroller) scroller.scrollTop += scroller.scrollHeight - previousHeight;
+      });
+    } catch (e) {
+      notifyError(e, "Không tải được tin nhắn cũ");
+    } finally {
+      setLoadingOlder(false);
+    }
   };
 
   const showConversationProfile = (c: ChatConversation) => {
@@ -1299,9 +1860,10 @@ export function Chats() {
     }
   };
 
-  // Gửi tệp qua LAN (P2P). Ghi MỘT dòng metadata "đã gửi tệp X" rồi mời người nhận qua WebRTC.
-  // Nội dung tệp KHÔNG đi qua server/DB — truyền thẳng giữa 2 trình duyệt khi người nhận đồng ý.
+  // Ảnh/video được lưu bền vững trên server để cả web và APK xem trực tiếp sau khi tải lại trang.
+  // Các loại tệp khác vẫn ưu tiên truyền qua LAN (P2P) và chỉ fallback server khi cần.
   const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB: chặn nhầm; truyền P2P nên không giới hạn server
+  const MAX_INLINE_MEDIA_BYTES = 100 * 1024 * 1024;
   const handleSendFile = async (file: File) => {
     if (!activeId || !active) return;
     if (active.isGroup || !active.username) {
@@ -1316,20 +1878,135 @@ export function Chats() {
       notify.warning("Tệp quá lớn (giới hạn 2GB).");
       return;
     }
+    const mediaKind = detectInlineMedia(file.name, file.type);
+    if (mediaKind && file.size > MAX_INLINE_MEDIA_BYTES) {
+      notify.warning(`${mediaKind === "image" ? "Ảnh" : "Video"} quá lớn (giới hạn xem trực tiếp 100MB).`);
+      return;
+    }
     const peer = active.username;
     try {
       const msg = await api.post<ChatMessage>(`/api/chat/conversations/${activeId}/messages/file`, {
         fileName: file.name,
         fileSize: file.size,
         fileMime: file.type || null,
+        kind: "file",
       });
-      startSend(peer, file, msg.id, activeId, !!active.isOnline);
+      if (mediaKind) {
+        await api.postBlob(`/api/chat/conversations/${activeId}/messages/${msg.id}/upload`, file);
+      } else {
+        startSend(peer, file, msg.id, activeId, !!active.isOnline);
+      }
       reloadMessages({ silent: true });
       reloadConversations({ silent: true });
       scrollToBottom();
     } catch (e) {
       notifyError(e, "Không gửi được tệp");
     }
+  };
+
+  const uploadVoice = async (voice: NonNullable<typeof pendingVoice>) => {
+    if (!activeId || voiceSending) return;
+    setVoiceSending(true);
+    setPendingVoice(voice);
+    try {
+      const metadata = await api.post<ChatMessage>(`/api/chat/conversations/${activeId}/messages/file`, {
+        fileName: voice.name,
+        fileSize: voice.blob.size,
+        fileMime: voice.mime,
+        kind: "voice",
+        clientMessageId: voice.clientMessageId,
+      });
+      // Retry có thể gặp bản ghi đã upload thành công trước đó; không tải blob lần hai.
+      if (!metadata.hasBlob) {
+        await api.postBlob(`/api/chat/conversations/${activeId}/messages/${metadata.id}/upload`, voice.blob);
+      }
+      setPendingVoice(null);
+      reloadMessages({ silent: true });
+      reloadConversations({ silent: true });
+      scrollToBottom();
+    } catch (e) {
+      setPendingVoice(voice);
+      notifyError(e, "Không gửi được tin nhắn thoại");
+    } finally {
+      setVoiceSending(false);
+    }
+  };
+
+  const startVoiceRecording = async () => {
+    if (!activeId || recordingVoice || voiceSending) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      notify.warning("Trình duyệt này không hỗ trợ ghi âm. Hãy dùng Chrome/Edge mới trên HTTPS.");
+      return;
+    }
+    setComposerEmojiOpen(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const supportedMime = [
+        "audio/webm;codecs=opus",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+        "audio/webm",
+      ].find((mime) => MediaRecorder.isTypeSupported(mime));
+      const recorder = supportedMime ? new MediaRecorder(stream, { mimeType: supportedMime }) : new MediaRecorder(stream);
+      const mime = (recorder.mimeType || supportedMime || "audio/webm").split(";")[0];
+      const extension = mime.includes("ogg") ? "ogg" : mime.includes("mp4") ? "m4a" : "webm";
+      voiceStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      voiceChunksRef.current = [];
+      voiceStartedAtRef.current = Date.now();
+      voiceSendOnStopRef.current = false;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) voiceChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const shouldSend = voiceSendOnStopRef.current;
+        const elapsed = Date.now() - voiceStartedAtRef.current;
+        const blob = new Blob(voiceChunksRef.current, { type: mime });
+        stream.getTracks().forEach((track) => track.stop());
+        voiceStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        voiceChunksRef.current = [];
+        if (voiceTimerRef.current != null) window.clearInterval(voiceTimerRef.current);
+        voiceTimerRef.current = null;
+        setRecordingVoice(false);
+        setVoiceElapsedMs(0);
+        if (!shouldSend) return;
+        if (elapsed < 700 || blob.size === 0) {
+          notify.warning("Giữ lâu hơn một chút để ghi âm.");
+          return;
+        }
+        const voice = {
+          blob,
+          mime,
+          name: `ghi-am-${Date.now()}.${extension}`,
+          clientMessageId: `web-voice:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`,
+        };
+        setPendingVoice(voice);
+        void uploadVoice(voice);
+      };
+      recorder.onerror = () => notify.error("Micro gặp lỗi trong lúc ghi âm.");
+      recorder.start(250);
+      setRecordingVoice(true);
+      setVoiceElapsedMs(0);
+      voiceTimerRef.current = window.setInterval(() => setVoiceElapsedMs(Date.now() - voiceStartedAtRef.current), 200);
+    } catch (e) {
+      voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+      voiceStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      notifyError(e, "Không mở được micro. Hãy cấp quyền ghi âm cho trang web.");
+    }
+  };
+
+  const finishVoiceRecording = (sendRecording: boolean) => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    voiceSendOnStopRef.current = sendRecording;
+    recorder.stop();
+  };
+
+  const loadVoiceBlob = (message: ChatMessage) => {
+    if (!activeId) return Promise.reject(new Error("Hội thoại không còn được mở."));
+    return api.getBlob(`/api/chat/conversations/${activeId}/messages/${message.id}/download`);
   };
 
   const onFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1642,14 +2319,60 @@ export function Chats() {
                 </div>
               </button>
               <div className="ml-auto flex items-center gap-1">
-                <CircleIconButton label="Tìm kiếm"><Search className="h-[18px] w-[18px]" /></CircleIconButton>
-                <CircleIconButton label="Gọi thoại"><Phone className="h-[18px] w-[18px]" /></CircleIconButton>
-                <CircleIconButton label="Gọi video"><Video className="h-[18px] w-[18px]" /></CircleIconButton>
+                <CircleIconButton
+                  label="Tìm tin nhắn"
+                  active={messageSearchOpen}
+                  onClick={() => {
+                    setMessageSearchOpen((open) => !open);
+                    if (messageSearchOpen) setMessageQuery("");
+                  }}
+                >
+                  <Search className="h-[18px] w-[18px]" />
+                </CircleIconButton>
+                <CircleIconButton
+                  label="Gọi thoại"
+                  onClick={() => void beginCall("audio")}
+                  disabled={!active.username || active.isGroup || active.username === SUPPORT_USERNAME || !!call}
+                >
+                  <Phone className="h-[18px] w-[18px]" />
+                </CircleIconButton>
+                <CircleIconButton
+                  label="Gọi video"
+                  onClick={() => void beginCall("video")}
+                  disabled={!active.username || active.isGroup || active.username === SUPPORT_USERNAME || !!call}
+                >
+                  <Video className="h-[18px] w-[18px]" />
+                </CircleIconButton>
                 <CircleIconButton label="Hồ sơ" active={profileOpen} onClick={() => setProfileOpen((o) => !o)}>
                   <MoreHorizontal className="h-[18px] w-[18px]" />
                 </CircleIconButton>
               </div>
             </header>
+
+            {messageSearchOpen && (
+              <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-3 py-2">
+                <Search className="h-4 w-4 shrink-0 text-[var(--text-muted)]" />
+                <input
+                  autoFocus
+                  value={messageQuery}
+                  onChange={(e) => setMessageQuery(e.target.value)}
+                  placeholder="Tìm nội dung hoặc tên tệp…"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none"
+                  aria-label="Tìm trong hội thoại"
+                />
+                {debouncedMessageQuery && !msgLoading && (
+                  <span className="shrink-0 text-xs text-[var(--text-muted)]">{messages.length} kết quả</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { setMessageQuery(""); setMessageSearchOpen(false); }}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--text-muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                  aria-label="Đóng tìm kiếm"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
 
             <div
               className="relative flex min-h-0 flex-1 flex-col"
@@ -1660,6 +2383,19 @@ export function Chats() {
             <div ref={scrollRef} className="scroll-thin flex-1 overflow-y-auto p-4">
               {msgLoading ? (
                 <MessageSkeletons />
+              ) : msgError && messages.length === 0 ? (
+                <div className="grid h-full place-items-center px-6 text-center text-sm text-[var(--danger)]">
+                  <div>
+                    <div>{msgError}</div>
+                    <button
+                      type="button"
+                      onClick={() => reloadMessages()}
+                      className="mt-3 rounded-xl px-3 py-2 font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                    >
+                      Thử lại
+                    </button>
+                  </div>
+                </div>
               ) : messages.length === 0 ? (
                 <div className="grid h-full place-items-center text-center text-sm text-[var(--text-muted)]">
                   <div>
@@ -1671,6 +2407,17 @@ export function Chats() {
                 // min-h-full + justify-end: ít tin thì dồn xuống đáy, nhiều tin thì tràn lên trên
                 // và cuộn bình thường — tin nhắn luôn "đi từ dưới lên" như app chat thật.
                 <div className="flex min-h-full flex-col justify-end space-y-3">
+                  {canLoadOlder && (
+                    <button
+                      type="button"
+                      onClick={() => void loadOlderMessages()}
+                      disabled={loadingOlder}
+                      className="mx-auto mb-1 inline-flex items-center gap-2 rounded-full border border-[var(--glass-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-60"
+                    >
+                      {loadingOlder && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      {loadingOlder ? "Đang tải…" : "Tải tin cũ hơn"}
+                    </button>
+                  )}
                   {messages.map((m) =>
                     editingId === m.id ? (
                       <EditRow
@@ -1680,10 +2427,11 @@ export function Chats() {
                         onSave={saveEdit}
                         onCancel={cancelEdit}
                       />
-                    ) : m.kind === "file" ? (
+                    ) : m.kind === "file" || m.kind === "voice" ? (
                       <FileBubble
                         key={m.id}
                         msg={m}
+                        conversationId={active.id}
                         transfer={transfers.get(m.id)}
                         serverBusy={serverDownloading === m.id}
                         onRedownload={() => {
@@ -1691,6 +2439,8 @@ export function Chats() {
                           if (t) redownload(t.tid);
                         }}
                         onServerDownload={() => void serverDownload(m)}
+                        onLoadVoice={() => loadVoiceBlob(m)}
+                        onReact={(emoji) => toggleReaction(m, emoji)}
                       />
                     ) : (
                       <Bubble
@@ -1718,8 +2468,10 @@ export function Chats() {
                   className="flex items-center gap-3 rounded-2xl p-2.5"
                   style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
                 >
-                  {previewUrl ? (
+                  {previewUrl && previewMediaKind === "image" ? (
                     <img src={previewUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+                  ) : previewUrl && previewMediaKind === "video" ? (
+                    <video src={previewUrl} muted playsInline preload="metadata" className="h-14 w-20 shrink-0 rounded-xl bg-black object-cover" />
                   ) : (
                     <span
                       className="grid h-14 w-14 shrink-0 place-items-center rounded-xl"
@@ -1754,6 +2506,37 @@ export function Chats() {
               </div>
             )}
 
+            {pendingVoice && !recordingVoice && (
+              <div className="flex items-center gap-3 border-t border-[var(--glass-border)] px-3 py-2 text-sm">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
+                  {voiceSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-[var(--text)]">{voiceSending ? "Đang gửi tin thoại…" : "Tin thoại chưa gửi được"}</div>
+                  <div className="text-xs text-[var(--text-muted)]">{formatBytes(pendingVoice.blob.size)}</div>
+                </div>
+                {!voiceSending && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setPendingVoice(null)}
+                      className="rounded-xl px-3 py-2 font-semibold text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]"
+                    >
+                      Bỏ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void uploadVoice(pendingVoice)}
+                      className="rounded-xl px-3 py-2 font-semibold text-white hover:opacity-90"
+                      style={{ background: "var(--accent)" }}
+                    >
+                      Gửi lại
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
             <footer
               className="relative flex items-center gap-2 border-t border-[var(--glass-border)] p-3"
               onDragOver={onZoneOver("composer")}
@@ -1764,65 +2547,129 @@ export function Chats() {
               {dragZone === "composer" && (
                 <DropOverlay icon={<Upload className="h-6 w-6" />} title="Thả để xem trước" sub="Kiểm tra rồi mới gửi" />
               )}
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={active.isGroup || !canSendLanFiles}
-                title={
-                  active.isGroup
-                    ? "Gửi tệp chỉ hỗ trợ trò chuyện 1-1"
-                    : isSupportPeer
-                      ? "Tài khoản hỗ trợ không nhận tệp qua LAN"
-                      : outgoingAsSupport
-                        ? "Tắt chế độ Hỗ Trợ để gửi tệp bằng tài khoản admin"
-                        : canSendLanFiles
-                          ? "Gửi tệp qua LAN"
-                          : "Chỉ hội viên kim cương mới được gửi tệp qua LAN"
-                }
-                className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-40"
-                aria-label="Gửi tệp qua LAN"
-              >
-                <Paperclip className="h-5 w-5" />
-              </button>
-              {canUseSupportSender && (
-                <select
-                  value={outgoingAsSupport ? "support" : "admin"}
-                  onChange={(e) => setSendAsSupport(e.target.value === "support")}
-                  className="h-10 shrink-0 rounded-full px-3 text-xs font-bold text-[var(--text)] outline-none transition"
-                  style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
-                  aria-label="Chọn tài khoản gửi"
-                  title="Chọn tài khoản gửi"
-                >
-                  <option value="admin">Admin</option>
-                  <option value="support">Hỗ Trợ Người Dùng</option>
-                </select>
+              {recordingVoice ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => finishVoiceRecording(false)}
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--danger)] hover:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]"
+                    aria-label="Hủy bản ghi"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                  <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-[var(--glass-border)] px-4 py-2">
+                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[var(--danger)]" />
+                    <span className="truncate text-sm font-semibold text-[var(--text)]">Đang ghi âm</span>
+                    <span className="ml-auto text-sm tabular-nums text-[var(--text-secondary)]">{fmtDuration(voiceElapsedMs)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => finishVoiceRecording(true)}
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:opacity-90"
+                    style={{ background: "var(--accent)" }}
+                    aria-label="Dừng và gửi tin thoại"
+                  >
+                    <Send className="h-[18px] w-[18px]" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={active.isGroup || !canSendLanFiles}
+                    title={
+                      active.isGroup
+                        ? "Gửi tệp chỉ hỗ trợ trò chuyện 1-1"
+                        : isSupportPeer
+                          ? "Tài khoản hỗ trợ không nhận tệp qua LAN"
+                          : outgoingAsSupport
+                            ? "Tắt chế độ Hỗ Trợ để gửi tệp bằng tài khoản admin"
+                            : canSendLanFiles
+                              ? "Gửi tệp qua LAN"
+                              : "Chỉ hội viên kim cương mới được gửi tệp qua LAN"
+                    }
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-40"
+                    aria-label="Gửi tệp qua LAN"
+                  >
+                    <Paperclip className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void startVoiceRecording()}
+                    disabled={voiceSending || !!pendingVoice}
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:opacity-40"
+                    aria-label="Ghi tin nhắn thoại"
+                    title="Ghi tin nhắn thoại"
+                  >
+                    <Mic className="h-5 w-5" />
+                  </button>
+                  {canUseSupportSender && (
+                    <select
+                      value={outgoingAsSupport ? "support" : "admin"}
+                      onChange={(e) => setSendAsSupport(e.target.value === "support")}
+                      className="h-10 shrink-0 rounded-full px-3 text-xs font-bold text-[var(--text)] outline-none transition"
+                      style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
+                      aria-label="Chọn tài khoản gửi"
+                      title="Chọn tài khoản gửi"
+                    >
+                      <option value="admin">Admin</option>
+                      <option value="support">Hỗ Trợ Người Dùng</option>
+                    </select>
+                  )}
+                  <div className="relative flex min-w-0 flex-1 items-center gap-2 px-1 py-1.5">
+                    {composerEmojiOpen && (
+                      <div
+                        className="absolute bottom-11 right-0 z-20 flex items-center gap-0.5 rounded-full border border-[var(--glass-border)] px-1.5 py-1 shadow-lg"
+                        style={{ background: "var(--glass-bg-strong)", backdropFilter: "blur(10px)" }}
+                      >
+                        {REACTIONS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => { setDraft((value) => `${value}${emoji}`.slice(0, 4000)); setComposerEmojiOpen(false); draftInputRef.current?.focus(); }}
+                            className="grid h-8 w-8 place-items-center rounded-full text-lg hover:scale-110 hover:bg-[var(--accent-soft)]"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <input
+                      ref={draftInputRef}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value.slice(0, 4000))}
+                      onFocus={() => setComposerFocused(true)}
+                      onBlur={() => setComposerFocused(false)}
+                      onKeyDown={(e) => e.key === "Enter" && void send()}
+                      placeholder={outgoingAsSupport ? "Nhập tin nhắn với tài khoản Hỗ Trợ…" : "Nhập tin nhắn…"}
+                      className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none"
+                    />
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setComposerEmojiOpen((open) => !open)}
+                      className="text-[var(--text-muted)] transition hover:text-[var(--accent)]"
+                      aria-label="Chèn biểu cảm"
+                      aria-expanded={composerEmojiOpen}
+                    >
+                      <Smile className="h-5 w-5" />
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => void send()}
+                    disabled={sending || !draft.trim()}
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:opacity-90 disabled:opacity-50"
+                    style={{ background: "var(--accent)" }}
+                    aria-label="Gửi"
+                  >
+                    {sending ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <Send className="h-[18px] w-[18px]" />}
+                  </button>
+                </>
               )}
-              <div className="flex flex-1 items-center gap-2 px-1 py-1.5">
-                <input
-                  ref={draftInputRef}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onFocus={() => setComposerFocused(true)}
-                  onBlur={() => setComposerFocused(false)}
-                  onKeyDown={(e) => e.key === "Enter" && send()}
-                  placeholder={outgoingAsSupport ? "Nhập tin nhắn với tài khoản Hỗ Trợ…" : "Nhập tin nhắn…"}
-                  className="w-full bg-transparent text-sm text-[var(--text)] outline-none"
-                />
-                <button type="button" className="text-[var(--text-muted)] transition hover:text-[var(--accent)]" aria-label="Biểu cảm">
-                  <Smile className="h-5 w-5" />
-                </button>
-              </div>
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={send}
-                disabled={sending || !draft.trim()}
-                className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:opacity-90 disabled:opacity-50"
-                style={{ background: "var(--accent)" }}
-                aria-label="Gửi"
-              >
-                {sending ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <Send className="h-[18px] w-[18px]" />}
-              </button>
             </footer>
           </>
         ) : (
@@ -1869,16 +2716,23 @@ export function Chats() {
                 {active.username && <div className="text-xs text-[var(--text-muted)]">@{active.username}</div>}
               </div>
 
-              <div className="mt-4 grid grid-cols-4 gap-2">
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 {[
-                  { icon: User, label: "Hồ sơ" },
-                  { icon: Bell, label: "Tắt báo" },
-                  { icon: Search, label: "Tìm" },
-                  { icon: MoreHorizontal, label: "Thêm" },
+                  {
+                    icon: active.pinned ? PinOff : Pin,
+                    label: active.pinned ? "Bỏ ghim" : "Ghim",
+                    onClick: () => void toggleConversationPin(active),
+                  },
+                  {
+                    icon: Search,
+                    label: "Tìm tin",
+                    onClick: () => { setProfileOpen(false); setMessageSearchOpen(true); },
+                  },
                 ].map((a) => (
                   <button
                     key={a.label}
                     type="button"
+                    onClick={a.onClick}
                     className="flex flex-col items-center gap-1.5 rounded-2xl py-3 text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
                     style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
                   >
@@ -1898,6 +2752,7 @@ export function Chats() {
       {forwardMsg && (
         <ContactPickerModal title="Chuyển tiếp đến…" onClose={() => setForwardMsg(null)} onPick={doForward} />
       )}
+      {call?.stage === "incoming" && <IncomingCallOverlay call={call} onAccept={acceptIncomingCallInTab} />}
     </div>
   );
 }

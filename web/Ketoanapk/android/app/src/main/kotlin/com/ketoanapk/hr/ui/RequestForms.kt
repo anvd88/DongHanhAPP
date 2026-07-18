@@ -71,8 +71,12 @@ val requestFields: Map<String, List<RequestField>> = mapOf(
         RequestField("reason", "Lý do", RfType.Textarea, "Vì sao bạn quên chấm?"),
     ),
     "shift_swap" to listOf(
+        RequestField(
+            "action", "Hình thức", RfType.Segmented, "Chọn đổi ca hiện tại hoặc nhận thêm ca",
+            options = listOf("swap" to "Xin đổi ca", "take" to "Xin nhận ca"),
+        ),
         RequestField("date", "Ngày đổi ca", RfType.Date, "Ngày cần đổi ca"),
-        RequestField("withPerson", "Người nhận ca", RfType.Text, "Tên đồng nghiệp nhận ca giúp"),
+        RequestField("withPerson", "Người đổi / bàn giao ca", RfType.Text, "Tên hoặc mã nhân viên đồng nghiệp", required = false),
         RequestField("reason", "Lý do", RfType.Textarea, "Vì sao bạn cần đổi ca?"),
     ),
     "payment" to listOf(
@@ -82,6 +86,13 @@ val requestFields: Map<String, List<RequestField>> = mapOf(
     "advance" to listOf(
         RequestField("amount", "Số tiền tạm ứng", RfType.Money, "Số tiền bạn muốn tạm ứng"),
         RequestField("reason", "Lý do", RfType.Textarea, "Bạn tạm ứng để làm gì?"),
+    ),
+    "reimbursement" to listOf(
+        RequestField("advanceRef", "Mã đơn tạm ứng", RfType.Text, "Mã đơn đã được duyệt", required=false),
+        RequestField("advancedAmount", "Số đã ứng", RfType.Money, "Tổng tiền đã tạm ứng"),
+        RequestField("spentAmount", "Số đã chi", RfType.Money, "Tổng theo hóa đơn"),
+        RequestField("receiptSummary", "Danh sách chi phí", RfType.Textarea, "Mỗi dòng: ngày, nội dung, số tiền"),
+        RequestField("reason", "Ghi chú quyết toán", RfType.Textarea, "Lý do chênh lệch", required=false),
     ),
     "purchase" to listOf(
         RequestField("item", "Vật tư cần mua", RfType.Text, "Tên món đồ cần mua"),

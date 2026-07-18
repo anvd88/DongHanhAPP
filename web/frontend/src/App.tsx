@@ -25,6 +25,7 @@ const TinhToan = lazy(() => import("./pages/TinhToan").then((m) => ({ default: m
 const ApkDownload = lazy(() => import("./pages/ApkDownload").then((m) => ({ default: m.ApkDownload })));
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const KeToan = lazy(() => import("./pages/KeToan").then((m) => ({ default: m.KeToan })));
+const PhieuChi = lazy(() => import("./pages/PhieuChi").then((m) => ({ default: m.PhieuChi })));
 const KhachHang = lazy(() => import("./pages/KhachHang").then((m) => ({ default: m.KhachHang })));
 const GiaCongPage = lazy(() => import("./features/giacong/GiaCongPage").then((m) => ({ default: m.GiaCongPage })));
 const ChamCongPage = lazy(() => import("./features/chamcong/ChamCongPage").then((m) => ({ default: m.ChamCongPage })));
@@ -55,11 +56,13 @@ const HRTimesheetPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ d
 const BaoCao = lazy(() => import("./pages/BaoCao").then((m) => ({ default: m.BaoCao })));
 const CongCu = lazy(() => import("./pages/CongCu").then((m) => ({ default: m.CongCu })));
 const Chats = lazy(() => import("./pages/Chats").then((m) => ({ default: m.Chats })));
+const CallPage = lazy(() => import("./pages/CallPage").then((m) => ({ default: m.CallPage })));
 const SaoLuu = lazy(() => import("./pages/SaoLuu").then((m) => ({ default: m.SaoLuu })));
 const PhanHoi = lazy(() => import("./pages/PhanHoi").then((m) => ({ default: m.PhanHoi })));
 const StubPage = lazy(() => import("./pages/StubPage").then((m) => ({ default: m.StubPage })));
 const SystemSettings = lazy(() => import("./pages/SystemSettings").then((m) => ({ default: m.SystemSettings })));
 const CongThongTin = lazy(() => import("./pages/CongThongTin").then((m) => ({ default: m.CongThongTin })));
+const CongViec = lazy(() => import("./pages/CongViec").then((m) => ({ default: m.CongViec })));
 import { isAdmin } from "./lib/types";
 import { DEFAULT_AUTH_PATH, IS_HR_APK, isHrModulePath } from "./lib/appConfig";
 import { Loader2 } from "lucide-react";
@@ -84,6 +87,7 @@ const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/tai-khoan-ngan-hang": "Tài khoản ngân hàng",
   "/lichhen": "Lịch hẹn",
   "/tichhop": "Tích hợp",
+  "/call": "Cuộc gọi",
 };
 
 const NAV_PAGE_TITLES = Object.fromEntries(
@@ -117,9 +121,11 @@ function Protected({
   children,
   admin,
   publicFallback,
+  standalone,
 }: {
   children: React.ReactNode;
   admin?: boolean;
+  standalone?: boolean;
   /** Nếu có: khi chưa đăng nhập (hoặc đang tải) sẽ render nội dung công khai này thay vì
    *  chuyển hướng về /login — dùng cho trang vừa công khai vừa nằm trong app (vd Tải APK). */
   publicFallback?: React.ReactNode;
@@ -140,6 +146,7 @@ function Protected({
     return <Navigate to="/login" state={{ from: loc }} replace />;
   }
   if (admin && !isAdmin(user)) return <Navigate to={DEFAULT_AUTH_PATH} replace />;
+  if (standalone) return <>{children}</>;
   const content = (
     <>
       {!suppressMainWebSystem && <FeedbackResolvedToasts />}
@@ -224,14 +231,21 @@ export default function App() {
             <Route path="/tai-apk" element={<Protected publicFallback={<ApkDownload standalone />}><ApkDownload /></Protected>} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/ketoan" element={<Protected><KeToan /></Protected>} />
+            {/* Không đặt admin: kế toán (không phải admin) mới là người lập/duyệt chi; server chốt quyền.
+                Nhân viên thường vào đây chỉ thấy phiếu chi của chính mình. */}
+            <Route path="/phieu-chi" element={<Protected><PhieuChi /></Protected>} />
             <Route path="/khachhang" element={<Protected><KhachHang /></Protected>} />
             <Route path="/giacong" element={<Protected><GiaCongPage /></Protected>} />
             <Route path="/baocao" element={<Protected><BaoCao /></Protected>} />
-            <Route path="/saoluu" element={<Protected admin><SaoLuu /></Protected>} />
+            {/* Không đặt admin: kế toán cũng vào được, nhưng server chỉ trả phần thu chi tiền mặt
+                (xem AuditEndpoints.ResolveScopeAsync). Người không có quyền nào sẽ nhận 403. */}
+            <Route path="/saoluu" element={<Protected><SaoLuu /></Protected>} />
             <Route path="/chamcong" element={<Protected>{IS_HR_APK ? <HRAttendancePage /> : <ChamCongScannerPage />}</Protected>} />
             <Route path="/ql-chamcong" element={<Protected admin>{IS_HR_APK ? <HRAttendanceAdminPage /> : <ChamCongPage />}</Protected>} />
             <Route path="/tinhtoan" element={<Protected><CongCu /></Protected>} />
+            <Route path="/cong-viec" element={<Protected><CongViec /></Protected>} />
             <Route path="/chats" element={<Protected><Chats /></Protected>} />
+            <Route path="/call" element={<Protected standalone><CallPage /></Protected>} />
             <Route path="/phanhoi" element={<Protected><PhanHoi /></Protected>} />
             <Route path="/nhan-su" element={<Protected>{IS_HR_APK ? <HRHomePage /> : <NhanSuPortal />}</Protected>} />
             <Route path="/nhansu" element={<Protected admin><NhanSu /></Protected>} />

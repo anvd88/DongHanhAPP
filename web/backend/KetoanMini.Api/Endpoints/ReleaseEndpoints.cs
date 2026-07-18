@@ -1,11 +1,14 @@
 using System.Security.Claims;
-using System.Security.Cryptography;
+using System.Text;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Realtime;
+using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Net.Http.Headers;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -23,7 +26,7 @@ public static class ReleaseEndpoints
             await using var r = await conn.Cmd(
                 @"SELECT id, release_notes, is_mandatory, published_at
                   FROM app_releases
-                  WHERE app_target=@target AND is_published=TRUE AND apk_data IS NOT NULL
+                  WHERE app_target=@target AND is_published=TRUE AND has_apk=TRUE
                   ORDER BY version_code DESC, published_at DESC, id DESC
                   LIMIT 1")
                 .With("@target", target)
@@ -42,9 +45,9 @@ public static class ReleaseEndpoints
                 publishedAt = r.Dt("published_at"),
                 downloadUrl = $"/api/releases/public/{id}/download",
             });
-        });
+        }).AllowAnonymous();
 
-        publicReleases.MapGet("/{id:long}/download", DownloadPublishedReleasePublic);
+        publicReleases.MapGet("/{id:long}/download", DownloadPublishedReleasePublic).AllowAnonymous();
 
         var user = app.MapGroup("/api/releases").RequireAuthorization();
 
@@ -58,7 +61,7 @@ public static class ReleaseEndpoints
                 @"SELECT id, app_target, version, version_code, release_notes, is_mandatory,
                          published_at, apk_file_name, apk_size, apk_sha256
                   FROM app_releases
-                  WHERE app_target=@target AND is_published=TRUE AND apk_data IS NOT NULL
+                  WHERE app_target=@target AND is_published=TRUE AND has_apk=TRUE
                   ORDER BY version_code DESC, published_at DESC, id DESC
                   LIMIT 1")
                 .With("@target", target)
@@ -115,7 +118,7 @@ public static class ReleaseEndpoints
                 string target;
                 bool hasApk;
                 await using (var release = await conn.Cmd(
-                    @"SELECT app_target, version, version_code, release_notes, apk_data IS NOT NULL AS has_apk
+                    @"SELECT app_target, version, version_code, release_notes, has_apk
                       FROM app_releases
                       WHERE id=@id")
                     .With("@id", id)
@@ -164,6 +167,7 @@ public static class ReleaseEndpoints
                 .With("@id", id)
                 .ExecuteNonQueryAsync();
             if (changed == 0) return Results.NotFound(new { message = "Không tìm thấy bản phát hành." });
+            ReleaseStorage.TryDelete(id);
             await NotifyReleaseChanged(hub);
             await db.RecordAudit(u.Username(), "Xóa bản phát hành APK", "Release", id.ToString(), "");
             return Results.NoContent();
@@ -179,83 +183,141 @@ public static class ReleaseEndpoints
             var deleted = await conn.Cmd("DELETE FROM app_releases WHERE id = ANY(@ids)")
                 .With("@ids", ids)
                 .ExecuteNonQueryAsync();
+            foreach (var id in ids) ReleaseStorage.TryDelete(id);
             await NotifyReleaseChanged(hub);
             await db.RecordAudit(u.Username(), "Xóa hàng loạt bản phát hành APK", "Release", string.Join(",", ids), $"{deleted} bản");
             return Results.Ok(new { deleted });
         });
     }
 
+    /// <summary>
+    /// Đăng bản cập nhật. Đọc multipart THEO LUỒNG (MultipartReader) thay vì ReadFormAsync: APK chảy
+    /// thẳng từ socket xuống đĩa qua buffer 80KB nên một bản 100MB cũng không chiếm 100MB RAM, và
+    /// không phải nhờ tệp tạm của hệ thống (thư mục temp có thể nằm trên RAM disk).
+    /// </summary>
     private static async Task<IResult> UploadRelease(HttpRequest request, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push)
     {
-        if (!request.HasFormContentType)
+        var boundary = ReadBoundary(request);
+        if (boundary is null)
             return Results.BadRequest(new { message = "Vui lòng gửi multipart/form-data kèm file APK." });
 
-        // Bỏ giới hạn dung lượng body cho RIÊNG endpoint tải APK (Kestrel mặc định ~28MB, còn APK
-        // thường 40–100MB) — nếu không request sẽ bị hủy giữa chừng và trình duyệt báo "Failed to fetch".
+        // Nâng trần body cho RIÊNG endpoint này TRƯỚC khi đọc: Kestrel đang áp trần chung 16MB
+        // (PayloadLimits.MaxJsonBodyBytes đặt trong Program) mà APK thường 40–100MB. Không nâng thì
+        // Kestrel hủy request giữa chừng và trình duyệt chỉ báo "Failed to fetch".
         var maxBodySize = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
         if (maxBodySize is { IsReadOnly: false })
-            maxBodySize.MaxRequestBodySize = null;
+            maxBodySize.MaxRequestBodySize = PayloadLimits.MaxApkBytes;
 
-        var form = await request.ReadFormAsync();
-        var file = form.Files.GetFile("apk") ?? form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
-        if (file is null || file.Length == 0)
-            return Results.BadRequest(new { message = "Chưa chọn file APK." });
-        if (!file.FileName.EndsWith(".apk", StringComparison.OrdinalIgnoreCase))
-            return Results.BadRequest(new { message = "File cập nhật phải là APK." });
+        var ct = request.HttpContext.RequestAborted;
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var reader = new MultipartReader(boundary, request.Body) { BodyLengthLimit = PayloadLimits.MaxApkBytes };
+        string? tempPath = null;
+        var apkFileName = "";
+        long apkSize = 0;
+        var sha256 = "";
 
-        var version = FormValue(form, "version");
-        if (string.IsNullOrWhiteSpace(version))
-            return Results.BadRequest(new { message = "Vui lòng nhập phiên bản." });
-
-        var versionCode = ParseInt(FormValue(form, "versionCode"), 1);
-        var target = NormalizeTarget(FormValue(form, "appTarget", "hr-apk"));
-        var notes = FormValue(form, "releaseNotes");
-        var isMandatory = ParseBool(FormValue(form, "isMandatory"));
-        var isPublished = ParseBool(FormValue(form, "isPublished"));
-
-        await using var conn = await db.OpenAsync();
-        if (isPublished)
+        try
         {
-            var latestPublished = await ReadLatestPublishedVersionCode(conn, target);
-            if (versionCode <= latestPublished)
-                return Results.BadRequest(new { message = VersionCodeMustIncreaseMessage(latestPublished) });
+            while (await reader.ReadNextSectionAsync(ct) is { } section)
+            {
+                if (!ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition)) continue;
+
+                if (disposition.IsFileDisposition())
+                {
+                    // Chỉ nhận tệp ĐẦU TIÊN; phần thừa vẫn phải đọc hết để không cắt ngang luồng.
+                    if (tempPath is not null) continue;
+                    apkFileName = Path.GetFileName(HeaderUtilities.RemoveQuotes(disposition.FileName).Value ?? "");
+                    tempPath = ReleaseStorage.NewTempPath();
+                    (apkSize, sha256) = await ReleaseStorage.WriteStreamAsync(section.Body, tempPath, ct);
+                }
+                else if (disposition.IsFormDisposition())
+                {
+                    var name = HeaderUtilities.RemoveQuotes(disposition.Name).Value ?? "";
+                    using var text = new StreamReader(section.Body, Encoding.UTF8);
+                    fields[name] = (await text.ReadToEndAsync(ct)).Trim();
+                }
+            }
+
+            if (tempPath is null || apkSize == 0)
+                return Results.BadRequest(new { message = "Chưa chọn file APK." });
+            if (!apkFileName.EndsWith(".apk", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new { message = "File cập nhật phải là APK." });
+
+            var version = Field(fields, "version");
+            if (string.IsNullOrWhiteSpace(version))
+                return Results.BadRequest(new { message = "Vui lòng nhập phiên bản." });
+
+            var versionCode = ParseInt(Field(fields, "versionCode"), 1);
+            var target = NormalizeTarget(Field(fields, "appTarget", "hr-apk"));
+            var notes = Field(fields, "releaseNotes");
+            var isMandatory = ParseBool(Field(fields, "isMandatory"));
+            var isPublished = ParseBool(Field(fields, "isPublished"));
+
+            await using var conn = await db.OpenAsync(ct);
+            if (isPublished)
+            {
+                var latestPublished = await ReadLatestPublishedVersionCode(conn, target);
+                if (versionCode <= latestPublished)
+                    return Results.BadRequest(new { message = VersionCodeMustIncreaseMessage(latestPublished) });
+            }
+
+            // Ghi dòng với has_apk=FALSE trước để lấy id (tên tệp APK theo id). Chỉ khi tệp đã nằm đúng
+            // chỗ mới bật cờ — nên bản phát hành không bao giờ được quảng bá khi chưa có APK trên đĩa.
+            ReleaseDto dto;
+            await using (var r = await conn.Cmd(
+                @"INSERT INTO app_releases
+                    (app_target, version, version_code, release_notes, is_mandatory, is_published,
+                     apk_file_name, apk_mime_type, apk_size, apk_sha256, has_apk, published_at, published_by, updated_at)
+                  VALUES
+                    (@target, @version, @versionCode, @notes, @mandatory, @published,
+                     @fileName, @mime, @size, @sha, FALSE, CURRENT_TIMESTAMP, @by, CURRENT_TIMESTAMP)
+                  RETURNING id, app_target, version, version_code, release_notes, is_mandatory, is_published,
+                            published_at, published_by, apk_file_name, apk_size, apk_sha256")
+                .With("@target", target)
+                .With("@version", version.Trim())
+                .With("@versionCode", versionCode)
+                .With("@notes", notes)
+                .With("@mandatory", isMandatory)
+                .With("@published", isPublished)
+                .With("@fileName", apkFileName)
+                .With("@mime", "application/vnd.android.package-archive")
+                .With("@size", apkSize)
+                .With("@sha", sha256)
+                .With("@by", isPublished ? u.Username() : "")
+                .ExecuteReaderAsync(ct))
+            {
+                await r.ReadAsync(ct);
+                dto = ReadRelease(r);
+            }
+
+            try
+            {
+                File.Move(tempPath, ReleaseStorage.ApkPath(dto.Id), overwrite: true);
+                tempPath = null;
+                await conn.Cmd("UPDATE app_releases SET has_apk=TRUE WHERE id=@id")
+                    .With("@id", dto.Id).ExecuteNonQueryAsync(ct);
+            }
+            catch (Exception)
+            {
+                // Không cất được tệp → gỡ luôn dòng vừa ghi để admin đăng lại, không để bản "rỗng".
+                await conn.Cmd("DELETE FROM app_releases WHERE id=@id").With("@id", dto.Id).ExecuteNonQueryAsync(ct);
+                throw;
+            }
+
+            await NotifyReleaseChanged(hub);
+            if (isPublished) await SendReleasePush(push, dto.Version, dto.VersionCode, notes);
+            await db.RecordAudit(u.Username(), isPublished ? "Đăng bản cập nhật APK" : "Tạo bản cập nhật APK", "Release", dto.Version, apkFileName);
+            return Results.Created($"/api/releases/{dto.Id}", dto);
         }
-
-        await using var ms = new MemoryStream();
-        await file.CopyToAsync(ms);
-        var apkBytes = ms.ToArray();
-        var sha256 = Convert.ToHexString(SHA256.HashData(apkBytes)).ToLowerInvariant();
-        var safeFileName = Path.GetFileName(file.FileName);
-
-        await using var r = await conn.Cmd(
-            @"INSERT INTO app_releases
-                (app_target, version, version_code, release_notes, is_mandatory, is_published,
-                 apk_file_name, apk_mime_type, apk_size, apk_sha256, apk_data, published_at, published_by, updated_at)
-              VALUES
-                (@target, @version, @versionCode, @notes, @mandatory, @published,
-                 @fileName, @mime, @size, @sha, @data, CURRENT_TIMESTAMP, @by, CURRENT_TIMESTAMP)
-              RETURNING id, app_target, version, version_code, release_notes, is_mandatory, is_published,
-                        published_at, published_by, apk_file_name, apk_size, apk_sha256")
-            .With("@target", target)
-            .With("@version", version.Trim())
-            .With("@versionCode", versionCode)
-            .With("@notes", notes)
-            .With("@mandatory", isMandatory)
-            .With("@published", isPublished)
-            .With("@fileName", safeFileName)
-            .With("@mime", "application/vnd.android.package-archive")
-            .With("@size", apkBytes.LongLength)
-            .With("@sha", sha256)
-            .With("@data", apkBytes)
-            .With("@by", isPublished ? u.Username() : "")
-            .ExecuteReaderAsync();
-
-        await r.ReadAsync();
-        var dto = ReadRelease(r);
-        await NotifyReleaseChanged(hub);
-        if (isPublished) await SendReleasePush(push, dto.Version, dto.VersionCode, notes);
-        await db.RecordAudit(u.Username(), isPublished ? "Đăng bản cập nhật APK" : "Tạo bản cập nhật APK", "Release", dto.Version, safeFileName);
-        return Results.Created($"/api/releases/{dto.Id}", dto);
+        catch (InvalidDataException)
+        {
+            // MultipartReader ném khi một phần vượt BodyLengthLimit.
+            return Results.Json(new { message = $"APK vượt giới hạn {PayloadLimits.MaxApkBytes / 1024 / 1024} MB." }, statusCode: 413);
+        }
+        finally
+        {
+            if (tempPath is not null) ReleaseStorage.TryDeletePath(tempPath);
+        }
     }
 
     private static ReleaseDto ReadRelease(Npgsql.NpgsqlDataReader r) => new(
@@ -273,42 +335,40 @@ public static class ReleaseEndpoints
         r.Str("apk_sha256"));
 
     private static async Task<IResult> DownloadPublishedRelease(long id, Database db)
-    {
-        await using var conn = await db.OpenAsync();
-        await using var r = await conn.Cmd(
-            @"SELECT apk_file_name, apk_mime_type, apk_data
-              FROM app_releases
-              WHERE id=@id AND is_published=TRUE AND apk_data IS NOT NULL")
-            .With("@id", id)
-            .ExecuteReaderAsync();
-
-        if (!await r.ReadAsync()) return Results.NotFound(new { message = "Không tìm thấy bản APK đã phát hành." });
-
-        var fileName = string.IsNullOrWhiteSpace(r.Str("apk_file_name")) ? $"ketoan-hr-{id}.apk" : r.Str("apk_file_name");
-        var mime = string.IsNullOrWhiteSpace(r.Str("apk_mime_type"))
-            ? "application/vnd.android.package-archive"
-            : r.Str("apk_mime_type");
-        var bytes = (byte[])r.GetValue(r.GetOrdinal("apk_data"));
-        return Results.File(bytes, mime, fileName, enableRangeProcessing: true);
-    }
+        => await ServeApk(id, db, downloadName: null);
 
     private static async Task<IResult> DownloadPublishedReleasePublic(long id, Database db)
+        => await ServeApk(id, db, downloadName: "KetoanAPK.apk");
+
+    /// <summary>
+    /// Gửi APK TỪ ĐĨA: Results.File(đường-dẫn) để Kestrel dùng sendfile, không nạp byte nào vào RAM.
+    /// Nhờ vậy 50 máy tải một bản 100MB cùng lúc cũng không tốn 5GB RAM như cách đọc bytea trước đây.
+    /// enableRangeProcessing giữ nguyên để app tải tiếp được khi mạng đứt giữa chừng.
+    /// </summary>
+    private static async Task<IResult> ServeApk(long id, Database db, string? downloadName)
     {
-        await using var conn = await db.OpenAsync();
-        await using var r = await conn.Cmd(
-            @"SELECT apk_mime_type, apk_data
-              FROM app_releases
-              WHERE id=@id AND is_published=TRUE AND apk_data IS NOT NULL")
-            .With("@id", id)
-            .ExecuteReaderAsync();
+        string fileName, mime;
+        await using (var conn = await db.OpenAsync())
+        {
+            await using var r = await conn.Cmd(
+                @"SELECT apk_file_name, apk_mime_type
+                  FROM app_releases
+                  WHERE id=@id AND is_published=TRUE AND has_apk=TRUE")
+                .With("@id", id)
+                .ExecuteReaderAsync();
 
-        if (!await r.ReadAsync()) return Results.NotFound(new { message = "Không tìm thấy bản APK đã phát hành." });
+            if (!await r.ReadAsync()) return Results.NotFound(new { message = "Không tìm thấy bản APK đã phát hành." });
 
-        var mime = string.IsNullOrWhiteSpace(r.Str("apk_mime_type"))
-            ? "application/vnd.android.package-archive"
-            : r.Str("apk_mime_type");
-        var bytes = (byte[])r.GetValue(r.GetOrdinal("apk_data"));
-        return Results.File(bytes, mime, "KetoanAPK.apk", enableRangeProcessing: true);
+            fileName = string.IsNullOrWhiteSpace(r.Str("apk_file_name")) ? $"ketoan-hr-{id}.apk" : r.Str("apk_file_name");
+            mime = string.IsNullOrWhiteSpace(r.Str("apk_mime_type"))
+                ? "application/vnd.android.package-archive"
+                : r.Str("apk_mime_type");
+        }
+
+        var path = ReleaseStorage.ApkPath(id);
+        if (!File.Exists(path)) return Results.NotFound(new { message = "Không tìm thấy bản APK đã phát hành." });
+
+        return Results.File(path, mime, downloadName ?? fileName, enableRangeProcessing: true);
     }
 
     private static async Task<int> ReadLatestPublishedVersionCode(Npgsql.NpgsqlConnection conn, string target, long? excludeId = null)
@@ -335,8 +395,17 @@ public static class ReleaseEndpoints
     private static string NormalizeTarget(string? value)
         => string.IsNullOrWhiteSpace(value) ? "hr-apk" : value.Trim().ToLowerInvariant();
 
-    private static string FormValue(IFormCollection form, string key, string fallback = "")
-        => form.TryGetValue(key, out var value) ? value.ToString().Trim() : fallback;
+    /// <summary>Boundary của multipart; null nghĩa là request không phải multipart hợp lệ.</summary>
+    private static string? ReadBoundary(HttpRequest request)
+    {
+        if (!request.HasFormContentType || !MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType))
+            return null;
+        var boundary = HeaderUtilities.RemoveQuotes(contentType.Boundary).Value;
+        return string.IsNullOrWhiteSpace(boundary) ? null : boundary;
+    }
+
+    private static string Field(IReadOnlyDictionary<string, string> fields, string key, string fallback = "")
+        => fields.TryGetValue(key, out var value) && !string.IsNullOrEmpty(value) ? value : fallback;
 
     private static int ParseInt(string value, int fallback)
         => int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;

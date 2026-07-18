@@ -7,12 +7,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.ketoanapk.hr.data.AppForeground
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
+import com.ketoanapk.hr.data.CallManager
+import com.ketoanapk.hr.data.CallNotifier
 import com.ketoanapk.hr.ui.HrApp
 import com.ketoanapk.hr.ui.HrViewModel
 
 class MainActivity : ComponentActivity() {
+    private companion object {
+        const val EXTRA_APP_LOGIN_REQUEST = "request_code"
+        const val EXTRA_APP_LOGIN_CLIENT_MODE = "client_mode"
+    }
+
     private val viewModel: HrViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -20,14 +28,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        // Tạo channel không làm hiện hộp xin quyền. Người dùng tự bật thông báo trong onboarding/Cài đặt.
         AppNotifier.ensureChannel(this)
-        // Dọn các APK cập nhật cũ còn sót trong cache (đã cài xong) để app không phình dung lượng.
+        CallManager.init(this)
         AppUpdater.purgeCachedApks(this)
         handleDeepLink(intent)
 
-        setContent {
-            HrApp(viewModel)
-        }
+        setContent { HrApp(viewModel) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -38,23 +45,47 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Kiểm tra cập nhật MỖI KHI vào app / quay lại foreground (force = bỏ qua hạn mức 10 phút).
+        AppForeground.isForeground = true
+        CallManager.onForegroundChanged()
         viewModel.autoCheckForUpdate(force = true)
         viewModel.refreshPushPermissionState()
-        // Làm mới ngay + bật vòng poll nhẹ để thấy admin duyệt đơn mà không cần kéo làm mới.
         viewModel.onAppResumed()
     }
 
     override fun onPause() {
         super.onPause()
-        // Dừng vòng poll khi app xuống nền để đỡ tốn pin/mạng (nền đã có WorkManager + push FCM).
+        AppForeground.isForeground = false
+        CallManager.onForegroundChanged()
         viewModel.onAppPaused()
     }
 
-    /** Mở đúng màn hình khi người dùng bấm vào thông báo hệ thống. */
+    /** Mở đúng nội dung từ notification nghiệp vụ hoặc dựng lại cuộc gọi đến sau cold start. */
     private fun handleDeepLink(intent: Intent?) {
-        val target = intent?.getStringExtra(AppNotifier.EXTRA_TARGET) ?: return
-        viewModel.navigateTo(target)
+        intent ?: return
+        AppDeepLink.mobileAppLoginRequest(
+            intent.dataString,
+            intent.getStringExtra(EXTRA_APP_LOGIN_REQUEST),
+            intent.getStringExtra(EXTRA_APP_LOGIN_CLIENT_MODE),
+        )?.let { requestCode ->
+            viewModel.receiveMobileAppLoginDeepLink(requestCode)
+            return
+        }
+        AppDeepLink.qrLoginCode(intent.dataString)?.let { code ->
+            viewModel.receiveQrLoginDeepLink(code)
+            return
+        }
+        val callId = intent.getStringExtra(CallNotifier.EXTRA_CALL_ID)
+        if (!callId.isNullOrBlank()) {
+            CallManager.ingestIncomingFromPush(
+                callId,
+                intent.getStringExtra(CallNotifier.EXTRA_CALL_FROM).orEmpty(),
+                intent.getStringExtra(CallNotifier.EXTRA_CALL_NAME).orEmpty(),
+                intent.getStringExtra(CallNotifier.EXTRA_CALL_MEDIA).orEmpty(),
+            )
+            CallNotifier.dismiss(this)
+            return
+        }
+        val target = intent.getStringExtra(AppNotifier.EXTRA_TARGET) ?: return
+        viewModel.navigateTo(target, intent.getStringExtra(AppNotifier.EXTRA_ENTITY_ID))
     }
-
 }

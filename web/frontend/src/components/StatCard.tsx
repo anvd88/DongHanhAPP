@@ -1,6 +1,9 @@
+import { motion } from "motion/react";
 import type { LucideIcon } from "lucide-react";
 import { useGlow } from "./Glass";
 import { CountUp } from "./CountUp";
+
+const iosSpring = { type: "spring", stiffness: 330, damping: 25, mass: 0.82 } as const;
 
 export function StatCard({
   label,
@@ -24,7 +27,14 @@ export function StatCard({
   const { ref, onMouseMove } = useGlow();
 
   return (
-    <div ref={ref} onMouseMove={onMouseMove} className={`km-stat-card km-stat-card-${tone}`}>
+    <motion.div
+      ref={ref}
+      onMouseMove={onMouseMove}
+      whileHover={{ y: -7, scale: 1.018 }}
+      whileTap={{ y: -2, scale: 0.985 }}
+      transition={iosSpring}
+      className={`km-stat-card km-stat-card-${tone}`}
+    >
       <div className="km-stat-icon" style={color ? { color } : undefined}>
         <Icon className="h-5 w-5" />
       </div>
@@ -44,6 +54,6 @@ export function StatCard({
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

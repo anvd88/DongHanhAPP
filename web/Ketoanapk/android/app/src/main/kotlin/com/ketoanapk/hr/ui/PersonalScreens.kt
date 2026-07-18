@@ -1,8 +1,20 @@
 package com.ketoanapk.hr.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.view.WindowManager
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,20 +69,35 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -83,6 +110,8 @@ import com.ketoanapk.hr.data.PayslipItem
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
+import com.ketoanapk.hr.data.ShiftReminderSettings
+import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.ui.theme.BrandRed
 import com.ketoanapk.hr.ui.theme.Danger
 import com.ketoanapk.hr.ui.theme.InfoBlue
@@ -96,6 +125,8 @@ fun HomeScreen(
     user: HrUser,
     state: HomeUiState,
     manager: ManagerUiState,
+    hub: List<HrDestination>,
+    workTasks: WorkTasksUiState,
     onSelect: (HrDestination) -> Unit,
 ) {
     val today = state.timesheet?.days?.firstOrNull { it.date.take(10) == todayKey() }
@@ -115,6 +146,11 @@ fun HomeScreen(
         item { HomeHeroCard(name, position, today, state.employee?.avatar) { onSelect(HrDestination.Scan) } }
 
         item { PortalEntryCard { onSelect(HrDestination.Portal) } }
+        item {
+            val taskCount = buildTaskCenterItems(state.inbox, state.timesheet, manager.summary?.headcount).size
+            TaskCenterEntryCard(taskCount) { onSelect(HrDestination.Tasks) }
+        }
+        item { WorkTaskEntryCard(badge = workTasks.badge, canAssign = workTasks.canAssign) { onSelect(HrDestination.WorkTasks) } }
 
         if (user.isAdmin) {
             item { AdminDashboardCard(manager.summary?.headcount) { onSelect(HrDestination.Approval) } }
@@ -133,13 +169,20 @@ fun HomeScreen(
             }
         }
 
+        if (AppPersonalization.reverseHomeCards) item { AttentionCard(state.requests) { onSelect(HrDestination.Requests) } }
+
         item { QuickActionsCard(onSelect) }
+
+        // Mục thuộc "Công ty" chưa có thẻ riêng trên Trang chủ (thay ngăn kéo cũ).
+        if (hub.isNotEmpty()) {
+            item { HrCard { CardHeader("Công ty"); HubList(destinations = hub, onSelect = onSelect) } }
+        }
 
         if (!user.isAdmin) {
             item { MiniWeekCard(state.timesheet) { onSelect(HrDestination.Timesheet) } }
         }
 
-        item { AttentionCard(state.requests) { onSelect(HrDestination.Requests) } }
+        if (!AppPersonalization.reverseHomeCards) item { AttentionCard(state.requests) { onSelect(HrDestination.Requests) } }
 
         state.error?.let { item { ErrorText(it) } }
     }
@@ -420,7 +463,6 @@ fun ProfileScreen(state: HomeUiState, onCapturePortrait: () -> Unit = {}) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (e == null) {
-            item { PageHeader(Icons.Filled.AccountCircle, "Hồ sơ của tôi", "Nhân viên", Tone.Neutral) }
             if (state.loading) item { LoadingBlock() }
             item { EmptyState("Chưa có hồ sơ", state.error ?: "Không tải được hồ sơ nhân viên.") }
         } else {
@@ -524,42 +566,76 @@ fun TimesheetScreen(
     state: TimesheetUiState,
     onMonthOffset: (Int) -> Unit,
     onSelectMonth: (String) -> Unit,
+    onShiftSwap: (String?) -> Unit,
 ) {
-    val ts = state.timesheet
-    var selectedDate by rememberSaveable(ts?.period ?: "") { mutableStateOf<String?>(null) }
+    val period = state.month.take(7)
+    val ts = state.timesheet?.takeIf { it.period.take(7) == period }
+    var selectedDate by rememberSaveable(period) { mutableStateOf<String?>(null) }
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
-    val currentStart = timesheetMonthStart(ts?.period ?: state.month)
+    var weekMode by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val reminderSettings = remember { ShiftReminderSettings(context) }
+    var beforeShift by rememberSaveable { mutableStateOf(reminderSettings.beforeShift) }
+    var lateWarning by rememberSaveable { mutableStateOf(reminderSettings.lateWarning) }
+    val currentStart = timesheetMonthStart(period)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHeader(Icons.Filled.CalendarMonth, "Bảng công", formatTimesheetPeriod(ts?.period ?: state.month), Tone.Neutral) }
+        item { PageHeader(Icons.Filled.CalendarMonth, "Bảng công", formatTimesheetPeriod(period), Tone.Neutral) }
         item {
             MonthSelectorBar(
-                label = formatTimesheetPeriod(ts?.period ?: state.month),
+                label = formatTimesheetPeriod(period),
                 onPrev = { onMonthOffset(-1) },
                 onNext = { onMonthOffset(1) },
                 onPick = { pickerOpen = true },
             )
         }
-        if (state.loading && ts == null) item { LoadingBlock() }
-        if (ts == null) {
-            item { EmptyState("Chưa có bảng công", state.error ?: "Không tải được dữ liệu bảng công.") }
-        } else {
-            val daysByDate = ts.days.associateBy { it.date.take(10) }
-            val selectedDay = selectedDate?.let { daysByDate[it] }
-
-            item {
-                TimesheetCalendarCard(
-                    period = ts.period,
-                    daysByDate = daysByDate,
-                    selectedDate = selectedDate,
-                    onSelectDate = { selectedDate = it },
-                )
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                if (weekMode) OutlinedButton({ weekMode = false }, Modifier.weight(1f)) { Text("Tháng") }
+                else Button({ weekMode = false }, Modifier.weight(1f)) { Text("Tháng") }
+                if (weekMode) Button({ weekMode = true }, Modifier.weight(1f)) { Text("Tuần") }
+                else OutlinedButton({ weekMode = true }, Modifier.weight(1f)) { Text("Tuần") }
             }
+        }
+        val daysByDate = ts?.days?.associateBy { it.date.take(10) }.orEmpty()
+        item {
+            TimesheetCalendarCard(
+                period = period,
+                daysByDate = daysByDate,
+                selectedDate = selectedDate,
+                weekOnly = weekMode,
+                loading = state.loading,
+                onSelectDate = { selectedDate = it },
+                onMonthOffset = onMonthOffset,
+            )
+        }
+        if (ts == null) {
+            if (!state.loading && state.error != null) {
+                item { EmptyState("Không tải được bảng công", state.error) }
+            }
+        } else {
+            val selectedDay = selectedDate?.let { daysByDate[it] }
             if (selectedDate != null) {
-                item { TimesheetDayDetailCard(selectedDate.orEmpty(), selectedDay) }
+                item { TimesheetDayDetailCard(selectedDate.orEmpty(), selectedDay, onShiftSwap) }
+            }
+            item {
+                HrCard {
+                    CardHeader("Nhắc ca làm")
+                    ReminderToggle("Nhắc trước giờ làm", "Thông báo trong vòng 30 phút trước ca", beforeShift) {
+                        beforeShift = it; reminderSettings.beforeShift = it
+                    }
+                    ReminderToggle("Cảnh báo sắp trễ", "Nhắc khi qua giờ vào mà chưa chấm công", lateWarning) {
+                        lateWarning = it; reminderSettings.lateWarning = it
+                    }
+                }
+            }
+            item {
+                Button(onClick = { onShiftSwap(selectedDate) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (selectedDate == null) "Xin đổi / nhận ca" else "Xin đổi / nhận ca ngày ${formatIsoDate(selectedDate.orEmpty())}")
+                }
             }
             item { SectionTitle("Tổng hợp tháng", modifier = Modifier.padding(start = 4.dp)) }
             item {
@@ -716,20 +792,88 @@ private fun TimesheetCalendarCard(
     period: String,
     daysByDate: Map<String, TimesheetDay>,
     selectedDate: String?,
+    weekOnly: Boolean,
+    loading: Boolean,
     onSelectDate: (String) -> Unit,
+    onMonthOffset: (Int) -> Unit,
 ) {
-    val rows = timesheetCalendarCells(period).chunked(7)
-    HrCard {
+    val allRows = timesheetCalendarCells(period).chunked(7)
+    val anchor = selectedDate ?: LocalDate.now().takeIf { it.toString().startsWith(period.take(7)) }?.toString()
+    val rows = if (weekOnly) allRows.filter { week -> week.any { it.dateKey == anchor } }.ifEmpty { allRows.take(1) } else allRows
+    var cardWidthPx by remember { mutableFloatStateOf(0f) }
+    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
+    var pendingMonthOffset by remember { mutableIntStateOf(0) }
+    var previousPeriod by remember { mutableStateOf(period) }
+    val minimumSwipePx = with(LocalDensity.current) { 72.dp.toPx() }
+    val dragState = rememberDraggableState { delta ->
+        if (cardWidthPx > 0f) {
+            dragOffsetPx = (dragOffsetPx + delta).coerceIn(-cardWidthPx, cardWidthPx)
+        }
+    }
+
+    // Tháng mới đi vào từ đúng phía đối diện tháng vừa vuốt ra, nên chuyển động không bị nháy/khựng.
+    LaunchedEffect(period) {
+        if (period == previousPeriod || cardWidthPx <= 0f) return@LaunchedEffect
+        val direction = pendingMonthOffset.takeIf { it != 0 }
+            ?: if (period > previousPeriod) 1 else -1
+        previousPeriod = period
+        pendingMonthOffset = 0
+        dragOffsetPx = if (direction > 0) cardWidthPx else -cardWidthPx
+        animate(
+            initialValue = dragOffsetPx,
+            targetValue = 0f,
+            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        ) { value, _ -> dragOffsetPx = value }
+    }
+
+    Box(modifier = Modifier.fillMaxWidth().clipToBounds().testTag("timesheet-calendar")) {
+        HrCard(
+            modifier = Modifier
+                .onSizeChanged { cardWidthPx = it.width.toFloat() }
+                .graphicsLayer { translationX = dragOffsetPx }
+                .draggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    onDragStopped = { velocity ->
+                        val monthOffset = timesheetMonthOffsetForSwipe(
+                            dragDistancePx = dragOffsetPx,
+                            thresholdPx = maxOf(minimumSwipePx, cardWidthPx * 0.18f),
+                        )
+                        if (monthOffset == null) {
+                            animate(
+                                initialValue = dragOffsetPx,
+                                targetValue = 0f,
+                                initialVelocity = velocity,
+                                animationSpec = spring(dampingRatio = 0.82f, stiffness = 520f),
+                            ) { value, _ -> dragOffsetPx = value }
+                        } else {
+                            pendingMonthOffset = monthOffset
+                            val exitTarget = if (monthOffset > 0) -cardWidthPx else cardWidthPx
+                            animate(
+                                initialValue = dragOffsetPx,
+                                targetValue = exitTarget,
+                                initialVelocity = velocity,
+                                animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
+                            ) { value, _ -> dragOffsetPx = value }
+                            onMonthOffset(monthOffset)
+                        }
+                    },
+                ),
+        ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Lịch tháng", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    "Chọn một ngày để mở chi tiết chấm công.",
+                    "Chọn một ngày để mở chi tiết. Vuốt trái/phải để đổi tháng.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             StatusChip(formatTimesheetPeriod(period), Tone.Neutral)
+        }
+
+        if (loading) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
         TimesheetLegend()
@@ -772,14 +916,28 @@ private fun TimesheetCalendarCard(
             }
         }
 
-        if (daysByDate.isEmpty()) {
+        if (loading && daysByDate.isEmpty()) {
+            Text(
+                "Đang tải dữ liệu tháng này…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else if (daysByDate.isEmpty()) {
             Text(
                 "Tháng này chưa có chấm công hoặc phân ca. Các ô sẽ đổi màu khi có dữ liệu.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        }
     }
+}
+
+/** Vuốt trái mở tháng sau, vuốt phải quay về tháng trước. */
+internal fun timesheetMonthOffsetForSwipe(dragDistancePx: Float, thresholdPx: Float): Int? = when {
+    dragDistancePx <= -thresholdPx -> 1
+    dragDistancePx >= thresholdPx -> -1
+    else -> null
 }
 
 @Composable
@@ -873,7 +1031,7 @@ private fun TimesheetCalendarDayCell(
 }
 
 @Composable
-private fun TimesheetDayDetailCard(dateKey: String, day: TimesheetDay?) {
+private fun TimesheetDayDetailCard(dateKey: String, day: TimesheetDay?, onShiftSwap: (String?) -> Unit) {
     val holidayLabel = day?.takeIf { isTimesheetHoliday(it) }?.let { timesheetHolidayLabel(it) }
     HrCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -920,7 +1078,22 @@ private fun TimesheetDayDetailCard(dateKey: String, day: TimesheetDay?) {
                     TimesheetCalendarTone.Holiday,
                 )
             }
+            if (day.shiftStart.isNotBlank() || day.shiftEnd.isNotBlank()) {
+                TimesheetDetailMetric("Khung giờ ca", "${day.shiftStart.ifBlank { "--:--" }} – ${day.shiftEnd.ifBlank { "--:--" }}")
+            }
+            OutlinedButton(onClick = { onShiftSwap(dateKey) }, modifier = Modifier.fillMaxWidth()) { Text("Đổi / nhận ca ngày này") }
         }
+    }
+}
+
+@Composable
+private fun ReminderToggle(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChecked)
     }
 }
 
@@ -946,7 +1119,7 @@ private fun TimesheetDetailMetric(
 
 private val timesheetWeekdays = listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN")
 
-private enum class TimesheetCalendarTone { Worked, Absent, Overtime, Warning, Holiday, Off, Empty }
+internal enum class TimesheetCalendarTone { Worked, Leave, Business, Absent, Overtime, Warning, Holiday, Off, Empty }
 
 private data class TimesheetCalendarCell(
     val key: String,
@@ -958,8 +1131,10 @@ private data class TimesheetLegendItem(val tone: TimesheetCalendarTone, val labe
 
 private val timesheetLegendItems = listOf(
     TimesheetLegendItem(TimesheetCalendarTone.Worked, "Đi làm"),
-    TimesheetLegendItem(TimesheetCalendarTone.Absent, "Nghỉ / vắng"),
+    TimesheetLegendItem(TimesheetCalendarTone.Leave, "Nghỉ phép"),
+    TimesheetLegendItem(TimesheetCalendarTone.Business, "Công tác"),
     TimesheetLegendItem(TimesheetCalendarTone.Overtime, "Tăng ca"),
+    TimesheetLegendItem(TimesheetCalendarTone.Absent, "Vắng"),
     TimesheetLegendItem(TimesheetCalendarTone.Warning, "Muộn / thiếu công"),
     TimesheetLegendItem(TimesheetCalendarTone.Holiday, "Ngày nghỉ"),
     TimesheetLegendItem(TimesheetCalendarTone.Off, "Không ca"),
@@ -994,8 +1169,11 @@ private fun formatTimesheetPeriod(period: String?): String {
     }.getOrElse { period }
 }
 
-private fun timesheetCalendarTone(day: TimesheetDay?): TimesheetCalendarTone {
+internal fun timesheetCalendarTone(day: TimesheetDay?): TimesheetCalendarTone {
     if (day == null) return TimesheetCalendarTone.Empty
+    if (day.eventType == "leave") return TimesheetCalendarTone.Leave
+    if (day.eventType == "business_trip") return TimesheetCalendarTone.Business
+    if (day.eventType == "overtime") return TimesheetCalendarTone.Overtime
     if (isTimesheetHoliday(day)) return TimesheetCalendarTone.Holiday
     val status = day.status.lowercase()
     return when {
@@ -1010,8 +1188,10 @@ private fun timesheetCalendarTone(day: TimesheetDay?): TimesheetCalendarTone {
     }
 }
 
-private fun timesheetCalendarLabel(day: TimesheetDay?): String = when (timesheetCalendarTone(day)) {
+internal fun timesheetCalendarLabel(day: TimesheetDay?): String = when (timesheetCalendarTone(day)) {
     TimesheetCalendarTone.Worked -> "Đi làm"
+    TimesheetCalendarTone.Leave -> "Nghỉ phép"
+    TimesheetCalendarTone.Business -> "Công tác"
     TimesheetCalendarTone.Absent -> "Vắng"
     TimesheetCalendarTone.Overtime -> "Tăng ca"
     TimesheetCalendarTone.Warning -> "Rà soát"
@@ -1043,6 +1223,8 @@ private fun timesheetHolidayLabel(day: TimesheetDay): String =
 @Composable
 private fun timesheetCalendarColor(tone: TimesheetCalendarTone): Color = when (tone) {
     TimesheetCalendarTone.Worked -> Success
+    TimesheetCalendarTone.Leave -> Color(0xFF2563EB)
+    TimesheetCalendarTone.Business -> Color(0xFF0D9488)
     TimesheetCalendarTone.Absent -> Danger
     TimesheetCalendarTone.Overtime -> Color(0xFF7C3AED)
     TimesheetCalendarTone.Warning -> Warning
@@ -1198,12 +1380,22 @@ fun MySalaryScreen(state: PayEstimateUiState) {
 fun MyPayslipsScreen(
     state: PayslipsUiState,
     openPeriod: String?,
+    username: String,
     onOpen: (String) -> Unit,
     onClose: () -> Unit,
+    onAcknowledge: (String) -> Unit,
+    onInquiry: (String, String, String) -> Unit,
+    onDownload: (PayslipItem) -> Unit,
+    onVerifyAccountPassword: (String, (Boolean, String?) -> Unit) -> Unit,
 ) {
+    var pendingPeriod by remember { mutableStateOf<String?>(null) }
     val opened = openPeriod?.let { p -> state.items.find { it.period == p } }
+    // Đang mở chi tiết một phiếu → Back lùi về danh sách thẻ tháng trước, chưa rời tab. Bám theo
+    // openPeriod chứ không phải `opened`, để phiếu đã mở nhưng chưa có trong danh sách vẫn lùi được.
+    BackHandler(enabled = openPeriod != null) { onClose() }
     if (opened != null) {
-        PayslipDetailView(opened, onClose)
+        val previous = state.items.getOrNull(state.items.indexOf(opened)+1)
+        PayslipDetailView(opened, previous, onClose, onAcknowledge, onInquiry, onDownload)
         return
     }
 
@@ -1212,7 +1404,6 @@ fun MyPayslipsScreen(
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item { PageHeader(Icons.Filled.ReceiptLong, "Phiếu lương", "Các phiếu lương đã nhận", Tone.Success) }
         if (state.loading && state.items.isEmpty()) item { LoadingBlock() }
         if (state.items.isEmpty() && !state.loading) {
             item {
@@ -1222,8 +1413,22 @@ fun MyPayslipsScreen(
                 )
             }
         }
-        items(state.items, key = { it.period }) { p -> PayslipMonthCard(p, onOpen) }
+        items(state.items, key = { it.period }) { p -> PayslipMonthCard(p) { period ->
+            pendingPeriod = period
+        } }
     }
+    AppPinGate(
+        visible = pendingPeriod != null,
+        username = username,
+        purpose = "Xác thực để mở chi tiết phiếu lương.",
+        onDismiss = { pendingPeriod = null },
+        onUnlocked = {
+            val period = pendingPeriod
+            pendingPeriod = null
+            if (period != null) onOpen(period)
+        },
+        onVerifyAccountPassword = onVerifyAccountPassword,
+    )
 }
 
 /** Thẻ tháng: bấm vào mở phiếu lương của kỳ đó. */
@@ -1267,7 +1472,10 @@ private fun PayslipMonthCard(p: PayslipItem, onOpen: (String) -> Unit) {
 
 /** Chi tiết một phiếu lương của một kỳ: thực nhận + ngày công/tăng ca + khoản cộng/trừ + ghi chú. */
 @Composable
-private fun PayslipDetailView(p: PayslipItem, onClose: () -> Unit) {
+private fun PayslipDetailView(p: PayslipItem, previous: PayslipItem?, onClose: () -> Unit, onAcknowledge:(String)->Unit,onInquiry:(String,String,String)->Unit,onDownload:(PayslipItem)->Unit) {
+    val context=LocalContext.current
+    var inquiryLine by remember{mutableStateOf<String?>(null)};var inquiryText by remember{mutableStateOf("")}
+    DisposableEffect(Unit){val activity=generateSequence<Context>(context){(it as? ContextWrapper)?.baseContext}.filterIsInstance<Activity>().firstOrNull();activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE);onDispose{activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)}}
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
@@ -1305,6 +1513,10 @@ private fun PayslipDetailView(p: PayslipItem, onClose: () -> Unit) {
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.ExtraBold,
                 )
+                previous?.let { prev ->
+                    val diff=p.netPay-prev.netPay
+                    Text("So với ${formatTimesheetPeriod(prev.period)}: ${if(diff>=0)"+" else ""}${formatMoney(diff)}",style=MaterialTheme.typography.bodySmall,color=if(diff>=0) Success else Danger)
+                }
                 Text(
                     "Tổng thu ${formatMoney(p.totalEarnings)} − Khấu trừ ${formatMoney(p.totalDeductions)}",
                     style = MaterialTheme.typography.bodySmall,
@@ -1326,7 +1538,7 @@ private fun PayslipDetailView(p: PayslipItem, onClose: () -> Unit) {
                 if (p.earnings.isEmpty()) {
                     Text("Không có khoản cộng.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    p.earnings.forEach { line -> LabelValue(line.label, formatMoney(line.amount)) }
+                    p.earnings.forEach { line -> Row(Modifier.fillMaxWidth()){Column(Modifier.weight(1f)){LabelValue(line.label, formatMoney(line.amount))};TextButton({inquiryLine=line.label}){Text("Hỏi")}} }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 LabelValue("Tổng thu nhập", formatMoney(p.totalEarnings))
@@ -1339,7 +1551,7 @@ private fun PayslipDetailView(p: PayslipItem, onClose: () -> Unit) {
                 if (p.deductions.isEmpty()) {
                     Text("Không có khoản trừ.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    p.deductions.forEach { line -> LabelValue(line.label, "− ${formatMoney(line.amount)}") }
+                    p.deductions.forEach { line -> Row(Modifier.fillMaxWidth()){Column(Modifier.weight(1f)){LabelValue(line.label, "− ${formatMoney(line.amount)}")};TextButton({inquiryLine=line.label}){Text("Hỏi")}} }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 LabelValue("Tổng khấu trừ", "− ${formatMoney(p.totalDeductions)}")
@@ -1356,6 +1568,12 @@ private fun PayslipDetailView(p: PayslipItem, onClose: () -> Unit) {
         }
 
         item {
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth()){
+                OutlinedButton({onDownload(p)},Modifier.weight(1f)){Text("Tải PDF")}
+                Button({onAcknowledge(p.id)},enabled=p.acknowledgedAt==null,modifier=Modifier.weight(1f)){Text(if(p.acknowledgedAt==null)"Xác nhận đã nhận" else "Đã xác nhận")}
+            }
+        }
+        item {
             Text(
                 "Phiếu lương đã phát hành" + (if (p.createdAt.isNotBlank()) " ngày ${formatIsoDate(p.createdAt)}" else "") + ".",
                 style = MaterialTheme.typography.bodySmall,
@@ -1364,4 +1582,5 @@ private fun PayslipDetailView(p: PayslipItem, onClose: () -> Unit) {
             )
         }
     }
+    inquiryLine?.let{line->AlertDialog(onDismissRequest={inquiryLine=null},title={Text("Thắc mắc: $line")},text={OutlinedTextField(inquiryText,{inquiryText=it},minLines=4,modifier=Modifier.fillMaxWidth())},confirmButton={Button(enabled=inquiryText.isNotBlank(),onClick={onInquiry(p.id,line,inquiryText);inquiryLine=null;inquiryText=""}){Text("Gửi")}},dismissButton={TextButton({inquiryLine=null}){Text("Hủy")}})}
 }

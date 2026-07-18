@@ -324,20 +324,24 @@ function PayslipAdmin({ empId }: { empId: string }) {
   const { data, loading, reload } = useApi<Payslip[]>(`/api/hr/employees/${empId}/payslips`, [empId]);
   const [f, setF] = useState({ period: "", workDays: "", baseSalary: "", allowance: "", overtimePay: "", deductions: "", published: true });
   const set = (k: keyof typeof f, v: string | boolean) => setF((s) => ({ ...s, [k]: v }));
-  // Tiền phạt phải khấu trừ cho kỳ đang lập (tự động cộng vào tổng khấu trừ).
+  // Lương còn có thể trừ cho phạt = lương+phụ cấp+tăng ca − khấu trừ KHÁC (không để phạt làm âm lương).
+  const otherDeductions = Number(f.deductions) || 0;
+  const available = Math.max(0, (Number(f.baseSalary) || 0) + (Number(f.allowance) || 0) + (Number(f.overtimePay) || 0) - otherDeductions);
+  // Tiền phạt thực trừ kỳ này (backend tự tính + cap; phần chưa thu tự chuyển sang kỳ sau).
   const { data: penalty } = useApi<PenaltyDeductions>(
-    f.period ? `/api/penalties/deductions?employeeId=${empId}&period=${f.period}` : null,
-    [empId, f.period],
+    f.period ? `/api/penalties/deductions?employeeId=${empId}&period=${f.period}&available=${available}` : null,
+    [empId, f.period, available],
   );
   const penaltyTotal = penalty?.total ?? 0;
-  const totalDeductions = (Number(f.deductions) || 0) + penaltyTotal;
+  const totalDeductions = otherDeductions + penaltyTotal;
   const add = async () => {
     if (!f.period) { notify.error("Nhập kỳ lương (yyyy-MM)."); return; }
     try {
+      // deductions gửi lên = khấu trừ KHÁC; backend tự tính + cap tiền phạt rồi cộng vào.
       await api.post(`/api/hr/employees/${empId}/payslips`, {
         period: f.period, workDays: Number(f.workDays) || 0, overtimeHours: 0,
         baseSalary: Number(f.baseSalary) || 0, allowance: Number(f.allowance) || 0,
-        overtimePay: Number(f.overtimePay) || 0, deductions: totalDeductions,
+        overtimePay: Number(f.overtimePay) || 0, deductions: otherDeductions,
         note: penaltyTotal > 0 ? `Đã trừ phạt ${moneyVnd(penaltyTotal)}` : "", published: f.published,
       });
       reload({ silent: true });

@@ -1,9 +1,14 @@
 package com.ketoanapk.hr.ui
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -37,25 +42,35 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PrivacyTip
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,10 +90,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.ketoanapk.hr.data.AppUpdater
+import com.ketoanapk.hr.data.AppPinStore
+import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.HrUser
 
-enum class SettingsRoute { Home, WebLogin, ChangePassword, Devices, Notifications, FaceEnroll, Version, Terms, Privacy }
+enum class SettingsRoute { Home, WebLogin, ChangePassword, AppPin, Devices, Notifications, Permissions, Personalization, FaceEnroll, Version, Terms, Privacy }
 
 private data class LegalSection(
     val title: String,
@@ -86,9 +103,12 @@ private data class LegalSection(
 )
 
 @Composable
-fun SettingsScreen(user: HrUser, vm: HrViewModel, onLogout: () -> Unit) {
+fun SettingsScreen(user: HrUser, vm: HrViewModel, onScanQr: () -> Unit, onLogout: () -> Unit) {
     // Màn con hiện tại lấy từ ViewModel để nút Back của điện thoại lùi được về Cài đặt gốc.
     val route = vm.settingsRoute
+
+    // Đang ở màn con (Đổi mật khẩu, Thiết bị...) → Back lùi về Cài đặt gốc trước, chưa rời tab.
+    BackHandler(enabled = route != SettingsRoute.Home) { vm.settingsRoute = SettingsRoute.Home }
 
     // Bấm "Đăng ký ngay" từ banner nhắc → tự mở thẳng màn Đăng ký khuôn mặt.
     LaunchedEffect(vm.openFaceEnroll) {
@@ -112,11 +132,20 @@ fun SettingsScreen(user: HrUser, vm: HrViewModel, onLogout: () -> Unit) {
     ) { target ->
         val goHome = { vm.settingsRoute = SettingsRoute.Home }
         when (target) {
-            SettingsRoute.Home -> SettingsHome(user, vm, onOpen = { vm.settingsRoute = it }, onLogout = onLogout)
+            SettingsRoute.Home -> SettingsHome(
+                user = user,
+                vm = vm,
+                onOpen = { vm.settingsRoute = it },
+                onScanQr = onScanQr,
+                onLogout = onLogout,
+            )
             SettingsRoute.WebLogin -> WebLoginSettings(vm, goHome)
             SettingsRoute.ChangePassword -> ChangePasswordScreen(vm, goHome)
+            SettingsRoute.AppPin -> AppPinSettingsScreen(user, vm, goHome)
             SettingsRoute.Devices -> DeviceManagerScreen(vm, goHome)
             SettingsRoute.Notifications -> NotificationSettings(vm, goHome)
+            SettingsRoute.Permissions -> PermissionCenterScreen(vm, goHome)
+            SettingsRoute.Personalization -> PersonalizationSettings(goHome)
             SettingsRoute.FaceEnroll -> FaceEnrollScreen(vm, goHome)
             SettingsRoute.Version -> AppVersionScreen(vm, goHome)
             SettingsRoute.Terms -> TermsScreen(goHome)
@@ -130,6 +159,7 @@ private fun SettingsHome(
     user: HrUser,
     vm: HrViewModel,
     onOpen: (SettingsRoute) -> Unit,
+    onScanQr: () -> Unit,
     onLogout: () -> Unit,
 ) {
     LaunchedEffect(Unit) { vm.loadFaceStatus() }
@@ -158,9 +188,15 @@ private fun SettingsHome(
         item { SectionTitle("Tài khoản", modifier = Modifier.padding(horizontal = 4.dp)) }
         item {
             SettingsGroup {
+                SettingsRow(Icons.Filled.QrCodeScanner, "Quét mã QR", "Đăng nhập web và các tác vụ QR do máy chủ hỗ trợ") {
+                    onScanQr()
+                }
+                SettingsDivider()
                 SettingsRow(Icons.AutoMirrored.Filled.Login, "Cài đặt đăng nhập", "Bật/tắt đăng nhập trên web") { onOpen(SettingsRoute.WebLogin) }
                 SettingsDivider()
                 SettingsRow(Icons.Filled.Lock, "Đổi mật khẩu", "Cập nhật mật khẩu tài khoản") { onOpen(SettingsRoute.ChangePassword) }
+                SettingsDivider()
+                SettingsRow(Icons.Filled.Shield, "Mã bảo mật ứng dụng", "PIN riêng 6 số, không dùng mã khóa điện thoại") { onOpen(SettingsRoute.AppPin) }
                 SettingsDivider()
                 SettingsRow(Icons.Filled.Devices, "Quản lý thiết bị", "Phiên đăng nhập & thu hồi từ xa") { onOpen(SettingsRoute.Devices) }
                 SettingsDivider()
@@ -175,6 +211,10 @@ private fun SettingsHome(
                 ) { onOpen(SettingsRoute.FaceEnroll) }
                 SettingsDivider()
                 SettingsRow(Icons.Filled.Notifications, "Cài đặt thông báo", "Bật/tắt thông báo push của ứng dụng") { onOpen(SettingsRoute.Notifications) }
+                SettingsDivider()
+                SettingsRow(Icons.Filled.PrivacyTip, "Quyền ứng dụng", "Camera, micro, vị trí và cuộc gọi đến") { onOpen(SettingsRoute.Permissions) }
+                SettingsDivider()
+                SettingsRow(Icons.Filled.Tune, "Cá nhân hóa & trợ năng", "Giao diện, cỡ chữ, ngôn ngữ và tiết kiệm dữ liệu") { onOpen(SettingsRoute.Personalization) }
             }
         }
 
@@ -201,6 +241,45 @@ private fun SettingsHome(
                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Đăng xuất", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+
+}
+
+@Composable
+private fun PersonalizationSettings(onBack: () -> Unit) {
+    SubScreen("Cá nhân hóa & trợ năng", onBack) {
+        item {
+            SettingsGroup(padded = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text("Giao diện", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("system" to "Theo máy", "light" to "Sáng", "dark" to "Tối").forEach { (value, label) ->
+                            FilterChip(selected = AppPersonalization.themeMode == value, onClick = { AppPersonalization.setTheme(value) }, label = { Text(label) })
+                        }
+                    }
+                    Text("Cỡ chữ: ${(AppPersonalization.fontScale * 100).toInt()}%", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Slider(value = AppPersonalization.fontScale, onValueChange = AppPersonalization::setFont, valueRange = .85f..1.3f, steps = 8)
+                    Text("Ngôn ngữ", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = AppPersonalization.language == "vi", onClick = { AppPersonalization.updateLanguage("vi") }, label = { Text("Tiếng Việt") })
+                        FilterChip(selected = AppPersonalization.language == "en", onClick = { AppPersonalization.updateLanguage("en") }, label = { Text("English") })
+                    }
+                    SettingsSwitchRow(Icons.Filled.Tune, "Đưa tác vụ nhanh lên trước", "Thay đổi thứ tự các thẻ trên trang chủ", AppPersonalization.reverseHomeCards, enabled = true, onCheckedChange = AppPersonalization::setReverseHome)
+                    SettingsSwitchRow(Icons.Filled.PhoneAndroid, "Tiết kiệm dữ liệu", "Hạn chế dữ liệu chạy ngầm khi dùng mạng di động", AppPersonalization.dataSaver, enabled = true, onCheckedChange = AppPersonalization::updateDataSaver)
+                    Text(
+                        "Mục đích: đỡ hao dữ liệu di động và pin. Khi BẬT, ứng dụng giãn nhịp tự động đồng bộ ở chế " +
+                            "độ nền (tối đa mỗi 60 giây/lần thay vì liên tục). Bạn vẫn nhận đủ tin nhắn, thông báo và " +
+                            "số liệu mới nhất mỗi khi mở app hoặc kéo để làm mới — chỉ là app bớt âm thầm tải dữ liệu " +
+                            "khi bạn không dùng tới. Nên bật khi dùng 3G/4G/5G hoặc gói cước giới hạn; tắt khi ở Wi-Fi " +
+                            "để cập nhật tức thời hơn. Ngoài ra, khi dùng dữ liệu di động, bản cập nhật lớn (trên 20MB) " +
+                            "sẽ luôn hỏi bạn trước khi tải.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("Ứng dụng hỗ trợ TalkBack, cỡ chữ hệ thống và vùng chạm tối thiểu 48dp cho các thao tác chính.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
@@ -297,18 +376,101 @@ private fun PasswordField(label: String, value: String, onChange: (String) -> Un
     )
 }
 
+// ── Mã bảo mật riêng của ứng dụng ───────────────────────────────────────────
+@Composable
+private fun AppPinSettingsScreen(user: HrUser, vm: HrViewModel, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val store = remember(context) { AppPinStore(context) }
+    var hasPin by remember(user.username) { mutableStateOf<Boolean?>(null) }
+    var loadError by remember(user.username) { mutableStateOf<String?>(null) }
+    var showGate by remember { mutableStateOf(false) }
+
+    LaunchedEffect(user.username) {
+        runCatching { store.hasPin(user.username) }
+            .onSuccess { hasPin = it; loadError = null }
+            .onFailure { hasPin = true; loadError = it.message }
+    }
+
+    SubScreen("Mã bảo mật ứng dụng", onBack) {
+        item {
+            SettingsGroup(padded = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier.size(46.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Filled.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("PIN riêng 6 số", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(
+                                when (hasPin) {
+                                    true -> "Đã thiết lập trên thiết bị này"
+                                    false -> "Chưa thiết lập"
+                                    null -> "Đang kiểm tra…"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    loadError?.let { ErrorText(it) }
+                    Text(
+                        "Mã này dùng để mở hồ sơ điện tử, phiếu lương và các dữ liệu nhạy cảm trong app. Mã không liên kết với PIN, hình vẽ hoặc mật khẩu mở khóa điện thoại.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = { showGate = true },
+                        enabled = hasPin != null,
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text(if (hasPin == true) "Đổi mã bảo mật" else "Tạo mã bảo mật", fontWeight = FontWeight.Bold)
+                    }
+                    Text(
+                        "Nếu quên mã, chọn “Quên mã bảo mật?” và xác minh lại bằng mật khẩu tài khoản để tạo mã mới.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+
+    AppPinGate(
+        visible = showGate,
+        username = user.username,
+        purpose = "Nhập mã hiện tại trước khi đổi mã bảo mật.",
+        mode = AppPinGateMode.Manage,
+        onDismiss = { showGate = false },
+        onUnlocked = {
+            showGate = false
+            hasPin = true
+            loadError = null
+            vm.showActionMessage("Đã cập nhật mã bảo mật ứng dụng.")
+        },
+        onVerifyAccountPassword = vm::verifyAccountPassword,
+    )
+}
+
 // ── Quản lý thiết bị ─────────────────────────────────────────────────────────
 @Composable
 private fun DeviceManagerScreen(vm: HrViewModel, onBack: () -> Unit) {
     LaunchedEffect(Unit) { vm.loadDevices() }
     val state = vm.settingsState
+    var confirmAll by remember{mutableStateOf(false)}
     SubScreen("Quản lý thiết bị", onBack) {
+        item{Button(onClick={confirmAll=true},colors=ButtonDefaults.buttonColors(containerColor=MaterialTheme.colorScheme.error),modifier=Modifier.fillMaxWidth()){Text("Đăng xuất khỏi tất cả thiết bị")}}
         if (state.devicesLoading && state.devices.isEmpty()) item { LoadingBlock() }
         if (!state.devicesLoading && state.devices.isEmpty()) {
             item { EmptyState("Chưa có thiết bị", "Không tìm thấy phiên đăng nhập nào.") }
         }
         items(state.devices, key = { it.sid }) { d -> DeviceCard(d) { vm.revokeDevice(d.sid) } }
     }
+    if(confirmAll)AlertDialog(onDismissRequest={confirmAll=false},title={Text("Đăng xuất tất cả thiết bị?")},text={Text("Tất cả phiên, kể cả thiết bị này, sẽ bị thu hồi.")},confirmButton={Button(onClick={confirmAll=false;vm.revokeAllDevices()}){Text("Đăng xuất tất cả")}},dismissButton={TextButton(onClick={confirmAll=false}){Text("Hủy")}})
 }
 
 @Composable
@@ -419,6 +581,130 @@ private fun pushNotificationSubtitle(localEnabled: Boolean?, systemAllowed: Bool
     localEnabled -> "Đang bật trong app, cần cấp quyền thông báo của hệ thống"
     !systemAllowed -> "Đang tắt, sẽ hỏi quyền thông báo khi bật"
     else -> "Đang tắt"
+}
+
+@Composable
+private fun PermissionCenterScreen(vm: HrViewModel, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var refreshKey by remember { mutableStateOf(0) }
+    var notificationDenied by rememberSaveable { mutableStateOf(false) }
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        notificationDenied = !granted
+        refreshKey++
+        vm.refreshPushPermissionState()
+        if (granted) vm.setPushNotificationsEnabled(true)
+    }
+
+    fun granted(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    fun openAppSettings() {
+        context.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")),
+        )
+    }
+
+    val notificationsGranted = remember(refreshKey) { systemNotificationsAllowed(context) }
+    val fullScreenGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+        (context.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() == true)
+
+    SubScreen("Quyền ứng dụng", onBack) {
+        item {
+            HrCard {
+                Text("Bạn kiểm soát các quyền", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "KetoanAPK không xin camera, micro hoặc vị trí khi khởi động. Các quyền này chỉ được hỏi khi bạn mở đúng tính năng cần dùng.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            PermissionStatusCard(
+                icon = Icons.Filled.Notifications,
+                title = "Thông báo",
+                explanation = "Dùng cho đơn từ, tin nhắn và cuộc gọi đến khi app ở nền.",
+                granted = notificationsGranted,
+                actionLabel = if (notificationDenied) "Mở cài đặt" else "Cho phép",
+                onAction = {
+                    if (notificationDenied || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) openAppSettings()
+                    else notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                },
+            )
+        }
+        item {
+            PermissionStatusCard(
+                icon = Icons.Filled.CameraAlt,
+                title = "Camera",
+                explanation = "Chỉ dùng khi chấm công, chụp hồ sơ, đăng ký khuôn mặt hoặc gọi video.",
+                granted = granted(Manifest.permission.CAMERA),
+                actionLabel = "Mở cài đặt",
+                onAction = ::openAppSettings,
+            )
+        }
+        item {
+            PermissionStatusCard(
+                icon = Icons.Filled.Mic,
+                title = "Micro",
+                explanation = "Chỉ dùng sau khi bạn bắt đầu hoặc nhận cuộc gọi thoại/video.",
+                granted = granted(Manifest.permission.RECORD_AUDIO),
+                actionLabel = "Mở cài đặt",
+                onAction = ::openAppSettings,
+            )
+        }
+        item {
+            PermissionStatusCard(
+                icon = Icons.Filled.LocationOn,
+                title = "Vị trí",
+                explanation = "Chỉ dùng trong chấm công để kiểm tra địa điểm và lưu lượt ngoại tuyến.",
+                granted = granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION),
+                actionLabel = "Mở cài đặt",
+                onAction = ::openAppSettings,
+            )
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            item {
+                PermissionStatusCard(
+                    icon = Icons.Filled.PhoneAndroid,
+                    title = "Cuộc gọi toàn màn hình",
+                    explanation = "Tùy chọn để hiện cuộc gọi đến trên màn hình khóa. App không tự mở trang này khi khởi động.",
+                    granted = fullScreenGranted,
+                    actionLabel = "Bật thủ công",
+                    onAction = {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                Uri.parse("package:${context.packageName}"),
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionStatusCard(
+    icon: ImageVector,
+    title: String,
+    explanation: String,
+    granted: Boolean,
+    actionLabel: String,
+    onAction: () -> Unit,
+) {
+    HrCard {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(explanation, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            StatusChip(if (granted) "Đã cấp" else "Chưa cấp", if (granted) Tone.Success else Tone.Muted)
+        }
+        if (!granted) {
+            OutlinedButton(onClick = onAction, modifier = Modifier.fillMaxWidth()) { Text(actionLabel) }
+        }
+    }
 }
 
 // ── Phiên bản ứng dụng ───────────────────────────────────────────────────────

@@ -7,7 +7,54 @@ public record LoginRequest(string Username, string Password, string? Sid = null,
 // Quên mật khẩu bằng khuôn mặt: username + mật khẩu mới + loạt ảnh quét.
 // Backend so 1:1 với mẫu khuôn mặt đã đăng ký của đúng username này.
 public record FacePasswordResetRequest(string Username, string NewPassword, List<string> Images, string? Client = null);
+// Khôi phục mật khẩu bằng mã do admin cấp (thay cho reset khuôn mặt): username + mã + mật khẩu mới.
+public record RecoveryResetRequest(string Username, string Code, string NewPassword);
+// Trả về mã khôi phục vừa tạo cho admin xem một lần (không lưu bản rõ ở server).
+public record RecoveryCodeResponse(string Code);
 public record LoginResponse(string Token, UserDto User);
+public record QrLoginStartRequest(string? Sid, string ClientMode = "desktop_qr");
+public record QrLoginStartResponse(
+    string QrCode,
+    string PollToken,
+    DateTime ExpiresAt,
+    string ClientMode = "desktop_qr");
+public record QrLoginPollRequest(string PollToken);
+public record QrLoginConfirmRequest(string QrCode);
+public record QrLoginCancelRequest(string PollToken);
+public record MobileAppLoginStartRequest(string? Sid, string ClientMode = "mobile_app");
+public record MobileAppLoginStartResponse(
+    string RequestCode,
+    string PollToken,
+    DateTime ExpiresAt,
+    string ClientMode = "mobile_app");
+public record MobileAppLoginCodeRequest(string RequestCode, string ClientMode = "mobile_app");
+public record MobileAppLoginPollRequest(string PollToken, string ClientMode = "mobile_app");
+public record MobileAppLoginChallengeResponse(
+    string RequestCode,
+    string Title,
+    string Message,
+    DateTime ExpiresAt,
+    string ClientMode = "mobile_app");
+public record QrResolveRequest(string Value, int ProtocolVersion = 1, List<string>? Capabilities = null, int? ClientVersionCode = null);
+public record QrDecisionRequest(string DecisionToken, string ActionId);
+public record QrPresentationDto(string Title, string Message, string Severity = "info");
+public record QrClientActionDto(
+    string Id,
+    string Type,
+    string Label,
+    string Style = "secondary",
+    string? Url = null,
+    bool CloseOnSelect = false);
+public record QrActionEnvelope(
+    int ProtocolVersion,
+    QrPresentationDto Presentation,
+    List<QrClientActionDto> Actions,
+    string? DecisionToken = null,
+    string? DismissActionId = null,
+    DateTime? ExpiresAt = null,
+    // Máy chủ tiếp nhận mã nhưng không có nghiệp vụ nào cho nó. Ứng dụng mới sẽ tự đọc và hiện nội
+    // dung mã ngay trên máy; bản cũ không biết cờ này nên vẫn hiện Presentation như trước.
+    bool Unhandled = false);
 public record HeartbeatRequest(string? Sid);
 // Thiết bị/phiên đăng nhập của một tài khoản (phục vụ màn "Quản lý thiết bị đăng nhập").
 public record DeviceDto(string Sid, string MachineName, string ClientKind, string UserAgent,
@@ -15,6 +62,7 @@ public record DeviceDto(string Sid, string MachineName, string ClientKind, strin
 public record UpdateProfileRequest(string FullName, string Email);
 public record UpdateAvatarRequest(string ImageDataUrl);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record VerifyPasswordRequest(string Password);
 // Cài đặt đăng nhập của tài khoản: cho phép đăng nhập bản web hay không (app native luôn dùng được).
 public record AccountLoginSettingsDto(bool WebLoginEnabled);
 public record AccountLoginSettingsPatch(bool WebLoginEnabled);
@@ -37,6 +85,14 @@ public record UserDto(Guid Id, string Username, string FullName, string Email, s
 
     /// <summary>Đã đăng ký khuôn mặt (có mẫu trong cham_cong_face) — app dùng để hiện banner nhắc đăng ký.</summary>
     public bool FaceRegistered { get; init; }
+
+    /// <summary>MỌI vai trò của tài khoản (vai trò chính + vai trò phụ như "Thủ kho"). Client dùng để
+    /// hiện/ẩn tính năng giao việc &amp; nghiệm thu. Rỗng ⇒ chỉ có vai trò chính trong <see cref="Role"/>.</summary>
+    public IReadOnlyList<string> Roles { get; init; } = System.Array.Empty<string>();
+
+    /// <summary>Có thẩm quyền giao việc &amp; nghiệm thu (Admin hoặc giữ vai trò Thủ kho).</summary>
+    public bool CanAssignTasks => IsAdmin
+        || Roles.Any(r => string.Equals(r, "Warehouse", StringComparison.OrdinalIgnoreCase));
 }
 
 // ----- Dashboard -----
@@ -69,29 +125,52 @@ public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal
 
 // ----- Users (Nhân sự) -----
 public record UserAdminDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
-    string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen, bool Verified, bool IsDiamond);
+    string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen, bool Verified, bool IsDiamond,
+    IReadOnlyList<string> SecondaryRoles);
 public record CreateUserRequest(string Username, string FullName, string Email, string Password, string Role);
 public record SetLockRequest(bool Locked);
+public record SetRoleRequest(string Role);
+// Cấp/thu một vai trò PHỤ (vd "Warehouse" = Thủ kho) cho tài khoản. Grant=true để cấp, false để thu hồi.
+public record SetSecondaryRoleRequest(string Role, bool Grant);
 public record SetVerifiedRequest(bool Verified);
 public record SetDiamondRequest(bool IsDiamond);
 public record ResetPasswordResponse(string Code);
 
 // ----- Chat (Trò chuyện, web-only) -----
-public record ChatContactDto(string Username, string DisplayName, string? AvatarUrl, bool IsOnline, bool Verified, bool IsDiamond, string Role);
+public record ChatContactDto(string Username, string DisplayName, string? AvatarUrl, bool IsOnline, bool Verified, bool IsDiamond, string Role,
+    string EmployeeId = "", string EmployeeCode = "", string DepartmentId = "", string DepartmentName = "", string Position = "",
+    string Phone = "", string Email = "", string ManagerUsername = "", string ManagerName = "", bool IsDirectManager = false,
+    bool SameDepartment = false);
+// Đổ chuông / hủy chuông / báo nhỡ cuộc gọi (thoại/video) qua FCM.
+public record CallRingRequest(string ToUsername, string CallId, string? Media);
+public record CallCancelRequest(string ToUsername, string CallId);
+public record CallMissedRequest(string ToUsername, string CallId, string? Media);
+public record MissedCallDto(long Id, string FromUsername, string FromName, string Media, string CallId, DateTime CreatedAt);
+public record CallHistoryDto(long Id, string PeerUsername, string PeerName, string CallId, string Media, string Direction,
+    string Outcome, DateTime? StartedAt, DateTime EndedAt, int DurationSeconds);
+public record RecordCallRequest(string PeerUsername, string? PeerName, string CallId, string? Media, string? Direction,
+    string? Outcome, long? StartedAtEpochMs, long EndedAtEpochMs);
+// TURN credential động cho WebRTC (cấp có hạn giờ qua HMAC — xem /api/chat/call/turn).
+public record TurnCredsDto(string[] Urls, string Username, string Credential, int Ttl);
 public record ChatConversationDto(Guid Id, bool IsGroup, string Title, string? Username, string? AvatarUrl,
     bool IsOnline, bool Verified, bool IsDiamond, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen,
     bool Pinned = false, bool SupportConversation = false);
 public record ChatMessageDto(long Id, string SenderUsername, string SenderName, bool Mine, string Body, DateTime CreatedAt,
     DateTime? EditedAt, bool Removed, bool Forwarded, IReadOnlyList<ChatReactionDto>? Reactions = null,
-    // Tin nhắn tệp gửi qua LAN: chỉ lưu METADATA (tên/dung lượng/kiểu), KHÔNG lưu nội dung tệp.
-    // HasBlob = true khi server đang GIỮ TẠM nội dung tệp (người nhận offline lúc gửi) chờ tải về rồi xóa.
+    // kind=file: metadata tệp LAN, blob chỉ được giữ tạm. kind=voice: tin thoại có blob bền vững tới khi gỡ.
+    // HasBlob cho biết nội dung hiện sẵn sàng tải/phát; tải hoặc đánh dấu đã đọc không được làm mất voice.
     string Kind = "text", string? FileName = null, long? FileSize = null, string? FileMime = null,
-    bool HasBlob = false);
+    bool HasBlob = false, bool Read = false);
 // Một biểu cảm (cảm xúc) gộp theo emoji trên một tin nhắn: số người thả + tôi có thả hay không.
 public record ChatReactionDto(string Emoji, int Count, bool Mine);
 public record SendMessageRequest(string Body, bool Forwarded = false, bool SendAsSupport = false);
-// Ghi lại "đã gửi tệp X" qua LAN — chỉ metadata; nội dung tệp truyền thẳng P2P, không lưu server.
-public record SendFileMessageRequest(string FileName, long FileSize, string? FileMime = null);
+// kind=file cho tệp đính kèm; recorder phải gửi kind=voice. Backend xác thực MIME/đuôi trước khi nhận voice.
+public record SendFileMessageRequest(
+    string FileName,
+    long FileSize,
+    string? FileMime = null,
+    string? Kind = null,
+    string? ClientMessageId = null);
 public record EditMessageRequest(string Body);
 public record ReactRequest(string Emoji);
 public record SetConversationPinnedRequest(bool Pinned);
@@ -198,6 +277,9 @@ public record OfflineReviewRequest(string? Note = null);
 
 /// <summary>Cấu hình chính sách chấm công ngoại tuyến: geofence công ty + ngưỡng lùi giờ.</summary>
 public record OfflineConfigDto(double? GeofenceLat, double? GeofenceLng, double GeofenceRadiusM, int MaxBackdateMinutes);
+public record QrAttendanceRequest(string Token);
+public record CreateQrSiteRequest(string Name, string? ProjectName = null);
+public record ApprovalDelegationReq(string ToUsername, DateOnly FromDate, DateOnly ToDate);
 
 // ----- Releases (Cập nhật) -----
 public record ReleaseDto(long Id, string AppTarget, string Version, int VersionCode, string ReleaseNotes,

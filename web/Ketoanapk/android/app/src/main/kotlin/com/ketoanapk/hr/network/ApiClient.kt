@@ -28,8 +28,16 @@ object ApiClient {
         encodeDefaults = true
     }
 
+    /**
+     * Header đánh dấu request do máy tự bắn ở NỀN (WorkManager poll), không phải người dùng đang
+     * dùng app. Máy chủ không tính các request này là "hoạt động" nên phiên vẫn hết hạn sau
+     * [com.ketoanapk.hr.data.SESSION_IDLE_DAYS] ngày người dùng không mở app. Xem Program.cs.
+     */
+    const val BACKGROUND_HEADER = "X-Background-Poll"
+
     /** API chính (công khai qua Cloudflare Tunnel). Dùng cho MỌI tính năng TRỪ chấm công. */
-    fun create(tokenStore: TokenStore): HrApi = build(BuildConfig.API_BASE_URL, tokenStore)
+    fun create(tokenStore: TokenStore, background: Boolean = false): HrApi =
+        build(BuildConfig.API_BASE_URL, tokenStore, background)
 
     /**
      * API chấm công — LUÔN đi thẳng máy chủ trong LAN ([BuildConfig.ATTENDANCE_BASE_URL]), KHÔNG qua
@@ -38,17 +46,13 @@ object ApiClient {
      */
     fun createAttendance(tokenStore: TokenStore): HrApi = build(BuildConfig.ATTENDANCE_BASE_URL, tokenStore)
 
-    private fun build(baseUrl: String, tokenStore: TokenStore): HrApi {
+    private fun build(baseUrl: String, tokenStore: TokenStore, background: Boolean = false): HrApi {
         val auth = Interceptor { chain ->
             val token = runBlocking { tokenStore.token() }
-            val request = if (!token.isNullOrBlank()) {
-                chain.request().newBuilder()
-                    .addHeader("Authorization", "Bearer $token")
-                    .build()
-            } else {
-                chain.request()
-            }
-            chain.proceed(request)
+            val builder = chain.request().newBuilder()
+            if (!token.isNullOrBlank()) builder.addHeader("Authorization", "Bearer $token")
+            if (background) builder.addHeader(BACKGROUND_HEADER, "1")
+            chain.proceed(builder.build())
         }
 
         val logging = HttpLoggingInterceptor().apply {

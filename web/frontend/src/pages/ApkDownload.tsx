@@ -375,7 +375,7 @@ export function ApkDownload({ standalone = false }: { standalone?: boolean }) {
                   </div>
                   <h2>Mở trên điện thoại</h2>
                   <div className="apk-qr-box">
-                    {pageUrl ? <QRCodeCanvas value={pageUrl} size={172} includeMargin /> : <Skeleton className="h-[172px] w-[172px]" />}
+                    {pageUrl ? <QRCodeCanvas value={pageUrl} size={172} marginSize={4} /> : <Skeleton className="h-[172px] w-[172px]" />}
                   </div>
                   <Button type="button" variant="soft" className="w-full" onClick={copyLink}>
                     Sao chép link

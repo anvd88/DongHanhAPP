@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+/* eslint-disable react-refresh/only-export-components -- Context provider và hook dùng chung cần ở cùng module. */
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, tokenStore } from "./api";
 import { appUrl } from "./appConfig";
 import type { User } from "./types";
@@ -11,10 +12,22 @@ interface AuthCtx {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  loginWithFace: (images: string[]) => Promise<void>;
+  pollQrLogin: (pollToken: string, signal?: AbortSignal) => Promise<QrLoginPollResult>;
+  completeExternalLogin: (login: { token: string; user: User }) => void;
   logout: () => void;
   updateUser: (u: User) => void;
 }
+
+export type QrLoginAccount = {
+  username: string;
+  fullName: string;
+  avatarUrl?: string | null;
+};
+
+export type QrLoginPollResult =
+  | { status: "pending" | "rejected" | "expired" }
+  | { status: "scanned"; account: QrLoginAccount }
+  | { status: "authenticated"; token: string; user: User };
 
 const Ctx = createContext<AuthCtx>(null!);
 export const useAuth = () => useContext(Ctx);
@@ -31,7 +44,7 @@ const IDLE_LOGOUT_MS = (() => {
 // Mã định danh phiên web ổn định theo từng trình duyệt (để backend ghi nhận hiện diện online).
 // crypto.randomUUID chỉ có ở ngữ cảnh bảo mật (https/localhost); LAN chạy http nên cần fallback.
 const SID_KEY = "km_sid";
-function sessionId(): string {
+export function webSessionId(): string {
   let sid = localStorage.getItem(SID_KEY);
   if (!sid) {
     sid = crypto.randomUUID?.() ?? `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -43,7 +56,7 @@ function sessionId(): string {
 // Báo "đang online" cho hệ thống (app desktop đọc last_seen của user_sessions). Nếu tài khoản
 // bị khóa, backend trả 401 và lớp api tự đăng xuất → ở đây chỉ cần nuốt lỗi.
 function sendHeartbeat() {
-  api.post("/api/auth/heartbeat", { sid: sessionId() }).catch(() => {});
+  api.post("/api/auth/heartbeat", { sid: webSessionId() }).catch(() => {});
 }
 
 function sendOfflineKeepalive() {
@@ -55,20 +68,17 @@ function sendOfflineKeepalive() {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ sid: sessionId() }),
+    body: JSON.stringify({ sid: webSessionId() }),
     keepalive: true,
   }).catch(() => {});
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => Boolean(tokenStore.get()));
 
   useEffect(() => {
-    if (!tokenStore.get()) {
-      setLoading(false);
-      return;
-    }
+    if (!tokenStore.get()) return;
     api
       .get<User>("/api/auth/me")
       .then((currentUser) => {
@@ -103,29 +113,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [user]);
 
-  const login = async (username: string, password: string) => {
-    const res = await api.post<{ token: string; user: User }>("/api/auth/login", { username, password, sid: sessionId() });
+  const finishLogin = useCallback((res: { token: string; user: User }) => {
     tokenStore.set(res.token);
     ensureWaterDailyLogin(res.user.id);
     ensureEyeDailyLogin(res.user.id);
     loadUserPreferences(res.user.id).catch(() => {});
     void restartRealtime();
     setUser(res.user); // kích hoạt heartbeat ngay qua effect ở trên
+  }, []);
+
+  const login = async (username: string, password: string) => {
+    const res = await api.post<{ token: string; user: User }>("/api/auth/login", { username, password, sid: webSessionId() });
+    finishLogin(res);
   };
 
-  // Đăng nhập bằng khuôn mặt: gửi một loạt ảnh, server nhận diện rồi cấp token như đăng nhập thường.
-  const loginWithFace = async (images: string[]) => {
-    const res = await api.post<{ token: string; user: User }>("/api/auth/login-face", { images, sid: sessionId() });
-    tokenStore.set(res.token);
-    ensureWaterDailyLogin(res.user.id);
-    ensureEyeDailyLogin(res.user.id);
-    loadUserPreferences(res.user.id).catch(() => {});
-    void restartRealtime();
-    setUser(res.user);
-  };
+  // Poll QR chỉ trả JWT khi app đã xác nhận. Dùng chung finishLogin để mọi kiểu đăng nhập đều khởi
+  // động realtime, nhắc sức khỏe và heartbeat theo cùng một cách.
+  const pollQrLogin = useCallback((pollToken: string, signal?: AbortSignal) =>
+    api.postPublic<QrLoginPollResult>("/api/auth/qr/poll", { pollToken }, signal), []);
 
   const logout = () => {
-    api.post("/api/auth/logout", { sid: sessionId() }).catch(() => {}); // tắt hiện diện ngay (best-effort)
+    api.post("/api/auth/logout", { sid: webSessionId() }).catch(() => {}); // tắt hiện diện ngay (best-effort)
     tokenStore.clear();
     void stopRealtime();
     setUser(null);
@@ -151,8 +159,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(timer);
       events.forEach((e) => window.removeEventListener(e, reset));
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  return <Ctx.Provider value={{ user, loading, login, loginWithFace, logout, updateUser: setUser }}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider
+      value={{ user, loading, login, pollQrLogin, completeExternalLogin: finishLogin, logout, updateUser: setUser }}
+    >
+      {children}
+    </Ctx.Provider>
+  );
 }

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup (Android < 12): KHÔNG sao lưu phiên đăng nhập (token JWT) lên cloud. -->
+<full-backup-content>
+    <exclude domain="file" path="datastore/ketoanapk_session.preferences_pb" />
+</full-backup-content>

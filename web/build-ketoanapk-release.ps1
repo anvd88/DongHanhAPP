@@ -103,12 +103,28 @@ function Set-EnvLine($text, $key, $value) {
     return $text + "$key=$value`r`n"
 }
 
+
+# local.properties là định dạng Java Properties: dấu \ dùng để THOÁT ký tự đứng ngay sau nó, nên
+# Android Studio ghi ổ đĩa thành "C\:/Users/..." (hoặc "C\:\\Users\\..."). Bê nguyên chuỗi đó vào
+# Join-Path là PowerShell đọc "C\:" thành tên ổ đĩa "C\" rồi ném DriveNotFound.
+function Expand-JavaPropsValue([string]$value) {
+    $sb = New-Object System.Text.StringBuilder
+    for ($i = 0; $i -lt $value.Length; $i++) {
+        # Gặp \ thì bỏ chính nó đi và lấy nguyên ký tự đứng sau.
+        if ($value[$i] -eq '\' -and $i + 1 -lt $value.Length) { $i++ }
+        [void]$sb.Append($value[$i])
+    }
+    return $sb.ToString()
+}
+
 function Get-SdkDir($androidDir) {
     $localProps = Join-Path $androidDir "local.properties"
     if (Test-Path -LiteralPath $localProps) {
-        $line = [IO.File]::ReadAllLines($localProps) | Where-Object { $_ -match '^sdk\.dir=' } | Select-Object -First 1
+        $line = [IO.File]::ReadAllLines($localProps) | Where-Object { $_ -match '^\s*sdk\.dir\s*=' } | Select-Object -First 1
         if ($line) {
-            return ($line -replace '^sdk\.dir=', '') -replace '/', '\'
+            $raw = ($line -replace '^\s*sdk\.dir\s*=\s*', '').Trim()
+            # Giải thoát TRƯỚC rồi mới nắn dấu gạch: "\\" phải về "\" xong xuôi thì đổi "/" mới đúng.
+            return (Expand-JavaPropsValue $raw).Replace('/', '\')
         }
     }
     if ($env:ANDROID_HOME) { return $env:ANDROID_HOME }
@@ -117,7 +133,11 @@ function Get-SdkDir($androidDir) {
 }
 
 function Latest-BuildTools($sdkDir) {
-    $dir = Join-Path $sdkDir "build-tools"
+    # [IO.Path]::Combine chứ không Join-Path: Join-Path đòi ổ đĩa phải có thật và NÉM lỗi nếu không.
+    # Kiểm tra APK chỉ là bước phụ sau khi APK đã ra lò — đường dẫn SDK hỏng thì cảnh báo rồi bỏ qua,
+    # đừng để nó giết cả script ($ErrorActionPreference = "Stop") và nuốt mất phần in SHA256 ở cuối.
+    if ([string]::IsNullOrWhiteSpace($sdkDir)) { return $null }
+    $dir = [IO.Path]::Combine($sdkDir, "build-tools")
     if (-not (Test-Path -LiteralPath $dir)) {
         return $null
     }
@@ -256,7 +276,12 @@ if (-not (Test-Path -LiteralPath $gradlew)) {
 $buildExit = 0
 Push-Location $android
 try {
-    & $gradlew assembleRelease
+    # --no-problems-report: Gradle kết thúc build bằng việc ghi đè build\reports\problems\problems-report.html.
+    # Trên máy này file đó không ghi/xoá được (kể cả sau "gradlew --stop", Get-Acl cũng bị từ chối — nghi
+    # Controlled Folder Access chặn ghi vào Desktop), nên Gradle ném FileAlreadyExistsException và trả mã
+    # thoát ≠ 0 => script này Fail dù APK ĐÃ build xong. Cờ này bỏ hẳn bước sinh report (Gradle 8.6+;
+    # wrapper của dự án đang là 8.14.3). Báo cáo đó chỉ để chẩn đoán, không ảnh hưởng APK.
+    & $gradlew assembleRelease --no-problems-report
     $buildExit = $LASTEXITCODE
 } finally {
     Pop-Location
@@ -286,6 +311,17 @@ if ($buildTools) {
         $badging = & $aapt dump badging $artifactPath 2>&1
         $badging | Select-String -Pattern "^package:" | ForEach-Object { Write-Host $_.Line }
         $badging | Select-String -Pattern "^application-label:'" | Select-Object -First 1 | ForEach-Object { Write-Host $_.Line }
+
+        # Bản release chỉ được mang CPU của điện thoại thật (xem ndk.abiFilters trong app/build.gradle).
+        # Lỡ ai gỡ abiFilters là APK phình thêm ~42 MB x86/x86_64 mà nhân viên phải tải — chỉ nhìn dung
+        # lượng thì khó nhận ra, nên soi thẳng danh sách ABI ở đây.
+        $nativeLine = $badging | Select-String -Pattern "^native-code:" | Select-Object -First 1
+        if ($nativeLine) {
+            Write-Host $nativeLine.Line
+            if ($nativeLine.Line -match "x86") {
+                Write-Host "CẢNH BÁO: APK release có kèm x86/x86_64 (chỉ máy ảo mới dùng) — kiểm tra lại ndk.abiFilters trong app/build.gradle." -ForegroundColor Yellow
+            }
+        }
     } else {
         Write-Host "CẢNH BÁO: Không tìm thấy aapt.exe; bỏ qua bước kiểm tra phiên bản." -ForegroundColor Yellow
     }
@@ -303,9 +339,12 @@ if ($buildTools) {
 }
 
 $hash = Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256
+$sizeMb = [math]::Round((Get-Item -LiteralPath $artifactPath).Length / 1MB, 1)
 
 Step "Hoàn tất"
 Write-Host "APK: $artifactPath"
+# Nhân viên tải đúng file này qua tunnel mỗi lần cập nhật nên dung lượng là con số đáng nhìn.
+Write-Host "Dung lượng: $sizeMb MB"
 Write-Host "SHA256: $($hash.Hash)"
 Write-Host ""
 Write-Host "Hãy upload APK này trong màn hình quản trị cập nhật với:"

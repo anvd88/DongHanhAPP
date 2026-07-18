@@ -44,7 +44,9 @@ public sealed class ChangeWatcher(
             (SELECT COUNT(*) FROM app_users), '|',
             (SELECT COALESCE(md5(string_agg(concat_ws('|', id, role, is_active, approval_status, is_deleted), '|' ORDER BY id::text)), '0') FROM app_users), '|',
             (SELECT COUNT(*) FROM (SELECT username FROM user_sessions WHERE is_active = TRUE AND last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' GROUP BY username) online_users), '|',
-            (SELECT COALESCE(md5(string_agg(username, '|' ORDER BY username)), '0') FROM (SELECT username FROM user_sessions WHERE is_active = TRUE AND last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' GROUP BY username) online_users)
+            (SELECT COALESCE(md5(string_agg(username, '|' ORDER BY username)), '0') FROM (SELECT username FROM user_sessions WHERE is_active = TRUE AND last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' GROUP BY username) online_users), '|',
+            (SELECT COUNT(*) FROM user_roles), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', username, role), '|' ORDER BY username, role)), '0') FROM user_roles)
         ) AS presence_token,
         CONCAT(
             (SELECT COUNT(*) FROM hr_departments), '|',
@@ -70,7 +72,9 @@ public sealed class ChangeWatcher(
             (SELECT COUNT(*) FROM cham_cong_log), '|',
             (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, loai, similarity, occurred_at), '|' ORDER BY id::text)), '0') FROM cham_cong_log), '|',
             (SELECT COUNT(*) FROM cham_cong_face), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, full_name, created_at, created_by), '|' ORDER BY id::text)), '0') FROM cham_cong_face)
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, full_name, created_at, created_by), '|' ORDER BY id::text)), '0') FROM cham_cong_face), '|',
+            (SELECT COUNT(*) FROM work_tasks), '|',
+            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, status, progress, assignee_username, assigner_username, updated_at), '|' ORDER BY id::text)), '0') FROM work_tasks)
         ) AS hr_token;";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

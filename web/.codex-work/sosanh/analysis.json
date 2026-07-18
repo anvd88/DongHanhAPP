@@ -1,0 +1,5039 @@
+{
+  "counts": {
+    "nRows": 759,
+    "meRows": 771,
+    "nGroups": 428,
+    "meGroups": 464,
+    "exactGroups": 310,
+    "valueMismatchGroups": 82,
+    "dateMismatchGroups": 16,
+    "missingGroupsInMe": 20,
+    "extraGroupsInMe": 56
+  },
+  "dateMismatches": [
+    {
+      "voucher": "8077",
+      "nDate": "13/03/2026",
+      "meDate": "14/03/2026",
+      "nRows": [
+        90
+      ],
+      "meRows": [
+        98
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "8231",
+      "nDate": "26/03/2026",
+      "meDate": "23/03/2026",
+      "nRows": [
+        179,
+        180,
+        181,
+        182
+      ],
+      "meRows": [
+        151,
+        152,
+        153,
+        154
+      ],
+      "lineCount": 4
+    },
+    {
+      "voucher": "5148",
+      "nDate": "31/03/2026",
+      "meDate": "30/03/2026",
+      "nRows": [
+        209
+      ],
+      "meRows": [
+        195
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "2641",
+      "nDate": "07/04/2026",
+      "meDate": "06/04/2026",
+      "nRows": [
+        268,
+        269
+      ],
+      "meRows": [
+        253,
+        254
+      ],
+      "lineCount": 2
+    },
+    {
+      "voucher": "2688",
+      "nDate": "14/04/2026",
+      "meDate": "13/04/2026",
+      "nRows": [
+        318
+      ],
+      "meRows": [
+        292
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "8169",
+      "nDate": "18/04/2026",
+      "meDate": "18/03/2026",
+      "nRows": [
+        357,
+        358
+      ],
+      "meRows": [
+        120,
+        121
+      ],
+      "lineCount": 2
+    },
+    {
+      "voucher": "2720",
+      "nDate": "18/04/2026",
+      "meDate": "17/04/2026",
+      "nRows": [
+        362,
+        363,
+        364
+      ],
+      "meRows": [
+        344,
+        345,
+        346
+      ],
+      "lineCount": 3
+    },
+    {
+      "voucher": "2718",
+      "nDate": "18/04/2026",
+      "meDate": "17/04/2026",
+      "nRows": [
+        365
+      ],
+      "meRows": [
+        343
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "5240",
+      "nDate": "18/04/2026",
+      "meDate": "17/04/2026",
+      "nRows": [
+        366
+      ],
+      "meRows": [
+        351
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "8869",
+      "nDate": "19/04/2026",
+      "meDate": "18/04/2026",
+      "nRows": [
+        367,
+        368,
+        369,
+        370
+      ],
+      "meRows": [
+        357,
+        358,
+        359,
+        360
+      ],
+      "lineCount": 4
+    },
+    {
+      "voucher": "9011",
+      "nDate": "24/04/2026",
+      "meDate": "25/04/2026",
+      "nRows": [
+        425
+      ],
+      "meRows": [
+        425
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "9012",
+      "nDate": "24/04/2026",
+      "meDate": "25/04/2026",
+      "nRows": [
+        426,
+        427
+      ],
+      "meRows": [
+        426,
+        427
+      ],
+      "lineCount": 2
+    },
+    {
+      "voucher": "9130",
+      "nDate": "04/05/2026",
+      "meDate": "29/04/2026",
+      "nRows": [
+        466
+      ],
+      "meRows": [
+        450
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "3",
+      "nDate": "14/05/2026",
+      "meDate": "14/03/2026",
+      "nRows": [
+        518
+      ],
+      "meRows": [
+        91
+      ],
+      "lineCount": 1
+    },
+    {
+      "voucher": "9422",
+      "nDate": "15/05/2026",
+      "meDate": "16/05/2026",
+      "nRows": [
+        535,
+        536
+      ],
+      "meRows": [
+        529,
+        530
+      ],
+      "lineCount": 2
+    },
+    {
+      "voucher": "9360",
+      "nDate": "13/06/2026",
+      "meDate": "13/05/2026",
+      "nRows": [
+        691,
+        692,
+        693,
+        694,
+        695,
+        696
+      ],
+      "meRows": [
+        499,
+        500,
+        501,
+        502,
+        503,
+        504
+      ],
+      "lineCount": 6
+    }
+  ],
+  "valueMismatches": [
+    {
+      "voucher": "7812",
+      "date": "03/03/2026",
+      "nRows": [
+        7,
+        8,
+        9
+      ],
+      "meRows": [
+        9,
+        10,
+        11
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 9,
+            "type": "Xuất GC",
+            "description": "Cuộn 410 0.38x620xC/BA",
+            "quantity": 958,
+            "price": null
+          },
+          "me": {
+            "row": 11,
+            "type": "Xuất GC",
+            "description": "Cuộn 410/BA 0,38x620xC",
+            "quantity": 958,
+            "price": 0
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 8,
+            "type": "Xuất GC",
+            "description": "Cuộn 430 0.6x275xC/BA",
+            "quantity": 3828,
+            "price": null
+          },
+          "me": {
+            "row": 10,
+            "type": "Xuất GC",
+            "description": "Cuộn 430/BA 0,6x275xC",
+            "quantity": 3828,
+            "price": 0
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 7,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.41267xC/BA",
+            "quantity": 5790,
+            "price": null
+          },
+          "me": {
+            "row": 9,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x1267xC",
+            "quantity": 5790,
+            "price": 0
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "7821",
+      "date": "03/03/2026",
+      "nRows": [
+        10,
+        11
+      ],
+      "meRows": [
+        12,
+        13
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 11,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.4x1200xC/BA",
+            "quantity": 2001,
+            "price": null
+          },
+          "me": {
+            "row": 13,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x1200xC",
+            "quantity": 2001,
+            "price": 0
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 10,
+            "type": "Xuất GC",
+            "description": "Cuộn 430 0.5x100xC/FH",
+            "quantity": 2110,
+            "price": null
+          },
+          "me": {
+            "row": 12,
+            "type": "Xuất GC",
+            "description": "Cuộn 430/FH 0,5x100xC",
+            "quantity": 2110,
+            "price": 0
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5032",
+      "date": "03/03/2026",
+      "nRows": [
+        12,
+        13,
+        14
+      ],
+      "meRows": [
+        8
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 13,
+          "type": "GC",
+          "description": "Xuất trả k xẻ 0.6x250xC",
+          "quantity": 2334,
+          "price": null
+        },
+        {
+          "row": 14,
+          "type": "GC",
+          "description": "Xuất trả k xẻ 0.5x155xC",
+          "quantity": 1856,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5038",
+      "date": "05/03/2026",
+      "nRows": [
+        19,
+        20,
+        21,
+        22,
+        23
+      ],
+      "meRows": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 20,
+          "type": "GC",
+          "description": "Cuối cuộn",
+          "quantity": 36,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5043",
+      "date": "06/03/2026",
+      "nRows": [
+        31,
+        32
+      ],
+      "meRows": [
+        21,
+        22,
+        23,
+        24,
+        25,
+        26
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 32,
+            "type": "GC",
+            "description": "Cuọn 0.4x400+600",
+            "quantity": 3394,
+            "price": 500
+          },
+          "me": {
+            "row": 21,
+            "type": "GC",
+            "description": "Cuộn 0,4x1200/xẻ 400",
+            "quantity": 1508,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 31,
+            "type": "GC",
+            "description": "Cuọn 0.4x400",
+            "quantity": 4220,
+            "price": 500
+          },
+          "me": {
+            "row": 22,
+            "type": "GC",
+            "description": "Cuộn 0,4x1200/xẻ 400",
+            "quantity": 1496,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 23,
+          "type": "GC",
+          "description": "Cuộn 0,4x1200/xẻ 400",
+          "quantity": 1216,
+          "price": -500
+        },
+        {
+          "row": 24,
+          "type": "GC",
+          "description": "Cuộn 0,4x1000/xẻ 400/600",
+          "quantity": 1164,
+          "price": -500
+        },
+        {
+          "row": 25,
+          "type": "GC",
+          "description": "Cuộn 0,4x1000/xẻ 400/600",
+          "quantity": 1028,
+          "price": -500
+        },
+        {
+          "row": 26,
+          "type": "GC",
+          "description": "Cuộn 0,4x1000/xẻ 400/600",
+          "quantity": 1202,
+          "price": -500
+        }
+      ]
+    },
+    {
+      "voucher": "5048",
+      "date": "09/03/2026",
+      "nRows": [
+        48,
+        49
+      ],
+      "meRows": [
+        42
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 49,
+          "type": "GC",
+          "description": "Băng 0.5x60 gốc",
+          "quantity": 3340,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5049",
+      "date": "09/03/2026",
+      "nRows": [
+        50,
+        51,
+        52
+      ],
+      "meRows": [
+        43,
+        44
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 50,
+          "type": "GC",
+          "description": "Cuộn 0.6x200 gốc",
+          "quantity": 3860,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5047",
+      "date": "09/03/2026",
+      "nRows": [
+        53,
+        54,
+        55
+      ],
+      "meRows": [
+        39,
+        40,
+        41
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 55,
+            "type": "GC",
+            "description": "Cuộn 0.4x300",
+            "quantity": 3731,
+            "price": 500
+          },
+          "me": {
+            "row": 41,
+            "type": "GC",
+            "description": "Cuộn 0,4x1200xC/xẻ 300",
+            "quantity": 3730,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "7997",
+      "date": "11/03/2026",
+      "nRows": [
+        62,
+        63
+      ],
+      "meRows": [
+        70,
+        71,
+        72
+      ],
+      "pairs": [],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 70,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 1,5x1210xC",
+          "quantity": 1510,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "8024",
+      "date": "12/03/2026",
+      "nRows": [
+        76,
+        77
+      ],
+      "meRows": [
+        78
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 77,
+          "type": "Xuất GC",
+          "description": "Cuộn 304 1.0x1000xC/2B",
+          "quantity": 419,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "8046",
+      "date": "12/03/2026",
+      "nRows": [
+        78
+      ],
+      "meRows": [
+        79
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 78,
+            "type": "Xuất GC",
+            "description": "Cuọn 304 0.8x1000xC/2B",
+            "quantity": 1698,
+            "price": null
+          },
+          "me": {
+            "row": 79,
+            "type": "Xuất GC",
+            "description": "Cuộn 2304/2B 0,8x1000xC",
+            "quantity": 1695,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "2433",
+      "date": "12/03/2026",
+      "nRows": [
+        83,
+        84
+      ],
+      "meRows": [
+        74
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 84,
+          "type": "GC",
+          "description": "Gốc",
+          "quantity": 475,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5075",
+      "date": "13/03/2026",
+      "nRows": [
+        91,
+        92
+      ],
+      "meRows": [
+        82
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 92,
+            "type": "GC",
+            "description": "Bản 20+đề xê",
+            "quantity": 254,
+            "price": 1000
+          },
+          "me": {
+            "row": 82,
+            "type": "GC",
+            "description": "Băng 1,0x75/xẻ 20",
+            "quantity": 1010,
+            "price": -1000
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 91,
+          "type": "GC",
+          "description": "Băng 1.0x75",
+          "quantity": 756,
+          "price": 1000
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "8095",
+      "date": "14/03/2026",
+      "nRows": [
+        99,
+        100
+      ],
+      "meRows": [
+        99
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 100,
+          "type": "Xuất GC",
+          "description": "trả cuộn gốc 304 0.8x1000xC",
+          "quantity": 1698,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5084",
+      "date": "14/03/2026",
+      "nRows": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106
+      ],
+      "meRows": [
+        94,
+        95,
+        96,
+        97
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 102,
+            "type": "GC",
+            "description": "Cuộn 304 0.4x300xC",
+            "quantity": 1972,
+            "price": 500
+          },
+          "me": {
+            "row": 94,
+            "type": "GC",
+            "description": "Cuộn 0,4x1200/xẻ 300",
+            "quantity": 3060,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 101,
+          "type": "GC",
+          "description": "Cuộn 201 0.4x300xC",
+          "quantity": 1088,
+          "price": 500
+        },
+        {
+          "row": 105,
+          "type": "GC",
+          "description": "Gốc 0.4xC",
+          "quantity": 356,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "186",
+      "date": "20/03/2026",
+      "nRows": [
+        149
+      ],
+      "meRows": [
+        137
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 149,
+            "type": "GC",
+            "description": "Gốc 201 2.0x1200xC",
+            "quantity": 1710,
+            "price": null
+          },
+          "me": {
+            "row": 137,
+            "type": "Nhập trả",
+            "description": "Cuộn 201 2,0x1200xC",
+            "quantity": 1710,
+            "price": 0
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": true
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5113",
+      "date": "21/03/2026",
+      "nRows": [
+        151,
+        152,
+        153,
+        154,
+        155
+      ],
+      "meRows": [
+        144,
+        145,
+        146,
+        147,
+        148
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 153,
+            "type": "GC",
+            "description": "Cuộn 0.4x300+400",
+            "quantity": 448,
+            "price": null
+          },
+          "me": {
+            "row": 146,
+            "type": "GC",
+            "description": "Cuộn 0,4x1000/xẻ 300/400",
+            "quantity": 448,
+            "price": -669.6428571428571
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "8318",
+      "date": "25/03/2026",
+      "nRows": [
+        166
+      ],
+      "meRows": [
+        170,
+        171
+      ],
+      "pairs": [],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 170,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x1280xC",
+          "quantity": 5480,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "8364",
+      "date": "27/03/2026",
+      "nRows": [
+        183,
+        184,
+        185
+      ],
+      "meRows": [
+        180,
+        181
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 185,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.8x1250xC/BA",
+            "quantity": 808,
+            "price": null
+          },
+          "me": {
+            "row": 180,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,5x1248xC",
+            "quantity": 1323,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 183,
+          "type": "Xuất GC",
+          "description": "Cuộn 304 0.5x1248xC/BA",
+          "quantity": 1328,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5141",
+      "date": "28/03/2026",
+      "nRows": [
+        194,
+        195
+      ],
+      "meRows": [
+        182,
+        183,
+        184
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 195,
+            "type": "GC",
+            "description": "Cuộn 0.8x750xC",
+            "quantity": 426,
+            "price": null
+          },
+          "me": {
+            "row": 183,
+            "type": "GC",
+            "description": "Cuộn 0,8x1200/xẻ 750",
+            "quantity": 426,
+            "price": -704.2253521127
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 184,
+          "type": "GC",
+          "description": "Cuộn 1,5x1200xC/xẻ 164+196",
+          "quantity": 2766,
+          "price": -500
+        }
+      ]
+    },
+    {
+      "voucher": "5166",
+      "date": "02/04/2026",
+      "nRows": [
+        231,
+        232
+      ],
+      "meRows": [
+        218,
+        219
+      ],
+      "pairs": [
+        {
+          "reason": "cùng mô tả",
+          "n": {
+            "row": 231,
+            "type": "GC",
+            "description": "Cuộn 0.4x400+600xC",
+            "quantity": 532,
+            "price": null
+          },
+          "me": {
+            "row": 218,
+            "type": "GC",
+            "description": "Cuộn 0,4x400/600xC",
+            "quantity": 532,
+            "price": -563.9097744361
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "8520",
+      "date": "03/04/2026",
+      "nRows": [
+        235,
+        236
+      ],
+      "meRows": [
+        236,
+        237
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 235,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 2.0x1200xC/2B",
+            "quantity": 4546,
+            "price": null
+          },
+          "me": {
+            "row": 236,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/2B 2,0x1200xC",
+            "quantity": 4540,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "8536",
+      "date": "03/04/2026",
+      "nRows": [
+        238,
+        239
+      ],
+      "meRows": [
+        239,
+        240
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 239,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.4x1200xC/BA",
+            "quantity": 1800,
+            "price": null
+          },
+          "me": {
+            "row": 240,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x1200xC 0,4x1210xC",
+            "quantity": 1500,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "2645",
+      "date": "07/04/2026",
+      "nRows": [
+        270,
+        271,
+        272
+      ],
+      "meRows": [
+        262,
+        263,
+        264
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 272,
+            "type": "GC",
+            "description": "Mua balet",
+            "quantity": 4,
+            "price": 300000
+          },
+          "me": {
+            "row": 264,
+            "type": "GC",
+            "description": "Pallet",
+            "quantity": 4,
+            "price": -75000
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5213",
+      "date": "14/04/2026",
+      "nRows": [
+        319,
+        320
+      ],
+      "meRows": [
+        314
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 320,
+            "type": "GC",
+            "description": "Cuộn 0.4x300+400",
+            "quantity": 1264,
+            "price": 500
+          },
+          "me": {
+            "row": 314,
+            "type": "GC",
+            "description": "Cuộn 0,4xC",
+            "quantity": 6104,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 319,
+          "type": "GC",
+          "description": "Cuộn 0.4x600",
+          "quantity": 4840,
+          "price": 500
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5126",
+      "date": "14/04/2026",
+      "nRows": [
+        321,
+        322,
+        323,
+        324
+      ],
+      "meRows": [
+        311,
+        312,
+        313
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 323,
+            "type": "Gc",
+            "description": "Đề xê",
+            "quantity": 130,
+            "price": 1000
+          },
+          "me": {
+            "row": 312,
+            "type": "GC",
+            "description": "Băng 0,5x90xC",
+            "quantity": 1208,
+            "price": -1000
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 322,
+          "type": "Gc",
+          "description": "Băng 0.5x43.8xC",
+          "quantity": 1077,
+          "price": 1000
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5220",
+      "date": "15/04/2026",
+      "nRows": [
+        328,
+        329,
+        330
+      ],
+      "meRows": [
+        321,
+        322
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 329,
+            "type": "GC",
+            "description": "san cuộn 0.4x600",
+            "quantity": 568,
+            "price": 500
+          },
+          "me": {
+            "row": 321,
+            "type": "GC",
+            "description": "Cuộn 0,4x600xC",
+            "quantity": 3406,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 328,
+          "type": "GC",
+          "description": "Cuộn 0.4x300",
+          "quantity": 2838,
+          "price": 500
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "8844",
+      "date": "17/04/2026",
+      "nRows": [
+        346
+      ],
+      "meRows": [
+        352,
+        353
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 346,
+            "type": "Bán hàng",
+            "description": "Cuộn 304 1.0x1200xC/2B",
+            "quantity": 1496,
+            "price": 57000
+          },
+          "me": {
+            "row": 352,
+            "type": "Bán hàng",
+            "description": "Cuộn 304/2B 1,0x1200xC",
+            "quantity": 606,
+            "price": 57000
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 353,
+          "type": "Bán hàng",
+          "description": "Cuộn 304/2B 1,0x1200xC",
+          "quantity": 890,
+          "price": 57000
+        }
+      ]
+    },
+    {
+      "voucher": "8855",
+      "date": "17/04/2026",
+      "nRows": [
+        352
+      ],
+      "meRows": [
+        356
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 352,
+            "type": "GC",
+            "description": "Cuộn 304 0.4x1000xC/BA",
+            "quantity": 4078,
+            "price": null
+          },
+          "me": {
+            "row": 356,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x1000xC",
+            "quantity": 4087,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": true
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5233",
+      "date": "17/04/2026",
+      "nRows": [
+        353
+      ],
+      "meRows": [
+        348
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 353,
+            "type": "GC",
+            "description": "Cuộn 0.5x320xC",
+            "quantity": 435,
+            "price": null
+          },
+          "me": {
+            "row": 348,
+            "type": "GC",
+            "description": "Cuộn 0,5x1200xC",
+            "quantity": 435,
+            "price": -689.6551724138
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5235",
+      "date": "17/04/2026",
+      "nRows": [
+        355,
+        356
+      ],
+      "meRows": [
+        349
+      ],
+      "pairs": [
+        {
+          "reason": "cùng vị trí còn lại trong phiếu",
+          "n": {
+            "row": 355,
+            "type": "GC",
+            "description": "Cuộn 0.5x328",
+            "quantity": 306,
+            "price": null
+          },
+          "me": {
+            "row": 349,
+            "type": "GC",
+            "description": "Cuộn 0,5x1200xC",
+            "quantity": 574,
+            "price": -1045.2961672474
+          },
+          "quantityWrong": true,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 356,
+          "type": "GC",
+          "description": "Cuộn 0.5x675",
+          "quantity": 268,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5243",
+      "date": "20/04/2026",
+      "nRows": [
+        379,
+        380,
+        381,
+        382,
+        383,
+        384
+      ],
+      "meRows": [
+        365,
+        366,
+        367,
+        368,
+        369,
+        370
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 382,
+            "type": "GC",
+            "description": "băng 1.0 tự do",
+            "quantity": 203,
+            "price": 1000
+          },
+          "me": {
+            "row": 368,
+            "type": "GC",
+            "description": "Băng 1,0xC",
+            "quantity": 1060,
+            "price": -1000
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5254",
+      "date": "22/04/2026",
+      "nRows": [
+        399,
+        400
+      ],
+      "meRows": [
+        387,
+        388
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 399,
+            "type": "GC",
+            "description": "Cuộn 0.4x960xC",
+            "quantity": 354,
+            "price": null
+          },
+          "me": {
+            "row": 387,
+            "type": "GC",
+            "description": "Cuộn 0,4x1200xC",
+            "quantity": 354,
+            "price": -847.4576271186
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5262",
+      "date": "24/04/2026",
+      "nRows": [
+        423,
+        424
+      ],
+      "meRows": [
+        410
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 424,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 26,
+            "price": 500
+          },
+          "me": {
+            "row": 410,
+            "type": "GC",
+            "description": "Cuộn 0,6x1200xC",
+            "quantity": 2964,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 423,
+          "type": "GC",
+          "description": "Cuộn 0.6x410xC",
+          "quantity": 2938,
+          "price": 500
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5266",
+      "date": "25/04/2026",
+      "nRows": [
+        438,
+        439
+      ],
+      "meRows": [
+        421
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 439,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 452,
+            "price": 1000
+          },
+          "me": {
+            "row": 421,
+            "type": "GC",
+            "description": "Băng 1,0x39xC",
+            "quantity": 2180,
+            "price": -1000
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 438,
+          "type": "GC",
+          "description": "Băng 1.0x39",
+          "quantity": 1728,
+          "price": 1000
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5274",
+      "date": "27/04/2026",
+      "nRows": [
+        443,
+        444,
+        447,
+        448
+      ],
+      "meRows": [
+        432
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 443,
+          "type": "GC",
+          "description": "Cuọn 0.4x600",
+          "quantity": 1296,
+          "price": null
+        },
+        {
+          "row": 444,
+          "type": "GC",
+          "description": "Cuọn 0.4x300",
+          "quantity": 1548,
+          "price": null
+        },
+        {
+          "row": 448,
+          "type": "GC",
+          "description": "",
+          "quantity": null,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5268",
+      "date": "27/04/2026",
+      "nRows": [
+        445
+      ],
+      "meRows": [
+        431
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 445,
+            "type": "GC",
+            "description": "Cuộn 0.4x400+300xC",
+            "quantity": 6388,
+            "price": 500
+          },
+          "me": {
+            "row": 431,
+            "type": "GC",
+            "description": "Cuộn 0,4x700xC",
+            "quantity": 6406,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "2780",
+      "date": "28/04/2026",
+      "nRows": [
+        450
+      ],
+      "meRows": [
+        434
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 450,
+            "type": "GC",
+            "description": "San 430 2.0x1200",
+            "quantity": 580,
+            "price": null
+          },
+          "me": {
+            "row": 434,
+            "type": "GC",
+            "description": "Cuộn 430/BA 2,0x1200xC",
+            "quantity": 580,
+            "price": -862.0689655172
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5277",
+      "date": "28/04/2026",
+      "nRows": [
+        451,
+        452,
+        453,
+        454,
+        455,
+        456
+      ],
+      "meRows": [
+        437,
+        438,
+        439,
+        440,
+        441
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 456,
+            "type": "GC",
+            "description": "Cuộn 0.4x520xC",
+            "quantity": 552,
+            "price": null
+          },
+          "me": {
+            "row": 441,
+            "type": "GC",
+            "description": "Cuộn 0,4x1000xC",
+            "quantity": 552,
+            "price": -543.4782608696
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 453,
+            "type": "GC",
+            "description": "Cuộn 0.4x300+400",
+            "quantity": 5250,
+            "price": 500
+          },
+          "me": {
+            "row": 438,
+            "type": "GC",
+            "description": "Cuộn 0,4x700xC",
+            "quantity": 6052,
+            "price": -500
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 452,
+          "type": "GC",
+          "description": "Cuộn 0.4x240",
+          "quantity": 802,
+          "price": 500
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "2782",
+      "date": "28/04/2026",
+      "nRows": [
+        457
+      ],
+      "meRows": [
+        435,
+        436
+      ],
+      "pairs": [],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 436,
+          "type": "Nhập trả",
+          "description": "Cuộn 430/BA/gốc 2,0x1200xC",
+          "quantity": 3783,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5284",
+      "date": "05/05/2026",
+      "nRows": [
+        476,
+        477,
+        478,
+        479,
+        480,
+        481
+      ],
+      "meRows": [
+        456,
+        457,
+        458,
+        459,
+        460,
+        461
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 481,
+            "type": "GC",
+            "description": "đề xê 0.6",
+            "quantity": 8,
+            "price": null
+          },
+          "me": {
+            "row": 461,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 8,
+            "price": -550
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 477,
+            "type": "GC",
+            "description": "Cuộn 430 0.3x300xC",
+            "quantity": 404,
+            "price": 500
+          },
+          "me": {
+            "row": 457,
+            "type": "GC",
+            "description": "Cuộn 430 0,3x1200xC",
+            "quantity": 404,
+            "price": -550
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 476,
+            "type": "GC",
+            "description": "Cuộn 201 0.3x300xC",
+            "quantity": 804,
+            "price": 500
+          },
+          "me": {
+            "row": 456,
+            "type": "GC",
+            "description": "Cuộn 201 0,3x1200xC",
+            "quantity": 804,
+            "price": -550
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5289",
+      "date": "06/05/2026",
+      "nRows": [
+        483,
+        484,
+        485
+      ],
+      "meRows": [
+        466,
+        467
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 485,
+            "type": "GC",
+            "description": "Cuộn 304 0.4x300xC",
+            "quantity": 1068,
+            "price": 550
+          },
+          "me": {
+            "row": 467,
+            "type": "GC",
+            "description": "Cuộn 304/BA 0,4x1200xC",
+            "quantity": 3078,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 484,
+          "type": "GC",
+          "description": "Cuộn 0.4x400",
+          "quantity": 2010,
+          "price": 550
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5292",
+      "date": "06/05/2026",
+      "nRows": [
+        486,
+        487
+      ],
+      "meRows": [
+        469,
+        470
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 487,
+            "type": "GC",
+            "description": "Cuộn 410 0.4x400",
+            "quantity": 996,
+            "price": 550
+          },
+          "me": {
+            "row": 469,
+            "type": "GC",
+            "description": "Cuộn 410/BA 0,4x700xC",
+            "quantity": 1992,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 486,
+            "type": "GC",
+            "description": "Cuộn 0.4x400",
+            "quantity": 2064,
+            "price": 550
+          },
+          "me": {
+            "row": 470,
+            "type": "GC",
+            "description": "Cuộn 304/BA 0,4x700xC",
+            "quantity": 1068,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5293",
+      "date": "07/05/2026",
+      "nRows": [
+        490,
+        491,
+        492,
+        493,
+        494,
+        495,
+        496
+      ],
+      "meRows": [
+        475,
+        476
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 495,
+            "type": "GC",
+            "description": "đai",
+            "quantity": 652,
+            "price": 1000
+          },
+          "me": {
+            "row": 476,
+            "type": "GC",
+            "description": "Băng 1,0x39/40xC",
+            "quantity": 6212,
+            "price": -1000
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 491,
+          "type": "GC",
+          "description": "đai 0.4",
+          "quantity": 234,
+          "price": 1000
+        },
+        {
+          "row": 492,
+          "type": "GC",
+          "description": "đề xê",
+          "quantity": 290,
+          "price": 1000
+        },
+        {
+          "row": 493,
+          "type": "GC",
+          "description": "Băng 1.0x39",
+          "quantity": 1968,
+          "price": 1000
+        },
+        {
+          "row": 494,
+          "type": "GC",
+          "description": "Băng 1.0x40",
+          "quantity": 3068,
+          "price": 1000
+        },
+        {
+          "row": 496,
+          "type": "GC",
+          "description": "Trả cuộn 0.5x900",
+          "quantity": 684,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5295",
+      "date": "07/05/2026",
+      "nRows": [
+        497,
+        498
+      ],
+      "meRows": [
+        477,
+        478
+      ],
+      "pairs": [
+        {
+          "reason": "cùng vị trí còn lại trong phiếu",
+          "n": {
+            "row": 498,
+            "type": "GC",
+            "description": "cuối cuộn",
+            "quantity": 112,
+            "price": null
+          },
+          "me": {
+            "row": 478,
+            "type": "GC",
+            "description": "Cuộn 410/BA 0,7x700xC",
+            "quantity": 4894,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5302",
+      "date": "08/05/2026",
+      "nRows": [
+        501,
+        502,
+        503,
+        504
+      ],
+      "meRows": [
+        483,
+        484
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 504,
+            "type": "GC",
+            "description": "Cuộn 0.5x1000xC/gốc",
+            "quantity": 652,
+            "price": null
+          },
+          "me": {
+            "row": 484,
+            "type": "Nhập trả",
+            "description": "Cuộn 304/BA 0,5x1000xC",
+            "quantity": 854,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": true
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 502,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 8,
+            "price": 550
+          },
+          "me": {
+            "row": 483,
+            "type": "GC",
+            "description": "Cuộn 304/BA 0,5x1000xC",
+            "quantity": 1260,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 501,
+          "type": "GC",
+          "description": "Cuộn 0.5x698xC",
+          "quantity": 1252,
+          "price": 550
+        },
+        {
+          "row": 503,
+          "type": "GC",
+          "description": "Chạy dày",
+          "quantity": 202,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5311",
+      "date": "12/05/2026",
+      "nRows": [
+        511,
+        512,
+        513,
+        514
+      ],
+      "meRows": [
+        493,
+        494,
+        495,
+        496
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 511,
+            "type": "GC",
+            "description": "Cuộn 0.3x600xC",
+            "quantity": 410,
+            "price": null
+          },
+          "me": {
+            "row": 493,
+            "type": "GC",
+            "description": "Cuộn 304/2B 0,3x1200xC",
+            "quantity": 410,
+            "price": -804.8780487805
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5316",
+      "date": "13/05/2026",
+      "nRows": [
+        516,
+        517
+      ],
+      "meRows": [
+        498
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 517,
+            "type": "GC",
+            "description": "Cuộn 0.5x20+đề xê",
+            "quantity": 110,
+            "price": 1650
+          },
+          "me": {
+            "row": 498,
+            "type": "GC",
+            "description": "Cuộn 430/FH 0,5x900xC",
+            "quantity": 2070,
+            "price": -1650
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 516,
+          "type": "GC",
+          "description": "Cuộn 0.5x43.8xC",
+          "quantity": 1960,
+          "price": 1650
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5322",
+      "date": "15/05/2026",
+      "nRows": [
+        521,
+        522
+      ],
+      "meRows": [
+        507
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 522,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 30,
+            "price": 550
+          },
+          "me": {
+            "row": 507,
+            "type": "GC",
+            "description": "Cuộn 201/6k 0,6x1200xC",
+            "quantity": 2982,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 521,
+          "type": "GC",
+          "description": "Cuộn 0.6x410xC",
+          "quantity": 2952,
+          "price": 550
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5328",
+      "date": "16/05/2026",
+      "nRows": [
+        545,
+        546,
+        547
+      ],
+      "meRows": [
+        522
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 546,
+            "type": "GC",
+            "description": "Cuộn 0.7x723",
+            "quantity": 992,
+            "price": 550
+          },
+          "me": {
+            "row": 522,
+            "type": "GC",
+            "description": "Cuộn 0,7x1200xC",
+            "quantity": 2990,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 545,
+          "type": "GC",
+          "description": "Cuộn 0.7x690",
+          "quantity": 1998,
+          "price": 550
+        },
+        {
+          "row": 547,
+          "type": "GC",
+          "description": "Gốc",
+          "quantity": 1468,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5332",
+      "date": "18/05/2026",
+      "nRows": [
+        558,
+        559,
+        560,
+        561,
+        562,
+        563
+      ],
+      "meRows": [
+        536,
+        537
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 563,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 178,
+            "price": 1100
+          },
+          "me": {
+            "row": 537,
+            "type": "GC",
+            "description": "Cuộn 0,5x43xC",
+            "quantity": 2622,
+            "price": -1100
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 561,
+            "type": "GC",
+            "description": "Cuộn 0.4x400+300xC",
+            "quantity": 5528,
+            "price": 550
+          },
+          "me": {
+            "row": 536,
+            "type": "GC",
+            "description": "Cuộn 0,5x1200xC",
+            "quantity": 8794,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 558,
+          "type": "GC",
+          "description": "Cuộn 0.5x900xC",
+          "quantity": 912,
+          "price": 550
+        },
+        {
+          "row": 559,
+          "type": "GC",
+          "description": "Cuộn 0.4x400+300xC",
+          "quantity": 456,
+          "price": 550
+        },
+        {
+          "row": 560,
+          "type": "GC",
+          "description": "Cuộn 0.5x800xC",
+          "quantity": 1898,
+          "price": 550
+        },
+        {
+          "row": 562,
+          "type": "GC",
+          "description": "Cuộn 0.5x43",
+          "quantity": 2444,
+          "price": 1100
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "9476",
+      "date": "19/05/2026",
+      "nRows": [
+        564
+      ],
+      "meRows": [
+        539
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 564,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.4x620xC/BA",
+            "quantity": 7574,
+            "price": null
+          },
+          "me": {
+            "row": 539,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x620xC",
+            "quantity": 8122,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5338",
+      "date": "19/05/2026",
+      "nRows": [
+        565,
+        566
+      ],
+      "meRows": [
+        538
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 566,
+            "type": "GC",
+            "description": "Cuộn 0.4x600/san",
+            "quantity": 1105,
+            "price": 550
+          },
+          "me": {
+            "row": 538,
+            "type": "GC",
+            "description": "Cuộn 304/BA 0,4x600xC",
+            "quantity": 2040,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 565,
+          "type": "GC",
+          "description": "Cuộn 0.4x300",
+          "quantity": 935,
+          "price": 550
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "2917",
+      "date": "20/05/2026",
+      "nRows": [
+        570,
+        571,
+        572
+      ],
+      "meRows": [
+        544,
+        545,
+        546
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 570,
+            "type": "GC",
+            "description": "San cuộn 201 2.0x1200xC/6K",
+            "quantity": 306,
+            "price": null
+          },
+          "me": {
+            "row": 544,
+            "type": "GC",
+            "description": "Cuộn 201/6k 2,0x1200xC",
+            "quantity": 306,
+            "price": -550
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5340",
+      "date": "20/05/2026",
+      "nRows": [
+        573,
+        574,
+        575,
+        576
+      ],
+      "meRows": [
+        547,
+        548,
+        549
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 575,
+            "type": "GC",
+            "description": "Cuộn 0.4x300+300",
+            "quantity": 2906,
+            "price": 550
+          },
+          "me": {
+            "row": 548,
+            "type": "GC",
+            "description": "Cuộn 304/BA 0,6x600xC",
+            "quantity": 4018,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 574,
+          "type": "GC",
+          "description": "Cuọn 0.4x600/san",
+          "quantity": 1112,
+          "price": 550
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5343",
+      "date": "21/05/2026",
+      "nRows": [
+        583,
+        584,
+        585,
+        586,
+        587
+      ],
+      "meRows": [
+        554,
+        555
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 586,
+            "type": "GC",
+            "description": "Cuộn 0.8x700+500",
+            "quantity": 1005,
+            "price": 550
+          },
+          "me": {
+            "row": 555,
+            "type": "GC",
+            "description": "Cuộn 430/BA 0,8x1200xC",
+            "quantity": 3330,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 584,
+          "type": "GC",
+          "description": "Cuộn 0.8x600+500",
+          "quantity": 1340,
+          "price": 550
+        },
+        {
+          "row": 585,
+          "type": "GC",
+          "description": "Cuộn 0.8x700+400",
+          "quantity": 985,
+          "price": 550
+        },
+        {
+          "row": 587,
+          "type": "GC",
+          "description": "Gốc 2.5x1000",
+          "quantity": 5985,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "9602",
+      "date": "25/05/2026",
+      "nRows": [
+        601
+      ],
+      "meRows": [
+        574,
+        575
+      ],
+      "pairs": [],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 575,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x710xC",
+          "quantity": 3515,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5354",
+      "date": "25/05/2026",
+      "nRows": [
+        605,
+        606,
+        607
+      ],
+      "meRows": [
+        571,
+        572
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 607,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 46,
+            "price": 550
+          },
+          "me": {
+            "row": 571,
+            "type": "GC",
+            "description": "Cuộn 304/BA 0,4x700xC",
+            "quantity": 4562,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 606,
+          "type": "GC",
+          "description": "Cuộn 0.4x300+400",
+          "quantity": 4516,
+          "price": 550
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5",
+      "date": "27/05/2026",
+      "nRows": [
+        620
+      ],
+      "meRows": [
+        582
+      ],
+      "pairs": [
+        {
+          "reason": "cùng vị trí còn lại trong phiếu",
+          "n": {
+            "row": 620,
+            "type": "GC",
+            "description": "Xuất trả cuộn 0.5x900",
+            "quantity": 3133,
+            "price": null
+          },
+          "me": {
+            "row": 582,
+            "type": "Nhập trả",
+            "description": "Cuộn 0,5x920xC",
+            "quantity": 3162,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": true,
+          "typeWrong": true
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5372",
+      "date": "30/05/2026",
+      "nRows": [
+        629,
+        630,
+        631,
+        632
+      ],
+      "meRows": [
+        599,
+        600,
+        601
+      ],
+      "pairs": [],
+      "missingInMe": [
+        {
+          "row": 631,
+          "type": "GC",
+          "description": "",
+          "quantity": null,
+          "price": null
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "9732",
+      "date": "01/06/2026",
+      "nRows": [
+        634
+      ],
+      "meRows": [
+        608
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 634,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.4x720xC/BA",
+            "quantity": 4426,
+            "price": null
+          },
+          "me": {
+            "row": 608,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x720xC",
+            "quantity": 4420,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "9738",
+      "date": "01/06/2026",
+      "nRows": [
+        635,
+        636,
+        637
+      ],
+      "meRows": [
+        609,
+        610,
+        611
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 637,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.7x1250xC/BA",
+            "quantity": 1720,
+            "price": null
+          },
+          "me": {
+            "row": 610,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x600xC",
+            "quantity": 3760,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 636,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.4x600xC/BA",
+            "quantity": 3758,
+            "price": null
+          },
+          "me": {
+            "row": 611,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,7x1250xC",
+            "quantity": 1718,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5384",
+      "date": "04/06/2026",
+      "nRows": [
+        647,
+        648,
+        649,
+        650,
+        651,
+        652
+      ],
+      "meRows": [
+        616
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 652,
+            "type": "GC",
+            "description": "Xẻ 0.5x43",
+            "quantity": 666,
+            "price": 1100
+          },
+          "me": {
+            "row": 616,
+            "type": "GC",
+            "description": "Băng 0,5x200xC",
+            "quantity": 12506,
+            "price": -1100
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 647,
+          "type": "GC",
+          "description": "Băng 0.5x135xC",
+          "quantity": 6874,
+          "price": 1100
+        },
+        {
+          "row": 648,
+          "type": "GC",
+          "description": "Băng 0.5x60xC",
+          "quantity": 976,
+          "price": 1100
+        },
+        {
+          "row": 649,
+          "type": "GC",
+          "description": "Băng 0.5x58xC",
+          "quantity": 1320,
+          "price": 1100
+        },
+        {
+          "row": 650,
+          "type": "GC",
+          "description": "Băng 0.5x20xC",
+          "quantity": 2184,
+          "price": 1100
+        },
+        {
+          "row": 651,
+          "type": "GC",
+          "description": "đề xê",
+          "quantity": 486,
+          "price": 1100
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "9815",
+      "date": "05/06/2026",
+      "nRows": [
+        662
+      ],
+      "meRows": [
+        623,
+        624
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 662,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.4x720xC/BA",
+            "quantity": 8838,
+            "price": null
+          },
+          "me": {
+            "row": 623,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x720xC",
+            "quantity": 8836,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 624,
+          "type": "Xuất GC",
+          "description": "Cuộn 201/BA 0,4x1200xC",
+          "quantity": 4975,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5390",
+      "date": "05/06/2026",
+      "nRows": [
+        664,
+        665
+      ],
+      "meRows": [
+        625,
+        626
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 665,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 42,
+            "price": null
+          },
+          "me": {
+            "row": 626,
+            "type": "GC",
+            "description": "Cuộn đề xê",
+            "quantity": 42,
+            "price": -550
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5392",
+      "date": "06/06/2026",
+      "nRows": [
+        669,
+        670,
+        671,
+        672
+      ],
+      "meRows": [
+        630
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 672,
+            "type": "GC",
+            "description": "Cuộn 0.4x400+800xC",
+            "quantity": 764,
+            "price": 550
+          },
+          "me": {
+            "row": 630,
+            "type": "GC",
+            "description": "Cuộn 0,4x1200xC",
+            "quantity": 6078,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 669,
+          "type": "GC",
+          "description": "Cuộn 0.4x400+600xC",
+          "quantity": 2560,
+          "price": 550
+        },
+        {
+          "row": 670,
+          "type": "GC",
+          "description": "Gốc",
+          "quantity": 1752,
+          "price": null
+        },
+        {
+          "row": 671,
+          "type": "GC",
+          "description": "Cuộn 0.4x600",
+          "quantity": 1002,
+          "price": 550
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "9887",
+      "date": "09/06/2026",
+      "nRows": [
+        676,
+        677
+      ],
+      "meRows": [
+        634,
+        635
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 676,
+            "type": "Xuất GC",
+            "description": "Cuộn 201 0.6x1200xC/2B",
+            "quantity": 3898,
+            "price": null
+          },
+          "me": {
+            "row": 634,
+            "type": "Xuất GC",
+            "description": "Cuộn 201/2B 0,6x1200xC",
+            "quantity": 3894,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5417",
+      "date": "16/06/2026",
+      "nRows": [
+        709,
+        710
+      ],
+      "meRows": [
+        660
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 710,
+            "type": "GC",
+            "description": "Xén mép",
+            "quantity": 646,
+            "price": 550
+          },
+          "me": {
+            "row": 660,
+            "type": "GC",
+            "description": "Cuộn",
+            "quantity": 2348,
+            "price": -550
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 709,
+          "type": "GC",
+          "description": "San cuộn",
+          "quantity": 1702,
+          "price": 550
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "3073",
+      "date": "17/06/2026",
+      "nRows": [
+        725,
+        726
+      ],
+      "meRows": [
+        668,
+        669
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 726,
+            "type": "GC",
+            "description": "Cuộn 304 0.6x1200xC/PVC",
+            "quantity": 2516,
+            "price": 1900
+          },
+          "me": {
+            "row": 669,
+            "type": "GC",
+            "description": "Cuộn 304 0,6x1200xC",
+            "quantity": 2570,
+            "price": -1900
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "99",
+      "date": "20/06/2026",
+      "nRows": [
+        740,
+        741
+      ],
+      "meRows": [
+        685,
+        686
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 741,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.8x1000xC/BA",
+            "quantity": 668,
+            "price": null
+          },
+          "me": {
+            "row": 685,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/NO4 1,2x1200xC",
+            "quantity": 956,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 740,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 1.2x1200xC/N04",
+            "quantity": 954,
+            "price": null
+          },
+          "me": {
+            "row": 686,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,8x1000xC",
+            "quantity": 671,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "117",
+      "date": "20/06/2026",
+      "nRows": [
+        742
+      ],
+      "meRows": [
+        687
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 742,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 1.0x1200xC/BA",
+            "quantity": 3860,
+            "price": null
+          },
+          "me": {
+            "row": 687,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 1,0x1200xC",
+            "quantity": 3862,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "125",
+      "date": "22/06/2026",
+      "nRows": [
+        746,
+        747
+      ],
+      "meRows": [
+        691,
+        692
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 747,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.6x1200xC/2B",
+            "quantity": 3124,
+            "price": null
+          },
+          "me": {
+            "row": 691,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/2B 0,8x1200xC",
+            "quantity": 2162,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        },
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 746,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.8x1200xC/2B",
+            "quantity": 2161,
+            "price": null
+          },
+          "me": {
+            "row": 692,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/2B 0,6x1200xC",
+            "quantity": 3126,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "169",
+      "date": "24/06/2026",
+      "nRows": [
+        756,
+        757
+      ],
+      "meRows": [
+        701,
+        702
+      ],
+      "pairs": [
+        {
+          "reason": "cùng mô tả",
+          "n": {
+            "row": 757,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.8x1200xC",
+            "quantity": 1620,
+            "price": null
+          },
+          "me": {
+            "row": 702,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0,8x1200xC",
+            "quantity": 1616,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "184",
+      "date": "24/06/2026",
+      "nRows": [
+        758
+      ],
+      "meRows": [
+        703
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 758,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.7x1200xC/BA",
+            "quantity": 4678,
+            "price": null
+          },
+          "me": {
+            "row": 703,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,7x1200xC",
+            "quantity": 4856,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "186",
+      "date": "24/06/2026",
+      "nRows": [
+        759
+      ],
+      "meRows": [
+        704
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 759,
+            "type": "Xuất GC",
+            "description": "Cuộn 430 0.5x1250xC/BA",
+            "quantity": 7500,
+            "price": null
+          },
+          "me": {
+            "row": 704,
+            "type": "Xuất GC",
+            "description": "Cuộn 430/BA 0,5x1250xC",
+            "quantity": 7519,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "196",
+      "date": "25/06/2026",
+      "nRows": [
+        762
+      ],
+      "meRows": [
+        707,
+        708
+      ],
+      "pairs": [],
+      "missingInMe": [],
+      "extraInMe": [
+        {
+          "row": 708,
+          "type": "Xuất GC",
+          "description": "Cuộn 430 0,6x75xC",
+          "quantity": 3730,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3118",
+      "date": "26/06/2026",
+      "nRows": [
+        764,
+        765,
+        766
+      ],
+      "meRows": [
+        710,
+        711,
+        712
+      ],
+      "pairs": [
+        {
+          "reason": "cùng số lượng",
+          "n": {
+            "row": 765,
+            "type": "GC",
+            "description": "San cuộn 304 2.0x1000",
+            "quantity": 740,
+            "price": null
+          },
+          "me": {
+            "row": 711,
+            "type": "GC",
+            "description": "Cuộn 304/2B 2,0x1000xC",
+            "quantity": 740,
+            "price": -743.2432432432
+          },
+          "quantityWrong": false,
+          "priceWrong": true,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "5434",
+      "date": "26/06/2026",
+      "nRows": [
+        767,
+        768,
+        769
+      ],
+      "meRows": [
+        713,
+        714
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 768,
+            "type": "GC",
+            "description": "Đề xê",
+            "quantity": 340,
+            "price": 1100
+          },
+          "me": {
+            "row": 713,
+            "type": "GC",
+            "description": "Cuộn 430 0,5x141xC",
+            "quantity": 780,
+            "price": -1100
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [
+        {
+          "row": 767,
+          "type": "GC",
+          "description": "Băng 0.5x124xC",
+          "quantity": 440,
+          "price": 1100
+        }
+      ],
+      "extraInMe": []
+    },
+    {
+      "voucher": "251",
+      "date": "27/06/2026",
+      "nRows": [
+        772
+      ],
+      "meRows": [
+        717
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 772,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.6x1200xC/2B",
+            "quantity": 2578,
+            "price": null
+          },
+          "me": {
+            "row": 717,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/2B 0,6x1200xC",
+            "quantity": 2580,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "259",
+      "date": "28/06/2026",
+      "nRows": [
+        774
+      ],
+      "meRows": [
+        719
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 774,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 1.0x1200xC/BA",
+            "quantity": 569,
+            "price": null
+          },
+          "me": {
+            "row": 719,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 1,0x1200xC",
+            "quantity": 574,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "270",
+      "date": "29/06/2026",
+      "nRows": [
+        775
+      ],
+      "meRows": [
+        720
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 775,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.5x1000xC/BA",
+            "quantity": 818,
+            "price": null
+          },
+          "me": {
+            "row": 720,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,5x1000xC",
+            "quantity": 812,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    },
+    {
+      "voucher": "261",
+      "date": "29/06/2026",
+      "nRows": [
+        778
+      ],
+      "meRows": [
+        723
+      ],
+      "pairs": [
+        {
+          "reason": "cùng trị tuyệt đối đơn giá",
+          "n": {
+            "row": 778,
+            "type": "Xuất GC",
+            "description": "Cuộn 304 0.4x720xC/BA",
+            "quantity": 8706,
+            "price": null
+          },
+          "me": {
+            "row": 723,
+            "type": "Xuất GC",
+            "description": "Cuộn 304/BA 0,4x720xC",
+            "quantity": 8690,
+            "price": null
+          },
+          "quantityWrong": true,
+          "priceWrong": false,
+          "typeWrong": false
+        }
+      ],
+      "missingInMe": [],
+      "extraInMe": []
+    }
+  ],
+  "missingGroupsInMe": [
+    {
+      "voucher": "7904",
+      "date": "06/03/2026",
+      "rows": [
+        {
+          "row": 29,
+          "type": "Xuất GC",
+          "description": "Cuộn 304 0.4x1281xC/BA",
+          "quantity": 5720,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "7992",
+      "date": "11/03/2026",
+      "rows": [
+        {
+          "row": 61,
+          "type": "Xuất GC",
+          "description": "Cuộn 304 1.5x1200xC/BA",
+          "quantity": 1510,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5068",
+      "date": "12/03/2026",
+      "rows": [
+        {
+          "row": 79,
+          "type": "GC",
+          "description": "Cuộn 0.4x400xC",
+          "quantity": 3070,
+          "price": 500
+        },
+        {
+          "row": 80,
+          "type": "GC",
+          "description": "Gốc 2.0x1200xC",
+          "quantity": 4860,
+          "price": null
+        },
+        {
+          "row": 81,
+          "type": "GC",
+          "description": "Cuộn 0.4x1200",
+          "quantity": 400,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "15",
+      "date": "12/03/2026",
+      "rows": [
+        {
+          "row": 85,
+          "type": "GC",
+          "description": "Xuất trả Băng 0.6x65-75",
+          "quantity": 7260,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5149",
+      "date": "30/03/2026",
+      "rows": [
+        {
+          "row": 201,
+          "type": "GC",
+          "description": "Cuộn 0.4x300+400xC",
+          "quantity": 4498,
+          "price": 500
+        },
+        {
+          "row": 202,
+          "type": "GC",
+          "description": "Cuộn 0.4x400xC",
+          "quantity": 1206,
+          "price": 500
+        }
+      ]
+    },
+    {
+      "voucher": "8459",
+      "date": "01/04/2026",
+      "rows": [
+        {
+          "row": 217,
+          "type": "Bán hàng",
+          "description": "Cuộn 201 2.0x1200xC/2B",
+          "quantity": 5321,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5161",
+      "date": "02/04/2026",
+      "rows": [
+        {
+          "row": 234,
+          "type": "GC",
+          "description": "Cuộn 0.4x600xC",
+          "quantity": 812,
+          "price": 500
+        }
+      ]
+    },
+    {
+      "voucher": "8461",
+      "date": "14/04/2026",
+      "rows": [
+        {
+          "row": 315,
+          "type": "Xuất GC",
+          "description": "Cuộn 410 0.4x600xC/BA",
+          "quantity": 3955,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "9022",
+      "date": "25/04/2026",
+      "rows": [
+        {
+          "row": 428,
+          "type": "Xuất GC",
+          "description": "Cuộn 410 0.38x720xC/BA",
+          "quantity": 6381,
+          "price": null
+        },
+        {
+          "row": 429,
+          "type": "Xuất GC",
+          "description": "Cuộn 201 0.4x1200xC/BA",
+          "quantity": 5241,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5264",
+      "date": "25/04/2026",
+      "rows": [
+        {
+          "row": 430,
+          "type": "GC",
+          "description": "Cuộn 304 0.4x400xC",
+          "quantity": 1352,
+          "price": 500
+        },
+        {
+          "row": 431,
+          "type": "GC",
+          "description": "Cuộn 0.4x615xC/san",
+          "quantity": 950,
+          "price": 500
+        },
+        {
+          "row": 432,
+          "type": "GC",
+          "description": "Cuộn 0.4x615xC/san",
+          "quantity": 940,
+          "price": 500
+        }
+      ]
+    },
+    {
+      "voucher": "9410",
+      "date": "15/05/2026",
+      "rows": [
+        {
+          "row": 528,
+          "type": "Xuất GC",
+          "description": "Cuộn 430 0.7x1300xC/BA",
+          "quantity": 4480,
+          "price": null
+        },
+        {
+          "row": 529,
+          "type": "Xuất GC",
+          "description": "Cuộn 430 1.0x1200xC/BA",
+          "quantity": 2088,
+          "price": null
+        },
+        {
+          "row": 530,
+          "type": "Xuất GC",
+          "description": "Cuộn 430 0.5x1040xC/BA",
+          "quantity": 2232,
+          "price": null
+        },
+        {
+          "row": 531,
+          "type": "Xuất GC",
+          "description": "Cuộn 430 0.5x1039xC/BA",
+          "quantity": 1007,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5333",
+      "date": "18/05/2026",
+      "rows": [
+        {
+          "row": 555,
+          "type": "GC",
+          "description": "Cuộn 0.4x300+400",
+          "quantity": 2854,
+          "price": 550
+        },
+        {
+          "row": 556,
+          "type": "GC",
+          "description": "Cuộn 304 0.4x400",
+          "quantity": 668,
+          "price": 550
+        },
+        {
+          "row": 557,
+          "type": "GC",
+          "description": "Gốc 0.4x600",
+          "quantity": 1974,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5353",
+      "date": "23/05/2026",
+      "rows": [
+        {
+          "row": 598,
+          "type": "GC",
+          "description": "Cuộn 0.5x13+đề xê",
+          "quantity": 2708,
+          "price": 1650
+        }
+      ]
+    },
+    {
+      "voucher": "5352",
+      "date": "23/05/2026",
+      "rows": [
+        {
+          "row": 599,
+          "type": "GC",
+          "description": "Cuộn 0.5x540+500",
+          "quantity": 6184,
+          "price": 550
+        }
+      ]
+    },
+    {
+      "voucher": "9963",
+      "date": "13/06/2026",
+      "rows": [
+        {
+          "row": 697,
+          "type": "Xuất GC",
+          "description": "Cuộn 430 0.7x1000xC/BA",
+          "quantity": 1682,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5407",
+      "date": "13/06/2026",
+      "rows": [
+        {
+          "row": 699,
+          "type": "GC",
+          "description": "Cuộn 0.6x600xC",
+          "quantity": 1754,
+          "price": 550
+        }
+      ]
+    },
+    {
+      "voucher": "5413",
+      "date": "16/06/2026",
+      "rows": [
+        {
+          "row": 715,
+          "type": "GC",
+          "description": "Cuộn 0.4x600/san",
+          "quantity": 572,
+          "price": 550
+        }
+      ]
+    },
+    {
+      "voucher": "3066",
+      "date": "16/06/2026",
+      "rows": [
+        {
+          "row": 716,
+          "type": "GC",
+          "description": "Tấm 430 0.7x1000xT",
+          "quantity": 4800,
+          "price": 550
+        },
+        {
+          "row": 717,
+          "type": "GC",
+          "description": "Gốc 304 0.8x1200xC/2B",
+          "quantity": 2161,
+          "price": null
+        },
+        {
+          "row": 718,
+          "type": "GC",
+          "description": "Cuộn 430 0.7xC/BA",
+          "quantity": 48,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "19",
+      "date": "17/06/2026",
+      "rows": [
+        {
+          "row": 719,
+          "type": "Xuất GC",
+          "description": "Cuộn 304 1.0x1200xC/2B",
+          "quantity": 3362,
+          "price": null
+        },
+        {
+          "row": 720,
+          "type": "Xuất GC",
+          "description": "Cuộn 304 0.6x1200xC/2B",
+          "quantity": 2650,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5420",
+      "date": "17/06/2026",
+      "rows": [
+        {
+          "row": 721,
+          "type": "GC",
+          "description": "Cuọn 0.4x300+400xC",
+          "quantity": 10364,
+          "price": 550
+        }
+      ]
+    }
+  ],
+  "extraGroupsInMe": [
+    {
+      "voucher": "7903",
+      "date": "06/03/2026",
+      "rows": [
+        {
+          "row": 33,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x1281xC",
+          "quantity": 5720,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5068",
+      "date": "11/03/2026",
+      "rows": [
+        {
+          "row": 68,
+          "type": "GC",
+          "description": "Cuộn 0,4x1200/xẻ 400",
+          "quantity": 3070,
+          "price": -500
+        },
+        {
+          "row": 69,
+          "type": "Nhập trả",
+          "description": "Cuộn 2,0x1200xC",
+          "quantity": 4860,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5144",
+      "date": "30/03/2026",
+      "rows": [
+        {
+          "row": 191,
+          "type": "GC",
+          "description": "Cuộn 0,4x700/xẻ 300/400",
+          "quantity": 4498,
+          "price": -500
+        },
+        {
+          "row": 192,
+          "type": "GC",
+          "description": "Cuộn 0,4x1200/xẻ 400",
+          "quantity": 1206,
+          "price": -500
+        }
+      ]
+    },
+    {
+      "voucher": "33",
+      "date": "03/04/2026",
+      "rows": [
+        {
+          "row": 227,
+          "type": "Nhập trả",
+          "description": "Cuộn 201/2B 2,0x1200xC",
+          "quantity": 5375,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "8597",
+      "date": "07/04/2026",
+      "rows": [
+        {
+          "row": 265,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 1,2x1200xC",
+          "quantity": 5396,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "8600",
+      "date": "07/04/2026",
+      "rows": [
+        {
+          "row": 266,
+          "type": "Xuất GC",
+          "description": "Cuộn 201/2B 0,6x1200xC",
+          "quantity": 5098,
+          "price": null
+        },
+        {
+          "row": 267,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x1270xC",
+          "quantity": 1570,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "0",
+      "date": "09/04/2026",
+      "rows": [
+        {
+          "row": 279,
+          "type": "Nhập trả",
+          "description": "Cuộn 201/NO4/pvc 2,0x1200xC",
+          "quantity": 572,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "8761",
+      "date": "14/04/2026",
+      "rows": [
+        {
+          "row": 316,
+          "type": "Xuất GC",
+          "description": "Cuộn 410/BA 0,4x600xC",
+          "quantity": 3955,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "0",
+      "date": "17/04/2026",
+      "rows": [
+        {
+          "row": 338,
+          "type": "Trả tiền",
+          "description": "Tiền mặt",
+          "quantity": 0,
+          "price": 0
+        }
+      ]
+    },
+    {
+      "voucher": "8852",
+      "date": "17/04/2026",
+      "rows": [
+        {
+          "row": 354,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x1270xC",
+          "quantity": 2000,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "8853",
+      "date": "17/04/2026",
+      "rows": [
+        {
+          "row": 355,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x800-1000xC",
+          "quantity": 11094,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5264",
+      "date": "27/04/2026",
+      "rows": [
+        {
+          "row": 429,
+          "type": "GC",
+          "description": "Cuộn 304 0,4x1200xC",
+          "quantity": 1352,
+          "price": -500
+        },
+        {
+          "row": 430,
+          "type": "GC",
+          "description": "Cuộn 304 0,4x615xC",
+          "quantity": 1890,
+          "price": -500
+        }
+      ]
+    },
+    {
+      "voucher": "251",
+      "date": "06/05/2026",
+      "rows": [
+        {
+          "row": 472,
+          "type": "Nhập trả",
+          "description": "Cuộn 304/2B 1,0x1000xC",
+          "quantity": 1020,
+          "price": null
+        },
+        {
+          "row": 473,
+          "type": "Nhập trả",
+          "description": "Cuộn 201/2B 1,5x1200xC",
+          "quantity": 0,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5301",
+      "date": "07/05/2026",
+      "rows": [
+        {
+          "row": 479,
+          "type": "GC",
+          "description": "Cuộn 1,0x1200xC",
+          "quantity": 5066,
+          "price": -800
+        },
+        {
+          "row": 480,
+          "type": "GC",
+          "description": "Cuộn 1,0x1000xC",
+          "quantity": 3590,
+          "price": -800
+        }
+      ]
+    },
+    {
+      "voucher": "45035",
+      "date": "07/05/2026",
+      "rows": [
+        {
+          "row": 482,
+          "type": "GC",
+          "description": "Cuộn 304/NO4/pvc 0,9x1200xC",
+          "quantity": 760,
+          "price": -3300
+        }
+      ]
+    },
+    {
+      "voucher": "9247",
+      "date": "08/05/2026",
+      "rows": [
+        {
+          "row": 485,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BB 0,5x1200xC",
+          "quantity": 338,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5333",
+      "date": "16/05/2026",
+      "rows": [
+        {
+          "row": 525,
+          "type": "GC",
+          "description": "Cuộn 304/BA 0,4x700xC",
+          "quantity": 2854,
+          "price": -550
+        },
+        {
+          "row": 526,
+          "type": "GC",
+          "description": "Cuộn 304/2B 0,4x1200xC",
+          "quantity": 668,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "9495",
+      "date": "19/05/2026",
+      "rows": [
+        {
+          "row": 540,
+          "type": "Xuất GC",
+          "description": "Cuộn 201/6k 2,0x1200xC",
+          "quantity": null,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5252",
+      "date": "23/05/2026",
+      "rows": [
+        {
+          "row": 568,
+          "type": "GC",
+          "description": "Cuộn 430/BA 0,5x1000xC",
+          "quantity": 6184,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "5353",
+      "date": "27/05/2026",
+      "rows": [
+        {
+          "row": 584,
+          "type": "GC",
+          "description": "Cuộn 430/FH 0,5x900xC",
+          "quantity": 2768,
+          "price": -1650
+        }
+      ]
+    },
+    {
+      "voucher": "3009",
+      "date": "05/06/2026",
+      "rows": [
+        {
+          "row": 621,
+          "type": "GC",
+          "description": "Cuộn 0,4x710xC",
+          "quantity": 3630,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "3010",
+      "date": "05/06/2026",
+      "rows": [
+        {
+          "row": 622,
+          "type": "Nhập trả",
+          "description": "Cuộn 0,5x920xC",
+          "quantity": 1316,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3029",
+      "date": "09/06/2026",
+      "rows": [
+        {
+          "row": 639,
+          "type": "GC",
+          "description": "Cuộn 304 2,0x1200xC",
+          "quantity": 892,
+          "price": -3650
+        }
+      ]
+    },
+    {
+      "voucher": "5435",
+      "date": "29/06/2026",
+      "rows": [
+        {
+          "row": 724,
+          "type": "GC",
+          "description": "Cuộn 304/BA 0,5x1000xC",
+          "quantity": 2276,
+          "price": -550
+        },
+        {
+          "row": 725,
+          "type": "GC",
+          "description": "Băng 1,0x40xC",
+          "quantity": 3522,
+          "price": -550
+        },
+        {
+          "row": 726,
+          "type": "GC",
+          "description": "Đai",
+          "quantity": 2140,
+          "price": -550
+        },
+        {
+          "row": 727,
+          "type": "GC",
+          "description": "Đề xê",
+          "quantity": 374,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "5440",
+      "date": "30/06/2026",
+      "rows": [
+        {
+          "row": 728,
+          "type": "GC",
+          "description": "Cuộn 304/BA 0,4x700xC",
+          "quantity": 8690,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "295",
+      "date": "01/07/2026",
+      "rows": [
+        {
+          "row": 729,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 1,0x1200xC",
+          "quantity": 4846,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3132",
+      "date": "01/07/2026",
+      "rows": [
+        {
+          "row": 730,
+          "type": "GC",
+          "description": "Cuộn 304/2B 1,0x1200xC",
+          "quantity": 1572,
+          "price": -3300
+        },
+        {
+          "row": 731,
+          "type": "Nhập trả",
+          "description": "Cuộn 304/2B 1,0x1200xC",
+          "quantity": 3274,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "301",
+      "date": "01/07/2026",
+      "rows": [
+        {
+          "row": 732,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 1,5x1250xC",
+          "quantity": 1248,
+          "price": null
+        },
+        {
+          "row": 733,
+          "type": "Xuất GC",
+          "description": "Cuộn 430/BA 0,8x1200xC",
+          "quantity": 2454,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "302",
+      "date": "01/07/2026",
+      "rows": [
+        {
+          "row": 734,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 1,2x1250xC",
+          "quantity": 1610,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3137",
+      "date": "01/07/2026",
+      "rows": [
+        {
+          "row": 735,
+          "type": "GC",
+          "description": "Cuộn 304/2B 1,2x1250xC",
+          "quantity": 1610,
+          "price": -3300
+        }
+      ]
+    },
+    {
+      "voucher": "5443",
+      "date": "02/07/2026",
+      "rows": [
+        {
+          "row": 736,
+          "type": "GC",
+          "description": "Cuộn 304/BA 0,5x1000xC",
+          "quantity": 812,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "3141",
+      "date": "02/07/2026",
+      "rows": [
+        {
+          "row": 737,
+          "type": "GC",
+          "description": "Cuộn 430/BA 0,8x1200xC",
+          "quantity": 914,
+          "price": -3650
+        },
+        {
+          "row": 738,
+          "type": "GC",
+          "description": "Cuộn 304/BA 1,5x1200xC",
+          "quantity": 442,
+          "price": -2488.68778280543
+        },
+        {
+          "row": 739,
+          "type": "GC",
+          "description": "Pallet",
+          "quantity": 1,
+          "price": -300000
+        }
+      ]
+    },
+    {
+      "voucher": "208",
+      "date": "02/07/2026",
+      "rows": [
+        {
+          "row": 740,
+          "type": "Nhập trả",
+          "description": "Cuộn 304/BA 1,5x1200xC",
+          "quantity": 806,
+          "price": null
+        },
+        {
+          "row": 741,
+          "type": "Nhập trả",
+          "description": "Cuộn 304/2B 2,0x1000xC",
+          "quantity": 5246,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "344",
+      "date": "03/07/2026",
+      "rows": [
+        {
+          "row": 742,
+          "type": "Xuất GC",
+          "description": "Cuộn 201/6k 0,6x1245xC",
+          "quantity": 5709,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "347",
+      "date": "03/07/2026",
+      "rows": [
+        {
+          "row": 743,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x720xC",
+          "quantity": 8968,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5452",
+      "date": "04/07/2026",
+      "rows": [
+        {
+          "row": 744,
+          "type": "GC",
+          "description": "Cuộn 0,4x600xC",
+          "quantity": 1242,
+          "price": -550
+        },
+        {
+          "row": 745,
+          "type": "GC",
+          "description": "Cuộn 201/6k 0,6x1200xC",
+          "quantity": 5709,
+          "price": -550
+        },
+        {
+          "row": 746,
+          "type": "GC",
+          "description": "Cuộn 0,4x700xC",
+          "quantity": 2204,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "382",
+      "date": "06/07/2026",
+      "rows": [
+        {
+          "row": 747,
+          "type": "Xuất GC",
+          "description": "Cuộn 410/BA 0,38x620xC",
+          "quantity": 1524,
+          "price": null
+        },
+        {
+          "row": 748,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,8x1200xC",
+          "quantity": 533,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "389",
+      "date": "06/07/2026",
+      "rows": [
+        {
+          "row": 749,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,44x1219xC",
+          "quantity": 956,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5453",
+      "date": "06/07/2026",
+      "rows": [
+        {
+          "row": 750,
+          "type": "GC",
+          "description": "Cuộn 0,4x600xC",
+          "quantity": 3380,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "388",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 751,
+          "type": "Xuất GC",
+          "description": "Cuộn 201/2B 2,0x1250xC",
+          "quantity": 4468,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "393",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 752,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 0,6x1200xC",
+          "quantity": 3120,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "399",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 753,
+          "type": "Xuất GC",
+          "description": "Cuộn 430/BA 0,65x1300xC",
+          "quantity": 11157,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "400",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 754,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x550xC",
+          "quantity": 2648,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3158",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 755,
+          "type": "GC",
+          "description": "Cuộn 201/2B 2,0x1250xC",
+          "quantity": 2916,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "5460",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 756,
+          "type": "GC",
+          "description": "Cuộn 0,4x600xC",
+          "quantity": 2612,
+          "price": -550
+        },
+        {
+          "row": 757,
+          "type": "GC",
+          "description": "Cuộn 304/BA 0,44x1219xC",
+          "quantity": 956,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "5458",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 758,
+          "type": "GC",
+          "description": "Cuộn 0,4x700xC",
+          "quantity": 2156,
+          "price": -550
+        },
+        {
+          "row": 759,
+          "type": "Nhập trả",
+          "description": "Cuộn 410/BA 0,38x620xC",
+          "quantity": 704,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "5457",
+      "date": "07/07/2026",
+      "rows": [
+        {
+          "row": 760,
+          "type": "GC",
+          "description": "Cuộn 0,4x600xC",
+          "quantity": 1664,
+          "price": -550
+        },
+        {
+          "row": 761,
+          "type": "GC",
+          "description": "Cuộn 0,4x700xC",
+          "quantity": 4598,
+          "price": -550
+        },
+        {
+          "row": 762,
+          "type": "GC",
+          "description": "Cuộn 0,4x1200xC",
+          "quantity": 534,
+          "price": -550
+        },
+        {
+          "row": 763,
+          "type": "GC",
+          "description": "Cuộn 410/BA 0,38x620xC",
+          "quantity": 820,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "5462",
+      "date": "08/07/2026",
+      "rows": [
+        {
+          "row": 764,
+          "type": "GC",
+          "description": "Cuộn 0,65x1200xC",
+          "quantity": 992,
+          "price": -550
+        }
+      ]
+    },
+    {
+      "voucher": "440",
+      "date": "09/07/2026",
+      "rows": [
+        {
+          "row": 765,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 0,6x1200xC",
+          "quantity": 710,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "461",
+      "date": "10/07/2026",
+      "rows": [
+        {
+          "row": 766,
+          "type": "Xuất GC",
+          "description": "Cuộn 430/BA 0,5x1000xC",
+          "quantity": 2600,
+          "price": null
+        },
+        {
+          "row": 767,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 0,8x1200xC",
+          "quantity": 1002,
+          "price": null
+        },
+        {
+          "row": 768,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 1,0x1200xC",
+          "quantity": 2056,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3175",
+      "date": "10/07/2026",
+      "rows": [
+        {
+          "row": 769,
+          "type": "GC",
+          "description": "Cuộn 304/2B 1,0x1200xC",
+          "quantity": 1278,
+          "price": -5400
+        }
+      ]
+    },
+    {
+      "voucher": "495",
+      "date": "11/07/2026",
+      "rows": [
+        {
+          "row": 770,
+          "type": "Xuất GC",
+          "description": "Cuộn 430/BA 0,44-0,47x50-93xC",
+          "quantity": 5867,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3178",
+      "date": "11/07/2026",
+      "rows": [
+        {
+          "row": 771,
+          "type": "GC",
+          "description": "Cuộn 304/2B 0,6x1200xC",
+          "quantity": 744,
+          "price": -3800
+        },
+        {
+          "row": 772,
+          "type": "GC",
+          "description": "Cuộn 304/2B 0,8x1200xC",
+          "quantity": 1008,
+          "price": -3300
+        },
+        {
+          "row": 773,
+          "type": "GC",
+          "description": "Lõi",
+          "quantity": 1,
+          "price": -150000
+        }
+      ]
+    },
+    {
+      "voucher": "507",
+      "date": "13/07/2026",
+      "rows": [
+        {
+          "row": 774,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/BA 0,4x1200xC",
+          "quantity": 2626,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "514",
+      "date": "13/07/2026",
+      "rows": [
+        {
+          "row": 775,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 0,6x1200xC",
+          "quantity": 1750,
+          "price": null
+        },
+        {
+          "row": 776,
+          "type": "Xuất GC",
+          "description": "Cuộn 304/2B 0,8x1200xC",
+          "quantity": 754,
+          "price": null
+        }
+      ]
+    },
+    {
+      "voucher": "3191",
+      "date": "14/07/2026",
+      "rows": [
+        {
+          "row": 777,
+          "type": "GC",
+          "description": "Cuộn 304/2B 1,0x1200xC",
+          "quantity": 778,
+          "price": -3300
+        },
+        {
+          "row": 778,
+          "type": "GC",
+          "description": "Cuộn 304/2B 0,6x1200xC",
+          "quantity": 1260,
+          "price": -3800
+        },
+        {
+          "row": 779,
+          "type": "Nhập trả",
+          "description": "Cuộn 304/2B 0,8x1200xC",
+          "quantity": 758,
+          "price": null
+        },
+        {
+          "row": 780,
+          "type": "Nhập trả",
+          "description": "Cuộn 304 0,6x1200xC",
+          "quantity": 1215,
+          "price": null
+        },
+        {
+          "row": 781,
+          "type": "Nhập trả",
+          "description": "Cuộn 304/2B 0,6x1200xC",
+          "quantity": 2395,
+          "price": null
+        },
+        {
+          "row": 782,
+          "type": "Nhập trả",
+          "description": "Cuộn 201/2B 2,0x1200xC",
+          "quantity": 2660,
+          "price": null
+        }
+      ]
+    }
+  ]
+}

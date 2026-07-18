@@ -169,6 +169,17 @@ public static class FeedbackEndpoints
             await db.RecordAudit(principal.Username(), "Giải quyết phản hồi", "Feedback", id.ToString(), label);
             return Results.NoContent();
         });
+
+        g.MapGet("/surveys/open",async(ClaimsPrincipal u,Database db)=>{await using var c=await db.OpenAsync();var list=new List<object>();await using var r=await c.Cmd("""
+          SELECT s.id,s.title,s.description,s.questions::text,s.closes_at,
+          EXISTS(SELECT 1 FROM app_survey_responses x WHERE x.survey_id=s.id AND x.username=@u) answered
+          FROM app_surveys s WHERE s.active=TRUE AND (s.closes_at IS NULL OR s.closes_at>CURRENT_TIMESTAMP) ORDER BY s.created_at DESC
+          """).With("@u",u.Username()).ExecuteReaderAsync();while(await r.ReadAsync())list.Add(new{id=r.Guid("id"),title=r.Str("title"),description=r.Str("description"),questions=ParseJson(r.Str("questions")),closesAt=r.DtNull("closes_at"),answered=r.Bool("answered")});return Results.Ok(list);});
+        g.MapPost("/surveys/{id:guid}/responses",async(Guid id,SurveyResponseReq req,ClaimsPrincipal u,Database db)=>{await using var c=await db.OpenAsync();var exists=Convert.ToInt32(await c.Cmd("SELECT COUNT(*) FROM app_surveys WHERE id=@id AND active=TRUE AND (closes_at IS NULL OR closes_at>CURRENT_TIMESTAMP)").With("@id",id).ExecuteScalarAsync())>0;if(!exists)return Results.BadRequest(new{message="Khảo sát đã đóng."});try{await c.Cmd("INSERT INTO app_survey_responses(id,survey_id,username,answers) VALUES(@rid,@id,@u,@a::jsonb)").With("@rid",Guid.NewGuid()).With("@id",id).With("@u",u.Username()).With("@a",req.Answers.GetRawText()).ExecuteNonQueryAsync();}catch(Npgsql.PostgresException ex)when(ex.SqlState=="23505"){return Results.Conflict(new{message="Bạn đã trả lời khảo sát này."});}return Results.NoContent();});
+        g.MapPost("/general",async(GeneralFeedbackReq req,ClaimsPrincipal u,Database db,IHubContext<ChangesHub> hub)=>{if(string.IsNullOrWhiteSpace(req.Message))return Results.BadRequest(new{message="Vui lòng nhập góp ý."});await using var c=await db.OpenAsync();var id=Guid.NewGuid();await c.Cmd("INSERT INTO app_general_feedback(id,username,anonymous,message,status) VALUES(@id,@u,@anon,@m,'open')").With("@id",id).With("@u",req.Anonymous?"":u.Username()).With("@anon",req.Anonymous).With("@m",req.Message.Trim()).ExecuteNonQueryAsync();await hub.Clients.All.SendAsync("changed","feedback");return Results.Ok(new{id,status="open"});});
+        g.MapGet("/general/mine",async(ClaimsPrincipal u,Database db)=>{await using var c=await db.OpenAsync();var list=new List<object>();await using var r=await c.Cmd("SELECT id,message,status,response,created_at FROM app_general_feedback WHERE username=@u AND anonymous=FALSE ORDER BY created_at DESC").With("@u",u.Username()).ExecuteReaderAsync();while(await r.ReadAsync())list.Add(new{id=r.Guid("id"),message=r.Str("message"),status=r.Str("status"),response=r.Str("response"),createdAt=r.Dt("created_at")});return Results.Ok(list);});
+        g.MapPost("/support",async(SupportTicketReq req,ClaimsPrincipal u,Database db)=>{if(string.IsNullOrWhiteSpace(req.Message))return Results.BadRequest(new{message="Vui lòng mô tả lỗi."});await using var c=await db.OpenAsync();var id=Guid.NewGuid();var code=$"HT{DateTime.UtcNow:yyMMdd}{Random.Shared.Next(1000,9999)}";await c.Cmd("INSERT INTO app_support_tickets(id,ticket_code,username,message,app_version,device_model,status) VALUES(@id,@c,@u,@m,@v,@d,'open')").With("@id",id).With("@c",code).With("@u",u.Username()).With("@m",req.Message.Trim()).With("@v",req.AppVersion??"").With("@d",req.DeviceModel??"").ExecuteNonQueryAsync();return Results.Ok(new{id,code,status="open"});});
+        g.MapGet("/support/mine",async(ClaimsPrincipal u,Database db)=>{await using var c=await db.OpenAsync();var list=new List<object>();await using var r=await c.Cmd("SELECT id,ticket_code,message,status,response,created_at FROM app_support_tickets WHERE username=@u ORDER BY created_at DESC").With("@u",u.Username()).ExecuteReaderAsync();while(await r.ReadAsync())list.Add(new{id=r.Guid("id"),code=r.Str("ticket_code"),message=r.Str("message"),status=r.Str("status"),response=r.Str("response"),createdAt=r.Dt("created_at")});return Results.Ok(list);});
     }
 
     public static async Task EnsureTables(Database db, CancellationToken ct = default)
@@ -189,6 +200,10 @@ public static class FeedbackEndpoints
 
             CREATE INDEX IF NOT EXISTS ix_app_feedbacks_type_created ON app_feedbacks (feedback_type, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_app_feedbacks_reporter ON app_feedbacks (reporter_username, created_at DESC);
+            CREATE TABLE IF NOT EXISTS app_surveys(id uuid PRIMARY KEY,title varchar(200) NOT NULL,description text NOT NULL DEFAULT '',questions jsonb NOT NULL DEFAULT '[]',active boolean NOT NULL DEFAULT TRUE,closes_at timestamptz NULL,created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS app_survey_responses(id uuid PRIMARY KEY,survey_id uuid NOT NULL REFERENCES app_surveys(id) ON DELETE CASCADE,username varchar(128) NOT NULL,answers jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE(survey_id,username));
+            CREATE TABLE IF NOT EXISTS app_general_feedback(id uuid PRIMARY KEY,username varchar(128) NOT NULL DEFAULT '',anonymous boolean NOT NULL DEFAULT FALSE,message text NOT NULL,status varchar(20) NOT NULL DEFAULT 'open',response text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS app_support_tickets(id uuid PRIMARY KEY,ticket_code varchar(20) NOT NULL UNIQUE,username varchar(128) NOT NULL,message text NOT NULL,app_version varchar(40) NOT NULL DEFAULT '',device_model varchar(160) NOT NULL DEFAULT '',status varchar(20) NOT NULL DEFAULT 'open',response text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP);
 
             INSERT INTO app_feedbacks
                 (feedback_type, reporter_username, target_name, reason, conversation_id, legacy_chat_report_id, created_at)
@@ -207,4 +222,8 @@ public static class FeedbackEndpoints
         "AttendanceIssue" => "Báo lỗi chấm công",
         _ => "Phản hồi",
     };
+    private static System.Text.Json.JsonElement ParseJson(string value){try{return System.Text.Json.JsonDocument.Parse(value).RootElement.Clone();}catch{return System.Text.Json.JsonDocument.Parse("[]").RootElement.Clone();}}
+    public record SurveyResponseReq(System.Text.Json.JsonElement Answers);
+    public record GeneralFeedbackReq(string? Message,bool Anonymous=false);
+    public record SupportTicketReq(string? Message,string? AppVersion,string? DeviceModel);
 }

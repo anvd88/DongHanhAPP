@@ -128,6 +128,7 @@ html:not([data-theme="dark"]) .profile-modal-strong select:focus {
   position: relative;
   isolation: isolate;
   overflow: hidden;
+  will-change: transform;
   border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.48);
   background:
@@ -944,9 +945,6 @@ html[data-theme="dark"] .gc-dialog-content {
 
 /* ---------- Giảm chuyển động ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .gc-card::after,
-  .gc-card::before,
-  .gc-card .gc-glass-sheen,
   .gc-btn-primary::after,
   .gc-skeleton {
     transition: none !important;

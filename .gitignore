@@ -28,6 +28,10 @@ src/KetoanMini/data/*.xlsx
 src/KetoanMini/config/database.json
 !src/KetoanMini/config/*.example.json
 
+# Dữ liệu chạy thật: blob chat + APK các bản phát hành (mỗi tệp vài chục MB) nằm trên đĩa,
+# thuộc về volume dữ liệu + bản backup chứ không phải Git.
+**/App_Data/
+
 # Publish artifacts
 publish/
 artifacts/

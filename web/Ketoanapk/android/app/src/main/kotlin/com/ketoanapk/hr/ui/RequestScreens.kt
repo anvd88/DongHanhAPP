@@ -1,10 +1,14 @@
 package com.ketoanapk.hr.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +51,8 @@ import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.MoreTime
 import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -60,6 +66,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -71,18 +78,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.Penalty
@@ -90,7 +103,12 @@ import com.ketoanapk.hr.data.RequestApproval
 import com.ketoanapk.hr.data.RequestHead
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
+import com.ketoanapk.hr.data.RequestDraftStore
+import com.ketoanapk.hr.ui.theme.Warning
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -111,9 +129,10 @@ fun RequestsScreen(vm: HrViewModel) {
 
     // Mở thẳng luồng tạo đơn khi có "nháp khiếu nại" từ màn Kỷ luật (bấm đề nghị trên một quyết định phạt).
     val appealDraft = vm.appealDraft
-    LaunchedEffect(appealDraft) { if (appealDraft != null) creating = true }
+    val requestDraftType = vm.requestDraftType
+    LaunchedEffect(appealDraft, requestDraftType) { if (appealDraft != null || requestDraftType != null) creating = true }
     // Khi rời luồng tạo đơn thì bỏ nháp để lần sau vào "Tạo đơn mới" bình thường (không dính án phạt cũ).
-    fun leaveCreate() { creating = false; vm.consumeAppealDraft() }
+    fun leaveCreate() { creating = false; vm.consumeAppealDraft(); vm.consumeRequestDraft() }
 
     when {
         detail.id != null -> {
@@ -122,6 +141,9 @@ fun RequestsScreen(vm: HrViewModel) {
                 state = detail,
                 onBack = vm::closeRequestDetail,
                 onCancel = vm::cancelFromDetail,
+                onCopy = vm::copyRequest,
+                onEdit = vm::editRequest,
+                onRemind = vm::remindRequest,
             )
         }
         creating -> {
@@ -131,14 +153,19 @@ fun RequestsScreen(vm: HrViewModel) {
                 penalties = vm.homeState.penalties,
                 saving = vm.creatingRequest,
                 initialDraft = appealDraft,
+                initialType = requestDraftType,
+                initialValues = vm.requestDraftValues,
                 onClose = { leaveCreate() },
-                onSubmit = { type, title, payload ->
-                    vm.submitRequest(type, title, payload) { ok -> if (ok) leaveCreate() }
+                onSubmit = { type, title, payload, attachments ->
+                    vm.submitRequest(type, title, payload, attachments) { ok -> if (ok) leaveCreate() }
                 },
             )
         }
         else -> RequestListView(
             state = vm.homeState,
+            hub = vm.hubFor(HrDestination.Requests),
+            badgeCount = vm::badgeCount,
+            onSelect = vm::select,
             onCreate = { creating = true },
             onOpen = vm::openRequestDetail,
         )
@@ -150,6 +177,9 @@ fun RequestsScreen(vm: HrViewModel) {
 @Composable
 private fun RequestListView(
     state: HomeUiState,
+    hub: List<HrDestination>,
+    badgeCount: (HrDestination) -> Int,
+    onSelect: (HrDestination) -> Unit,
     onCreate: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
@@ -159,6 +189,10 @@ private fun RequestListView(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { CreateRequestButton(onCreate) }
+        // Đơn chờ duyệt / Kỷ luật thuộc cùng họ với Đơn từ nên nằm ngay đây (thay ngăn kéo cũ).
+        if (hub.isNotEmpty()) {
+            item { HrCard { HubList(destinations = hub, badgeCount = badgeCount, onSelect = onSelect) } }
+        }
         item {
             Text(
                 "Đơn của tôi",
@@ -268,11 +302,13 @@ private fun CreateRequestFlow(
     penalties: List<Penalty>,
     saving: Boolean,
     initialDraft: AppealDraft?,
+    initialType: String?,
+    initialValues: Map<String, String>,
     onClose: () -> Unit,
-    onSubmit: (type: String, title: String, payload: kotlinx.serialization.json.JsonObject) -> Unit,
+    onSubmit: (type: String, title: String, payload: kotlinx.serialization.json.JsonObject, attachments: List<android.net.Uri>) -> Unit,
 ) {
     // Có nháp khiếu nại → mở thẳng form "penalty_appeal", bỏ qua bước chọn loại.
-    var selectedType by rememberSaveable { mutableStateOf(initialDraft?.let { "penalty_appeal" }) }
+    var selectedType by rememberSaveable { mutableStateOf(initialDraft?.let { "penalty_appeal" } ?: initialType) }
     val chosen = types.find { it.type == selectedType }
 
     // Giá trị điền sẵn cho form khiếu nại đến từ án phạt được chọn ở màn Kỷ luật.
@@ -282,9 +318,7 @@ private fun CreateRequestFlow(
             "penaltyType" to initialDraft.penaltyTypeLabel,
             "penaltyAmount" to (if (initialDraft.amount > 0) initialDraft.amount.toLong().toString() else ""),
         )
-    } else {
-        emptyMap()
-    }
+    } else initialValues
 
     if (chosen == null) {
         RequestTypePicker(types = types, onBack = onClose, onPick = { selectedType = it.type })
@@ -297,8 +331,8 @@ private fun CreateRequestFlow(
                 saving = saving,
                 initialValues = draftValues,
                 // Từ nháp khiếu nại: nút quay lại thoát hẳn luồng (không có bước chọn loại để lùi về).
-                onBack = { if (initialDraft != null) onClose() else selectedType = null },
-                onSubmit = { title, payload -> onSubmit(chosen.type, title, payload) },
+                onBack = { if (initialDraft != null || initialType != null) onClose() else selectedType = null },
+                onSubmit = { title, payload, attachments -> onSubmit(chosen.type, title, payload, attachments) },
             )
         }
     }
@@ -369,7 +403,7 @@ private fun RequestFormStep(
     saving: Boolean,
     initialValues: Map<String, String>,
     onBack: () -> Unit,
-    onSubmit: (title: String, payload: kotlinx.serialization.json.JsonObject) -> Unit,
+    onSubmit: (title: String, payload: kotlinx.serialization.json.JsonObject, attachments: List<android.net.Uri>) -> Unit,
 ) {
     val allFields = fieldsForType(type.type)
     var showErrors by remember { mutableStateOf(false) }
@@ -387,6 +421,24 @@ private fun RequestFormStep(
             putAll(initialValues)
             if (isPenaltyAppeal && this["appealKind"].isNullOrBlank()) this["appealKind"] = "dispute"
         }
+    }
+    val context = LocalContext.current
+    val draftStore = remember { RequestDraftStore(context) }
+    val draftScope = rememberCoroutineScope()
+    var draftLoaded by remember { mutableStateOf(false) }
+    val attachmentUris = remember { mutableStateListOf<android.net.Uri>() }
+    val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        attachmentUris.clear()
+        attachmentUris.addAll(uris.take(8))
+    }
+    val signaturePoints = remember { mutableStateListOf<Offset>() }
+    LaunchedEffect(type.type) {
+        val saved = draftStore.load(type.type)
+        saved.forEach { (key, value) -> if (values[key].isNullOrBlank()) values[key] = value }
+        draftLoaded = true
+    }
+    LaunchedEffect(values.toMap(), draftLoaded) {
+        if (draftLoaded) { delay(500); draftStore.save(type.type, values.toMap()) }
     }
 
     // Với khiếu nại: chỉ hiện ô "Số tiền đề nghị" khi Giảm tiền, ô "Số tháng" khi Trả góp.
@@ -473,6 +525,34 @@ private fun RequestFormStep(
             }
         }
 
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Tệp đính kèm", fontWeight = FontWeight.Bold)
+                Text("Ảnh, PDF hoặc tài liệu; tối đa 8 tệp, 15 MB/tệp.", style = MaterialTheme.typography.bodySmall)
+                attachmentUris.forEach { uri -> Text("• ${requestFileName(context, uri)}", style = MaterialTheme.typography.bodySmall) }
+                TextButton(onClick = { attachmentPicker.launch(arrayOf("image/*", "application/pdf", "text/*", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")) }) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = null); Text("Chọn tệp")
+                }
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Ký xác nhận trên màn hình (không bắt buộc)", fontWeight = FontWeight.Bold)
+            Canvas(
+                Modifier.fillMaxWidth().height(150.dp).background(Color.White, RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { signaturePoints.add(it) },
+                            onDrag = { change, _ -> signaturePoints.add(change.position); change.consume() },
+                        )
+                    },
+            ) {
+                signaturePoints.zipWithNext().forEach { (a, b) -> drawLine(Color.Black, a, b, strokeWidth = 4f) }
+            }
+            TextButton(onClick = { signaturePoints.clear() }) { Text("Xóa chữ ký") }
+        }
+
         if (showErrors && missing.isNotEmpty()) {
             Text(
                 "Vui lòng điền: " + missing.joinToString(", ") { it.label },
@@ -491,8 +571,12 @@ private fun RequestFormStep(
                             val raw = values[f.key]?.trim().orEmpty()
                             if (raw.isNotEmpty()) put(f.key, jsonValueFor(f, raw))
                         }
+                        if (signaturePoints.isNotEmpty()) {
+                            put("requesterSignature", JsonPrimitive(signaturePoints.joinToString(";") { "${it.x.toInt()},${it.y.toInt()}" }))
+                        }
                     }
-                    onSubmit("", payload)
+                    draftScope.launch { draftStore.clear(type.type) }
+                    onSubmit("", payload, attachmentUris.toList())
                 }
             },
             enabled = !saving,
@@ -511,6 +595,13 @@ private fun RequestFormStep(
         }
         Spacer(Modifier.height(8.dp))
     }
+}
+
+private fun requestFileName(context: android.content.Context, uri: android.net.Uri): String {
+    context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { return c.getString(it) ?: "Tệp đính kèm" }
+    }
+    return uri.lastPathSegment ?: "Tệp đính kèm"
 }
 
 /** Một ô nhập trong form, tự chọn kiểu hiển thị theo loại trường. */
@@ -827,7 +918,53 @@ internal fun RequestDetailView(
     state: RequestDetailUiState,
     onBack: () -> Unit,
     onCancel: (String) -> Unit,
+    onCopy: (com.ketoanapk.hr.data.RequestDetail) -> Unit = {},
+    onEdit: (com.ketoanapk.hr.data.RequestDetail) -> Unit = {},
+    onRemind: (String) -> Unit = {},
+    onDecide: (String, Boolean, String) -> Unit = { _, _, _ -> },
 ) {
+    var decision by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var comment by rememberSaveable { mutableStateOf("") }
+
+    decision?.let { approve ->
+        AlertDialog(
+            onDismissRequest = { if (!state.deciding) decision = null },
+            title = { Text(if (approve) "Xác nhận duyệt đơn" else "Xác nhận từ chối") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (approve) "Đơn sẽ chuyển sang bước tiếp theo hoặc hoàn tất." else "Người gửi sẽ thấy đơn bị từ chối cùng nhận xét của bạn.")
+                    OutlinedTextField(
+                        value = comment,
+                        onValueChange = { comment = it },
+                        label = { Text("Nhận xét") },
+                        placeholder = { Text(if (approve) "Không bắt buộc" else "Nêu rõ lý do từ chối") },
+                        enabled = !state.deciding,
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    modifier = Modifier.testTag(if (approve) "confirm_approve" else "confirm_reject"),
+                    enabled = !state.deciding && (approve || comment.isNotBlank()),
+                    onClick = {
+                        state.id?.let { onDecide(it, approve, comment) }
+                        decision = null
+                        comment = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (approve) toneColor(Tone.Success) else MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    if (state.deciding) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Text(if (approve) "Duyệt" else "Từ chối")
+                }
+            },
+            dismissButton = { TextButton(enabled = !state.deciding, onClick = { decision = null }) { Text("Hủy") } },
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
@@ -842,6 +979,16 @@ internal fun RequestDetailView(
                 val head = state.detail.request
                 item { StatusBanner(head.status) }
                 item { RequestInfoCard(head) }
+                if (state.detail.attachments.isNotEmpty()) {
+                    item {
+                        HrCard {
+                            Text("Tệp đính kèm", fontWeight = FontWeight.Bold)
+                            state.detail.attachments.forEach { file ->
+                                Text("• ${file.fileName} · ${file.fileSize / 1024} KB", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
                 item {
                     Text(
                         "Tiến trình phê duyệt",
@@ -851,9 +998,48 @@ internal fun RequestDetailView(
                     )
                 }
                 items(state.detail.approvals, key = { it.stepNo }) { a -> ApprovalStepCard(a) }
+                if (state.canCancel) {
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(onClick = { onCopy(state.detail) }, modifier = Modifier.weight(1f)) { Text("Sao chép") }
+                            if (head.status.equals("Pending", true)) OutlinedButton(onClick = { onEdit(state.detail) }, modifier = Modifier.weight(1f)) { Text("Sửa đơn") }
+                        }
+                    }
+                }
+
+                if (state.decisionError != null) {
+                    item { EmptyState("Không xử lý được đơn", state.decisionError) }
+                }
+
+                if (head.status.equals("Pending", true) && state.canDecide) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Button(
+                                onClick = { decision = false },
+                                enabled = !state.deciding,
+                                modifier = Modifier.weight(1f).height(50.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            ) { Text("Từ chối", fontWeight = FontWeight.Bold) }
+                            Button(
+                                onClick = { decision = true },
+                                enabled = !state.deciding,
+                                modifier = Modifier.weight(1f).height(50.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = toneColor(Tone.Success)),
+                            ) { Text("Duyệt", fontWeight = FontWeight.Bold) }
+                        }
+                    }
+                }
 
                 // Chỉ đơn của chính mình còn chờ duyệt mới cho hủy. Đơn của nhân sự khác là chỉ đọc.
                 if (head.status.equals("Pending", true) && state.canCancel) {
+                    item {
+                        OutlinedButton(onClick = { onRemind(head.id) }, modifier = Modifier.fillMaxWidth()) { Text("Nhắc người duyệt") }
+                    }
                     item {
                         Button(
                             onClick = { onCancel(head.id) },
@@ -922,6 +1108,7 @@ private fun RequestInfoCard(head: RequestHead) {
     HrCard {
         Text(head.title.ifBlank { head.typeLabel }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
         Text("${head.requestNo} · gửi ${formatIsoDateTime(head.createdAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        head.dueAt?.takeIf { it.isNotBlank() }?.let { Text("Hạn xử lý: ${formatIsoDateTime(it)}", style = MaterialTheme.typography.bodySmall, color = Warning) }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         LabelValue("Người gửi", head.employeeName + (if (head.employeeCode.isNotBlank()) " (${head.employeeCode})" else ""))
         if (head.departmentName.isNotBlank()) LabelValue("Phòng ban", head.departmentName)
@@ -1041,6 +1228,7 @@ private fun requestTypeIcon(type: String): ImageVector = when (type) {
     "shift_swap" -> Icons.Filled.SwapHoriz
     "payment" -> Icons.Filled.Payments
     "advance" -> Icons.Filled.AccountBalanceWallet
+    "reimbursement" -> Icons.Filled.ReceiptLong
     "purchase" -> Icons.Filled.ShoppingCart
     "booking" -> Icons.Filled.MeetingRoom
     "penalty_appeal" -> Icons.Filled.Gavel
@@ -1057,6 +1245,7 @@ private fun requestTypeDescription(type: String): String = when (type) {
     "shift_swap" -> "Đổi ca hoặc nhờ người nhận ca giúp"
     "payment" -> "Đề nghị công ty thanh toán một khoản"
     "advance" -> "Xin ứng trước một khoản tiền lương"
+    "reimbursement" -> "Khai hóa đơn, số đã chi và số cần hoàn ứng"
     "purchase" -> "Đề nghị mua vật tư, đồ dùng"
     "booking" -> "Đăng ký dùng xe hoặc phòng họp"
     "penalty_appeal" -> "Khiếu nại khi bị phạt chưa hợp lý"

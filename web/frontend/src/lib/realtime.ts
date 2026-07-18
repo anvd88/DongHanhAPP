@@ -71,6 +71,10 @@ export function subscribeRealtime(cb: Listener, scopes?: RealtimeScope[]): () =>
 
 export function startRealtime() {
   if (connection) return;
+  // Chỉ kết nối hub khi ĐÃ đăng nhập. Trang công khai (đăng nhập, kiosk, tải APK, tính toán) không có
+  // token → tránh spam negotiate 401 mỗi 3 giây (nhất là màn kiosk chạy liên tục). Sau khi đăng nhập,
+  // auth.tsx gọi restartRealtime() để kết nối lại.
+  if (!tokenStore.get()) return;
 
   connection = new signalR.HubConnectionBuilder()
     .withUrl(appUrl("/hubs/changes"), {

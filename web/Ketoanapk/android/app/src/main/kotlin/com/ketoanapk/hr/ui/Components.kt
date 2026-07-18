@@ -52,6 +52,79 @@ import com.ketoanapk.hr.ui.theme.Warning
 
 enum class Tone { Neutral, Success, Warning, Danger, Info, Muted }
 
+/**
+ * Danh sách dẫn sang các màn con, dùng cho những màn "chứa" một nhóm màn con (Cá nhân, Chat, Đơn từ,
+ * Quản lý). Đây là thứ THAY CHO ngăn kéo hamburger đã bỏ: mỗi màn con nằm trong đúng màn cha của nó
+ * thay vì gom hết vào một danh sách phẳng 22 mục.
+ */
+@Composable
+fun HubList(
+    destinations: List<HrDestination>,
+    badgeCount: (HrDestination) -> Int = { 0 },
+    onSelect: (HrDestination) -> Unit,
+) {
+    destinations.forEachIndexed { index, dest ->
+        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        HubRow(dest, badgeCount(dest)) { onSelect(dest) }
+    }
+}
+
+@Composable
+private fun HubRow(destination: HrDestination, badge: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                destination.icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(21.dp),
+            )
+        }
+        Text(
+            destination.title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (badge > 0) {
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.error)
+                    .padding(horizontal = 7.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    if (badge > 99) "99+" else "$badge",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onError,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 fun toneColor(tone: Tone): Color = when (tone) {
     Tone.Neutral -> MaterialTheme.colorScheme.primary
