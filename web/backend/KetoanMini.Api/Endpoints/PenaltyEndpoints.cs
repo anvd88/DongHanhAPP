@@ -1,8 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Services;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -384,7 +382,7 @@ public static class PenaltyEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/", async (SavePenaltyReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/", async (SavePenaltyReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (req.EmployeeId == Guid.Empty) return Results.BadRequest(new { message = "Vui lòng chọn nhân viên." });
@@ -407,13 +405,13 @@ public static class PenaltyEndpoints
                 .With("@by", u.Username())
                 .ExecuteNonQueryAsync();
 
-            await SignalEmployee(hub, db, conn, u, req.EmployeeId, "Lập quyết định phạt", no);
+            await Signal(db, u, "Lập quyết định phạt", no);
             await push.SendToEmployeeAsync(conn, req.EmployeeId, "Quyết định phạt mới",
                 $"{no} · {req.Reason!.Trim()}", $"pen:{id}", "Penalty");
             return Results.Ok(new { id, penaltyNo = no });
         });
 
-        g.MapPut("/{id:guid}", async (Guid id, SavePenaltyReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/{id:guid}", async (Guid id, SavePenaltyReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -432,29 +430,29 @@ public static class PenaltyEndpoints
                 .With("@note", req.Note ?? "").With("@status", req.Status ?? "Active")
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await SignalEmployee(hub, db, conn, u, req.EmployeeId, "Cập nhật quyết định phạt", id.ToString());
+            await Signal(db, u, "Cập nhật quyết định phạt", id.ToString());
             return Results.NoContent();
         });
 
         // Miễn / hủy hiệu lực phạt (không xóa để giữ lịch sử).
-        g.MapPost("/{id:guid}/waive", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/waive", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("UPDATE hr_penalties SET status='Waived', updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                 .With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Miễn phạt", id.ToString());
+            await Signal(db, u, "Miễn phạt", id.ToString());
             return Results.NoContent();
         });
 
-        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_penalties WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa quyết định phạt", id.ToString());
+            await Signal(db, u, "Xóa quyết định phạt", id.ToString());
             return Results.NoContent();
         });
     }
@@ -587,26 +585,13 @@ public static class PenaltyEndpoints
         return $"{total / 12:D4}-{total % 12 + 1:D2}";
     }
 
-    private static async Task Signal(IHubContext<ChangesHub> hub, Database db, ClaimsPrincipal u, string action, string name)
-    {
-        await db.RecordAudit(u.Username(), action, "Penalty", name, $"{action} (web).");
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-    }
-
-    /// <summary>Ghi audit + báo real-time, đồng thời nhắm riêng người bị phạt để màn hình của họ tự cập nhật.</summary>
-    private static async Task SignalEmployee(IHubContext<ChangesHub> hub, Database db, NpgsqlConnection conn,
-        ClaimsPrincipal u, Guid employeeId, string action, string name)
-    {
-        await Signal(hub, db, u, action, name);
-        var target = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
-            .With("@id", employeeId).ExecuteScalarAsync() as string;
-        if (!string.IsNullOrWhiteSpace(target))
-        {
-            await hub.Clients.User(target).SendAsync("changed", "data");
-            await hub.Clients.User(target).SendAsync("changed", "hr");
-        }
-    }
+    /// <summary>
+    /// Chỉ ghi audit. Tín hiệu real-time KHÔNG gửi tay ở đây nữa: trigger trên hr_penalties và
+    /// hr_penalty_ledger tự phát scope 'hr' sau khi giao dịch commit (xem DatabaseChangePublisher).
+    /// Một đường duy nhất — muốn màn hình nào đó biết thì thêm bảng vào danh sách trigger, đừng gọi hub.
+    /// </summary>
+    private static async Task Signal(Database db, ClaimsPrincipal u, string action, string name)
+        => await db.RecordAudit(u.Username(), action, "Penalty", name, $"{action} (web).");
 
     private static int NormInstallments(int installments) => installments < 1 ? 1 : (installments > 60 ? 60 : installments);
 

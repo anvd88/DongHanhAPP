@@ -132,6 +132,38 @@ public sealed class RealtimeWatcherTests
     }
 
     /// <summary>
+    /// Gộp nhịp KHÔNG được nuốt tín hiệu. Đây là điểm chết người của phần hiện diện online: nhịp tim
+    /// 45 giây/người là thứ duy nhất kéo màn hình "ai đang online" cập nhật, nên nếu một nhịp rơi vào
+    /// cửa sổ gộp rồi bị bỏ luôn thì danh sách đứng im — người đã tắt máy vẫn hiện đang online.
+    /// Tín hiệu bị hoãn phải được TRẢ LẠI hàng chờ và phát nốt khi hết cửa sổ.
+    /// </summary>
+    [Fact]
+    public async Task ThrottledPresence_IsDelayedButNeverDropped()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var (watcher, hub, db) = await StartWatcherAsync(_factory, cts.Token);
+        try
+        {
+            // Nhịp đầu: phát ngay, mở cửa sổ gộp 15 giây.
+            await NotifyAsync(db, "UPDATE user_sessions SET last_seen = last_seen WHERE FALSE");
+            await WaitUntilAsync(() => Task.FromResult(hub.Sent.Contains("presence")), TimeSpan.FromSeconds(15));
+            var afterFirst = hub.Sent.Count(s => s == "presence");
+            Assert.True(afterFirst >= 1, "Nhịp tim đầu tiên phải được phát ngay.");
+
+            // Nhịp thứ hai rơi GIỮA cửa sổ → bị hoãn. Không được im lặng bỏ đi: chờ qua cửa sổ 15 giây
+            // thì phải thấy thêm một lần phát nữa mà KHÔNG cần bất kỳ thay đổi mới nào.
+            await NotifyAsync(db, "UPDATE user_sessions SET last_seen = last_seen WHERE FALSE");
+            await WaitUntilAsync(
+                () => Task.FromResult(hub.Sent.Count(s => s == "presence") > afterFirst),
+                TimeSpan.FromSeconds(40));
+
+            Assert.True(hub.Sent.Count(s => s == "presence") > afterFirst,
+                "Tín hiệu 'presence' bị hoãn đã bị nuốt mất — màn hình online sẽ đứng im.");
+        }
+        finally { await watcher.StopAsync(CancellationToken.None); }
+    }
+
+    /// <summary>
     /// Rớt kết nối tới PostgreSQL là mất trắng thông báo: LISTEN/NOTIFY không giữ hàng chờ cho phiên
     /// đã ngắt. Máy khách vẫn nối SignalR nên không tự biết mà nạp lại → phải được bảo nạp toàn bộ
     /// ('all') ngay khi listener nối lại, nếu không chúng giữ dữ liệu cũ tới lần ghi kế tiếp.

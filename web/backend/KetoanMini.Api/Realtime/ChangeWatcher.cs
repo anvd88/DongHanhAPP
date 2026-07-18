@@ -14,8 +14,10 @@ public sealed class ChangeWatcher(
     ILogger<ChangeWatcher> logger) : BackgroundService
 {
     private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(100);
+    // Phải khớp danh sách phạm vi trong DatabaseChangePublisher: payload lạ thì bỏ qua.
     private static readonly HashSet<string> AllowedScopes =
-        new(["data", "presence", "hr", "tasks", "portal", "config", "audit", "talent"],
+        new(["data", "presence", "hr", "tasks", "portal", "config", "audit", "talent",
+             "release", "feedback"],
             StringComparer.Ordinal);
 
     // Nhịp tim (45 giây/người) chỉ cập nhật last_seen của user_sessions nhưng vẫn kích hoạt trigger

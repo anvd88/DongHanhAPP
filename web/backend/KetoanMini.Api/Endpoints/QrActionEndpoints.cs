@@ -185,7 +185,6 @@ public static class QrActionEndpoints
 
                 await db.RecordAudit(user.Username, "Ký nhận phiếu chi", "PayoutVoucher", signed.Value.VoucherNo,
                     $"Người nhận quét QR xác nhận đã nhận tiền phiếu {signed.Value.VoucherNo} (app).");
-                await PayoutVoucherEndpoints.SignalScanAsync(hub, conn, signed.Value.EmployeeId);
                 return Results.Ok(Message("Đã xác nhận",
                     $"Bạn đã ký nhận phiếu chi {signed.Value.VoucherNo}. Kế toán sẽ duyệt chi ngay bây giờ.", "success"));
             }

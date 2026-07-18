@@ -1,9 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -257,7 +255,7 @@ public static class HrEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/departments", async (SaveDepartmentReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/departments", async (SaveDepartmentReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { message = "Vui lòng nhập tên phòng ban." });
@@ -272,11 +270,11 @@ public static class HrEndpoints
                 .With("@mgr", (object?)req.ManagerEmployeeId ?? DBNull.Value)
                 .With("@acc", req.IsAccounting)
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Tạo phòng ban", "Department", req.Name);
+            await Signal(db, u, "Tạo phòng ban", "Department", req.Name);
             return Results.Ok(new { id });
         });
 
-        g.MapPut("/departments/{id:guid}", async (Guid id, SaveDepartmentReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/departments/{id:guid}", async (Guid id, SaveDepartmentReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -291,17 +289,17 @@ public static class HrEndpoints
                 .With("@acc", req.IsAccounting)
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Cập nhật phòng ban", "Department", req.Name ?? "");
+            await Signal(db, u, "Cập nhật phòng ban", "Department", req.Name ?? "");
             return Results.NoContent();
         });
 
-        g.MapDelete("/departments/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/departments/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_departments WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa phòng ban", "Department", id.ToString());
+            await Signal(db, u, "Xóa phòng ban", "Department", id.ToString());
             return Results.NoContent();
         });
 
@@ -324,7 +322,7 @@ public static class HrEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/locations", async (SaveLocationReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/locations", async (SaveLocationReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { message = "Vui lòng nhập tên địa điểm." });
@@ -333,11 +331,11 @@ public static class HrEndpoints
             await conn.Cmd("INSERT INTO hr_locations (id, code, name, address) VALUES (@id, @code, @name, @addr)")
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", req.Name.Trim()).With("@addr", req.Address ?? "")
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Tạo địa điểm", "Location", req.Name);
+            await Signal(db, u, "Tạo địa điểm", "Location", req.Name);
             return Results.Ok(new { id });
         });
 
-        g.MapPut("/locations/{id:guid}", async (Guid id, SaveLocationReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/locations/{id:guid}", async (Guid id, SaveLocationReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -345,17 +343,17 @@ public static class HrEndpoints
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", (req.Name ?? "").Trim()).With("@addr", req.Address ?? "")
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Cập nhật địa điểm", "Location", req.Name ?? "");
+            await Signal(db, u, "Cập nhật địa điểm", "Location", req.Name ?? "");
             return Results.NoContent();
         });
 
-        g.MapDelete("/locations/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/locations/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_locations WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa địa điểm", "Location", id.ToString());
+            await Signal(db, u, "Xóa địa điểm", "Location", id.ToString());
             return Results.NoContent();
         });
 
@@ -436,7 +434,7 @@ public static class HrEndpoints
         });
 
         g.MapPost("/me/documents", async (string docType, string title, string? docNumber, string? expiresAt,
-            string? issuedBy, HttpContext ctx, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+            string? issuedBy, HttpContext ctx, ClaimsPrincipal u, Database db) =>
         {
             var allowed = new[] { "cccd", "contract", "degree", "certificate", "emergency_contact" };
             if (!allowed.Contains(docType)) return Results.BadRequest(new { message = "Loại hồ sơ không hợp lệ." });
@@ -454,13 +452,13 @@ public static class HrEndpoints
                 """).With("@id",id).With("@e",emp).With("@t",docType).With("@title",title.Trim()).With("@by",issuedBy ?? "")
                 .With("@no",docNumber ?? "").With("@exp",(object?)expiry ?? DBNull.Value).With("@fn",fileName)
                 .With("@mime",ctx.Request.ContentType ?? "application/octet-stream").With("@content",ms.Length == 0 ? DBNull.Value : ms.ToArray()).ExecuteNonQueryAsync();
-            await Signal(hub,db,u,"Gửi cập nhật hồ sơ","EmployeeDocument",title);
+            await Signal(db,u,"Gửi cập nhật hồ sơ","EmployeeDocument",title);
             return Results.Ok(new { id, approvalStatus="pending" });
         });
 
         // Cập nhật ảnh chân dung của CHÍNH người đang đăng nhập (app tự chụp có hướng dẫn).
         // Nhận data URL JPEG (data:image/jpeg;base64,...); gửi chuỗi rỗng/null để xoá ảnh.
-        g.MapPut("/me/avatar", async (SaveAvatarReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/me/avatar", async (SaveAvatarReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var id = await EnsureEmployeeForUser(conn, u.Username());
@@ -469,7 +467,7 @@ public static class HrEndpoints
                 return Results.BadRequest(new { message = $"Ảnh chân dung phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
             await conn.Cmd("UPDATE hr_employees SET avatar=@a, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                 .With("@a", (object?)avatar ?? DBNull.Value).With("@id", id).ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Cập nhật ảnh chân dung", "Employee", u.Username());
+            await Signal(db, u, "Cập nhật ảnh chân dung", "Employee", u.Username());
             return Results.NoContent();
         });
 
@@ -481,7 +479,7 @@ public static class HrEndpoints
             return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
 
-        g.MapPost("/employees", async (SaveEmployeeReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/employees", async (SaveEmployeeReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.FullName)) return Results.BadRequest(new { message = "Vui lòng nhập họ tên." });
@@ -511,11 +509,11 @@ public static class HrEndpoints
             {
                 return Results.Json(new { message = "Mã nhân viên hoặc tài khoản đã tồn tại." }, statusCode: 400);
             }
-            await Signal(hub, db, u, "Tạo hồ sơ nhân viên", "Employee", req.FullName);
+            await Signal(db, u, "Tạo hồ sơ nhân viên", "Employee", req.FullName);
             return Results.Ok(new { id, employeeCode = code });
         });
 
-        g.MapPut("/employees/{id:guid}", async (Guid id, SaveEmployeeReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/employees/{id:guid}", async (Guid id, SaveEmployeeReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             // Admin sửa mọi hồ sơ; nhân viên chỉ sửa liên hệ của chính mình.
@@ -561,17 +559,17 @@ public static class HrEndpoints
             cmd.With("@id", id);
             var n = await cmd.ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Cập nhật hồ sơ nhân viên", "Employee", req.FullName ?? id.ToString());
+            await Signal(db, u, "Cập nhật hồ sơ nhân viên", "Employee", req.FullName ?? id.ToString());
             return Results.NoContent();
         });
 
-        g.MapDelete("/employees/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/employees/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_employees WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa hồ sơ nhân viên", "Employee", id.ToString());
+            await Signal(db, u, "Xóa hồ sơ nhân viên", "Employee", id.ToString());
             return Results.NoContent();
         });
 
@@ -601,7 +599,7 @@ public static class HrEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/employees/{id:guid}/contracts", async (Guid id, SaveContractReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/employees/{id:guid}/contracts", async (Guid id, SaveContractReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -614,11 +612,11 @@ public static class HrEndpoints
                 .With("@start", (object?)req.StartDate ?? DBNull.Value).With("@end", (object?)req.EndDate ?? DBNull.Value)
                 .With("@base", req.BaseSalary).With("@allow", req.Allowance).With("@status", req.Status ?? "Active")
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Thêm hợp đồng", "Contract", req.ContractNo ?? "");
+            await Signal(db, u, "Thêm hợp đồng", "Contract", req.ContractNo ?? "");
             return Results.Ok(new { id = cid });
         });
 
-        g.MapPut("/contracts/{cid:guid}", async (Guid cid, SaveContractReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/contracts/{cid:guid}", async (Guid cid, SaveContractReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -631,17 +629,17 @@ public static class HrEndpoints
                 .With("@base", req.BaseSalary).With("@allow", req.Allowance).With("@status", req.Status ?? "Active")
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Cập nhật hợp đồng", "Contract", req.ContractNo ?? "");
+            await Signal(db, u, "Cập nhật hợp đồng", "Contract", req.ContractNo ?? "");
             return Results.NoContent();
         });
 
-        g.MapDelete("/contracts/{cid:guid}", async (Guid cid, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/contracts/{cid:guid}", async (Guid cid, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_contracts WHERE id=@id").With("@id", cid).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa hợp đồng", "Contract", cid.ToString());
+            await Signal(db, u, "Xóa hợp đồng", "Contract", cid.ToString());
             return Results.NoContent();
         });
 
@@ -679,7 +677,7 @@ public static class HrEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/employees/{id:guid}/payslips", async (Guid id, SavePayslipReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/employees/{id:guid}/payslips", async (Guid id, SavePayslipReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Period)) return Results.BadRequest(new { message = "Thiếu kỳ lương (yyyy-MM)." });
@@ -713,11 +711,11 @@ public static class HrEndpoints
             else
                 await PenaltyEndpoints.ClearDeductionsForPeriod(conn, id, period);
 
-            await Signal(hub, db, u, "Lập phiếu lương", "Payslip", period);
+            await Signal(db, u, "Lập phiếu lương", "Payslip", period);
             return Results.Ok(new { id = pid, penaltyTotal });
         });
 
-        g.MapDelete("/payslips/{pid:guid}", async (Guid pid, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/payslips/{pid:guid}", async (Guid pid, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -732,7 +730,7 @@ public static class HrEndpoints
 
             var n = await conn.Cmd("DELETE FROM hr_payslips WHERE id=@id").With("@id", pid).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa phiếu lương", "Payslip", pid.ToString());
+            await Signal(db, u, "Xóa phiếu lương", "Payslip", pid.ToString());
             return Results.NoContent();
         });
 
@@ -759,7 +757,7 @@ public static class HrEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/employees/{id:guid}/leave-balances", async (Guid id, SaveLeaveBalanceReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/employees/{id:guid}/leave-balances", async (Guid id, SaveLeaveBalanceReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -772,7 +770,7 @@ public static class HrEndpoints
                 .With("@id", bid).With("@emp", id).With("@year", req.Year)
                 .With("@type", req.LeaveType ?? "annual").With("@total", req.TotalDays).With("@used", req.UsedDays)
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Cập nhật số phép", "LeaveBalance", $"{req.Year}/{req.LeaveType}");
+            await Signal(db, u, "Cập nhật số phép", "LeaveBalance", $"{req.Year}/{req.LeaveType}");
             return Results.Ok(new { id = bid });
         });
 
@@ -800,7 +798,7 @@ public static class HrEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/employees/{id:guid}/documents", async (Guid id, SaveDocumentReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/employees/{id:guid}/documents", async (Guid id, SaveDocumentReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", id).ExecuteScalarAsync() as string;
@@ -815,11 +813,11 @@ public static class HrEndpoints
                 .With("@title", req.Title ?? "").With("@by", req.IssuedBy ?? "")
                 .With("@date", (object?)req.IssuedDate ?? DBNull.Value).With("@url", req.FileUrl ?? "").With("@note", req.Note ?? "")
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Thêm hồ sơ bằng cấp", "EmployeeDocument", req.Title ?? "");
+            await Signal(db, u, "Thêm hồ sơ bằng cấp", "EmployeeDocument", req.Title ?? "");
             return Results.Ok(new { id = did });
         });
 
-        g.MapDelete("/documents/{did:guid}", async (Guid did, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/documents/{did:guid}", async (Guid did, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!u.IsAdmin())
@@ -831,7 +829,7 @@ public static class HrEndpoints
             }
             var n = await conn.Cmd("DELETE FROM hr_documents WHERE id=@id").With("@id", did).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa hồ sơ bằng cấp", "EmployeeDocument", did.ToString());
+            await Signal(db, u, "Xóa hồ sơ bằng cấp", "EmployeeDocument", did.ToString());
             return Results.NoContent();
         });
 
@@ -1755,12 +1753,13 @@ public static class HrEndpoints
         catch { return JsonDocument.Parse("{}").RootElement.Clone(); }
     }
 
-    private static async Task Signal(IHubContext<ChangesHub> hub, Database db, ClaimsPrincipal u, string action, string entity, string name)
-    {
-        await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-    }
+    /// <summary>
+    /// Chỉ ghi audit. Mọi bảng nhân sự sửa ở đây (hr_employees, hr_departments, hr_contracts,
+    /// hr_payslips, hr_leave_balances, hr_documents, hr_locations) đều có trigger tự phát scope 'hr'
+    /// sau khi commit — không gọi hub ở đây nữa (một đường duy nhất, xem DatabaseChangePublisher).
+    /// </summary>
+    private static async Task Signal(Database db, ClaimsPrincipal u, string action, string entity, string name)
+        => await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
 
     // ---- DTO nhận từ client ----
     public record SaveDepartmentReq(string? Code, string? Name, Guid? ParentId, Guid? ManagerEmployeeId, bool IsAccounting);

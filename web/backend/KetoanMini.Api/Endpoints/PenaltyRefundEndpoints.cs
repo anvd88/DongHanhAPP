@@ -1,7 +1,5 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -119,7 +117,7 @@ public static class PenaltyRefundEndpoints
         });
 
         // Kế toán duyệt: chọn hình thức chi trả (payroll = cộng vào lương kỳ sau | cash = chi tiền mặt).
-        g.MapPost("/{id:guid}/approve", async (Guid id, ApproveRefundReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/approve", async (Guid id, ApproveRefundReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!(u.IsAdmin() || await IsAccountingAsync(conn, u.Username()))) return Results.Forbid();
@@ -132,12 +130,12 @@ public static class PenaltyRefundEndpoints
                 .With("@id", id).With("@pm", payout).With("@by", u.Username()).With("@note", req.Note ?? "")
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.BadRequest(new { message = "Khoản hoàn không tồn tại hoặc đã được xử lý." });
-            await SignalRefund(hub, db, conn, u, id, "Duyệt hoàn tiền phạt");
+            await SignalRefund(db, u, id, "Duyệt hoàn tiền phạt");
             return Results.NoContent();
         });
 
         // Kế toán từ chối khoản hoàn.
-        g.MapPost("/{id:guid}/reject", async (Guid id, ApproveRefundReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/reject", async (Guid id, ApproveRefundReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!(u.IsAdmin() || await IsAccountingAsync(conn, u.Username()))) return Results.Forbid();
@@ -149,12 +147,12 @@ public static class PenaltyRefundEndpoints
                 .With("@id", id).With("@by", u.Username()).With("@note", req.Note ?? "")
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.BadRequest(new { message = "Khoản hoàn không tồn tại hoặc đã được xử lý." });
-            await SignalRefund(hub, db, conn, u, id, "Từ chối hoàn tiền phạt");
+            await SignalRefund(db, u, id, "Từ chối hoàn tiền phạt");
             return Results.NoContent();
         });
 
         // Đánh dấu đã chi tiền mặt (chỉ với khoản đã duyệt hình thức cash).
-        g.MapPost("/{id:guid}/mark-paid", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/mark-paid", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!(u.IsAdmin() || await IsAccountingAsync(conn, u.Username()))) return Results.Forbid();
@@ -163,7 +161,7 @@ public static class PenaltyRefundEndpoints
                 WHERE id=@id AND status='Approved' AND payout_method='cash'
                 """).With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.BadRequest(new { message = "Chỉ đánh dấu đã chi cho khoản đã duyệt hình thức tiền mặt." });
-            await SignalRefund(hub, db, conn, u, id, "Chi tiền mặt hoàn phạt");
+            await SignalRefund(db, u, id, "Chi tiền mặt hoàn phạt");
             return Results.NoContent();
         });
     }
@@ -189,21 +187,11 @@ public static class PenaltyRefundEndpoints
         decidedAt = r.DtNull("decided_at"),
     };
 
-    private static async Task SignalRefund(IHubContext<ChangesHub> hub, Database db, NpgsqlConnection conn,
-        ClaimsPrincipal u, Guid refundId, string action)
-    {
-        await db.RecordAudit(u.Username(), action, "PenaltyRefund", refundId.ToString(), $"{action} (web).");
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-        var target = await conn.Cmd("""
-            SELECT e.username FROM hr_penalty_refunds r JOIN hr_employees e ON e.id = r.employee_id WHERE r.id=@id
-            """).With("@id", refundId).ExecuteScalarAsync() as string;
-        if (!string.IsNullOrWhiteSpace(target))
-        {
-            await hub.Clients.User(target).SendAsync("changed", "data");
-            await hub.Clients.User(target).SendAsync("changed", "hr");
-        }
-    }
+    /// <summary>
+    /// Chỉ ghi audit. Trigger trên hr_penalty_refunds tự phát scope 'hr' sau khi commit.
+    /// </summary>
+    private static async Task SignalRefund(Database db, ClaimsPrincipal u, Guid refundId, string action)
+        => await db.RecordAudit(u.Username(), action, "PenaltyRefund", refundId.ToString(), $"{action} (web).");
 
     public record ApproveRefundReq(string? PayoutMethod, string? Note);
 }

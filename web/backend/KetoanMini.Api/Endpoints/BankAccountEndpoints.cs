@@ -1,7 +1,5 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -72,7 +70,7 @@ public static class BankAccountEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/", async (SaveBankAccountReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/", async (SaveBankAccountReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var empId = await ResolveEmployee(conn, u, req.EmployeeId);
@@ -103,11 +101,11 @@ public static class BankAccountEndpoints
                 .With("@branch", (req.Branch ?? "").Trim()).With("@def", makeDefault)
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
 
-            await SignalEmployee(hub, db, u, "Thêm tài khoản ngân hàng", id.ToString());
+            await SignalEmployee(db, u, "Thêm tài khoản ngân hàng", id.ToString());
             return Results.Ok(new { id });
         });
 
-        g.MapPut("/{id:guid}", async (Guid id, SaveBankAccountReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/{id:guid}", async (Guid id, SaveBankAccountReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var empId = await OwnerOf(conn, id);
@@ -128,12 +126,12 @@ public static class BankAccountEndpoints
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
 
-            await SignalEmployee(hub, db, u, "Cập nhật tài khoản ngân hàng", id.ToString());
+            await SignalEmployee(db, u, "Cập nhật tài khoản ngân hàng", id.ToString());
             return Results.NoContent();
         });
 
         // Đặt một thẻ làm mặc định (gỡ mặc định của các thẻ còn lại của nhân viên đó).
-        g.MapPost("/{id:guid}/default", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/default", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var empId = await OwnerOf(conn, id);
@@ -143,11 +141,11 @@ public static class BankAccountEndpoints
             await ClearDefault(conn, empId.Value);
             await conn.Cmd("UPDATE hr_bank_accounts SET is_default=TRUE, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                 .With("@id", id).ExecuteNonQueryAsync();
-            await SignalEmployee(hub, db, u, "Đặt tài khoản ngân hàng mặc định", id.ToString());
+            await SignalEmployee(db, u, "Đặt tài khoản ngân hàng mặc định", id.ToString());
             return Results.NoContent();
         });
 
-        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var empId = await OwnerOf(conn, id);
@@ -164,7 +162,7 @@ public static class BankAccountEndpoints
                     WHERE id = (SELECT id FROM hr_bank_accounts WHERE employee_id=@e ORDER BY created_at LIMIT 1)
                     """).With("@e", empId.Value).ExecuteNonQueryAsync();
 
-            await SignalEmployee(hub, db, u, "Xóa tài khoản ngân hàng", id.ToString());
+            await SignalEmployee(db, u, "Xóa tài khoản ngân hàng", id.ToString());
             return Results.NoContent();
         });
     }
@@ -210,15 +208,12 @@ public static class BankAccountEndpoints
         note = r.Str("note"),
     };
 
-    private static async Task SignalEmployee(IHubContext<ChangesHub> hub, Database db,
-        ClaimsPrincipal u, string action, string name)
-    {
-        await db.RecordAudit(u.Username(), action, "BankAccount", name, $"{action} (web).");
-        // Clients.All ĐÃ gồm cả nhân viên chủ tài khoản, nên không gửi thêm bản riêng cho họ nữa:
-        // trước đây máy của người đó nhận "data"/"hr" HAI lần và tải lại dữ liệu thừa một lượt.
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-    }
+    /// <summary>
+    /// Chỉ ghi audit. Trigger trên hr_bank_accounts tự phát scope 'hr' sau khi commit — cả màn hình
+    /// quản trị lẫn máy của chính nhân viên đều nhận được, không cần gọi hub ở đây.
+    /// </summary>
+    private static async Task SignalEmployee(Database db, ClaimsPrincipal u, string action, string name)
+        => await db.RecordAudit(u.Username(), action, "BankAccount", name, $"{action} (web).");
 
     public record SaveBankAccountReq(Guid? EmployeeId, string? Bank, string? AccountNumber,
         string? AccountHolder, string? Branch, bool IsDefault, string? Note);

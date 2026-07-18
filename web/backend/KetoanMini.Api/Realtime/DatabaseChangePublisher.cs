@@ -50,6 +50,17 @@ public static class DatabaseChangePublisher
                     ('app_users',             ARRAY['presence']::text[]),
                     ('user_sessions',         ARRAY['presence']::text[]),
                     ('user_roles',            ARRAY['presence']::text[]),
+                    -- Các bảng dưới đây đều phục vụ /api/users mà useApi ánh xạ sang scope 'presence',
+                    -- nên dùng chung scope đó thì màn hình quản trị tài khoản tự làm mới đúng chỗ.
+                    ('work_access_requests',  ARRAY['presence']::text[]),
+                    ('password_reset_requests', ARRAY['presence']::text[]),
+                    ('registration_codes',    ARRAY['presence']::text[]),
+                    ('web_verified_users',    ARRAY['presence']::text[]),
+                    ('web_diamond_members',   ARRAY['presence']::text[]),
+                    ('web_user_avatars',      ARRAY['presence']::text[]),
+                    ('app_settings',          ARRAY['presence']::text[]),
+
+                    ('help_faqs',             ARRAY['data']::text[]),
 
                     ('hr_departments',        ARRAY['hr']::text[]),
                     ('hr_employees',          ARRAY['hr']::text[]),
@@ -77,6 +88,33 @@ public static class DatabaseChangePublisher
 
                     ('app_config',            ARRAY['config']::text[]),
                     ('audit_logs',            ARRAY['audit']::text[]),
+
+                    -- Lương / phạt / chi tiền / tài khoản ngân hàng: trước đây các endpoint này tự gọi
+                    -- hub. Nay đi chung một đường như mọi bảng khác (xem RealtimeCoverageTests).
+                    ('hr_salaries',           ARRAY['hr']::text[]),
+                    ('hr_payslip_inquiries',  ARRAY['hr']::text[]),
+                    ('hr_penalties',          ARRAY['hr']::text[]),
+                    ('hr_penalty_ledger',     ARRAY['hr']::text[]),
+                    ('hr_penalty_refunds',    ARRAY['hr']::text[]),
+                    ('hr_payout_categories',  ARRAY['hr']::text[]),
+                    ('hr_payout_vouchers',    ARRAY['hr']::text[]),
+                    ('hr_bank_accounts',      ARRAY['hr']::text[]),
+
+                    ('app_releases',          ARRAY['release']::text[]),
+
+                    ('app_feedbacks',         ARRAY['feedback']::text[]),
+                    ('app_general_feedback',  ARRAY['feedback']::text[]),
+                    ('app_support_tickets',   ARRAY['feedback']::text[]),
+                    -- Báo cáo tin nhắn xấu hiện ở hộp thư xử lý cùng chỗ với góp ý, nên dùng chung
+                    -- scope 'feedback'. Các bảng web_chat_* CÒN LẠI cố ý KHÔNG có trigger: tín hiệu
+                    -- chat phải nhắm đúng thành viên cuộc trò chuyện (ChatEndpoints.NotifyChat).
+                    ('web_chat_reports',      ARRAY['feedback']::text[]),
+
+                    ('surveys',               ARRAY['data']::text[]),
+                    ('survey_questions',      ARRAY['data']::text[]),
+                    ('survey_answers',        ARRAY['data']::text[]),
+                    ('survey_responses',      ARRAY['data']::text[]),
+                    ('app_survey_responses',  ARRAY['data']::text[]),
 
                     ('hr_onboarding_tasks',   ARRAY['talent']::text[]),
                     ('hr_performance_goals',  ARRAY['talent']::text[]),

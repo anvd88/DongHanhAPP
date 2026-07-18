@@ -2,11 +2,9 @@ using System.Security.Claims;
 using System.Text;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
-using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Net.Http.Headers;
 
@@ -108,7 +106,7 @@ public static class ReleaseEndpoints
 
         g.MapPost("/", UploadRelease).DisableAntiforgery();
 
-        g.MapPost("/{id:long}/publish", async (long id, PublishReleaseRequest req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/{id:long}/publish", async (long id, PublishReleaseRequest req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             await using var conn = await db.OpenAsync();
             string version = "", notes = "";
@@ -154,13 +152,12 @@ public static class ReleaseEndpoints
                 .ExecuteNonQueryAsync();
 
             if (changed == 0) return Results.NotFound(new { message = "Không tìm thấy bản phát hành." });
-            await NotifyReleaseChanged(hub);
             if (req.IsPublished) await SendReleasePush(push, version, versionCode, notes);
             await db.RecordAudit(u.Username(), req.IsPublished ? "Phát hành APK" : "Gỡ phát hành APK", "Release", id.ToString(), "");
             return Results.NoContent();
         });
 
-        g.MapDelete("/{id:long}", async (long id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/{id:long}", async (long id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var changed = await conn.Cmd("DELETE FROM app_releases WHERE id=@id")
@@ -168,13 +165,12 @@ public static class ReleaseEndpoints
                 .ExecuteNonQueryAsync();
             if (changed == 0) return Results.NotFound(new { message = "Không tìm thấy bản phát hành." });
             ReleaseStorage.TryDelete(id);
-            await NotifyReleaseChanged(hub);
             await db.RecordAudit(u.Username(), "Xóa bản phát hành APK", "Release", id.ToString(), "");
             return Results.NoContent();
         });
 
         // Gỡ HÀNG LOẠT các bản phát hành đã tích chọn (kèm APK trong DB) trong một lần.
-        g.MapPost("/bulk-delete", async (BulkDeleteReleasesRequest req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/bulk-delete", async (BulkDeleteReleasesRequest req, ClaimsPrincipal u, Database db) =>
         {
             var ids = (req.Ids ?? Array.Empty<long>()).Where(x => x > 0).Distinct().ToArray();
             if (ids.Length == 0) return Results.BadRequest(new { message = "Chưa chọn bản phát hành nào." });
@@ -184,7 +180,6 @@ public static class ReleaseEndpoints
                 .With("@ids", ids)
                 .ExecuteNonQueryAsync();
             foreach (var id in ids) ReleaseStorage.TryDelete(id);
-            await NotifyReleaseChanged(hub);
             await db.RecordAudit(u.Username(), "Xóa hàng loạt bản phát hành APK", "Release", string.Join(",", ids), $"{deleted} bản");
             return Results.Ok(new { deleted });
         });
@@ -195,7 +190,7 @@ public static class ReleaseEndpoints
     /// thẳng từ socket xuống đĩa qua buffer 80KB nên một bản 100MB cũng không chiếm 100MB RAM, và
     /// không phải nhờ tệp tạm của hệ thống (thư mục temp có thể nằm trên RAM disk).
     /// </summary>
-    private static async Task<IResult> UploadRelease(HttpRequest request, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push)
+    private static async Task<IResult> UploadRelease(HttpRequest request, ClaimsPrincipal u, Database db, PushService push)
     {
         var boundary = ReadBoundary(request);
         if (boundary is null)
@@ -304,7 +299,6 @@ public static class ReleaseEndpoints
                 throw;
             }
 
-            await NotifyReleaseChanged(hub);
             if (isPublished) await SendReleasePush(push, dto.Version, dto.VersionCode, notes);
             await db.RecordAudit(u.Username(), isPublished ? "Đăng bản cập nhật APK" : "Tạo bản cập nhật APK", "Release", dto.Version, apkFileName);
             return Results.Created($"/api/releases/{dto.Id}", dto);
@@ -412,9 +406,6 @@ public static class ReleaseEndpoints
 
     private static bool ParseBool(string value)
         => value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1" || value.Equals("on", StringComparison.OrdinalIgnoreCase);
-
-    private static Task NotifyReleaseChanged(IHubContext<ChangesHub> hub)
-        => hub.Clients.All.SendAsync("changed", "release");
 
     /// <summary>
     /// Đẩy thông báo tới MỌI thiết bị khi admin phát hành bản mới. "Chữ ký" <c>release:{versionCode}</c>

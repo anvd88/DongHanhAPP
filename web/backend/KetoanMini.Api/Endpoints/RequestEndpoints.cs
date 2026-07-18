@@ -1,9 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Services;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -425,7 +423,7 @@ public static class RequestEndpoints
             return Results.File((byte[])r.GetValue(r.GetOrdinal("content")), r.Str("mime_type"), r.Str("file_name"));
         });
 
-        g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
+        g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             if (string.IsNullOrWhiteSpace(req.Type) || Array.FindIndex(Types, t => t.Type == req.Type) < 0)
                 return Results.BadRequest(new { message = "Loại đơn không hợp lệ." });
@@ -506,8 +504,6 @@ public static class RequestEndpoints
             }
 
             await db.RecordAudit(me, "Gửi đơn từ", "Request", no, $"{TypeLabel(req.Type)} (web).");
-            await hub.Clients.All.SendAsync("changed", "data");
-            await hub.Clients.All.SendAsync("changed", "hr");
 
             // Đẩy thông báo tới người sẽ duyệt bước đầu tiên (quản lý trực tiếp, hoặc quản trị).
             var pushBody = $"{me} · {TypeLabel(req.Type)}";
@@ -520,7 +516,7 @@ public static class RequestEndpoints
             return Results.Ok(new { id = reqId, requestNo = no });
         });
 
-        g.MapPut("/{id:guid}", async (Guid id, CreateRequestReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/{id:guid}", async (Guid id, CreateRequestReq req, ClaimsPrincipal u, Database db) =>
         {
             if (string.IsNullOrWhiteSpace(req.Type) || Array.FindIndex(Types, t => t.Type == req.Type) < 0)
                 return Results.BadRequest(new { message = "Loại đơn không hợp lệ." });
@@ -534,17 +530,16 @@ public static class RequestEndpoints
                 .With("@payload", payload).ExecuteNonQueryAsync();
             if (n == 0) return Results.BadRequest(new { message = "Đơn không còn đủ điều kiện chỉnh sửa." });
             await db.RecordAudit(u.Username(), "Sửa đơn từ", "Request", id.ToString(), TypeLabel(req.Type));
-            await hub.Clients.All.SendAsync("changed", "data");
             return Results.NoContent();
         });
 
-        g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
-            await Decide(id, req, u, db, hub, push, approve: true));
+        g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push) =>
+            await Decide(id, req, u, db, push, approve: true));
 
-        g.MapPost("/{id:guid}/reject", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push) =>
-            await Decide(id, req, u, db, hub, push, approve: false));
+        g.MapPost("/{id:guid}/reject", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push) =>
+            await Decide(id, req, u, db, push, approve: false));
 
-        g.MapPost("/{id:guid}/cancel", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/cancel", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("""
@@ -552,8 +547,6 @@ public static class RequestEndpoints
                 WHERE id=@id AND requester_username=@me AND status='Pending'
                 """).With("@id", id).With("@me", u.Username()).ExecuteNonQueryAsync();
             if (n == 0) return Results.BadRequest(new { message = "Chỉ hủy được đơn của bạn khi còn chờ duyệt." });
-            await hub.Clients.All.SendAsync("changed", "data");
-            await hub.Clients.All.SendAsync("changed", "hr");
             return Results.NoContent();
         });
 
@@ -617,7 +610,7 @@ public static class RequestEndpoints
         }.ExecuteNonQueryAsync();
     }
 
-    private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub, PushService push, bool approve)
+    private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push, bool approve)
     {
         await using var conn = await db.OpenAsync();
         var me = u.Username();
@@ -724,10 +717,6 @@ public static class RequestEndpoints
         await db.RecordAudit(me, approve ? "Duyệt đơn từ" : "Từ chối đơn từ", "Request", requestNo,
             approve ? TypeLabel(reqType) : $"{TypeLabel(reqType)} — Lý do từ chối: {comment}");
         // Báo cho người gửi biết đơn đã được xử lý (tín hiệu chung + nhắm riêng người gửi).
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-        await hub.Clients.User(requester).SendAsync("changed", "data");
-        await hub.Clients.User(requester).SendAsync("changed", "hr");
         return Results.NoContent();
     }
 

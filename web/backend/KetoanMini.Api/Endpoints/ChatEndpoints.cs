@@ -828,7 +828,6 @@ public static class ChatEndpoints
                 .With("@supportMessage", "Hỗ Trợ Người Dùng đã nhận báo xấu của bạn. Admin sẽ kiểm tra và phản hồi tại đây.")
                 .ExecuteNonQueryAsync();
             await NotifyChat(hub, conn, supportConversationId);
-            await hub.Clients.All.SendAsync("changed", "feedback");
             return Results.NoContent();
         });
 

@@ -1,7 +1,5 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -92,7 +90,7 @@ public static class ShiftEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/", async (SaveShiftReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/", async (SaveShiftReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (!TryTime(req.StartTime, out var start) || !TryTime(req.EndTime, out var end))
@@ -107,11 +105,11 @@ public static class ShiftEndpoints
                 .With("@start", start).With("@end", end).With("@brk", req.BreakMinutes)
                 .With("@grace", req.LateGraceMinutes).With("@std", req.StandardHours).With("@overnight", req.IsOvernight)
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Tạo ca làm", "Shift", req.Name ?? "");
+            await Signal(db, u, "Tạo ca làm", "Shift", req.Name ?? "");
             return Results.Ok(new { id });
         });
 
-        g.MapPut("/{id:guid}", async (Guid id, SaveShiftReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/{id:guid}", async (Guid id, SaveShiftReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (!TryTime(req.StartTime, out var start) || !TryTime(req.EndTime, out var end))
@@ -127,17 +125,17 @@ public static class ShiftEndpoints
                 .With("@grace", req.LateGraceMinutes).With("@std", req.StandardHours).With("@overnight", req.IsOvernight)
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Cập nhật ca làm", "Shift", req.Name ?? "");
+            await Signal(db, u, "Cập nhật ca làm", "Shift", req.Name ?? "");
             return Results.NoContent();
         });
 
-        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_shifts WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xóa ca làm", "Shift", id.ToString());
+            await Signal(db, u, "Xóa ca làm", "Shift", id.ToString());
             return Results.NoContent();
         });
 
@@ -174,7 +172,7 @@ public static class ShiftEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/assignments", async (AssignShiftReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/assignments", async (AssignShiftReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -187,17 +185,17 @@ public static class ShiftEndpoints
                 .With("@id", id).With("@emp", req.EmployeeId).With("@shift", req.ShiftId)
                 .With("@date", req.WorkDate).With("@note", req.Note ?? "")
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Phân ca", "ShiftAssignment", req.WorkDate.ToString("yyyy-MM-dd"));
+            await Signal(db, u, "Phân ca", "ShiftAssignment", req.WorkDate.ToString("yyyy-MM-dd"));
             return Results.Ok(new { id });
         });
 
-        g.MapDelete("/assignments/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/assignments/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_shift_assignments WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Hủy phân ca", "ShiftAssignment", id.ToString());
+            await Signal(db, u, "Hủy phân ca", "ShiftAssignment", id.ToString());
             return Results.NoContent();
         });
 
@@ -233,7 +231,7 @@ public static class ShiftEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/holidays", async (SaveHolidayReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/holidays", async (SaveHolidayReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             var holidayType = NormalizeHolidayType(req.HolidayType);
@@ -252,11 +250,11 @@ public static class ShiftEndpoints
                 .With("@id", id).With("@date", req.HolidayDate).With("@name", name)
                 .With("@type", holidayType).With("@note", req.Note ?? "").With("@by", u.Username())
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Cap nhat ngay nghi", "Holiday", req.HolidayDate.ToString("yyyy-MM-dd"));
+            await Signal(db, u, "Cap nhat ngay nghi", "Holiday", req.HolidayDate.ToString("yyyy-MM-dd"));
             return Results.Ok(new { id });
         });
 
-        g.MapDelete("/holidays/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/holidays/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -264,7 +262,7 @@ public static class ShiftEndpoints
                 .With("@id", id).ExecuteScalarAsync() as string ?? id.ToString();
             var n = await conn.Cmd("DELETE FROM hr_holidays WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(hub, db, u, "Xoa ngay nghi", "Holiday", name);
+            await Signal(db, u, "Xoa ngay nghi", "Holiday", name);
             return Results.NoContent();
         });
     }
@@ -593,12 +591,12 @@ public static class ShiftEndpoints
     private static bool TryTime(string? value, out TimeOnly time)
         => TimeOnly.TryParse(string.IsNullOrWhiteSpace(value) ? "" : value, out time);
 
-    private static async Task Signal(IHubContext<ChangesHub> hub, Database db, ClaimsPrincipal u, string action, string entity, string name)
-    {
-        await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-    }
+    /// <summary>
+    /// Chỉ ghi audit. Tín hiệu real-time do trigger trên hr_shifts / hr_shift_assignments / hr_holidays
+    /// tự phát scope 'hr' sau khi commit (xem DatabaseChangePublisher) — không gọi hub ở đây nữa.
+    /// </summary>
+    private static async Task Signal(Database db, ClaimsPrincipal u, string action, string entity, string name)
+        => await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
 
     public record SaveShiftReq(string? Code, string? Name, string? StartTime, string? EndTime,
         int BreakMinutes, int LateGraceMinutes, decimal StandardHours, bool IsOvernight);

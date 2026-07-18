@@ -3,8 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -72,7 +70,7 @@ public static class SurveyEndpoints
         var g = app.MapGroup("/api/surveys").RequireAuthorization();
 
         // ---------- Tạo / quản trị (Admin) ----------
-        g.MapPost("/", async (CreateSurveyReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/", async (CreateSurveyReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Title)) return Results.BadRequest(new { message = "Thiếu tiêu đề khảo sát." });
@@ -104,7 +102,6 @@ public static class SurveyEndpoints
             }
 
             await db.RecordAudit(u.Username(), "Tạo khảo sát", "Survey", id.ToString(), req.Title.Trim());
-            await hub.Clients.All.SendAsync("changed", "data");
             return Results.Ok(new { id });
         });
 
@@ -180,7 +177,7 @@ public static class SurveyEndpoints
         });
 
         // Gửi phản hồi.
-        g.MapPost("/{id:guid}/respond", async (Guid id, RespondReq req, ClaimsPrincipal u, Database db, IConfiguration cfg, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/respond", async (Guid id, RespondReq req, ClaimsPrincipal u, Database db, IConfiguration cfg) =>
         {
             await using var conn = await db.OpenAsync();
             bool anon, multi, active; DateTime? closes;
@@ -219,7 +216,6 @@ public static class SurveyEndpoints
                     .With("@opts", JsonSerializer.Serialize(a.OptionIndices ?? Array.Empty<int>()))
                     .ExecuteNonQueryAsync();
 
-            await hub.Clients.All.SendAsync("changed", "data");
             return Results.Ok(new { ok = true });
         });
 
@@ -269,26 +265,24 @@ public static class SurveyEndpoints
         });
 
         // Đóng khảo sát.
-        g.MapPost("/{id:guid}/close", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/close", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("UPDATE surveys SET is_active=FALSE WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await db.RecordAudit(u.Username(), "Đóng khảo sát", "Survey", id.ToString(), "");
-            await hub.Clients.All.SendAsync("changed", "data");
             return Results.NoContent();
         });
 
         // Xóa khảo sát (kèm câu hỏi + phản hồi qua ON DELETE CASCADE).
-        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM surveys WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await db.RecordAudit(u.Username(), "Xóa khảo sát", "Survey", id.ToString(), "");
-            await hub.Clients.All.SendAsync("changed", "data");
             return Results.NoContent();
         });
     }

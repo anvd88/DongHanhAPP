@@ -3,8 +3,6 @@ using System.Security.Claims;
 using System.Text.Json;
 using ClosedXML.Excel;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -88,7 +86,7 @@ public static class PayrollEndpoints
             return Results.Ok(await ReadSalary(conn, employeeId));
         });
 
-        g.MapPut("/salaries/{employeeId:guid}", async (Guid employeeId, SaveSalaryReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/salaries/{employeeId:guid}", async (Guid employeeId, SaveSalaryReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -104,7 +102,7 @@ public static class PayrollEndpoints
                 .With("@base", req.BaseSalary).With("@allow", req.Allowance).With("@otr", req.OvertimeRate)
                 .With("@comp", componentsJson).With("@note", req.Note ?? "").With("@by", u.Username())
                 .ExecuteNonQueryAsync();
-            await Signal(hub, db, conn, u, employeeId, "Cập nhật mức lương", "Salary");
+            await Signal(db, u, employeeId, "Cập nhật mức lương", "Salary");
             return Results.NoContent();
         });
 
@@ -214,7 +212,7 @@ public static class PayrollEndpoints
         });
 
         // Lập (hoặc cập nhật) phiếu lương cho kỳ từ dữ liệu đã tính; adjustments là các khoản điều chỉnh thủ công.
-        g.MapPost("/payslips", async (CreatePayslipReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/payslips", async (CreatePayslipReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             if (req.EmployeeId == Guid.Empty || !ValidPeriod(req.Period))
@@ -269,7 +267,7 @@ public static class PayrollEndpoints
                 await PayoutVoucherEndpoints.SyncPayslipVoucherAsync(conn, pid, req.EmployeeId, req.Period,
                     result.NetPay, u.Username());
 
-            await Signal(hub, db, conn, u, req.EmployeeId, "Lập phiếu lương", "Payslip");
+            await Signal(db, u, req.EmployeeId, "Lập phiếu lương", "Payslip");
             return Results.Ok(new { id = pid, netPay = result.NetPay });
         });
 
@@ -559,19 +557,13 @@ public static class PayrollEndpoints
         => !string.IsNullOrWhiteSpace(period) && period.Length >= 7
            && int.TryParse(period[..4], out _) && int.TryParse(period.Substring(5, 2), out var m) && m is >= 1 and <= 12;
 
-    private static async Task Signal(IHubContext<ChangesHub> hub, Database db, NpgsqlConnection conn,
-        ClaimsPrincipal u, Guid employeeId, string action, string entity)
+    /// <summary>
+    /// Chỉ ghi audit. Trigger trên hr_salaries / hr_payslips / hr_payslip_inquiries / hr_penalty_refunds
+    /// tự phát scope 'hr' sau khi commit — không gọi hub ở đây nữa (một đường duy nhất).
+    /// </summary>
+    private static async Task Signal(Database db, ClaimsPrincipal u, Guid employeeId, string action, string entity)
     {
         await db.RecordAudit(u.Username(), action, entity, employeeId.ToString(), $"{action} (web).");
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-        var target = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
-            .With("@id", employeeId).ExecuteScalarAsync() as string;
-        if (!string.IsNullOrWhiteSpace(target))
-        {
-            await hub.Clients.User(target).SendAsync("changed", "data");
-            await hub.Clients.User(target).SendAsync("changed", "hr");
-        }
     }
 
     // ---- Xuất Excel ----

@@ -1,9 +1,7 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -176,7 +174,7 @@ public static class PayoutVoucherEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/categories", async (SaveCategoryReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/categories", async (SaveCategoryReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             var name = (req.Name ?? "").Trim();
@@ -197,11 +195,11 @@ public static class PayoutVoucherEndpoints
                 .With("@id", id).With("@code", code).With("@name", name)
                 .With("@desc", (req.Description ?? "").Trim()).With("@active", req.IsActive)
                 .With("@sort", NormSort(req.SortOrder)).ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Thêm loại chi", code);
+            await Signal(db, u, "Thêm loại chi", code);
             return Results.Ok(new { id, code });
         });
 
-        g.MapPut("/categories/{id:guid}", async (Guid id, SaveCategoryReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPut("/categories/{id:guid}", async (Guid id, SaveCategoryReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             var name = (req.Name ?? "").Trim();
@@ -226,11 +224,11 @@ public static class PayoutVoucherEndpoints
             if (!system) n.With("@active", req.IsActive);
             if (await n.ExecuteNonQueryAsync() == 0) return Results.NotFound();
 
-            await Signal(hub, db, u, "Cập nhật loại chi", id.ToString());
+            await Signal(db, u, "Cập nhật loại chi", id.ToString());
             return Results.NoContent();
         });
 
-        g.MapDelete("/categories/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapDelete("/categories/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -247,7 +245,7 @@ public static class PayoutVoucherEndpoints
                 return Results.BadRequest(new { message = "Loại chi đã có phiếu nên không xóa được — hãy tắt (ẩn) loại này." });
 
             await conn.Cmd("DELETE FROM hr_payout_categories WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
-            await Signal(hub, db, u, "Xóa loại chi", id.ToString());
+            await Signal(db, u, "Xóa loại chi", id.ToString());
             return Results.NoContent();
         });
 
@@ -413,7 +411,7 @@ public static class PayoutVoucherEndpoints
 
         // ---------------- Lập / duyệt phiếu ----------------
 
-        g.MapPost("/", async (CreateVoucherReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/", async (CreateVoucherReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!await IsCashierAsync(conn, u))
@@ -472,7 +470,7 @@ public static class PayoutVoucherEndpoints
                     WHERE id=@id AND status='PendingAccounting'
                     """).With("@id", refundId).With("@by", u.Username()).ExecuteNonQueryAsync();
 
-            await SignalVoucher(hub, db, conn, u, id, employeeId, "Lập phiếu chi", no);
+            await Signal(db, u, "Lập phiếu chi", no);
             return Results.Ok(new { id, voucherNo = no });
         });
 
@@ -493,7 +491,7 @@ public static class PayoutVoucherEndpoints
         });
 
         // Duyệt chi — CHẶN CỨNG nếu người nhận chưa quét QR ký nhận.
-        g.MapPost("/{id:guid}/approve", async (Guid id, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/approve", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!await IsCashierAsync(conn, u)) return Results.Forbid();
@@ -519,11 +517,11 @@ public static class PayoutVoucherEndpoints
                 await conn.Cmd("UPDATE hr_penalty_refunds SET status='Paid', decided_at=CURRENT_TIMESTAMP WHERE id=@id")
                     .With("@id", refundId).ExecuteNonQueryAsync();
 
-            await SignalVoucher(hub, db, conn, u, id, employeeId, "Duyệt chi phiếu chi", no ?? id.ToString());
+            await Signal(db, u, "Duyệt chi phiếu chi", no ?? id.ToString());
             return Results.NoContent();
         });
 
-        g.MapPost("/{id:guid}/cancel", async (Guid id, CancelVoucherReq req, ClaimsPrincipal u, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:guid}/cancel", async (Guid id, CancelVoucherReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!await IsCashierAsync(conn, u)) return Results.Forbid();
@@ -546,7 +544,7 @@ public static class PayoutVoucherEndpoints
                     WHERE id=@id AND status='Approved'
                     """).With("@id", refundId).ExecuteNonQueryAsync();
 
-            await SignalVoucher(hub, db, conn, u, id, employeeId, "Hủy phiếu chi", no);
+            await Signal(db, u, "Hủy phiếu chi", no);
             return Results.NoContent();
         });
     }
@@ -643,20 +641,8 @@ public static class PayoutVoucherEndpoints
         return (r.Guid("id"), r.Guid("employee_id"), r.Str("voucher_no"));
     }
 
-    /// <summary>Báo cho màn hình kế toán + người nhận biết phiếu vừa đổi trạng thái (dùng sau khi quét QR).</summary>
-    public static async Task SignalScanAsync(IHubContext<ChangesHub> hub, NpgsqlConnection conn, Guid employeeId)
-    {
-        // Dùng đúng bộ scope client đã biết ("data"/"hr"); scope lạ sẽ bị lib/realtime.ts bỏ qua.
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-        var target = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
-            .With("@id", employeeId).ExecuteScalarAsync() as string;
-        if (!string.IsNullOrWhiteSpace(target))
-        {
-            await hub.Clients.User(target).SendAsync("changed", "data");
-            await hub.Clients.User(target).SendAsync("changed", "hr");
-        }
-    }
+    // SignalScanAsync đã bỏ: ConfirmScanAsync UPDATE hr_payout_vouchers nên trigger tự phát scope 'hr'
+    // cho cả màn hình kế toán lẫn người nhận, không cần báo tay sau khi quét QR nữa.
 
     // ---------------- Trợ giúp ----------------
 
@@ -780,26 +766,12 @@ public static class PayoutVoucherEndpoints
         };
     }
 
-    private static async Task Signal(IHubContext<ChangesHub> hub, Database db, ClaimsPrincipal u, string action, string name)
-    {
-        await db.RecordAudit(u.Username(), action, "PayoutVoucher", name, $"{action} (web).");
-        // Dùng đúng bộ scope client đã biết ("data"/"hr"); scope lạ sẽ bị lib/realtime.ts bỏ qua.
-        await hub.Clients.All.SendAsync("changed", "data");
-        await hub.Clients.All.SendAsync("changed", "hr");
-    }
-
-    private static async Task SignalVoucher(IHubContext<ChangesHub> hub, Database db, NpgsqlConnection conn,
-        ClaimsPrincipal u, Guid voucherId, Guid employeeId, string action, string name)
-    {
-        await Signal(hub, db, u, action, name);
-        var target = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
-            .With("@id", employeeId).ExecuteScalarAsync() as string;
-        if (!string.IsNullOrWhiteSpace(target))
-        {
-            await hub.Clients.User(target).SendAsync("changed", "data");
-            await hub.Clients.User(target).SendAsync("changed", "hr");
-        }
-    }
+    /// <summary>
+    /// Chỉ ghi audit. Trigger trên hr_payout_vouchers / hr_payout_categories tự phát scope 'hr' sau khi
+    /// commit — không gọi hub ở đây nữa (một đường duy nhất, xem DatabaseChangePublisher).
+    /// </summary>
+    private static async Task Signal(Database db, ClaimsPrincipal u, string action, string name)
+        => await db.RecordAudit(u.Username(), action, "PayoutVoucher", name, $"{action} (web).");
 
     public record SaveCategoryReq(string? Code, string? Name, string? Description, bool IsActive, int SortOrder);
     public record CreateVoucherReq(Guid CategoryId, Guid EmployeeId, decimal Amount, string? Reason,

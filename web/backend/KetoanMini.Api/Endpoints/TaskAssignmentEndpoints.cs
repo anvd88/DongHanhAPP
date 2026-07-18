@@ -207,7 +207,7 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, assignerName, "assigned", $"Giao việc cho {assigneeName}.");
 
             await db.RecordAudit(me, "Giao việc", "WorkTask", no, $"{title} → {assigneeName}.");
-            await push.SendToUserAsync(assignee, "Bạn được giao việc mới", $"{no}: {title}", $"task:{id}:assigned", "WorkTasks");
+            await push.SendToUserAsync(assignee, "Bạn được giao việc mới", $"{no}: {title}", $"task:{id}:assigned", "Tasks");
             return Results.Ok(new { id, taskNo = no });
         });
 
@@ -253,7 +253,7 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, actorName, reassigned ? "reassigned" : "updated",
                 reassigned ? $"Chuyển việc cho {assigneeName}." : "Cập nhật thông tin việc.");
             await db.RecordAudit(me, "Sửa việc", "WorkTask", t.TaskNo, title);
-            if (reassigned) await push.SendToUserAsync(assignee, "Bạn được giao việc", $"{t.TaskNo}: {title}", $"task:{id}:assigned", "WorkTasks");
+            if (reassigned) await push.SendToUserAsync(assignee, "Bạn được giao việc", $"{t.TaskNo}: {title}", $"task:{id}:assigned", "Tasks");
             return Results.NoContent();
         });
 
@@ -299,7 +299,7 @@ public static class TaskAssignmentEndpoints
             var name = await DisplayName(conn, me);
             await AddEvent(conn, id, me, name, "submitted", note.Length > 0 ? $"Nộp nghiệm thu: {note}" : "Nộp nghiệm thu.");
             await db.RecordAudit(me, "Nộp nghiệm thu", "WorkTask", t.TaskNo, t.Title);
-            await push.SendToUserAsync(t.AssignerUsername, "Có việc chờ nghiệm thu", $"{t.TaskNo}: {t.Title}", $"task:{id}:submitted", "WorkTasks");
+            await push.SendToUserAsync(t.AssignerUsername, "Có việc chờ nghiệm thu", $"{t.TaskNo}: {t.Title}", $"task:{id}:submitted", "Tasks");
             return Results.NoContent();
         });
 
@@ -325,7 +325,7 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, name, "accepted",
                 (rating is not null ? $"Nghiệm thu đạt ({rating}★). " : "Nghiệm thu đạt. ") + note);
             await db.RecordAudit(me, "Nghiệm thu đạt", "WorkTask", t.TaskNo, t.Title);
-            await push.SendToUserAsync(t.AssigneeUsername, "Việc đã được nghiệm thu", $"{t.TaskNo}: {t.Title}", $"task:{id}:accepted", "WorkTasks");
+            await push.SendToUserAsync(t.AssigneeUsername, "Việc đã được nghiệm thu", $"{t.TaskNo}: {t.Title}", $"task:{id}:accepted", "Tasks");
             return Results.NoContent();
         });
 
@@ -349,7 +349,7 @@ public static class TaskAssignmentEndpoints
             var name = await DisplayName(conn, me);
             await AddEvent(conn, id, me, name, "rejected", $"Trả lại: {note}");
             await db.RecordAudit(me, "Trả lại việc", "WorkTask", t.TaskNo, note);
-            await push.SendToUserAsync(t.AssigneeUsername, "Việc bị trả lại", $"{t.TaskNo}: {note}", $"task:{id}:rejected", "WorkTasks");
+            await push.SendToUserAsync(t.AssigneeUsername, "Việc bị trả lại", $"{t.TaskNo}: {note}", $"task:{id}:rejected", "Tasks");
             return Results.NoContent();
         });
 
@@ -369,7 +369,7 @@ public static class TaskAssignmentEndpoints
             var name = await DisplayName(conn, me);
             await AddEvent(conn, id, me, name, "cancelled", note.Length > 0 ? $"Huỷ việc: {note}" : "Huỷ việc.");
             await db.RecordAudit(me, "Huỷ việc", "WorkTask", t.TaskNo, t.Title);
-            await push.SendToUserAsync(t.AssigneeUsername, "Việc đã bị huỷ", $"{t.TaskNo}: {t.Title}", $"task:{id}:cancelled", "WorkTasks");
+            await push.SendToUserAsync(t.AssigneeUsername, "Việc đã bị huỷ", $"{t.TaskNo}: {t.Title}", $"task:{id}:cancelled", "Tasks");
             return Results.NoContent();
         });
 
@@ -389,7 +389,7 @@ public static class TaskAssignmentEndpoints
             var name = await DisplayName(conn, me);
             await AddEvent(conn, id, me, name, "comment", note);
             var other = isAssignee ? t.AssignerUsername : t.AssigneeUsername;
-            await push.SendToUserAsync(other, $"Trao đổi việc {t.TaskNo}", note, $"task:{id}:comment", "WorkTasks");
+            await push.SendToUserAsync(other, $"Trao đổi việc {t.TaskNo}", note, $"task:{id}:comment", "Tasks");
             return Results.NoContent();
         });
 
