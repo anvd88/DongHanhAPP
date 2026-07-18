@@ -95,7 +95,11 @@ builder.Services.AddSingleton<FieldCipher>();
 builder.Services.AddHttpClient();
 
 // Thông báo đẩy tức thì qua Firebase Cloud Messaging (tắt an toàn nếu chưa cấu hình Firebase:CredentialsPath).
+// Hàng chờ bền cho việc-có-hậu-quả: endpoint chỉ ghi một dòng, worker mới gọi FCM. Xem OutboxQueue.
+builder.Services.AddSingleton<OutboxQueue>();
 builder.Services.AddSingleton<PushService>();
+builder.Services.AddSingleton<IOutboxHandler, PushOutboxHandler>();
+builder.Services.AddHostedService<OutboxWorker>();
 
 // Bộ máy nhận diện khuôn mặt cho chấm công: YuNet + căn chỉnh 5 điểm + AdaFace R50 ONNX Runtime.
 // Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
@@ -639,6 +643,10 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang phat trien nha
 
 try { await SurveyEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang khao sat luc khoi dong: {Msg}", ex.Message); }
+
+// Bảng hàng chờ phải có TRƯỚC khi OutboxWorker chạy (worker khởi động cùng app.Run() bên dưới).
+try { await OutboxQueue.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng hàng chờ: {Msg}", ex.Message); }
 
 try { await HelpEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang FAQ tro giup luc khoi dong: {Msg}", ex.Message); }

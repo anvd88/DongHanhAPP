@@ -15,11 +15,13 @@ public sealed class PushService
 {
     private readonly Database _db;
     private readonly ILogger<PushService> _log;
+    private readonly OutboxQueue _outbox;
     private readonly bool _enabled;
 
-    public PushService(IConfiguration config, Database db, ILogger<PushService> log)
+    public PushService(IConfiguration config, Database db, OutboxQueue outbox, ILogger<PushService> log)
     {
         _db = db;
+        _outbox = outbox;
         _log = log;
         var path = config["Firebase:CredentialsPath"];
         try
@@ -45,17 +47,23 @@ public sealed class PushService
 
     public bool Enabled => _enabled;
 
+    /// <summary>Nội dung một thông báo đẩy đang nằm trong hàng chờ.</summary>
+    internal sealed record PushJob(string? Username, string Title, string Body, string NotifId, string? Target);
+
     /// <summary>
     /// Đẩy tới mọi thiết bị của một user. <paramref name="notifId"/> là "chữ ký" ổn định của sự kiện
     /// (vd. <c>req:{id}:approved</c>, <c>inbox:{id}</c>, <c>pen:{id}</c>) — trùng với chữ ký của
     /// <c>NotificationCenter</c> trên app để CHỐNG TRÙNG với luồng kiểm tra nền.
+    ///
+    /// KHÔNG gọi FCM ngay: chỉ ghi một dòng vào hàng chờ rồi trả về, worker gửi sau (xem OutboxQueue).
+    /// Nhờ vậy thao tác của người dùng không phải chờ mạng, và FCM lỗi thì việc vẫn được thử lại.
     /// </summary>
     public async Task SendToUserAsync(string? username, string title, string body, string notifId, string? target = null)
     {
         if (!_enabled || string.IsNullOrWhiteSpace(username)) return;
-        var tokens = await LoadTokensAsync(
-            "SELECT token FROM hr_device_tokens WHERE lower(username)=lower(@u)", ("@u", username!));
-        await DispatchAsync(tokens, title, body, notifId, target);
+        await _outbox.EnqueueAsync(OutboxQueue.KindUserPush,
+            new PushJob(username, title, body, notifId, target),
+            DedupeKey(OutboxQueue.KindUserPush, username, notifId));
     }
 
     /// <summary>
@@ -64,20 +72,62 @@ public sealed class PushService
     public async Task SendToAllAsync(string title, string body, string notifId, string? target = null)
     {
         if (!_enabled) return;
-        var tokens = await LoadTokensAsync("SELECT token FROM hr_device_tokens");
-        await DispatchAsync(tokens, title, body, notifId, target);
+        await _outbox.EnqueueAsync(OutboxQueue.KindAllPush,
+            new PushJob(null, title, body, notifId, target),
+            DedupeKey(OutboxQueue.KindAllPush, null, notifId));
     }
 
     /// <summary>Đẩy tới mọi quản trị viên đang hoạt động (cho bước duyệt cấp Admin).</summary>
     public async Task SendToAdminsAsync(string title, string body, string notifId, string? target = null)
     {
         if (!_enabled) return;
+        await _outbox.EnqueueAsync(OutboxQueue.KindAdminsPush,
+            new PushJob(null, title, body, notifId, target),
+            DedupeKey(OutboxQueue.KindAdminsPush, null, notifId));
+    }
+
+    /// <summary>
+    /// Khoá khử trùng của một việc trong hàng chờ. PHẢI gồm NGƯỜI NHẬN chứ không chỉ chữ ký sự kiện:
+    /// một tin nhắn chat gửi cho nhiều người dùng CHUNG notif_id (<c>chat:{conv}:{msg}</c>), nếu khoá
+    /// chỉ có chữ ký thì chỉ người đầu tiên được xếp hàng, những người còn lại bị coi là trùng và MẤT
+    /// thông báo. Chuẩn hoá chữ thường vì username so sánh không phân biệt hoa thường ở mọi nơi khác.
+    /// </summary>
+    internal static string DedupeKey(string kind, string? recipient, string notifId)
+        => string.IsNullOrWhiteSpace(recipient)
+            ? $"{kind}|{notifId}"
+            : $"{kind}|{recipient.ToLowerInvariant()}|{notifId}";
+
+    /// <summary>Gửi THẲNG, không qua hàng chờ — dùng cho việc đã tới hạn xử lý (worker) hoặc cuộc gọi.</summary>
+    private async Task<bool> SendNowAsync(List<string> tokens, string title, string body, string notifId, string? target)
+    {
+        if (!_enabled || tokens.Count == 0) return true; // không có gì để làm → coi như xong, đừng thử lại
+        return await DispatchAsync(tokens, title, body, notifId, target);
+    }
+
+    internal async Task<bool> DispatchUserAsync(string? username, string title, string body, string notifId, string? target)
+    {
+        if (!_enabled || string.IsNullOrWhiteSpace(username)) return true;
+        var tokens = await LoadTokensAsync(
+            "SELECT token FROM hr_device_tokens WHERE lower(username)=lower(@u)", ("@u", username!));
+        return await SendNowAsync(tokens, title, body, notifId, target);
+    }
+
+    internal async Task<bool> DispatchAllAsync(string title, string body, string notifId, string? target)
+    {
+        if (!_enabled) return true;
+        var tokens = await LoadTokensAsync("SELECT token FROM hr_device_tokens");
+        return await SendNowAsync(tokens, title, body, notifId, target);
+    }
+
+    internal async Task<bool> DispatchAdminsAsync(string title, string body, string notifId, string? target)
+    {
+        if (!_enabled) return true;
         var tokens = await LoadTokensAsync("""
             SELECT dt.token FROM hr_device_tokens dt
             JOIN app_users u ON lower(u.username) = lower(dt.username)
             WHERE u.role = 'admin' AND u.is_active = TRUE AND COALESCE(u.is_deleted, FALSE) = FALSE
             """);
-        await DispatchAsync(tokens, title, body, notifId, target);
+        return await SendNowAsync(tokens, title, body, notifId, target);
     }
 
     /// <summary>Đẩy tới nhân viên theo employeeId (tra username qua kết nối sẵn có).</summary>
@@ -171,9 +221,15 @@ public sealed class PushService
         return tokens;
     }
 
-    private async Task DispatchAsync(List<string> tokens, string title, string body, string notifId, string? target)
+    /// <summary>
+    /// Gửi thật tới FCM. Trả false khi hỏng TẠM THỜI (mạng đứt, FCM lỗi) để worker thử lại — trước đây
+    /// chỗ này nuốt lỗi, nên bên ngoài không thể biết thông báo có tới hay không.
+    /// Token hỏng lẻ tẻ KHÔNG tính là hỏng: đó là thiết bị đã gỡ app, dọn đi là xong, thử lại vô ích.
+    /// </summary>
+    private async Task<bool> DispatchAsync(List<string> tokens, string title, string body, string notifId, string? target)
     {
-        if (tokens.Count == 0) return;
+        if (tokens.Count == 0) return true;
+        var ok = true;
         // FCM giới hạn 500 token/lần gửi multicast → chia lô để "gửi tới mọi thiết bị" vẫn an toàn.
         for (var offset = 0; offset < tokens.Count; offset += 500)
         {
@@ -200,8 +256,10 @@ public sealed class PushService
             catch (Exception ex)
             {
                 _log.LogWarning("PushService gửi FCM lỗi: {Msg}", ex.Message);
+                ok = false;
             }
         }
+        return ok;
     }
 
     /// <summary>Xóa các token không còn hợp lệ (đã gỡ app / hết hạn) để bảng gọn và không gửi thừa.</summary>
