@@ -1,9 +1,11 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
+using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -537,7 +539,7 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, FlashLivenessChallenge flash, LivenessMetricsLog livenessLog, ILoggerFactory lf, HttpContext http) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, FlashLivenessChallenge flash, LivenessMetricsLog livenessLog, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http) =>
         {
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
@@ -608,6 +610,10 @@ public static class ChamCongEndpoints
 
             // Ghi số đo (Silent-Face + biên độ quay) để hiển thị lên panel hiệu chỉnh.
             livenessLog.Record(currentUser, liveScores, engine.LivenessThreshold, livePassed, motionSpan);
+            // These diagnostics only live in memory, so no database trigger can publish them.
+            // Notify the open admin panel instead of making it poll this endpoint every four seconds.
+            try { await hub.Clients.All.SendAsync("changed", "liveness", http.RequestAborted); }
+            catch (Exception ex) { lf.CreateLogger("LivenessRealtime").LogDebug(ex, "Could not publish liveness metrics."); }
 
             if (!livePassed)
                 return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,

@@ -1,136 +1,187 @@
+using System.Threading.Channels;
 using KetoanMini.Api.Data;
 using Microsoft.AspNetCore.SignalR;
 
 namespace KetoanMini.Api.Realtime;
 
 /// <summary>
-/// Dịch vụ nền: theo dõi "mốc thay đổi" rẻ tiền của các bảng dùng chung mỗi ~1.5s.
-/// Khi mốc khác lần trước (bất kỳ nguồn ghi nào — web, desktop, hay nơi khác) → phát
-/// tín hiệu "changed" qua SignalR để mọi client tự làm mới.
-/// Nhờ vậy không cần sửa đường ghi của desktop, chỉ cần desktop NHẬN tín hiệu.
+/// Bridges PostgreSQL Pub/Sub (LISTEN/NOTIFY) to the existing SignalR protocol used by web and
+/// desktop clients. This replaces the old 1.5-second whole-table checksum scan.
 /// </summary>
 public sealed class ChangeWatcher(
     IHubContext<ChangesHub> hub,
     Database db,
     ILogger<ChangeWatcher> logger) : BackgroundService
 {
-    // Hai mốc tách biệt theo "phạm vi" (scope) để client chỉ refetch đúng thứ liên quan:
-    //  • data    = nghiệp vụ (chứng từ, thanh toán, khách hàng, gia công, chấm công)
-    //  • presence = hiện diện online + thay đổi tài khoản (vai trò/khóa/avatar ảnh hưởng tên & tích xanh)
-    // KHÔNG còn theo dõi chat ở đây: tín hiệu chat được endpoint phát thẳng tới ĐÚNG thành viên
-    // cuộc trò chuyện (xem ChatEndpoints.NotifyChat) nên không gây "bão" refetch cho cả 100 máy.
-    // CHECKSUM_AGG bắt được cả thêm/sửa/xóa (đổi count hoặc đổi nội dung dòng).
-    private const string TokenSql = @"
-        SELECT
-        CONCAT(
-            (SELECT COUNT(*) FROM documents), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, voucher_no, content, doc_date, customer_name), '|' ORDER BY id::text)), '0') FROM documents), '|',
-            (SELECT COUNT(*) FROM document_lines), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', document_id, quantity, unit_price, line_content), '|' ORDER BY id::text)), '0') FROM document_lines), '|',
-            (SELECT COUNT(*) FROM payments), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, amount, pay_date), '|' ORDER BY id::text)), '0') FROM payments), '|',
-            (SELECT COUNT(*) FROM customers), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, name, is_active), '|' ORDER BY id::text)), '0') FROM customers), '|',
-            (SELECT COUNT(*) FROM gia_cong_phieu), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, loai_phieu, doi_tac, nhan_vien, ngay_lap, han_hoan_thanh), '|' ORDER BY id::text)), '0') FROM gia_cong_phieu), '|',
-            (SELECT COUNT(*) FROM gia_cong_hang_hoa), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', phieu_id, loai_dong, ten_hang, quy_cach, don_vi_tinh, so_luong, don_gia_gia_cong), '|' ORDER BY id::text)), '0') FROM gia_cong_hang_hoa), '|',
-            (SELECT COUNT(*) FROM cham_cong_face), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, full_name, created_at, created_by), '|' ORDER BY id::text)), '0') FROM cham_cong_face), '|',
-            (SELECT COUNT(*) FROM cham_cong_log), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, loai, similarity, occurred_at), '|' ORDER BY id::text)), '0') FROM cham_cong_log)
-        ) AS data_token,
-        CONCAT(
-            (SELECT COUNT(*) FROM app_users), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, role, is_active, approval_status, is_deleted), '|' ORDER BY id::text)), '0') FROM app_users), '|',
-            (SELECT COUNT(*) FROM (SELECT username FROM user_sessions WHERE is_active = TRUE AND last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' GROUP BY username) online_users), '|',
-            (SELECT COALESCE(md5(string_agg(username, '|' ORDER BY username)), '0') FROM (SELECT username FROM user_sessions WHERE is_active = TRUE AND last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' GROUP BY username) online_users), '|',
-            (SELECT COUNT(*) FROM user_roles), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', username, role), '|' ORDER BY username, role)), '0') FROM user_roles)
-        ) AS presence_token,
-        CONCAT(
-            (SELECT COUNT(*) FROM hr_departments), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, code, name, parent_id, manager_employee_id), '|' ORDER BY id::text)), '0') FROM hr_departments), '|',
-            (SELECT COUNT(*) FROM hr_employees), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_code, username, full_name, department_id, position, manager_id, status, updated_at), '|' ORDER BY id::text)), '0') FROM hr_employees), '|',
-            (SELECT COUNT(*) FROM hr_contracts), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, contract_no, contract_type, start_date, end_date, base_salary, allowance, status), '|' ORDER BY id::text)), '0') FROM hr_contracts), '|',
-            (SELECT COUNT(*) FROM hr_payslips), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, published), '|' ORDER BY id::text)), '0') FROM hr_payslips), '|',
-            (SELECT COUNT(*) FROM hr_leave_balances), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, year, leave_type, total_days, used_days), '|' ORDER BY id::text)), '0') FROM hr_leave_balances), '|',
-            (SELECT COUNT(*) FROM hr_documents), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, doc_type, title, issued_by, issued_date), '|' ORDER BY id::text)), '0') FROM hr_documents), '|',
-            (SELECT COUNT(*) FROM hr_shifts), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, code, name, start_time, end_time, break_minutes, late_grace_minutes, standard_hours, is_overnight), '|' ORDER BY id::text)), '0') FROM hr_shifts), '|',
-            (SELECT COUNT(*) FROM hr_shift_assignments), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, employee_id, shift_id, work_date, note), '|' ORDER BY id::text)), '0') FROM hr_shift_assignments), '|',
-            (SELECT COUNT(*) FROM hr_requests), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, request_no, req_type, employee_id, requester_username, status, current_step, updated_at), '|' ORDER BY id::text)), '0') FROM hr_requests), '|',
-            (SELECT COUNT(*) FROM hr_request_approvals), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, request_id, step_no, approver_username, status, decided_at, decided_by), '|' ORDER BY id::text)), '0') FROM hr_request_approvals), '|',
-            (SELECT COUNT(*) FROM cham_cong_log), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, loai, similarity, occurred_at), '|' ORDER BY id::text)), '0') FROM cham_cong_log), '|',
-            (SELECT COUNT(*) FROM cham_cong_face), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, username, full_name, created_at, created_by), '|' ORDER BY id::text)), '0') FROM cham_cong_face), '|',
-            (SELECT COUNT(*) FROM work_tasks), '|',
-            (SELECT COALESCE(md5(string_agg(concat_ws('|', id, status, progress, assignee_username, assigner_username, updated_at), '|' ORDER BY id::text)), '0') FROM work_tasks)
-        ) AS hr_token;";
+    private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(100);
+    private static readonly HashSet<string> AllowedScopes =
+        new(["data", "presence", "hr", "tasks", "portal", "config", "audit", "talent"],
+            StringComparer.Ordinal);
+
+    // Nhịp tim (45 giây/người) chỉ cập nhật last_seen của user_sessions nhưng vẫn kích hoạt trigger
+    // 'presence'. Với N người dùng thì mỗi 45 giây có N thông báo, mỗi thông báo lại phát tới N máy →
+    // N² tin nhắn. "presence" chỉ là gợi ý "dữ liệu đã cũ" nên gộp lại: phát nhiều nhất 1 lần/15 giây,
+    // vẫn thừa nhanh so với ngưỡng offline 90 giây mà không phụ thuộc số người đang online.
+    private static readonly Dictionary<string, TimeSpan> MinPublishInterval = new(StringComparer.Ordinal)
+    {
+        ["presence"] = TimeSpan.FromSeconds(15),
+    };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        string? lastData = null, lastPresence = null, lastHr = null;
+        var triggersReady = false;
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await using var conn = await db.OpenAsync(stoppingToken);
-                await using var cmd = conn.Cmd(TokenSql);
-                string dataToken = "", presenceToken = "", hrToken = "";
-                await using (var r = await cmd.ExecuteReaderAsync(stoppingToken))
+                if (!triggersReady)
                 {
-                    if (await r.ReadAsync(stoppingToken))
-                    {
-                        dataToken = r.IsDBNull(0) ? "" : r.GetString(0);
-                        presenceToken = r.IsDBNull(1) ? "" : r.GetString(1);
-                        hrToken = r.IsDBNull(2) ? "" : r.GetString(2);
-                    }
+                    await DatabaseChangePublisher.EnsureAsync(db, stoppingToken);
+                    triggersReady = true;
+                    logger.LogInformation("Realtime database Pub/Sub triggers are ready.");
                 }
 
-                // Lần đầu chỉ ghi nhận, không broadcast (tránh tín hiệu thừa lúc khởi động).
-                if (lastData is not null && dataToken != lastData)
-                {
-                    await hub.Clients.All.SendAsync("changed", "data", stoppingToken);
-                    logger.LogDebug("ChangeWatcher: phát tín hiệu data.");
-                }
-                if (lastPresence is not null && presenceToken != lastPresence)
-                {
-                    await hub.Clients.All.SendAsync("changed", "presence", stoppingToken);
-                    logger.LogDebug("ChangeWatcher: phát tín hiệu presence.");
-                }
-                if (lastHr is not null && hrToken != lastHr)
-                {
-                    await hub.Clients.All.SendAsync("changed", "hr", stoppingToken);
-                    logger.LogDebug("ChangeWatcher: phat tin hieu hr.");
-                }
-
-                lastData = dataToken;
-                lastPresence = presenceToken;
-                lastHr = hrToken;
+                await ListenAsync(stoppingToken);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
             catch (Exception ex)
             {
-                // DB tạm offline / lỗi truy vấn → bỏ qua chu kỳ này, không làm sập service.
-                logger.LogDebug("ChangeWatcher lỗi: {Msg}", ex.Message);
+                logger.LogWarning("Realtime database listener disconnected: {Message}. Retrying.", ex.Message);
+                try { await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken); }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+            }
+        }
+    }
+
+    private async Task ListenAsync(CancellationToken ct)
+    {
+        // Gom phạm vi đang chờ vào một TẬP HỢP thay vì hàng đợi chuỗi 64 ô (DropOldest). Hàng đợi cũ
+        // xếp cả bản TRÙNG NHAU, nên trên lý thuyết một trận dội 'data' có thể đẩy văng thông báo 'hr'
+        // đang xếp trước → máy khách nhân sự giữ dữ liệu cũ tới lần ghi sau. (Chưa dựng lại được cảnh
+        // này trong test, xem RealtimeWatcherTests — đây là phòng xa chứ không phải vá lỗi đã gặp.)
+        // Tập hợp thì trùng lặp tự tan: hàng chờ tối đa bằng SỐ PHẠM VI (8), không phụ thuộc lưu lượng.
+        var pending = new HashSet<string>(StringComparer.Ordinal);
+        // Kênh 1 ô chỉ đóng vai "có việc mới, dậy đi" — dữ liệu thật nằm ở `pending`.
+        var wake = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropWrite,
+        });
+        await using var conn = await db.OpenAsync(ct);
+
+        conn.Notification += (_, notification) =>
+        {
+            if (!AllowedScopes.Contains(notification.Payload)) return;
+            lock (pending) pending.Add(notification.Payload);
+            wake.Writer.TryWrite(0);
+        };
+
+        await conn.Cmd($"LISTEN {DatabaseChangePublisher.ChannelName}").ExecuteNonQueryAsync(ct);
+        logger.LogInformation("Realtime database listener subscribed to {Channel}.", DatabaseChangePublisher.ChannelName);
+
+        using var listenerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var pump = PumpNotificationsAsync(conn, wake.Writer, listenerCts.Token);
+        var lastPublished = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        var scheduledWakeAt = DateTime.MinValue;
+        try
+        {
+            while (await wake.Reader.WaitToReadAsync(ct))
+            {
+                while (wake.Reader.TryRead(out _)) { }
+
+                // One business action often updates a row and appends an event in separate commits.
+                // Keep pumping PostgreSQL while this tiny window coalesces those writes by scope.
+                await Task.Delay(CoalesceWindow, ct);
+
+                string[] scopes;
+                lock (pending)
+                {
+                    scopes = [.. pending];
+                    pending.Clear();
+                }
+
+                var now = DateTime.UtcNow;
+                var retryAfter = TimeSpan.Zero;
+                foreach (var pendingScope in scopes)
+                {
+                    // Phạm vi bị gộp nhịp mà chưa tới hạn thì TRẢ LẠI hàng chờ (không bỏ đi) rồi hẹn
+                    // đánh thức đúng lúc hết hạn — máy khách vẫn được báo, chỉ muộn vài giây.
+                    if (MinPublishInterval.TryGetValue(pendingScope, out var minInterval) &&
+                        lastPublished.TryGetValue(pendingScope, out var previous) &&
+                        now - previous < minInterval)
+                    {
+                        lock (pending) pending.Add(pendingScope);
+                        var wait = minInterval - (now - previous);
+                        if (wait > retryAfter) retryAfter = wait;
+                        continue;
+                    }
+
+                    lastPublished[pendingScope] = now;
+                    await hub.Clients.All.SendAsync("changed", pendingScope, ct);
+                    logger.LogDebug("Realtime published scope {Scope}.", pendingScope);
+                }
+
+                // Mỗi nhịp tim đều đánh thức vòng này, nên chỉ đặt hẹn khi CHƯA có hẹn nào còn hiệu lực
+                // (hoặc lần này tới hạn sớm hơn) — tránh đẻ hàng trăm hẹn giờ trùng nhau khi đông người.
+                if (retryAfter > TimeSpan.Zero)
+                {
+                    var dueAt = now + retryAfter;
+                    if (scheduledWakeAt <= now || dueAt < scheduledWakeAt)
+                    {
+                        scheduledWakeAt = dueAt;
+                        ScheduleWake(wake.Writer, retryAfter, ct);
+                    }
+                }
             }
 
-            try { await Task.Delay(1500, stoppingToken); }
-            catch (OperationCanceledException) { break; }
+            await pump;
+        }
+        finally
+        {
+            listenerCts.Cancel();
+            try { await pump; }
+            catch (OperationCanceledException) when (listenerCts.IsCancellationRequested) { }
+        }
+    }
+
+    /// <summary>Hẹn đánh thức vòng đọc sau <paramref name="delay"/> để phát nốt phạm vi đang bị gộp nhịp.</summary>
+    private static void ScheduleWake(ChannelWriter<byte> writer, TimeSpan delay, CancellationToken ct)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, ct);
+                writer.TryWrite(0);
+            }
+            catch (OperationCanceledException) { /* dừng dịch vụ / mất kết nối → thôi */ }
+        }, CancellationToken.None);
+    }
+
+    private static async Task PumpNotificationsAsync(
+        Npgsql.NpgsqlConnection conn,
+        ChannelWriter<byte> writer,
+        CancellationToken ct)
+    {
+        Exception? failure = null;
+        try
+        {
+            while (!ct.IsCancellationRequested) await conn.WaitAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            failure = ex;
+            throw;
+        }
+        finally
+        {
+            writer.TryComplete(failure);
         }
     }
 }
