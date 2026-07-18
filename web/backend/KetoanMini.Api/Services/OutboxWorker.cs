@@ -47,6 +47,14 @@ public sealed class OutboxWorker(
                     var removed = await queue.CleanupAsync(stoppingToken);
                     nextCleanup = DateTime.UtcNow + CleanupInterval;
                     if (removed > 0) logger.LogInformation("Dọn {Count} việc đã xong khỏi hàng chờ.", removed);
+
+                    // Nhắc lại việc đã bỏ hẳn: mỗi cái là một thông báo KHÔNG tới nơi. Nếu con số này
+                    // lớn dần thì FCM/cấu hình đang hỏng chứ không phải trục trặc nhất thời.
+                    var dead = await queue.DeadCountAsync(stoppingToken);
+                    if (dead > 0)
+                        logger.LogWarning(
+                            "Hàng chờ còn {Count} việc đã bỏ hẳn — tương ứng {Count} thông báo không tới " +
+                            "nơi. Xem bảng app_outbox (status='dead', cột last_error).", dead);
                 }
 
                 // Còn việc thì quay lại ngay; hết việc thì chờ tín hiệu đánh thức, tối đa PollInterval.

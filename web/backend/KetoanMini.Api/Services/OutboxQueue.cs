@@ -164,6 +164,18 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
                 id, attempts, error);
     }
 
+    /// <summary>
+    /// Số việc đã bỏ hẳn. Một dòng log lúc nó chết thì trôi mất giữa hàng nghìn dòng khác — con số này
+    /// được nhắc lại định kỳ để "có thông báo không tới nơi" là thứ nhìn thấy được, không phải thứ chỉ
+    /// phát hiện khi người dùng phàn nàn.
+    /// </summary>
+    public async Task<int> DeadCountAsync(CancellationToken ct = default)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        return Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM app_outbox WHERE status='dead'")
+            .ExecuteScalarAsync(ct));
+    }
+
     /// <summary>Dọn việc đã xong quá hạn lưu. Việc "chết" giữ lại để còn điều tra.</summary>
     public async Task<int> CleanupAsync(CancellationToken ct = default)
     {

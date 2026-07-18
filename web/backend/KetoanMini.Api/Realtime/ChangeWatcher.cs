@@ -29,6 +29,13 @@ public sealed class ChangeWatcher(
         ["presence"] = TimeSpan.FromSeconds(15),
     };
 
+    // Hàng chờ thông báo là tài nguyên CHUNG của cả cụm PostgreSQL (tối đa 8GB). Nếu có một phiên
+    // LISTEN nào đó kẹt không đọc, hàng chờ dâng lên và tới lúc đầy thì MỌI giao dịch có gọi NOTIFY sẽ
+    // LỖI NGAY LÚC COMMIT — tức người dùng không lưu được dữ liệu, chứ không chỉ mất realtime. Đây là
+    // cái giá phải canh khi dồn mọi tín hiệu qua Pub/Sub, nên đo định kỳ để còn kịp xử lý trước khi vỡ.
+    private static readonly TimeSpan QueueCheckInterval = TimeSpan.FromMinutes(1);
+    private const double QueueWarnLevel = 0.25;
+
     // Đã từng LISTEN thành công chưa. Lần sau là NỐI LẠI → phải bảo máy khách nạp lại (xem ListenAsync).
     private bool _hasSubscribed;
 
@@ -116,6 +123,7 @@ public sealed class ChangeWatcher(
         var pump = PumpNotificationsAsync(conn, wake.Writer, listenerCts.Token);
         var lastPublished = new Dictionary<string, DateTime>(StringComparer.Ordinal);
         var scheduledWakeAt = DateTime.MinValue;
+        var lastQueueCheck = DateTime.UtcNow;
         try
         {
             while (await wake.Reader.WaitToReadAsync(ct))
@@ -154,6 +162,12 @@ public sealed class ChangeWatcher(
                     logger.LogDebug("Realtime published scope {Scope}.", pendingScope);
                 }
 
+                if (now - lastQueueCheck >= QueueCheckInterval)
+                {
+                    lastQueueCheck = now;
+                    await WarnIfNotifyQueueFillingAsync(ct);
+                }
+
                 // Mỗi nhịp tim đều đánh thức vòng này, nên chỉ đặt hẹn khi CHƯA có hẹn nào còn hiệu lực
                 // (hoặc lần này tới hạn sớm hơn) — tránh đẻ hàng trăm hẹn giờ trùng nhau khi đông người.
                 if (retryAfter > TimeSpan.Zero)
@@ -174,6 +188,31 @@ public sealed class ChangeWatcher(
             listenerCts.Cancel();
             try { await pump; }
             catch (OperationCanceledException) when (listenerCts.IsCancellationRequested) { }
+        }
+    }
+
+    /// <summary>
+    /// Đo mức đầy của hàng chờ thông báo PostgreSQL. Bình thường phải xấp xỉ 0 — con số dâng lên nghĩa
+    /// là có phiên LISTEN nào đó kẹt (có thể của ứng dụng khác trên cùng cụm), và nếu chạm 100% thì
+    /// mọi lệnh ghi có trigger sẽ bắt đầu lỗi lúc commit. Dùng kết nối riêng vì kết nối đang LISTEN
+    /// bận chờ ở WaitAsync.
+    /// </summary>
+    private async Task WarnIfNotifyQueueFillingAsync(CancellationToken ct)
+    {
+        try
+        {
+            await using var probe = await db.OpenAsync(ct);
+            var usage = Convert.ToDouble(await probe.Cmd("SELECT pg_notification_queue_usage()").ExecuteScalarAsync(ct));
+            if (usage >= QueueWarnLevel)
+                logger.LogWarning(
+                    "Hàng chờ thông báo PostgreSQL đã dùng {Usage:P0}. Nếu đầy, MỌI giao dịch có trigger " +
+                    "realtime sẽ lỗi lúc commit. Kiểm tra phiên LISTEN nào đang kẹt không đọc " +
+                    "(pg_stat_activity, cột wait_event).", usage);
+        }
+        catch (Exception ex)
+        {
+            // Đo được thì tốt, không đo được cũng không được làm sập vòng chính.
+            logger.LogDebug("Không đo được mức hàng chờ thông báo: {Msg}", ex.Message);
         }
     }
 

@@ -33,19 +33,35 @@ public sealed class RealtimeCoverageTests
         ["web_user_preferences"] = "tuỳ chọn riêng của từng người, chính máy đó vừa đặt",
         ["web_login_settings"] = "cấu hình trang đăng nhập, đọc lúc mở trang",
         ["password_recovery_codes"] = "mã dùng một lần trong luồng khôi phục, không hiển thị",
+
+        // Hạ tầng nội bộ, không có màn hình nào đọc.
+        ["app_outbox"] = "hàng chờ nội bộ của OutboxWorker",
+        ["schema_migrations"] = "sổ di trú lược đồ",
     };
 
-    private static string EndpointsDir()
+    private static string ApiSourceDir()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "KetoanMini.Api", "Endpoints");
-            if (Directory.Exists(candidate)) return candidate;
+            var candidate = Path.Combine(dir.FullName, "KetoanMini.Api");
+            if (Directory.Exists(Path.Combine(candidate, "Endpoints"))) return candidate;
             dir = dir.Parent;
         }
-        throw new DirectoryNotFoundException("Không tìm thấy thư mục Endpoints để soi mã nguồn.");
+        throw new DirectoryNotFoundException("Không tìm thấy mã nguồn KetoanMini.Api để soi.");
     }
+
+    private static string EndpointsDir() => Path.Combine(ApiSourceDir(), "Endpoints");
+
+    /// <summary>
+    /// Quét TOÀN BỘ mã nguồn API, không chỉ thư mục Endpoints. Lý do: dịch vụ nền cũng ghi bảng
+    /// (PushService dọn token, ReleaseStorage, QrLoginService…), nên nếu chỉ soi Endpoints thì một bảng
+    /// mới sinh ra ở Services/ sẽ lọt lưới đúng vào loại lỗi mà test này sinh ra để chặn.
+    /// </summary>
+    private static IEnumerable<string> ApiSourceFiles()
+        => Directory.EnumerateFiles(ApiSourceDir(), "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                     && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
 
     private static HashSet<string> TablesWrittenByApi()
     {
@@ -61,7 +77,7 @@ public sealed class RealtimeCoverageTests
             @"|DELETE\s+FROM\s+([a-z_][a-z0-9_]*)",
             RegexOptions.IgnoreCase);
         var tables = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var file in Directory.EnumerateFiles(EndpointsDir(), "*.cs"))
+        foreach (var file in ApiSourceFiles())
             foreach (Match m in pattern.Matches(File.ReadAllText(file)))
             {
                 var name = m.Groups[1].Success ? m.Groups[1].Value

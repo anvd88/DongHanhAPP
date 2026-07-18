@@ -151,6 +151,21 @@ public sealed class OutboxTests
         Assert.Equal(recipients.Length, count);
     }
 
+    /// <summary>Việc đã bỏ hẳn phải đếm được — đó là cơ sở để nhắc lại định kỳ trong log.</summary>
+    [Fact]
+    public async Task DeadCount_CountsAbandonedJobs()
+    {
+        var (queue, _) = await NewQueueAsync(_factory);
+        var before = await queue.DeadCountAsync();
+
+        await queue.EnqueueAsync(OutboxQueue.KindUserPush,
+            new { Username = "demxac", Title = "T", Body = "B", NotifId = "n6", Target = (string?)null }, UniqueKey());
+        var mine = (await queue.ClaimAsync(50)).Single(c => c.Payload.Contains("demxac", StringComparison.Ordinal));
+        await queue.FailAsync(mine.Id, OutboxQueue.MaxAttempts, "hỏng hẳn");
+
+        Assert.Equal(before + 1, await queue.DeadCountAsync());
+    }
+
     /// <summary>
     /// Đầu-tới-cuối qua chính DI của ứng dụng: worker chạy nền TRONG app phải tự rút việc và đóng sổ.
     /// Chọn người nhận không có thiết bị nào nên không có thông báo thật nào được gửi đi, nhưng vẫn đi
