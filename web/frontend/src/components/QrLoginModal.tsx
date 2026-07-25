@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, CircleX, Loader2, RefreshCw, Smartphone, Timer, X } from "lucide-react";
+import { ArrowLeft, CheckCircle2, CircleX, Loader2, RefreshCw, Smartphone, Timer, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { ApiError, api } from "../lib/api";
 import { useAuth, webSessionId, type QrLoginAccount } from "../lib/auth";
@@ -27,9 +27,12 @@ function accountInitials(account: QrLoginAccount) {
 export function QrLoginModal({
   onClose,
   onSuccess,
+  embedded = false,
 }: {
   onClose: () => void;
   onSuccess: () => void;
+  /** Hiển thị gọn trong thẻ đăng nhập (thay cho ô tài khoản/mật khẩu) thay vì bật hộp thoại nổi. */
+  embedded?: boolean;
 }) {
   const { pollQrLogin, completeExternalLogin } = useAuth();
   const [session, setSession] = useState<QrSession | null>(null);
@@ -124,9 +127,10 @@ export function QrLoginModal({
         if (stopped || generation !== generationRef.current) return;
         if (result.status === "authenticated") {
           terminal = true;
-          completeExternalLogin({ token: result.token, user: result.user });
-          // Chỉ xóa phiên server sau khi trình duyệt đã nhận và lưu JWT. Nếu response trước đó bị
-          // thất lạc, poll kế tiếp vẫn có thể nhận lại kết quả thay vì buộc người dùng quét QR mới.
+          completeExternalLogin({ user: result.user });
+          // Chỉ xóa phiên server sau khi trình duyệt đã nhận phản hồi (và cùng với nó là cookie phiên).
+          // Nếu response trước đó bị thất lạc, poll kế tiếp vẫn có thể nhận lại kết quả thay vì buộc
+          // người dùng quét QR mới.
           void api.postPublic("/api/auth/qr/ack", { pollToken: session.pollToken }).catch(() => {});
           pollTokenRef.current = null;
           setConfirmed(true);
@@ -213,30 +217,8 @@ export function QrLoginModal({
   const progress = Math.max(0, Math.min(100, (secondsLeft / QR_LIFETIME_SECONDS) * 100));
   const scannedName = scannedAccount?.fullName.trim() || scannedAccount?.username || "";
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={close}>
-      <div
-        className="fade-in w-full max-w-sm overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-950"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="qr-login-title"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="relative flex min-h-14 items-center justify-center border-b border-slate-200 px-14 dark:border-slate-800">
-          <span id="qr-login-title" className="text-center font-semibold text-slate-900 dark:text-slate-100">
-            Đăng nhập qua mã QR
-          </span>
-          <button
-            type="button"
-            onClick={close}
-            className="absolute right-4 rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-            aria-label="Đóng"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="p-6">
+  const body = (
+    <>
           <div className="mx-auto flex min-h-[248px] w-full max-w-[280px] items-center justify-center" aria-live="polite">
             {confirmed ? (
               <div className="flex flex-col items-center px-4 text-center">
@@ -329,7 +311,44 @@ export function QrLoginModal({
               {scannedAccount ? "Đang chờ xác nhận trên điện thoại…" : "Đang chờ quét mã…"}
             </p>
           )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="login-qr-inline">
+        {body}
+        <button type="button" className="login-qr-back" onClick={close}>
+          <ArrowLeft aria-hidden="true" /> Quay lại đăng nhập tài khoản
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={close}>
+      <div
+        className="fade-in w-full max-w-sm overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-950"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="qr-login-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="relative flex min-h-14 items-center justify-center border-b border-slate-200 px-14 dark:border-slate-800">
+          <span id="qr-login-title" className="text-center font-semibold text-slate-900 dark:text-slate-100">
+            Đăng nhập qua mã QR
+          </span>
+          <button
+            type="button"
+            onClick={close}
+            className="absolute right-4 rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
+            aria-label="Đóng"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
+
+        <div className="p-6">{body}</div>
       </div>
     </div>
   );

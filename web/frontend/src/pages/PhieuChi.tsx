@@ -20,7 +20,7 @@ import { GlassPanel } from "../components/glass/GlassPanel";
 import { LiquidTabs, type LiquidTab } from "../components/glass/LiquidTabs";
 import { Modal } from "../components/Modal";
 import { MonthPicker } from "../components/DateField";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { Badge, Button, EmptyState, Field, Input, Select, Spinner } from "../components/ui";
 import { StatCard } from "../features/giacong/StatCard";
 import { api } from "../lib/api";
@@ -60,6 +60,17 @@ const badgeColor = (status: string) => {
   const tone = voucherStatusColor(status);
   return tone === "info" ? "accent" : tone;
 };
+
+/**
+ * Mã QR của phiếu đã hết hạn chưa (hoặc chưa từng có mã).
+ *
+ * Để NGOÀI component có chủ ý: `Date.now()` là một lời gọi không thuần khiết, và khi nó nằm trong thân
+ * component thì luật `react-hooks/purity` không phân biệt được "gọi lúc render" với "gọi trong hàm xử
+ * lý sự kiện" nên báo nhầm. Đưa ra ngoài vừa hết cảnh báo vừa nói rõ: đây là hàm chỉ chạy khi người
+ * dùng bấm mở mã QR, không phải một giá trị được tính lúc render.
+ */
+const isQrExpired = (v: PayoutVoucher) =>
+  !v.qrValue || !v.qrExpiresAt || new Date(v.qrExpiresAt).getTime() <= Date.now();
 
 /**
  * Sổ phiếu chi tiền mặt của phòng kế toán. Luồng một phiếu: kế toán lập → người nhận quét QR ký nhận →
@@ -152,7 +163,7 @@ export function PhieuChi() {
 
   const openQr = async (v: PayoutVoucher) => {
     // Mã cũ hết hạn (người nhận tới muộn) thì xin mã mới ngay khi mở, khỏi bắt kế toán bấm hai lần.
-    const expired = !v.qrValue || !v.qrExpiresAt || new Date(v.qrExpiresAt).getTime() <= Date.now();
+    const expired = isQrExpired(v);
     if (!expired) {
       setQrVoucher(v);
       return;
@@ -397,18 +408,18 @@ function CreateVoucherModal({ onClose, onCreated }: { onClose: () => void; onCre
   const pendingRefunds = refunds ?? [];
   const picked = pendingRefunds.find((r) => r.id === refundId) ?? null;
 
-  // Không có khoản hoàn nào chờ thì mở thẳng chế độ nhập tay cho đỡ phải bấm.
-  useEffect(() => {
-    if (refunds && refunds.length === 0) setMode("manual");
-  }, [refunds]);
+  // Không có khoản hoàn nào chờ thì mở thẳng chế độ nhập tay cho đỡ phải bấm. Đặt MỘT LẦN, ngay khi
+  // biết danh sách, và chỉ khi người dùng chưa tự chọn — tải lại danh sách không được giật chế độ về.
+  const [modePicked, setModePicked] = useState(false);
+  if (!modePicked && refunds) {
+    setModePicked(true);
+    if (refunds.length === 0) setMode("manual");
+  }
 
   // Loại chi mặc định: loại đầu tiên không phải danh mục hệ thống (lương/hoàn phạt do máy tự sinh).
-  useEffect(() => {
-    if (!categoryId && categories?.length) {
-      const first = categories.find((c) => !c.isSystem) ?? categories[0];
-      setCategoryId(first.id);
-    }
-  }, [categories, categoryId]);
+  if (!categoryId && categories?.length) {
+    setCategoryId((categories.find((c) => !c.isSystem) ?? categories[0]).id);
+  }
 
   const submit = async () => {
     if (mode === "refund" && !refundId) {

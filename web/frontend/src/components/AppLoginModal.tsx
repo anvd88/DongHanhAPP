@@ -17,7 +17,8 @@ type AppLoginSession = {
 
 type AppLoginPollResult =
   | { status: "pending" | "opened" | "rejected" | "expired"; expiresAt?: string }
-  | { status: "authenticated"; token: string; user: User; expiresAt?: string };
+  // Không có "token": phiên đi bằng cookie HttpOnly do máy chủ đặt trong chính phản hồi này.
+  | { status: "authenticated"; user: User; expiresAt?: string };
 
 type Phase = "starting" | "waiting" | "opened" | "authenticated" | "rejected" | "expired" | "error";
 
@@ -87,7 +88,7 @@ export function AppLoginModal({ onClose, onSuccess }: { onClose: () => void; onS
         }, controller.signal);
         if (stopped) return;
         if (result.status === "authenticated") {
-          completeExternalLogin({ token: result.token, user: result.user });
+          completeExternalLogin({ user: result.user });
           void api.postPublic("/api/auth/app-login/ack", {
             pollToken: session.pollToken,
             clientMode: CLIENT_MODE,

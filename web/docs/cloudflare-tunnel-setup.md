@@ -137,13 +137,22 @@ Kiểm tra ngoài Internet: mở `https://<DOMAIN>` trên điện thoại **tắ
 
 1. ✅ `Ketoanapk/android/app/build.gradle` → `API_BASE_URL = "https://ketoancp.click"` (bỏ `:5443`, Cloudflare phục vụ 443); `versionCode 16→17`, `versionName 1.2.11`.
 2. ✅ `Ketoanapk/android/app/src/main/res/xml/network_security_config.xml` → domain `ketoancp.click`, chỉ tin CA `system` (bỏ CA riêng `ketoanmini_ca`).
-3. ✅ `frontend/capacitor.config.ts` (bản Capacitor cũ) → thêm `ketoancp.click` vào `allowNavigation`.
+3. ~~`frontend/capacitor.config.ts` → `allowNavigation`~~ — KHÔNG còn áp dụng: vỏ Capacitor đã bị gỡ hẳn
+   (2026-07-19). APK hiện là native Kotlin/Compose, không có WebView nên không có danh sách điều hướng.
 
-**Việc còn lại của bạn:** build + phát hành:
+**Việc còn lại của bạn:** build + phát hành. Dùng script phát hành (tự tăng versionCode, ký, chép ra
+`artifacts/`):
 
 ```powershell
-cd Ketoanapk
-npm run apk:release
+.\build-ketoanapk-release.ps1
+```
+
+Hoặc build tay bằng gradle (KHÔNG còn lệnh npm nào cho APK):
+
+```powershell
+$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
+cd Ketoanapk\android
+.\gradlew.bat assembleRelease --no-problems-report
 ```
 → **đăng bản mới ở form APK trên WEB** để thiết bị tự cập nhật (xem memory apk-update-mechanism). Nhớ `versionCode` mới (17) phải > mã đang cài trên máy.
 

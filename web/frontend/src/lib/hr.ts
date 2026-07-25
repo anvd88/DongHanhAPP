@@ -21,15 +21,15 @@ export interface Location {
   employeeCount: number;
 }
 
-// Vai trò truy cập (chức vụ phân quyền) của nhân viên.
+// Phạm vi dữ liệu nhân sự. Đây không phải vai trò hệ thống của tài khoản.
 export type AccessRole = "staff" | "dept_manager" | "location_manager";
 export const ACCESS_ROLES: { value: AccessRole; label: string }[] = [
-  { value: "staff", label: "Nhân viên" },
-  { value: "dept_manager", label: "Quản lý phòng ban" },
-  { value: "location_manager", label: "Quản lý địa điểm" },
+  { value: "staff", label: "Chỉ hồ sơ của mình" },
+  { value: "dept_manager", label: "Toàn bộ phòng ban" },
+  { value: "location_manager", label: "Toàn bộ địa điểm" },
 ];
 export function accessRoleLabel(role?: string | null): string {
-  return ACCESS_ROLES.find((r) => r.value === role)?.label ?? "Nhân viên";
+  return ACCESS_ROLES.find((r) => r.value === role)?.label ?? "Chỉ hồ sơ của mình";
 }
 
 export interface EmployeeCard {
@@ -38,6 +38,7 @@ export interface EmployeeCard {
   username: string;
   fullName: string;
   position: string;
+  hireDate?: string | null;
   status: string;
   phone: string;
   email: string;
@@ -55,7 +56,6 @@ export interface EmployeeDetail extends EmployeeCard {
   gender: string;
   address: string;
   managerId?: string | null;
-  hireDate?: string | null;
   isAccounting: boolean;
 }
 

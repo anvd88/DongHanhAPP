@@ -41,6 +41,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Devices
@@ -54,6 +56,7 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Description
@@ -95,7 +98,7 @@ import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.HrUser
 
-enum class SettingsRoute { Home, WebLogin, ChangePassword, AppPin, Devices, Notifications, Permissions, Personalization, FaceEnroll, Version, Terms, Privacy }
+enum class SettingsRoute { Home, WebLogin, ChangePassword, AppPin, Devices, Notifications, Permissions, Personalization, FaceEnroll, Version, Terms, Privacy, Storage }
 
 private data class LegalSection(
     val title: String,
@@ -148,6 +151,7 @@ fun SettingsScreen(user: HrUser, vm: HrViewModel, onScanQr: () -> Unit, onLogout
             SettingsRoute.Personalization -> PersonalizationSettings(goHome)
             SettingsRoute.FaceEnroll -> FaceEnrollScreen(vm, goHome)
             SettingsRoute.Version -> AppVersionScreen(vm, goHome)
+            SettingsRoute.Storage -> StorageScreen(vm, goHome)
             SettingsRoute.Terms -> TermsScreen(goHome)
             SettingsRoute.Privacy -> PrivacyPolicyScreen(goHome)
         }
@@ -163,6 +167,9 @@ private fun SettingsHome(
     onLogout: () -> Unit,
 ) {
     LaunchedEffect(Unit) { vm.loadFaceStatus() }
+    val canPreviewAnniversary = user.isAdmin ||
+        user.role.equals("HR", ignoreCase = true) ||
+        user.roles.any { it.equals("HR", ignoreCase = true) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
@@ -226,6 +233,16 @@ private fun SettingsHome(
                 SettingsRow(Icons.Filled.PrivacyTip, "Chính sách quyền riêng tư", "Cách dữ liệu được sử dụng") { onOpen(SettingsRoute.Privacy) }
                 SettingsDivider()
                 SettingsRow(Icons.Filled.Info, "Phiên bản ứng dụng", "Phiên bản & kiểm tra cập nhật") { onOpen(SettingsRoute.Version) }
+                SettingsDivider()
+                SettingsRow(Icons.Filled.Storage, "Bộ nhớ & dữ liệu tạm", "Xem dung lượng và dọn cache của ứng dụng") { onOpen(SettingsRoute.Storage) }
+                if (canPreviewAnniversary) {
+                    SettingsDivider()
+                    SettingsRow(
+                        Icons.Filled.AutoAwesome,
+                        "Xem thử thư tri ân",
+                        if (vm.anniversaryPreviewLoading) "Đang chuẩn bị bản xem thử…" else "Mở mẫu thư 5 năm với hiệu ứng máy đánh chữ",
+                    ) { vm.previewAnniversaryGreeting() }
+                }
             }
         }
 
@@ -790,6 +807,95 @@ private fun AppVersionScreen(vm: HrViewModel, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+// ── Bộ nhớ & dữ liệu tạm ─────────────────────────────────────────────────────
+@Composable
+private fun StorageScreen(vm: HrViewModel, onBack: () -> Unit) {
+    var showConfirm by remember { mutableStateOf(false) }
+    // Đo lại mỗi lần mở màn để con số phản ánh đúng hiện trạng (vd vừa tải xong gói cập nhật).
+    LaunchedEffect(Unit) { vm.loadCacheSize() }
+
+    SubScreen("Bộ nhớ & dữ liệu tạm", onBack) {
+        item {
+            HrCard {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Filled.CleaningServices, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+                    }
+                    Text(vm.cacheSizeText ?: "Đang tính…", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    Text("Dung lượng dữ liệu tạm đang chiếm", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        item {
+            SettingsGroup(padded = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Dọn cache sẽ xoá", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    BulletLine("Gói cập nhật đã tải sẵn")
+                    BulletLine("Ảnh, PDF và âm thanh tạm")
+                    BulletLine("Bộ đệm chat và ảnh chụp Trang chủ (giúp mở app nhanh)")
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Không ảnh hưởng: phiên đăng nhập, đơn nháp chưa gửi, và các lượt chấm công ngoại tuyến " +
+                            "chưa đồng bộ. Dữ liệu đã dọn sẽ tự tải lại khi cần.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        item {
+            Button(
+                onClick = { showConfirm = true },
+                enabled = !vm.cacheClearing,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+            ) {
+                if (vm.cacheClearing) {
+                    CircularProgressIndicator(Modifier.size(20.dp), MaterialTheme.colorScheme.onError, 2.dp)
+                } else {
+                    Icon(Icons.Filled.CleaningServices, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Dọn cache ngay", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+
+    if (showConfirm) {
+        AlertDialog(
+            onDismissRequest = { showConfirm = false },
+            icon = { Icon(Icons.Filled.CleaningServices, contentDescription = null) },
+            title = { Text("Dọn cache?") },
+            text = { Text("Ứng dụng sẽ xoá dữ liệu tạm để giải phóng bộ nhớ. Phiên đăng nhập và các dữ liệu chưa gửi vẫn được giữ nguyên.") },
+            confirmButton = { TextButton(onClick = { showConfirm = false; vm.clearCache() }) { Text("Dọn cache") } },
+            dismissButton = { TextButton(onClick = { showConfirm = false }) { Text("Huỷ") } },
+        )
+    }
+}
+
+@Composable
+private fun BulletLine(text: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Text("•  ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

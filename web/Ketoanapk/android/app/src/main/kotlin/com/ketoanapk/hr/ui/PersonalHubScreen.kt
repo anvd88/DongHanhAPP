@@ -68,7 +68,6 @@ fun PersonalHubScreen(user: HrUser, state: HomeUiState, onSelect: (HrDestination
                 HubList(
                     destinations = listOf(
                         HrDestination.Profile,
-                        HrDestination.MySalary,
                         HrDestination.MyPayslips,
                         HrDestination.Payout,
                         HrDestination.Benefits,

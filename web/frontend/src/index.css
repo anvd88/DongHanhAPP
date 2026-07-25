@@ -1256,6 +1256,53 @@ html[data-theme="dark"] .glass-strong {
   letter-spacing: 0.04em;
 }
 
+/* Bộ chuyển "Làm việc / Quản trị" — chỉ đổi menu đang hiện, không đụng tới quyền (xem lib/workArea.tsx). */
+.km-area-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  margin: 0 7px 6px;
+  border: 1px solid rgba(166, 200, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(12, 24, 48, 0.35);
+  padding: 2px;
+}
+
+.km-area-switch button {
+  border-radius: 10px;
+  padding: 5px 4px;
+  color: rgba(220, 232, 255, 0.7);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  transition: background 0.2s ease, color 0.2s ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.km-area-switch button:hover {
+  color: white;
+}
+
+.km-area-switch button.is-active {
+  background: rgba(42, 148, 255, 0.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  color: white;
+}
+
+/* Sidebar thu gọn: nút chỉ còn vệt nhỏ, chữ ẩn cùng nhóm với nhãn menu (quy tắc ở phần rail bên dưới). */
+.km-sidebar-rail .km-sidebar .km-area-switch {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.km-sidebar-rail .km-sidebar:hover .km-area-switch,
+.km-sidebar-rail .km-sidebar:focus-within .km-area-switch {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .km-sidebar-sections {
   display: flex;
   flex-direction: column;
@@ -2637,6 +2684,49 @@ html[data-theme="dark"] .km-skeleton {
 
 @media (prefers-reduced-motion: reduce) {
   .km-skeleton { animation: none; }
+}
+
+/* ---------- Bố cục skeleton loading (khung nội dung + khung khởi động) ---------- */
+.km-page-skeleton { display: block; }
+.km-skel-stats { margin-top: 14px; }
+.km-skel-panel { margin-top: 14px; }
+.km-skel-rows { display: grid; gap: 14px; margin-top: 16px; }
+.km-skel-row { display: flex; align-items: center; gap: 16px; }
+
+/* Khung toàn màn hình (trang đăng nhập / lần tải đầu) — thẻ kính ở giữa. */
+.km-boot-skeleton {
+  display: flex;
+  min-height: 100vh;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.km-boot-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 380px;
+  padding: 26px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(227, 239, 255, 0.28));
+  box-shadow:
+    0 30px 80px -46px rgba(58, 92, 155, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+}
+html[data-theme="dark"] .km-boot-skeleton-card {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.55), rgba(15, 23, 42, 0.4));
+  box-shadow:
+    0 30px 80px -46px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+html.perf-lite .km-boot-skeleton-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* =========================================================================

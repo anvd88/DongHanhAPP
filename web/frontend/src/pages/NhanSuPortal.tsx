@@ -18,9 +18,8 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
-import { IS_HR_APK } from "../lib/appConfig";
 import { initials } from "../lib/format";
-import { isAdmin } from "../lib/types";
+import { PERM, useAccess } from "../lib/access";
 import { useApi } from "../lib/useApi";
 import {
   requestStatusLabel,
@@ -34,7 +33,7 @@ import {
   subscribeOfflineCount,
   syncOfflineAttendance,
 } from "../lib/offlineAttendance";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import "./nhan-su-portal.css";
 
 function currentMonth() {
@@ -71,11 +70,19 @@ function attendanceTone(day?: TimesheetDay) {
 export function NhanSuPortal() {
   const { user } = useAuth();
   const { notify } = useAppNotifications();
-  const admin = isAdmin(user);
+  // Ô nào hiện ra là theo QUYỀN THẬT chứ không theo "có phải admin không": trưởng phòng cũng duyệt
+  // đơn, kế toán trưởng cũng xem bảng lương. Ẩn đúng thứ mình không vào được thì không còn ô nào bấm
+  // vào chỉ để bị đá ngược về đây.
+  const { can } = useAccess();
+  const canApprove = can(PERM.requestsApprove);
+  const canPayroll = can(PERM.payrollRead);
+  const canHrManage = can(PERM.hrManage);
+  const canMainWeb = can(PERM.accountingAccess);
+  const admin = canHrManage;
   const { data: me } = useApi<EmployeeDetail>("/api/hr/me");
   const { data: timesheet, loading: timesheetLoading } = useApi<Timesheet>(`/api/timesheet/me?month=${currentMonth()}`);
   const { data: requests } = useApi<RequestListItem[]>("/api/requests?scope=mine");
-  const { data: approvals } = useApi<RequestListItem[]>(admin ? "/api/requests?scope=inbox" : null, [admin]);
+  const { data: approvals } = useApi<RequestListItem[]>(canApprove ? "/api/requests?scope=inbox" : null, [canApprove]);
   const [pendingOffline, setPendingOffline] = useState(0);
   const [online, setOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
@@ -132,10 +139,12 @@ export function NhanSuPortal() {
             <span>{role}</span>
           </div>
         </div>
-        <Link className="hrp-main-link" to={IS_HR_APK ? "/dashboard" : "/dashboard"} aria-label="Mở web chính">
-          <LayoutDashboard className="h-4 w-4" />
-          <span>Web chính</span>
-        </Link>
+        {canMainWeb && (
+          <Link className="hrp-main-link" to="/dashboard" aria-label="Mở web chính">
+            <LayoutDashboard className="h-4 w-4" />
+            <span>Web chính</span>
+          </Link>
+        )}
       </header>
 
       <section className="hrp-attendance" aria-labelledby="hrp-attendance-title">
@@ -184,11 +193,13 @@ export function NhanSuPortal() {
           <PortalAction icon={<IdCard />} title="Hồ sơ của tôi" hint="Thông tin cá nhân, hợp đồng, lương" to="/hoso" />
           <PortalAction icon={<CalendarClock />} title="Bảng công" hint="Đối chiếu công, đi muộn, tăng ca" to="/bangcong" />
           <PortalAction icon={<FileText />} title="Đơn từ" hint={latestRequest ? `Gần nhất: ${requestStatusLabel(latestRequest.status)}` : "Tạo và theo dõi đơn"} to="/dontu" tone={statusTone(latestRequest?.status)} />
-          <PortalAction icon={<Inbox />} title="Phê duyệt" hint={admin ? `${inboxCount} đơn đang chờ` : "Các đơn cần bạn xử lý"} to="/pheduyet" tone={inboxCount > 0 ? "warning" : "muted"} />
-          <PortalAction icon={<Gavel />} title="Phạt / kỷ luật" hint={admin ? "Lập & quản lý quyết định phạt" : "Xem các lần bị phạt"} to="/phat" />
+          {canApprove && (
+            <PortalAction icon={<Inbox />} title="Phê duyệt" hint={`${inboxCount} đơn đang chờ`} to="/pheduyet" tone={inboxCount > 0 ? "warning" : "muted"} />
+          )}
+          <PortalAction icon={<Gavel />} title="Phạt / kỷ luật" hint={can(PERM.penaltyManage) ? "Lập & quản lý quyết định phạt" : "Xem các lần bị phạt"} to="/phat" />
           <PortalAction icon={<CreditCard />} title="Tài khoản ngân hàng" hint="Thẻ nhận lương của bạn" to="/tai-khoan-ngan-hang" />
-          {admin && <PortalAction icon={<Wallet />} title="Bảng lương" hint="Mức lương & lập phiếu lương" to="/bang-luong" />}
-          {admin && <PortalAction icon={<UserCog />} title="Quản lý nhân sự" hint="Nhân viên, phòng ban, ca làm" to="/quanly-nhansu" />}
+          {canPayroll && <PortalAction icon={<Wallet />} title="Bảng lương" hint="Mức lương & lập phiếu lương" to="/bang-luong" />}
+          {canHrManage && <PortalAction icon={<UserCog />} title="Quản lý nhân sự" hint="Nhân viên, phòng ban, ca làm" to="/quanly-nhansu" />}
         </div>
       </section>
 

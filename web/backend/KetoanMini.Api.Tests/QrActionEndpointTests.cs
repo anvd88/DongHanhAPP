@@ -45,7 +45,8 @@ public sealed class QrActionEndpointTests
 
         try
         {
-            var browser = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+            // Trình duyệt: giữ cookie phiên và tự gắn header CSRF, giống hệt lib/api.ts ở frontend.
+            var browser = _factory.CreateBrowserClient();
             var app = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
             app.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", appToken);
 

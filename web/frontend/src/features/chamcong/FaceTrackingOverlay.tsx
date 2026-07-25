@@ -11,7 +11,7 @@ export type Framing = {
   /** Tổng "cử động biểu cảm" tích lũy (tăng dần) — liveness THỤ ĐỘNG: người thật luôn nhúc nhích,
    *  ảnh tĩnh thì gần như đứng yên. So sánh mức tăng trong cửa sổ giữ khung để biết có phải mặt sống. */
   motion: number;
-  /** Hướng mặt tính NGAY TRÊN TRÌNH DUYỆT (tỉ lệ hình học, CÙNG quy ước với server /huongmat):
+  /** Hướng mặt tính NGAY TRÊN TRÌNH DUYỆT (tỉ lệ hình học, CÙNG quy ước với FacePose của server):
    *  yaw > 0 ⇒ người dùng quay sang TRÁI; pitch nhỏ = ngước lên, lớn = cúi xuống. Dùng cho đăng ký realtime. */
   yaw: number;
   pitch: number;

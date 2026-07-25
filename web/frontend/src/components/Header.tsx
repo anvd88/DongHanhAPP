@@ -14,14 +14,13 @@ import {
   UserCog,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
-import { useTheme } from "../lib/theme";
+import { useTheme } from "../lib/theme-context";
 import { initials } from "../lib/format";
 import { isAdmin } from "../lib/types";
 import { APP_BRAND_NAME } from "../lib/branding";
-import { IS_HR_APK } from "../lib/appConfig";
 import { VerifiedBadge } from "./VerifiedBadge";
 import { EditProfileModal, ChangePasswordModal } from "./AccountModals";
-import { useChatNotifications } from "./ChatNotifications";
+import { useChatNotifications } from "./chat-notifications-context";
 
 export function Header({ onMenu }: { onMenu: () => void }) {
   const { user, logout } = useAuth();
@@ -59,7 +58,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
       <div className="km-header-company">
         <div className="km-brand-title text-sm font-bold text-[var(--text)]">{APP_BRAND_NAME}</div>
         <div className="mt-1 text-xs font-medium text-[var(--text-secondary)]">
-          {IS_HR_APK ? "Cổng nhân sự công ty" : "Hệ thống kế toán doanh nghiệp"}
+          Hệ thống kế toán doanh nghiệp
         </div>
       </div>
 

@@ -42,7 +42,7 @@ import { DiamondLabel, VerifiedBadge } from "../components/VerifiedBadge";
 import { useAuth } from "../lib/auth";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { formatBytes } from "../lib/format";
 import {
   redownload,
@@ -248,7 +248,8 @@ const CONVERSATION_MENU_WIDTH = 184;
 
 /** Nút "..." (hiện khi rê chuột) mở menu Chuyển tiếp / Chỉnh sửa / Gỡ.
  *  Menu render qua portal ra <body> với vị trí fixed → không bị vùng chat (overflow)
- *  cắt mất; tự mở lên trên nếu không đủ chỗ bên dưới. */
+ *  cắt mất; tự mở lên trên nếu không đủ chỗ bên dưới.
+ *  onForward/onEdit là tùy chọn: tin tệp/thoại không chuyển tiếp/sửa được nên chỉ hiện "Gỡ". */
 function MessageMenu({
   mine,
   onForward,
@@ -256,8 +257,8 @@ function MessageMenu({
   onRemove,
 }: {
   mine: boolean;
-  onForward: () => void;
-  onEdit: () => void;
+  onForward?: () => void;
+  onEdit?: () => void;
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -303,8 +304,8 @@ function MessageMenu({
                 WebkitBackdropFilter: "blur(8px)",
               }}
             >
-              <MenuItem icon={Forward} label="Chuyển tiếp" onClick={() => { setOpen(false); onForward(); }} />
-              {mine && <MenuItem icon={Pencil} label="Chỉnh sửa" onClick={() => { setOpen(false); onEdit(); }} />}
+              {onForward && <MenuItem icon={Forward} label="Chuyển tiếp" onClick={() => { setOpen(false); onForward(); }} />}
+              {mine && onEdit && <MenuItem icon={Pencil} label="Chỉnh sửa" onClick={() => { setOpen(false); onEdit(); }} />}
               {mine && <MenuItem icon={Trash2} label="Gỡ" danger onClick={() => { setOpen(false); onRemove(); }} />}
             </div>
           </>,
@@ -855,6 +856,7 @@ function FileBubble({
   onServerDownload,
   onLoadVoice,
   onReact,
+  onRemove,
 }: {
   msg: ChatMessage;
   conversationId: string;
@@ -864,6 +866,7 @@ function FileBubble({
   onServerDownload: () => void;
   onLoadVoice: () => Promise<Blob>;
   onReact: (emoji: string) => void;
+  onRemove: () => void;
 }) {
   const mine = msg.mine;
   const voice = isVoiceMessage(msg);
@@ -938,7 +941,12 @@ function FileBubble({
   return (
     <div className="flex flex-col">
       <div className={`group flex w-full items-center gap-1 ${mine ? "justify-end" : "justify-start"}`}>
-        {mine && <ReactionPicker mine onReact={onReact} />}
+        {mine && (
+          <>
+            <MessageMenu mine onRemove={onRemove} />
+            <ReactionPicker mine onReact={onReact} />
+          </>
+        )}
         <div
           className="chat-message-bubble max-w-[90%] rounded-2xl px-3 py-2.5 shadow-sm sm:max-w-[78%]"
           style={
@@ -2124,9 +2132,12 @@ export function Chats() {
 
   const removeMsg = async (m: ChatMessage) => {
     if (!activeId) return;
+    const isFile = m.kind === "file" || m.kind === "voice";
     const ok = await confirm({
-      title: "Gỡ tin nhắn?",
-      description: "Mọi người trong cuộc trò chuyện sẽ không xem được tin nhắn này nữa.",
+      title: isFile ? "Gỡ tệp đã gửi?" : "Gỡ tin nhắn?",
+      description: isFile
+        ? "Mọi người trong cuộc trò chuyện sẽ không xem được tệp này nữa. Bản tệp đang giữ tạm trên máy chủ (nếu có) cũng bị xóa."
+        : "Mọi người trong cuộc trò chuyện sẽ không xem được tin nhắn này nữa.",
       confirmLabel: "Gỡ",
       tone: "danger",
     });
@@ -2441,6 +2452,7 @@ export function Chats() {
                         onServerDownload={() => void serverDownload(m)}
                         onLoadVoice={() => loadVoiceBlob(m)}
                         onReact={(emoji) => toggleReaction(m, emoji)}
+                        onRemove={() => removeMsg(m)}
                       />
                     ) : (
                       <Bubble

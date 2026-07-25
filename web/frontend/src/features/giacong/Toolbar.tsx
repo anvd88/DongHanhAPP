@@ -4,7 +4,8 @@ import { GlassPanel } from "../../components/glass/GlassPanel";
 import { GlassCapsule } from "../../components/glass/GlassCapsule";
 import { LiquidTabs, type LiquidTab } from "../../components/glass/LiquidTabs";
 
-export const TABS: LiquidTab[] = [
+// Không export: chỉ dùng ngay trong file này (giữ export làm Fast Refresh mất tác dụng cho cả file).
+const TABS: LiquidTab[] = [
   { key: "all", label: "Tất cả" },
   { key: "xuat", label: "Xuất gia công" },
   { key: "nhap", label: "Nhập gia công" },

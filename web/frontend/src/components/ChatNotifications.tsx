@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { MessageCircle } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
@@ -8,6 +8,7 @@ import { isMessagePreviewEnabled, subscribeMessagePreviewEnabled } from "../lib/
 import { subscribeRealtime } from "../lib/realtime";
 import { FileTransferPrompts } from "./FileTransferPrompts";
 import type { ChatConversation } from "../lib/types";
+import { ChatNotificationContext } from "./chat-notifications-context";
 
 type ChatToast = {
   id: number;
@@ -17,18 +18,7 @@ type ChatToast = {
   avatarUrl?: string | null;
 };
 
-type ChatNotificationContextValue = {
-  unreadCount: number;
-  conversations: ChatConversation[];
-  reload: (silent?: boolean) => void;
-};
-
-const ChatNotificationContext = createContext<ChatNotificationContextValue | null>(null);
 const TOAST_DURATION_MS = 6500;
-
-export function useChatNotifications() {
-  return useContext(ChatNotificationContext) ?? { unreadCount: 0, conversations: [], reload: () => {} };
-}
 
 function totalUnread(conversations: ChatConversation[]) {
   return conversations.reduce((sum, c) => sum + Math.max(0, c.unread || 0), 0);
@@ -49,10 +39,32 @@ export function ChatNotificationProvider({ children, suppress = false }: { child
   const location = useLocation();
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [toast, setToast] = useState<ChatToast | null>(null);
-  const [previewEnabled, setPreviewEnabled] = useState(() => (user ? isMessagePreviewEnabled(user.id) : true));
+  // Cờ "đọc trước nội dung tin nhắn" nằm ở localStorage — một NGUỒN NGOÀI React. Đọc bằng
+  // useSyncExternalStore thay vì useState + useEffect(setState): React tự đăng ký / huỷ đăng ký và đọc
+  // lại đúng lúc render, nên không còn cảnh "render một nhịp bằng giá trị cũ rồi mới setState sửa lại"
+  // (chính là lỗi set-state-in-effect). Đúng cách đã dùng ở WaterReminderPopup và EyeReminderPopup.
+  const userId = user?.id ?? null;
+  const previewEnabled = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) => (userId ? subscribeMessagePreviewEnabled(userId, onChange) : () => {}),
+      [userId],
+    ),
+    () => (userId ? isMessagePreviewEnabled(userId) : true),
+  );
   const conversationsRef = useRef<ChatConversation[]>([]);
   const firstLoadRef = useRef(true);
   const previewEnabledRef = useRef(previewEnabled);
+
+  // Đăng xuất (hoặc đổi tài khoản) thì bỏ sạch hội thoại và toast đang hiện — dữ liệu của người trước
+  // không được phép hiện cho người sau. Gán lúc render thay vì trong effect: React Compiler cấm
+  // setState đồng bộ trong effect, và làm ở đây còn CHẮC hơn — state sạch ngay trong khung hình đầu,
+  // không có nhịp nào kịp vẽ hội thoại cũ. `conversationsRef` tự theo sau nhờ effect đồng bộ bên dưới.
+  const [conversationsUserId, setConversationsUserId] = useState(user?.id ?? null);
+  if (conversationsUserId !== (user?.id ?? null)) {
+    setConversationsUserId(user?.id ?? null);
+    setConversations([]);
+    setToast(null);
+  }
 
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -101,33 +113,33 @@ export function ChatNotificationProvider({ children, suppress = false }: { child
   useEffect(() => {
     if (!user) {
       conversationsRef.current = [];
-      setConversations([]);
-      setToast(null);
       return;
     }
 
     firstLoadRef.current = true;
-    setPreviewEnabled(isMessagePreviewEnabled(user.id));
+    // BÁO NHẦM: `loadConversations` là hàm async và mọi setState trong đó đều nằm SAU
+    // `await api.get(...)`, nên không có setState nào chạy đồng bộ trong thân effect. Luật chỉ thấy
+    // "hàm này có gọi setState" chứ không lần được tới chỗ await.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadConversations();
 
     const unsubscribeRealtime = subscribeRealtime((_, payload) => {
       void loadConversations({ notify: true, payload });
     }, ["chat"]);
-    const unsubscribePreview = subscribeMessagePreviewEnabled(user.id, () => {
-      setPreviewEnabled(isMessagePreviewEnabled(user.id));
-    });
 
     const onFocus = () => void loadConversations();
     window.addEventListener("focus", onFocus);
 
     return () => {
       unsubscribeRealtime();
-      unsubscribePreview();
       window.removeEventListener("focus", onFocus);
     };
   }, [loadConversations, user]);
 
   useEffect(() => {
+    // BÁO NHẦM, cùng lý do như trên: setState trong `loadConversations` nằm sau `await`, không chạy
+    // đồng bộ trong thân effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (location.pathname.startsWith("/chats")) void loadConversations();
   }, [loadConversations, location.pathname]);
 

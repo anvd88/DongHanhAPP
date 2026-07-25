@@ -6,7 +6,7 @@ import { Badge, Button } from "../components/ui";
 import { Table } from "../components/Table";
 import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { RequestReviewModal } from "../components/hr/RequestReviewModal";
 import { type RequestListItem } from "../lib/hr";
 

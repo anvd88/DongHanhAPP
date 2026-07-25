@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { MotionConfig, motion } from "motion/react";
 import { ArrowDown, ArrowUp, ArrowUpDown, CalendarDays, CircleDollarSign, Download, FileText, FilterX, Loader2, Pencil, Printer, Search, Trash2, TriangleAlert, Wallet, X } from "lucide-react";
 import { GlassCapsule } from "../components/glass/GlassCapsule";
@@ -6,7 +6,7 @@ import { GlassPanel } from "../components/glass/GlassPanel";
 import { LiquidTabs, type LiquidTab } from "../components/glass/LiquidTabs";
 import { Button as GlassButton } from "../shadcn/button";
 import { Modal } from "../components/Modal";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { MonthPicker } from "../components/DateField";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
@@ -481,9 +481,6 @@ export function KeToan() {
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [printingId, setPrintingId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [keepCreateOpen, setKeepCreateOpen] = useState(() =>
-    user ? isKeepCreateVoucherOpenEnabled(user.id) : false,
-  );
   const searchRef = useRef<HTMLInputElement>(null);
 
   const monthRows = useMemo(
@@ -541,17 +538,17 @@ export function KeToan() {
         : { key, dir: key === "date" || key === "total" ? "desc" : "asc" },
     );
 
-  useEffect(() => {
-    if (!user) {
-      setKeepCreateOpen(false);
-      return;
-    }
-
-    setKeepCreateOpen(isKeepCreateVoucherOpenEnabled(user.id));
-    return subscribeKeepCreateVoucherOpenEnabled(user.id, () => {
-      setKeepCreateOpen(isKeepCreateVoucherOpenEnabled(user.id));
-    });
-  }, [user]);
+  // Tuỳ chọn này lưu ở localStorage — nguồn NGOÀI React, nên đọc bằng useSyncExternalStore (React tự
+  // đăng ký/huỷ và đọc lại đúng lúc render) thay vì useState + useEffect(setState). Chưa đăng nhập thì
+  // không có khoá nào để đọc ⇒ coi như tắt.
+  const keepCreateOpen = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) =>
+        user ? subscribeKeepCreateVoucherOpenEnabled(user.id, onChange) : () => {},
+      [user],
+    ),
+    () => (user ? isKeepCreateVoucherOpenEnabled(user.id) : false),
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -907,6 +904,9 @@ export function KeToan() {
 
         {editing !== null && (
           <DocumentEditor
+            // Mỗi chứng từ (và mỗi loại chứng từ mới) là một form riêng: đổi key ⇒ React dựng lại
+            // component với giá trị khởi tạo đúng, thay cho việc dọn/nạp lại từng ô bằng useEffect.
+            key={`${editing}:${initialKind}`}
             id={editing}
             initialKind={initialKind}
             customers={customers ?? []}

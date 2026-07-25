@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Hiệu ứng "số chạy": nhận vào một CHUỖI đã định dạng sẵn (vd "1.234.567 ₫", "0",
@@ -36,14 +36,13 @@ export function CountUp({
   const target = parsed?.value ?? 0;
   const decimals = parsed?.decimals ?? 0;
   const hasNumber = match !== null;
-  const formatter = useMemo(
-    () =>
-      new Intl.NumberFormat("vi-VN", {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals,
-      }),
-    [decimals],
-  );
+  // Bỏ useMemo: React Compiler không giữ được memo thủ công ở đây (nó cảnh báo deps có thể bị đổi sau),
+  // mà dựng một Intl.NumberFormat vốn rất rẻ so với việc chạy animation 60 khung/giây ngay bên dưới.
+  // Để compiler tự lo phần ghi nhớ thì đúng hơn là ép nó bằng tay rồi bị bỏ tối ưu cả component.
+  const formatter = new Intl.NumberFormat("vi-VN", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 
   const [display, setDisplay] = useState(0);
   const fromRef = useRef(0);
@@ -54,7 +53,9 @@ export function CountUp({
   // match mới → effect chạy lại → animation bị KHỞI ĐỘNG LẠI liên tục và số đứng yên ở 0.
   useEffect(() => {
     if (!hasNumber) {
-      setDisplay(target);
+      // Không có số trong chuỗi thì component trả thẳng `str` (xem `if (!match)` bên dưới) — `display`
+      // KHÔNG được vẽ ra, nên gán nó ở đây chỉ tốn một vòng render thừa. Chỉ cần đặt lại mốc `fromRef`
+      // để lần sau chuỗi có số trở lại thì vẫn chạy từ 0 đúng như cũ.
       fromRef.current = target;
       return;
     }
@@ -63,8 +64,12 @@ export function CountUp({
       return;
     }
     const from = fromRef.current;
-    const start = performance.now();
+    // Mốc thời gian lấy từ CHÍNH khung hình đầu tiên (rAF truyền timestamp vào) thay vì gọi
+    // performance.now() sẵn: bỏ được khoảng trễ giữa lúc effect chạy và lúc trình duyệt vẽ khung
+    // đầu — nếu không, quãng trễ đó bị tính vào thời lượng và số nhảy vọt ngay khung đầu tiên.
+    let start: number | null = null;
     const step = (now: number) => {
+      start ??= now;
       const p = Math.min(1, (now - start) / duration);
       setDisplay(from + (target - from) * easeOutExpo(p));
       if (p < 1) {

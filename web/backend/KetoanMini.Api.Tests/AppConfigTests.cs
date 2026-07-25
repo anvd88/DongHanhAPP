@@ -24,6 +24,7 @@ public sealed class AppConfigTests : IAsyncLifetime
     private const string Emp = "__test_cfg_emp__";
     private string _savedFeatures = "{}";
     private string _savedOnboarding = "{}";
+    private string _savedNotices = "[]";
 
     public AppConfigTests(ApiFactory factory) => _factory = factory;
 
@@ -35,8 +36,8 @@ public sealed class AppConfigTests : IAsyncLifetime
         await Upsert(conn, Admin, "Admin");
         await Upsert(conn, Emp, "Employee");
         await using var r = await conn.Cmd(
-            "SELECT feature_flags::text AS f, onboarding::text AS o FROM app_config WHERE id=1").ExecuteReaderAsync();
-        if (await r.ReadAsync()) { _savedFeatures = r.Str("f"); _savedOnboarding = r.Str("o"); }
+            "SELECT feature_flags::text AS f, onboarding::text AS o, notices::text AS n FROM app_config WHERE id=1").ExecuteReaderAsync();
+        if (await r.ReadAsync()) { _savedFeatures = r.Str("f"); _savedOnboarding = r.Str("o"); _savedNotices = r.Str("n"); }
     }
 
     public async Task DisposeAsync()
@@ -44,8 +45,8 @@ public sealed class AppConfigTests : IAsyncLifetime
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Database>();
         await using var conn = await db.OpenAsync();
-        await conn.Cmd("UPDATE app_config SET feature_flags=@f::jsonb, onboarding=@o::jsonb WHERE id=1")
-            .With("@f", _savedFeatures).With("@o", _savedOnboarding).ExecuteNonQueryAsync();
+        await conn.Cmd("UPDATE app_config SET feature_flags=@f::jsonb, onboarding=@o::jsonb, notices=@n::jsonb WHERE id=1")
+            .With("@f", _savedFeatures).With("@o", _savedOnboarding).With("@n", _savedNotices).ExecuteNonQueryAsync();
         await conn.Cmd("DELETE FROM app_users WHERE username = ANY(@u)")
             .With("@u", new[] { Admin, Emp }).ExecuteNonQueryAsync();
     }
@@ -76,7 +77,7 @@ public sealed class AppConfigTests : IAsyncLifetime
         bool ChatFileTransferEnabled, bool CompanyPortalEnabled);
     private sealed record Onboarding(string CameraReason, string LocationReason, string NotificationReason,
         string MicrophoneReason, string IntroText);
-    private sealed record Config(Features Features, Onboarding Onboarding);
+    private sealed record Config(Features Features, Onboarding Onboarding, string[] Notices);
 
     [Fact]
     public async Task Config_EmployeeCannotPut_Returns403()
@@ -106,5 +107,23 @@ public sealed class AppConfigTests : IAsyncLifetime
         Assert.False(cfg.Features.OfflineAttendanceEnabled);
         Assert.True(cfg.Features.BiometricAttendanceEnabled); // trường không gửi → mặc định bật
         Assert.Equal("Xin quyền camera để chấm công khuôn mặt.", cfg.Onboarding.CameraReason);
+    }
+
+    [Fact]
+    public async Task Config_AdminPut_Notices_RoundTripsAndCleans()
+    {
+        var admin = await ClientAsAsync(Admin, "Admin");
+        // Gửi kèm dòng rỗng và trùng lặp để kiểm chứng backend lọc rỗng + khử trùng lặp.
+        var put = await admin.PutAsJsonAsync("/api/app-config", new
+        {
+            notices = new[] { "Nhớ nộp báo cáo tuần", "  ", "Giữ gìn vệ sinh nơi làm việc", "Nhớ nộp báo cáo tuần" },
+        });
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+
+        var emp = await ClientAsAsync(Emp, "Employee");
+        var cfg = await emp.GetFromJsonAsync<Config>("/api/app-config");
+
+        Assert.NotNull(cfg);
+        Assert.Equal(new[] { "Nhớ nộp báo cáo tuần", "Giữ gìn vệ sinh nơi làm việc" }, cfg!.Notices);
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using KetoanMini.Api.Data;
 using Microsoft.AspNetCore.SignalR;
 
 namespace KetoanMini.Api.Realtime;
@@ -17,14 +18,59 @@ namespace KetoanMini.Api.Realtime;
 public sealed class ChangesHub : Hub
 {
     private readonly ILogger<ChangesHub> _log;
-    public ChangesHub(ILogger<ChangesHub> log) => _log = log;
+    private readonly Database _db;
+    private readonly HubPresenceRegistry _presence;
+
+    public ChangesHub(ILogger<ChangesHub> log, Database db, HubPresenceRegistry presence)
+    {
+        _log = log;
+        _db = db;
+        _presence = presence;
+    }
 
     // Log định danh mỗi kết nối để chẩn đoán cuộc gọi: nếu UserIdentifier NULL nghĩa là token không
     // tới được hub (kết nối ẩn danh) → Relay bị bỏ → không nhận được cuộc gọi. Xem có "user=<username>".
-    public override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
         _log.LogInformation("Hub kết nối: user={User} conn={Conn}", Context.UserIdentifier ?? "(ẩn danh)", Context.ConnectionId);
-        return base.OnConnectedAsync();
+        await MarkPresenceAsync();
+        await base.OnConnectedAsync();
+    }
+
+    // HIỆN DIỆN ONLINE — thay cho nhịp tim HTTP mà client tự bắn. Chính kết nối SignalR là bằng chứng
+    // "đang online", còn keep-alive ping sẵn có của SignalR là "nhịp tim" ở tầng vận chuyển. Ở đây chỉ
+    // làm tươi last_seen của ĐÚNG dòng user_sessions mà lúc đăng nhập đã tạo (khóa theo sid) rồi để
+    // <see cref="HubPresenceRefresher"/> giữ tươi mỗi 45s.
+    //
+    // Áp cho MỌI kết nối đã xác thực có claim "sid" — cả TRÌNH DUYỆT (phiên cookie) LẪN APP native
+    // (khi ở foreground). App ở nền tắt SignalR nên lúc đó nhịp tim HTTP dự phòng của app mới giữ hiện
+    // diện. Khóa theo session_token (sid) nên chỉ đụng đúng dòng của kết nối này, không phân biệt
+    // Web/App. Ghi last_seen kích hoạt trigger 'presence' của PostgreSQL nên các máy khác tự cập nhật.
+    private async Task MarkPresenceAsync()
+    {
+        var username = Context.UserIdentifier;
+        if (string.IsNullOrEmpty(username)) return;
+        // sid nằm sẵn trong token (TokenService gắn claim "sid" = session_token của dòng user_sessions
+        // tạo lúc đăng nhập). Không có sid thì không biết làm tươi dòng nào → bỏ qua.
+        var sid = Context.User?.FindFirst("sid")?.Value;
+        if (string.IsNullOrWhiteSpace(sid)) return;
+
+        _presence.Track(Context.ConnectionId, sid);
+        try
+        {
+            await using var conn = await _db.OpenAsync(Context.ConnectionAborted);
+            await conn.Cmd(
+                @"UPDATE user_sessions
+                     SET last_seen = CURRENT_TIMESTAMP, is_active = TRUE, ended_at = NULL, end_reason = ''
+                   WHERE session_token = @t AND username = @u AND revoked = FALSE")
+                .With("@t", sid).With("@u", username)
+                .ExecuteNonQueryAsync(Context.ConnectionAborted);
+        }
+        catch (Exception ex)
+        {
+            // DB chập chờn không được làm hỏng việc dựng kết nối realtime — bỏ qua, nhịp làm tươi sau sẽ vá.
+            _log.LogDebug("Đánh dấu hiện diện lỗi cho {User}: {Msg}", username, ex.Message);
+        }
     }
 
     // Chống lạm dụng kênh Relay (DoS/flood): giới hạn số gói mỗi cửa sổ thời gian theo TỪNG kết nối.
@@ -65,6 +111,10 @@ public sealed class ChangesHub : Hub
 
     public override Task OnDisconnectedAsync(Exception? exception)
     {
+        // Ngừng làm tươi hiện diện cho kết nối này. KHÔNG chủ động ghi is_active=false: cứ để last_seen
+        // cũ dần rồi sau 90s tự hiện offline — đúng như khi nhịp tim cũ ngừng, và giữ nguyên dòng thiết
+        // bị cho "Quản lý thiết bị"/thu hồi tới khi người dùng đăng xuất hẳn.
+        _presence.Drop(Context.ConnectionId);
         Buckets.TryRemove(Context.ConnectionId, out _);
         return base.OnDisconnectedAsync(exception);
     }

@@ -100,6 +100,54 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         return b.ConnectionString;
     }
 
+    /// <summary>
+    /// HttpClient CƯ XỬ NHƯ TRÌNH DUYỆT: giữ cookie (mặc định của WebApplicationFactory) VÀ tự gắn
+    /// lại cookie km_csrf vào header X-CSRF-Token cho mọi request ghi — đúng việc mà lib/api.ts làm
+    /// ở frontend. Không có phần thứ hai thì mọi POST sau khi đăng nhập đều bị chốt CSRF trả 403.
+    /// </summary>
+    public HttpClient CreateBrowserClient()
+        => CreateDefaultClient(new BrowserLikeHandler());
+
+    /// <summary>
+    /// Hũ cookie tối giản + tự gắn header CSRF. Cố ý KHÔNG dùng CreateClient(HandleCookies): nó không
+    /// nhận DelegatingHandler tuỳ ý, mà phần "gắn lại cookie CSRF vào header" mới là thứ phân biệt một
+    /// trình duyệt thật với một request trần — và cũng chính là thứ các test CSRF cần để có ý nghĩa.
+    /// </summary>
+    private sealed class BrowserLikeHandler : DelegatingHandler
+    {
+        private static readonly string[] SafeMethods = ["GET", "HEAD", "OPTIONS"];
+        private readonly Dictionary<string, string> _jar = new(StringComparer.Ordinal);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (_jar.Count > 0)
+                request.Headers.TryAddWithoutValidation(
+                    "Cookie", string.Join("; ", _jar.Select(kv => $"{kv.Key}={kv.Value}")));
+
+            if (!SafeMethods.Contains(request.Method.Method)
+                && _jar.TryGetValue(Security.AuthCookies.CsrfCookie, out var csrf))
+                request.Headers.TryAddWithoutValidation(Security.AuthCookies.CsrfHeader, csrf);
+
+            var response = await base.SendAsync(request, cancellationToken);
+
+            if (response.Headers.TryGetValues("Set-Cookie", out var setCookies))
+                foreach (var raw in setCookies)
+                {
+                    var pair = raw.Split(';')[0];
+                    var i = pair.IndexOf('=');
+                    if (i <= 0) continue;
+                    var name = pair[..i];
+                    var value = pair[(i + 1)..];
+                    // Giá trị rỗng = máy chủ đang XOÁ cookie (đăng xuất, phiên bị thu hồi).
+                    if (string.IsNullOrEmpty(value)) _jar.Remove(name);
+                    else _jar[name] = value;
+                }
+
+            return response;
+        }
+    }
+
     /// <summary>Tạo (idempotent) một tài khoản vai trò Employee đang hoạt động và trả về JWT hợp lệ.</summary>
     public async Task<string> EmployeeTokenAsync(string? sid = null)
     {

@@ -539,29 +539,23 @@ html[data-theme="dark"] .hr-page--payroll .hr-day-row {
   white-space: nowrap;
 }
 
-.hr-settings-profile-card,
-.hr-update-card {
+.hr-settings-profile-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
 }
 
-.hr-settings-profile-card > div,
-.hr-update-card > div {
+.hr-settings-profile-card > div {
   min-width: 0;
 }
 
 .hr-settings-profile-card h2,
-.hr-settings-profile-card p,
-.hr-settings-profile-card small,
-.hr-update-card h2,
-.hr-update-card p {
+.hr-settings-profile-card p {
   margin: 0;
 }
 
-.hr-settings-profile-card h2,
-.hr-update-card h2 {
+.hr-settings-profile-card h2 {
   overflow: hidden;
   color: var(--hr-text);
   font-size: 1rem;
@@ -570,20 +564,11 @@ html[data-theme="dark"] .hr-page--payroll .hr-day-row {
   white-space: nowrap;
 }
 
-.hr-settings-profile-card p,
-.hr-update-card p {
+.hr-settings-profile-card p {
   margin-top: 3px;
   color: var(--hr-muted);
   font-size: 0.8rem;
   font-weight: 650;
-}
-
-.hr-settings-profile-card small {
-  display: block;
-  margin-top: 4px;
-  color: var(--hr-primary-dark);
-  font-size: 0.76rem;
-  font-weight: 850;
 }
 
 .hr-inline-error {
@@ -2117,15 +2102,13 @@ html[data-theme="dark"] .hr-attendance-sync-btn {
   .hr-hero-card,
   .hr-profile-card,
   .hr-sync-card,
-  .hr-settings-profile-card,
-  .hr-update-card {
+  .hr-settings-profile-card {
     align-items: stretch;
     flex-direction: column;
   }
 
   .hr-scan-cta,
-  .hr-sync-card .hr-button,
-  .hr-update-card .hr-button {
+  .hr-sync-card .hr-button {
     width: 100%;
   }
 

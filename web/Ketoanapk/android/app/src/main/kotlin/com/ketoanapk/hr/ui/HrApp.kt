@@ -4,15 +4,25 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -24,24 +34,31 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -78,7 +95,10 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -86,11 +106,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.WindowCompat
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import com.ketoanapk.hr.data.AnniversaryGreeting
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.ui.theme.KetoanTheme
@@ -181,12 +207,182 @@ fun HrApp(vm: HrViewModel) {
                     )
                 }
 
+                // Thư tri ân nằm trên nội dung ứng dụng nhưng nhường ưu tiên cho cuộc gọi/đăng nhập QR.
+                // Chỉ dựng sau intro và hướng dẫn quyền để nhân viên không nhận nhiều popup cùng lúc.
+                if (
+                    vm.authState is AuthState.SignedIn &&
+                    !showIntro &&
+                    !showPermissionOnboarding &&
+                    !hasPendingWebLogin
+                ) {
+                    vm.anniversaryGreeting?.let { greeting ->
+                        AnniversaryLetterDialog(
+                            greeting = greeting,
+                            onDismiss = vm::dismissAnniversaryGreeting,
+                        )
+                    }
+                }
+
                 // Lớp phủ cuộc gọi (thoại/video) — luôn trên cùng, hiện khi có cuộc gọi đến/đi.
                 CallHost(vm)
 
                 // Keep the web-login confirmation above intro, onboarding and all feature dialogs.
                 QrScanDialog(qrScanner)
                 MobileAppLoginDialog(vm)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Thư cảm ơn nhân viên ở mốc tròn năm. Nội dung được gõ từng ký tự như máy đánh chữ; nhân viên có thể
+ * bấm "Hiện toàn bộ" nếu không muốn chờ. Đóng thư đồng nghĩa đã xem mốc này trên thiết bị hiện tại.
+ */
+@Composable
+private fun AnniversaryLetterDialog(greeting: AnniversaryGreeting, onDismiss: () -> Unit) {
+    val fullLetter = remember(greeting.key, greeting.body, greeting.signature) {
+        listOf(greeting.body.trim(), greeting.signature.trim())
+            .filter { it.isNotEmpty() }
+            .joinToString("\n\n")
+    }
+    var visibleChars by remember(greeting.key) { mutableIntStateOf(0) }
+    var revealAll by remember(greeting.key) { mutableStateOf(false) }
+    val typingComplete = visibleChars >= fullLetter.length
+
+    LaunchedEffect(greeting.key, fullLetter, revealAll) {
+        if (revealAll) {
+            visibleChars = fullLetter.length
+            return@LaunchedEffect
+        }
+        visibleChars = 0
+        while (visibleChars < fullLetter.length) {
+            val next = fullLetter[visibleChars]
+            delay(
+                when (next) {
+                    '.', '!', '?' -> 105L
+                    ',', ';', ':' -> 55L
+                    '\n' -> 90L
+                    else -> 18L
+                },
+            )
+            visibleChars++
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(18.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 560.dp)
+                    .heightIn(max = 700.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 24.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
+            ) {
+                Column(modifier = Modifier.padding(22.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(72.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text(
+                                    text = greeting.years.toString(),
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    fontWeight = FontWeight.Black,
+                                )
+                                Text(
+                                    text = "NĂM",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Filled.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(17.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = if (greeting.preview) "BẢN XEM THỬ · THƯ TRI ÂN" else "THƯ TRI ÂN",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                            Text(
+                                text = greeting.title,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Filled.Close, contentDescription = "Đóng thư tri ân")
+                        }
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false),
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    ) {
+                        val scroll = rememberScrollState()
+                        Text(
+                            text = fullLetter.take(visibleChars) + if (typingComplete) "" else "▌",
+                            modifier = Modifier
+                                .verticalScroll(scroll)
+                                .padding(18.dp),
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * 1.18f,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = if (typingComplete) onDismiss else ({ revealAll = true }),
+                    ) {
+                        Text(
+                            when {
+                                !typingComplete -> "Hiện toàn bộ"
+                                greeting.preview -> "Đóng bản xem thử"
+                                else -> "Cảm ơn công ty"
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -324,17 +520,26 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
     // Khai SAU cái trên nên được ưu tiên hơn: đang mở tìm kiếm thì Back đóng tìm kiếm, chưa rời màn.
     BackHandler(enabled = vm.searchOpen) { vm.closeSearch() }
 
+    // Màu icon thanh trạng thái đổi theo màn: Trang chủ có header tối tràn viền phủ dưới thanh trạng thái
+    // nên phải để icon SÁNG (trắng) cho đọc được; các màn nền sáng thì icon TỐI; nền tối luôn icon sáng.
+    val statusBarDark = when (AppPersonalization.themeMode) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
+    val shellContext = LocalContext.current
+    LaunchedEffect(vm.selected, statusBarDark) {
+        val window = shellContext.findActivity()?.window ?: return@LaunchedEffect
+        // isAppearanceLightStatusBars = true → nền sáng → icon tối. Chỉ dùng icon tối khi nền sáng và KHÔNG ở Trang chủ.
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars =
+            !statusBarDark && vm.selected != HrDestination.Home
+    }
+
     val isRefreshing = when (vm.selected) {
         HrDestination.People -> vm.managerState.loading
         HrDestination.Settings -> vm.settingsState.loading
         HrDestination.Scan -> vm.attendanceServer is AttendanceServerState.Checking
         HrDestination.Timesheet -> vm.timesheetState.loading
-        HrDestination.MySalary -> vm.payEstimateState.loading
         HrDestination.MyPayslips -> vm.payslipsState.loading
         HrDestination.Payout -> vm.payoutState.loading
         HrDestination.Portal -> vm.portalState.loading
-        HrDestination.Tasks -> vm.homeState.loading
-        HrDestination.WorkTasks -> vm.workTasksState.loading
+        HrDestination.Tasks -> vm.homeState.loading || vm.workTasksState.loading
         HrDestination.Chat -> vm.realChatState.loading
         HrDestination.Directory -> vm.directoryState.loading
         HrDestination.Calls -> vm.callHistoryState.loading
@@ -354,6 +559,13 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     onQuery = vm::typeSearch,
                     onClose = vm::closeSearch,
                 )
+                // Trang chủ dùng header tràn viền riêng (nền tối kéo lên dưới thanh trạng thái, ghim đỉnh).
+                else if (vm.selected == HrDestination.Home) HomeHeaderBar(
+                    user = user,
+                    state = vm.homeState,
+                    unread = vm.unreadCount,
+                    onBell = vm::openNotifications,
+                )
                 else TopAppBar(
                     // Bỏ chữ "KETOANAPK": người dùng đã ở trong app rồi, tên app chiếm gần nửa header mà
                     // không nói thêm điều gì. Giữ lại đúng tên màn đang xem.
@@ -368,22 +580,15 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         )
                     },
                     actions = {
-                        IconButton(onClick = vm::openSearch) {
-                            Icon(Icons.Filled.Search, contentDescription = "Tìm kiếm")
-                        }
-                        IconButton(enabled = !qrScanner.busy, onClick = qrScanner.startScan) {
-                            Icon(Icons.Filled.QrCodeScanner, contentDescription = "Quét mã QR")
+                        // Màn Đơn từ có nút "Hỗ trợ" ở góc phải: mở thẳng Chat nội bộ (thay cho tab Chat cũ).
+                        if (vm.selected == HrDestination.Requests) {
+                            SupportButton(
+                                unread = vm.chatUnreadCount,
+                                onClick = { vm.select(HrDestination.Chat) },
+                            )
                         }
                         NotificationBell(count = vm.unreadCount, onClick = vm::openNotifications)
-                        // Ảnh đại diện mở màn Cá nhân — nơi ở của nhóm mục cá nhân sau khi bỏ ngăn kéo.
-                        UserAvatar(
-                            user.displayName,
-                            34,
-                            modifier = Modifier
-                                .padding(start = 4.dp, end = 12.dp)
-                                .clip(CircleShape)
-                                .clickable { vm.select(HrDestination.Personal) },
-                        )
+                        Spacer(Modifier.width(4.dp))
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
                 )
@@ -394,6 +599,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     selected = vm.selected,
                     badgeCount = vm::badgeCount,
                     onSelect = vm::select,
+                    onScanQr = qrScanner.startScan,
                 )
             },
         ) { padding ->
@@ -403,9 +609,13 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     .padding(padding)
                     .background(MaterialTheme.colorScheme.background),
             ) {
+                // Báo MẤT KẾT NỐI ngay ở đỉnh mọi màn: mất Internet (máy không có mạng) hoặc không chạm
+                // được máy chủ. Tự ẩn khi kết nối phục hồi (heartbeat + callback mạng cập nhật liên tục).
+                ConnectionBanner(status = vm.connection)
                 // Thông báo điều khiển từ xa (admin đặt ở trang Hệ thống → Cập nhật). Ẩn khi để trống.
+                // Trang chủ đã chạy nội dung này trong dải thông báo gõ chữ nên bỏ banner ở đây, tránh lặp.
                 val announcement = vm.appConfig.announcement
-                if (announcement.isNotBlank() && announcement != dismissedAnnouncement) {
+                if (announcement.isNotBlank() && announcement != dismissedAnnouncement && vm.selected != HrDestination.Home) {
                     AnnouncementBanner(
                         text = announcement,
                         level = vm.appConfig.announcementLevel,
@@ -436,7 +646,18 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         onSelect = { vm.closeSearch(); vm.select(it) },
                     ) else screenState.SaveableStateProvider(vm.selected) {
                     when (vm.selected) {
-                    HrDestination.Home -> HomeScreen(user, vm.homeState, vm.managerState, vm.hubFor(HrDestination.Home), vm.workTasksState, vm::select)
+                    HrDestination.Home -> HomeScreen(
+                        user = user,
+                        state = vm.homeState,
+                        manager = vm.managerState,
+                        hub = vm.hubFor(HrDestination.Home),
+                        workTasks = vm.workTasksState,
+                        notifications = vm.notifications,
+                        announcement = vm.appConfig.announcement,
+                        serverNotices = vm.appConfig.notices,
+                        onOpenNotifications = vm::openNotifications,
+                        onSelect = vm::select,
+                    )
                     HrDestination.Personal -> PersonalHubScreen(user, vm.homeState, vm::select)
                     HrDestination.Portal -> PortalScreen(vm.portalState, vm.portalDetail, vm::openPortalPost, vm::closePortalDetail)
                     HrDestination.Profile -> ElectronicProfileScreen(vm)
@@ -447,8 +668,17 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     HrDestination.Feedback -> SurveyFeedbackScreen(vm)
                     HrDestination.Help -> HelpCenterScreen(vm)
                     HrDestination.Scan -> AttendanceScreen(vm)
-                    HrDestination.Timesheet -> TimesheetScreen(vm.timesheetState, vm::changeTimesheetMonth, vm::setTimesheetMonth, vm::startShiftSwap)
-                    HrDestination.MySalary -> MySalaryScreen(vm.payEstimateState)
+                    HrDestination.Timesheet -> TimesheetScreen(
+                        state = vm.timesheetState,
+                        payEstimate = vm.payEstimateState,
+                        username = user.username,
+                        onMonthOffset = vm::changeTimesheetMonth,
+                        onSelectMonth = vm::setTimesheetMonth,
+                        onShiftSwap = vm::startShiftSwap,
+                        onForgotCheckin = vm::startForgotCheckin,
+                        onLoadSalary = vm::loadMyEstimate,
+                        onVerifyAccountPassword = vm::verifyAccountPassword,
+                    )
                     HrDestination.MyPayslips -> MyPayslipsScreen(
                         state = vm.payslipsState,
                         openPeriod = vm.payslipOpenPeriod,
@@ -463,7 +693,6 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     HrDestination.Payout -> PayoutScreen(vm)
                     HrDestination.Requests -> RequestsScreen(vm)
                     HrDestination.Tasks -> TaskCenterScreen(vm)
-                    HrDestination.WorkTasks -> WorkTaskScreen(vm)
                     HrDestination.Chat -> RealChatScreen(vm)
                     HrDestination.Directory -> DirectoryScreen(vm)
                     HrDestination.Calls -> CallHistoryScreen(vm)
@@ -631,6 +860,69 @@ private fun SearchResults(
  * Banner thông báo điều khiển từ xa (remote config), ngay dưới header. Màu theo mức độ:
  * info = phụ, warning = nhấn, critical = báo lỗi. Đóng được (ẩn theo nội dung).
  */
+/**
+ * Banner MẤT KẾT NỐI ở đỉnh app. KHÔNG đóng được (khác announcement): vấn đề kết nối phải nhìn thấy tới
+ * khi hết. Hiện có hiệu ứng trượt xuống khi mất, trượt lên khi phục hồi; kèm vòng xoay nhỏ ngụ ý "đang
+ * thử lại". Phân biệt "mất Internet" (máy không có mạng) với "không kết nối được máy chủ".
+ */
+@Composable
+private fun ConnectionBanner(status: ConnectionStatus) {
+    AnimatedVisibility(
+        visible = status != ConnectionStatus.Online,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
+    ) {
+        // Giữ lại nội dung cuối khác Online để lúc trượt lên (exit) không nhấp nháy chữ.
+        val shown = remember { mutableStateOf(status) }
+        if (status != ConnectionStatus.Online) shown.value = status
+        val noInternet = shown.value == ConnectionStatus.NoInternet
+        val icon = if (noInternet) Icons.Filled.WifiOff else Icons.Filled.CloudOff
+        val title = if (noInternet) "Mất kết nối Internet" else "Không kết nối được máy chủ"
+        val detail = if (noInternet)
+            "Kiểm tra Wi-Fi hoặc dữ liệu di động. Đang chờ có mạng trở lại…"
+        else
+            "Máy chủ đang không phản hồi. Đang tự thử lại…"
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 2.dp),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.errorContainer,
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(24.dp),
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        detail,
+                        color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun AnnouncementBanner(text: String, level: String, onDismiss: () -> Unit) {
     val bg: Color
@@ -777,19 +1069,22 @@ private fun NotificationBell(count: Int, onClick: () -> Unit) {
     }
 }
 
-/** Thanh điều hướng nổi (floating): thẻ trắng bo tròn, nút Chấm công đỏ nhô lên ở giữa. */
+/** Thanh điều hướng nổi (floating): thẻ bo tròn, nút Quét QR đỏ nhô lên ở giữa (có hiệu ứng quét). */
 @Composable
 private fun BottomBar(
     items: List<HrDestination>,
     selected: HrDestination,
     badgeCount: (HrDestination) -> Int,
     onSelect: (HrDestination) -> Unit,
+    onScanQr: () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .navigationBarsPadding() // né thanh điều hướng hệ thống (cử chỉ / 3 nút) để không bị che
-            .padding(start = 14.dp, end = 14.dp, bottom = 12.dp)
+            // Đã ẩn thanh điều hướng hệ thống → dành sẵn khoảng đệm cố định để thanh nổi không sát mép,
+            // vẫn giữ navigationBarsPadding để khi vuốt hiện thanh tạm thời thì không bị che.
+            .navigationBarsPadding()
+            .padding(start = 14.dp, end = 14.dp, bottom = 18.dp)
             .height(84.dp),
     ) {
         Surface(
@@ -825,10 +1120,27 @@ private fun BottomBar(
             }
         }
 
-        ScanButton(
-            onClick = { onSelect(HrDestination.Scan) },
+        QrScanButton(
+            onClick = onScanQr,
             modifier = Modifier.align(Alignment.TopCenter),
         )
+    }
+}
+
+/** Nút "Hỗ trợ" ở góc phải màn Đơn từ → mở Chat nội bộ. Kèm huy hiệu số tin nhắn chưa đọc. */
+@Composable
+private fun SupportButton(unread: Int, onClick: () -> Unit) {
+    TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 10.dp)) {
+        BadgedBox(badge = { if (unread > 0) CountBadge(unread) }) {
+            Icon(
+                Icons.Filled.SupportAgent,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Text("Hỗ trợ", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -866,22 +1178,91 @@ private fun CountBadge(count: Int) {
     ) { Text(if (count > 99) "99+" else "$count") }
 }
 
+/**
+ * Nút Quét QR nổi ở giữa thanh dưới. Tự vẽ hiệu ứng động: khung ngắm 4 góc "thở" nhẹ, một vạch quét
+ * trượt lên xuống, và một mã QR nhỏ mô phỏng ở giữa — gợi ngay chức năng quét mã.
+ */
 @Composable
-private fun ScanButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun QrScanButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val onPrimary = MaterialTheme.colorScheme.onPrimary
+    val transition = rememberInfiniteTransition(label = "qr")
+    // Vạch quét trượt lên–xuống trong khung ngắm.
+    val scan by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "scan",
+    )
+    // Khung 4 góc co giãn nhẹ như đang "thở".
+    val pulse by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulse",
+    )
     Box(
         modifier = modifier
-            .size(60.dp)
-            .shadow(10.dp, CircleShape)
+            .size(62.dp)
+            .shadow(12.dp, CircleShape)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primary)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            HrDestination.Scan.icon,
-            contentDescription = "Chấm công",
-            tint = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.size(30.dp),
-        )
+        Canvas(modifier = Modifier.size(30.dp)) {
+            val s = size.minDimension
+            val stroke = s * 0.10f
+            val inset = stroke / 2f
+            val left = inset
+            val top = inset
+            val right = s - inset
+            val bottom = s - inset
+            val arm = s * (0.24f + 0.05f * pulse)   // độ dài cạnh mỗi góc, thở nhẹ
+            val cap = StrokeCap.Round
+
+            // Khung ngắm 4 góc hình chữ L.
+            drawLine(onPrimary, Offset(left, top), Offset(left + arm, top), stroke, cap)
+            drawLine(onPrimary, Offset(left, top), Offset(left, top + arm), stroke, cap)
+            drawLine(onPrimary, Offset(right, top), Offset(right - arm, top), stroke, cap)
+            drawLine(onPrimary, Offset(right, top), Offset(right, top + arm), stroke, cap)
+            drawLine(onPrimary, Offset(left, bottom), Offset(left + arm, bottom), stroke, cap)
+            drawLine(onPrimary, Offset(left, bottom), Offset(left, bottom - arm), stroke, cap)
+            drawLine(onPrimary, Offset(right, bottom), Offset(right - arm, bottom), stroke, cap)
+            drawLine(onPrimary, Offset(right, bottom), Offset(right, bottom - arm), stroke, cap)
+
+            // Mã QR nhỏ mô phỏng ở giữa: 3 ô định vị góc + vài module.
+            val gridInset = s * 0.30f
+            val cell = (s - gridInset * 2f) / 3f
+            val dot = cell * 0.74f
+            fun module(cx: Int, cy: Int, scale: Float) {
+                val d = dot * scale
+                val off = (cell - d) / 2f
+                drawRect(
+                    color = onPrimary,
+                    topLeft = Offset(gridInset + cx * cell + off, gridInset + cy * cell + off),
+                    size = Size(d, d),
+                )
+            }
+            module(0, 0, 1f); module(2, 0, 1f); module(0, 2, 1f)  // 3 ô định vị
+            module(1, 1, 0.6f); module(2, 2, 0.55f)               // vài module cho ra dáng mã
+
+            // Vạch quét ngang trượt trong khung.
+            val trackTop = top + arm * 0.15f
+            val trackBottom = bottom - arm * 0.15f
+            val y = trackTop + (trackBottom - trackTop) * scan
+            drawLine(
+                color = onPrimary,
+                start = Offset(left + arm * 0.15f, y),
+                end = Offset(right - arm * 0.15f, y),
+                strokeWidth = stroke * 0.8f,
+                cap = cap,
+            )
+        }
     }
 }

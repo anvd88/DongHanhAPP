@@ -1,14 +1,18 @@
-import { useState } from "react";
-import { Building2, CalendarDays, CalendarRange, Clock, Gift, MapPin, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Building2, CalendarDays, CalendarRange, Clock, Eye, HeartHandshake, MapPin, Pencil, Plus, RotateCcw, Save, Search, Sparkles, Trash2, UserPlus, Users, Wifi, WifiOff } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
 import { Badge, Button, Field, Input, Select } from "../components/ui";
 import { Table } from "../components/Table";
 import { api } from "../lib/api";
-import { date, moneyVnd } from "../lib/format";
+import { date, dateTime, moneyVnd } from "../lib/format";
 import { useApi } from "../lib/useApi";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
+import { AccountCreateForm, AccountManagePanel, ASSIGNABLE_ROLES } from "./NhanSu";
+import { PERM, useAccess } from "../lib/access";
+import type { UserAdmin } from "../lib/types";
+import { DiamondLabel, VerifiedBadge } from "../components/VerifiedBadge";
 import {
   docTypeLabel,
   holidayTypeLabel,
@@ -28,7 +32,7 @@ import {
   type ShiftAssignment,
 } from "../lib/hr";
 
-type Tab = "employees" | "departments" | "locations" | "shifts" | "assignments" | "holidays";
+type Tab = "employees" | "departments" | "locations" | "shifts" | "assignments" | "holidays" | "anniversary";
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "employees", label: "Nhân viên", icon: <Users className="h-4 w-4" /> },
   { key: "departments", label: "Phòng ban", icon: <Building2 className="h-4 w-4" /> },
@@ -36,15 +40,18 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "shifts", label: "Ca làm", icon: <Clock className="h-4 w-4" /> },
   { key: "assignments", label: "Phân ca", icon: <CalendarRange className="h-4 w-4" /> },
   { key: "holidays", label: "Ngày nghỉ", icon: <CalendarDays className="h-4 w-4" /> },
+  { key: "anniversary", label: "Thư tri ân", icon: <HeartHandshake className="h-4 w-4" /> },
 ];
 
 export function QuanLyNhanSu() {
   const [tab, setTab] = useState<Tab>("employees");
+  const { can } = useAccess();
+  const visibleTabs = can(PERM.hrManage) ? TABS : TABS.filter((item) => item.key === "employees");
   return (
     <div className="gc-root">
-      <PageHeader title="Quản lý nhân sự" subtitle="Hồ sơ nhân viên, phòng ban, ca làm việc và phân ca" />
+      <PageHeader title="Quản lý nhân sự" subtitle="Hồ sơ, tài khoản nhân viên, lịch làm việc và thư tri ân" />
       <div className="mb-4 flex flex-wrap gap-2">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.key}
             type="button"
@@ -64,7 +71,252 @@ export function QuanLyNhanSu() {
       {tab === "shifts" && <ShiftsTab />}
       {tab === "assignments" && <AssignmentsTab />}
       {tab === "holidays" && <HolidaysTab />}
+      {tab === "anniversary" && <AnniversaryLetterTab />}
     </div>
+  );
+}
+
+type AnniversaryLetterTemplate = {
+  enabled: boolean;
+  title: string;
+  body: string;
+  signature: string;
+};
+
+type LetterField = "title" | "body" | "signature";
+
+const EMPTY_ANNIVERSARY_TEMPLATE: AnniversaryLetterTemplate = {
+  enabled: true,
+  title: "",
+  body: "",
+  signature: "",
+};
+
+const LETTER_TOKENS = [
+  { token: "{ten}", label: "Tên nhân viên" },
+  { token: "{so_nam}", label: "Số năm" },
+  { token: "{ngay_vao_lam}", label: "Ngày vào làm" },
+] as const;
+
+function fillLetterSample(value: string) {
+  return value
+    .replaceAll("{ten}", "Nguyễn Văn An")
+    .replaceAll("{so_nam}", "5")
+    .replaceAll("{ngay_vao_lam}", "21/07/2021");
+}
+
+// ---------------- Thư tri ân thâm niên ----------------
+function AnniversaryLetterTab() {
+  const { notify } = useAppNotifications();
+  const { data, loading, error, setData } = useApi<AnniversaryLetterTemplate>("/api/hr/anniversary/template");
+  const [form, setForm] = useState<AnniversaryLetterTemplate>(EMPTY_ANNIVERSARY_TEMPLATE);
+  const [saving, setSaving] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [activeField, setActiveField] = useState<LetterField>("body");
+  const titleRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const signatureRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (data) setForm(data);
+  }, [data]);
+
+  const dirty = data !== null && (
+    data.enabled !== form.enabled ||
+    data.title !== form.title ||
+    data.body !== form.body ||
+    data.signature !== form.signature
+  );
+
+  const set = (key: keyof AnniversaryLetterTemplate, value: string | boolean) =>
+    setForm((current) => ({ ...current, [key]: value }));
+
+  const insertToken = (token: string) => {
+    const element = activeField === "title" ? titleRef.current : activeField === "body" ? bodyRef.current : signatureRef.current;
+    const value = form[activeField];
+    const start = element?.selectionStart ?? value.length;
+    const end = element?.selectionEnd ?? start;
+    const next = `${value.slice(0, start)}${token}${value.slice(end)}`;
+    set(activeField, next);
+    requestAnimationFrame(() => {
+      element?.focus();
+      element?.setSelectionRange(start + token.length, start + token.length);
+    });
+  };
+
+  const save = async () => {
+    if (!form.title.trim()) { notify.error("Vui lòng nhập tiêu đề thư."); return; }
+    if (!form.body.trim()) { notify.error("Vui lòng nhập nội dung thư."); return; }
+    setSaving(true);
+    try {
+      const saved = await api.put<AnniversaryLetterTemplate>("/api/hr/anniversary/template", {
+        enabled: form.enabled,
+        title: form.title.trim(),
+        body: form.body.trim(),
+        signature: form.signature.trim(),
+      });
+      setData(saved);
+      setForm(saved);
+      notify.success("Đã lưu mẫu thư tri ân.");
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không lưu được mẫu thư.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading && !data) {
+    return <GlassPanel strong className="rounded-[20px] p-8 text-center text-sm text-[var(--text-muted)]">Đang tải mẫu thư…</GlassPanel>;
+  }
+  if (error && !data) {
+    return <GlassPanel strong className="rounded-[20px] p-8 text-center text-sm text-red-600">{error}</GlassPanel>;
+  }
+
+  return (
+    <>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <GlassPanel strong className="overflow-hidden rounded-[20px]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gc-border)] px-5 py-4">
+            <div>
+              <h2 className="flex items-center gap-2 font-bold text-[var(--text)]"><HeartHandshake className="h-5 w-5 text-[var(--accent)]" /> Nội dung thư</h2>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Mẫu này dùng chung cho mọi mốc thâm niên.</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={form.enabled}
+              onClick={() => set("enabled", !form.enabled)}
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-bold transition ${form.enabled ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-black/5 text-[var(--text-muted)] dark:bg-white/10"}`}
+            >
+              <span className={`relative h-5 w-9 rounded-full transition ${form.enabled ? "bg-emerald-500" : "bg-slate-400"}`}>
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${form.enabled ? "left-[18px]" : "left-0.5"}`} />
+              </span>
+              {form.enabled ? "Đang bật" : "Đang tắt"}
+            </button>
+          </div>
+
+          <div className="space-y-5 p-5">
+            <div className="rounded-2xl border border-[var(--gc-border)] bg-[var(--accent-soft)]/40 p-4">
+              <p className="mb-2 flex items-center gap-2 text-xs font-bold text-[var(--text-secondary)]"><Sparkles className="h-4 w-4 text-[var(--accent)]" /> Chèn thông tin tự động</p>
+              <div className="flex flex-wrap gap-2">
+                {LETTER_TOKENS.map((item) => (
+                  <button
+                    type="button"
+                    key={item.token}
+                    onClick={() => insertToken(item.token)}
+                    className="rounded-lg border border-[var(--gc-border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs font-semibold text-[var(--accent)] transition hover:border-[var(--accent)]"
+                    title={`Chèn vào ${activeField === "title" ? "tiêu đề" : activeField === "body" ? "nội dung" : "chữ ký"}`}
+                  >
+                    {item.label} <code className="ml-1 text-[10px] opacity-70">{item.token}</code>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-[var(--text-muted)]">Đặt con trỏ vào ô cần sửa, rồi bấm biến muốn chèn.</p>
+            </div>
+
+            <Field label="Tiêu đề thư *">
+              <input
+                ref={titleRef}
+                value={form.title}
+                onFocus={() => setActiveField("title")}
+                onChange={(e) => set("title", e.target.value)}
+                placeholder="Ví dụ: Tri ân {so_nam} năm gắn bó"
+                maxLength={180}
+                className="km-form-control w-full rounded-xl border px-3.5 py-2.5 text-sm outline-none transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+              />
+            </Field>
+
+            <Field label="Nội dung thư *">
+              <textarea
+                ref={bodyRef}
+                value={form.body}
+                onFocus={() => setActiveField("body")}
+                onChange={(e) => set("body", e.target.value)}
+                rows={11}
+                maxLength={4000}
+                placeholder="Soạn lời cảm ơn dành cho nhân viên…"
+                className="km-form-control w-full resize-y rounded-xl border px-3.5 py-3 text-sm leading-6 outline-none transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+              />
+              <span className="mt-1 block text-right text-[10px] text-[var(--text-muted)]">{form.body.length}/4000</span>
+            </Field>
+
+            <Field label="Chữ ký">
+              <textarea
+                ref={signatureRef}
+                value={form.signature}
+                onFocus={() => setActiveField("signature")}
+                onChange={(e) => set("signature", e.target.value)}
+                rows={3}
+                maxLength={500}
+                placeholder={"Trân trọng,\nBan Giám đốc"}
+                className="km-form-control w-full resize-y rounded-xl border px-3.5 py-3 text-sm leading-6 outline-none transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+              />
+            </Field>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--gc-border)] pt-4">
+              <Button variant="ghost" disabled={!dirty || saving} onClick={() => data && setForm(data)}><RotateCcw className="h-4 w-4" /> Hoàn tác</Button>
+              <Button variant="soft" disabled={!form.title.trim() || !form.body.trim()} onClick={() => setPreviewOpen(true)}><Eye className="h-4 w-4" /> Xem thử</Button>
+              <Button loading={saving} disabled={!dirty || !form.title.trim() || !form.body.trim()} onClick={save}><Save className="h-4 w-4" /> Lưu mẫu thư</Button>
+            </div>
+          </div>
+        </GlassPanel>
+
+        <div className="space-y-4">
+          <GlassPanel strong className="rounded-[20px] p-5">
+            <h3 className="font-bold text-[var(--text)]">Cách hoạt động</h3>
+            <ol className="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
+              <li className="flex gap-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-bold text-[var(--accent)]">1</span><span>Hệ thống lấy <b>Ngày vào làm</b> trong hồ sơ nhân viên.</span></li>
+              <li className="flex gap-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-bold text-[var(--accent)]">2</span><span>Khi đủ tròn năm, các biến trong thư được điền tự động.</span></li>
+              <li className="flex gap-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-bold text-[var(--accent)]">3</span><span>APK hiển thị thư với hiệu ứng máy đánh chữ, một lần cho mỗi mốc.</span></li>
+            </ol>
+          </GlassPanel>
+          <GlassPanel strong className="rounded-[20px] p-5">
+            <h3 className="font-bold text-[var(--text)]">Lưu ý</h3>
+            <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">Tắt mẫu thư sẽ ngừng gửi cho tất cả nhân viên. Nội dung đang soạn chỉ có hiệu lực sau khi bấm <b>Lưu mẫu thư</b>.</p>
+          </GlassPanel>
+        </div>
+      </div>
+
+      {previewOpen && <AnniversaryLetterPreview template={form} onClose={() => setPreviewOpen(false)} />}
+    </>
+  );
+}
+
+function AnniversaryLetterPreview({ template, onClose }: { template: AnniversaryLetterTemplate; onClose: () => void }) {
+  const title = fillLetterSample(template.title);
+  const fullLetter = [fillLetterSample(template.body.trim()), fillLetterSample(template.signature.trim())].filter(Boolean).join("\n\n");
+  const [visible, setVisible] = useState(0);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setVisible(fullLetter.length);
+      return;
+    }
+    if (visible >= fullLetter.length) return;
+    const next = fullLetter[visible];
+    const wait = ".!?".includes(next) ? 105 : ",;:".includes(next) ? 55 : next === "\n" ? 90 : 18;
+    const timer = window.setTimeout(() => setVisible((value) => value + 1), wait);
+    return () => window.clearTimeout(timer);
+  }, [fullLetter, visible]);
+
+  return (
+    <Modal open onClose={onClose} title="Xem thử thư tri ân" panel wide
+      footer={<><Button variant="soft" disabled={visible >= fullLetter.length} onClick={() => setVisible(fullLetter.length)}>Hiện toàn bộ</Button><Button onClick={onClose}>Đóng xem thử</Button></>}>
+      <div className="mx-auto max-w-2xl overflow-hidden rounded-[28px] border border-amber-200/70 bg-gradient-to-br from-amber-50 via-white to-orange-50 shadow-xl dark:border-amber-700/40 dark:from-slate-900 dark:via-slate-950 dark:to-amber-950/40">
+        <div className="flex items-start gap-4 border-b border-amber-200/60 p-6 dark:border-amber-700/30">
+          <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg shadow-amber-500/20">
+            <span className="text-2xl font-black leading-none">5</span><span className="text-[10px] font-black">NĂM</span>
+          </div>
+          <div>
+            <p className="flex items-center gap-1.5 text-xs font-black tracking-wider text-amber-700 dark:text-amber-400"><Sparkles className="h-4 w-4" /> BẢN XEM THỬ · THƯ TRI ÂN</p>
+            <h3 className="mt-1 text-xl font-black text-slate-900 dark:text-white">{title}</h3>
+          </div>
+        </div>
+        <div className="min-h-64 whitespace-pre-wrap p-6 font-mono text-sm leading-7 text-slate-700 dark:text-slate-200">
+          {fullLetter.slice(0, visible)}{visible < fullLetter.length && <span className="animate-pulse text-amber-600">▌</span>}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -92,92 +344,302 @@ function monthRange(month: string) {
 }
 
 // ---------------- Nhân viên ----------------
-function EmployeesTab() {
-  const { notify, confirm } = useAppNotifications();
-  const { data, loading, reload } = useApi<EmployeeCard[]>("/api/hr/employees");
-  const { data: departments } = useApi<Department[]>("/api/hr/departments");
-  const { data: locations } = useApi<Location[]>("/api/hr/locations");
-  const [edit, setEdit] = useState<EmployeeCard | "new" | null>(null);
-  const [benefits, setBenefits] = useState<EmployeeCard | null>(null);
+type EmployeeAccountRow = {
+  key: string;
+  employee: EmployeeCard | null;
+  account: UserAdmin | null;
+};
 
-  const remove = async (r: EmployeeCard) => {
-    const ok = await confirm({ title: `Xóa hồ sơ ${r.fullName}?`, description: "Toàn bộ hợp đồng, phiếu lương, phép của nhân viên này sẽ bị xóa.", confirmLabel: "Xóa", tone: "danger" });
-    if (!ok) return;
-    try {
-      await api.del(`/api/hr/employees/${r.id}`);
-      notify.success("Đã xóa hồ sơ.");
-      reload({ silent: true });
-    } catch (e) {
-      notify.error(e instanceof Error ? e.message : "Không xóa được.");
+const usernameKey = (value?: string | null) => (value ?? "").trim().toLocaleLowerCase("vi");
+
+function accountCreatedDateValue(value?: string | null) {
+  if (!value) return "";
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(value));
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+const ACCOUNT_ROLE_FILTERS = [
+  { value: "", label: "Tất cả vai trò hệ thống" },
+  { value: "Admin", label: "Admin" },
+  { value: "Accounting", label: "Kế toán" },
+  { value: "HR", label: "Nhân sự (HR)" },
+  { value: "Employee", label: "Nhân viên" },
+  { value: "Pending", label: "Chờ duyệt" },
+  { value: "Locked", label: "Đã khóa" },
+] as const;
+
+function EmployeesTab() {
+  const { can } = useAccess();
+  const canManageProfiles = can(PERM.hrManage);
+  const canManageAccounts = can(PERM.usersManage);
+  const canCompareLinks = canManageProfiles && canManageAccounts;
+  const { data: employees, loading: employeesLoading, reload: reloadEmployees } = useApi<EmployeeCard[]>(canManageProfiles ? "/api/hr/employees" : null);
+  const { data: accounts, loading: accountsLoading, reload: reloadAccounts } = useApi<UserAdmin[]>(canManageAccounts ? "/api/users/?search=&role=" : null);
+  const { data: departments } = useApi<Department[]>(canManageProfiles ? "/api/hr/departments" : null);
+  const { data: locations } = useApi<Location[]>(canManageProfiles ? "/api/hr/locations" : null);
+  const [manage, setManage] = useState<EmployeeAccountRow | "new" | null>(null);
+  const [search, setSearch] = useState("");
+  const [linkFilter, setLinkFilter] = useState("all");
+  const [roleFilter, setRoleFilter] = useState("");
+
+  const rows = useMemo<EmployeeAccountRow[]>(() => {
+    const accountByUsername = new Map<string, UserAdmin>();
+    for (const account of accounts ?? []) {
+      const key = usernameKey(account.username);
+      if (key) accountByUsername.set(key, account);
     }
-  };
+
+    const matchedAccountIds = new Set<string>();
+    const merged: EmployeeAccountRow[] = (employees ?? []).map((employee) => {
+      const account = accountByUsername.get(usernameKey(employee.username)) ?? null;
+      if (account) matchedAccountIds.add(account.id);
+      return { key: `employee-${employee.id}`, employee, account };
+    });
+
+    for (const account of accounts ?? []) {
+      if (!matchedAccountIds.has(account.id)) merged.push({ key: `account-${account.id}`, employee: null, account });
+    }
+
+    return merged.sort((a, b) => {
+      const nameA = a.employee?.fullName || a.account?.fullName || a.account?.username || "";
+      const nameB = b.employee?.fullName || b.account?.fullName || b.account?.username || "";
+      return nameA.localeCompare(nameB, "vi");
+    });
+  }, [accounts, employees]);
+
+  const visibleRows = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase("vi");
+    return rows.filter(({ employee, account }) => {
+      if (canCompareLinks && linkFilter === "linked" && (!employee || !account)) return false;
+      if (canCompareLinks && linkFilter === "missing-account" && (!employee || account)) return false;
+      if (canCompareLinks && linkFilter === "missing-profile" && (employee || !account)) return false;
+      if (roleFilter === "Pending" && account?.approvalStatus !== "Pending") return false;
+      if (roleFilter === "Locked" && account?.isActive !== false) return false;
+      if (roleFilter === "Employee" && account?.role !== "Employee" && account?.role !== "User") return false;
+      if (roleFilter && roleFilter !== "Pending" && roleFilter !== "Locked" && roleFilter !== "Employee" && account?.role !== roleFilter) return false;
+      if (!query) return true;
+      return [employee?.employeeCode, employee?.fullName, employee?.username, employee?.position,
+        employee?.departmentName, employee?.locationName, account?.username, account?.fullName, account?.email]
+        .some((value) => value?.toLocaleLowerCase("vi").includes(query));
+    });
+  }, [canCompareLinks, linkFilter, roleFilter, rows, search]);
+
+  const loading = (canManageProfiles && employeesLoading) || (canManageAccounts && accountsLoading);
 
   return (
     <GlassPanel strong className="overflow-hidden rounded-[20px]">
-      {toolbar("Danh sách nhân viên", () => setEdit("new"), "Thêm nhân viên")}
-      <Table<EmployeeCard>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gc-border)] px-5 py-4">
+        <div>
+          <h2 className="font-bold text-[var(--text)]">{canCompareLinks ? "Nhân viên & tài khoản" : canManageProfiles ? "Danh sách nhân viên" : "Danh sách tài khoản"}</h2>
+          <p className="mt-1 text-xs text-[var(--text-muted)]">Mỗi người một dòng — bấm “Quản lý” để xử lý hồ sơ, tài khoản và quyền lợi ở cùng một chỗ.</p>
+        </div>
+        {(canManageProfiles || canManageAccounts) && <Button onClick={() => setManage("new")}><Plus className="h-4 w-4" /> Thêm</Button>}
+      </div>
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--gc-border)] p-3">
+        <div className="relative min-w-56 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm tên, mã nhân viên, username, phòng ban…" className="pl-9" />
+        </div>
+        {canCompareLinks && <Select value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)}>
+          <option value="all">Tất cả liên kết</option>
+          <option value="linked">Đã đủ hồ sơ & tài khoản</option>
+          <option value="missing-account">Chưa có tài khoản</option>
+          <option value="missing-profile">Chưa có hồ sơ nhân viên</option>
+        </Select>}
+        {canManageAccounts && <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+          {ACCOUNT_ROLE_FILTERS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </Select>}
+      </div>
+      <Table<EmployeeAccountRow>
         loading={loading}
-        rows={data ?? []}
-        keyOf={(r) => r.id}
-        empty="Chưa có nhân viên"
+        rows={visibleRows}
+        keyOf={(row) => row.key}
+        empty="Không có nhân viên hoặc tài khoản phù hợp"
         columns={[
-          { header: "Mã", cell: (r) => <span className="font-mono text-xs font-bold text-[var(--accent)]">{r.employeeCode}</span> },
-          { header: "Họ tên", cell: (r) => <span className="font-semibold">{r.fullName}</span> },
-          { header: "Chức vụ", cell: (r) => <span className="text-[var(--text-secondary)]">{r.position || "—"}</span> },
-          { header: "Phòng ban", cell: (r) => <span>{r.departmentName || "—"}</span> },
-          { header: "Địa điểm", cell: (r) => <span className="text-[var(--text-secondary)]">{r.locationName || "—"}</span> },
-          { header: "Phân quyền", cell: (r) => <Badge color={r.accessRole && r.accessRole !== "staff" ? "success" : "muted"}>{accessRoleLabel(r.accessRole)}</Badge> },
-          { header: "Trạng thái", cell: (r) => <Badge color={r.status === "Active" ? "success" : "muted"}>{r.status === "Active" ? "Đang làm" : r.status}</Badge> },
+          { header: "Thông tin chung", cell: ({ employee, account }) => {
+            const fullName = employee?.fullName?.trim() || account?.fullName?.trim() || account?.username || "—";
+            const username = account?.username?.trim() || employee?.username?.trim() || "";
+            const email = employee?.email?.trim() || account?.email?.trim() || "";
+            return (
+              <div className="min-w-52">
+                <p className="flex items-center gap-1.5 font-semibold">
+                  {fullName}
+                  {account?.verified && <VerifiedBadge size={14} />}
+                  {account?.isDiamond && <DiamondLabel />}
+                </p>
+                <p className="mt-1 font-mono text-xs font-bold text-[var(--accent)]">{username || "Chưa gắn username"}</p>
+                <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{email || "Chưa có email"}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {employee ? <Badge color="muted">{employee.employeeCode || "Chưa có mã NV"}</Badge> : canManageProfiles && <Badge color="warning">Chưa có hồ sơ</Badge>}
+                  {!account && canManageAccounts && <Badge color="warning">Chưa có tài khoản</Badge>}
+                </div>
+                {account?.createdAt && <p className="mt-1 text-[10px] text-[var(--text-muted)]">Tài khoản tạo: {date(account.createdAt)}</p>}
+              </div>
+            );
+          } },
+          { header: "Công việc", cell: ({ employee }) => employee ? (
+            <div className="min-w-36 text-xs">
+              <p className="font-semibold text-[var(--text-secondary)]">{employee.position || "Chưa có chức vụ"}</p>
+              <p className="mt-1">{employee.departmentName || "Chưa có phòng ban"}</p>
+              {employee.locationName && <p className="mt-0.5 text-[var(--text-muted)]">{employee.locationName}</p>}
+            </div>
+          ) : "—" },
+          { header: "Vai trò hệ thống", cell: ({ account }) => (
+            <div className="flex min-w-32 flex-col items-start gap-1">
+              {account && <Badge color={account.role === "Admin" ? "purple" : "accent"}>{account.role}</Badge>}
+              {account && account.secondaryRoles?.length > 0 && <span className="text-[11px] text-[var(--text-muted)]">Vai trò phụ: {account.secondaryRoles.join(", ")}</span>}
+              {!account && <span className="text-xs text-[var(--text-muted)]">Chưa có tài khoản</span>}
+            </div>
+          ) },
+          { header: "Phạm vi dữ liệu HR", cell: ({ employee }) => (
+            <div className="min-w-32">
+              {employee ? <Badge color={employee.accessRole && employee.accessRole !== "staff" ? "success" : "muted"}>{accessRoleLabel(employee.accessRole)}</Badge>
+                : <span className="text-xs text-[var(--text-muted)]">Chưa có hồ sơ</span>}
+            </div>
+          ) },
+          { header: "Online", cell: ({ account }) => account ? (
+            <div className="flex min-w-28 flex-col items-start gap-1">
+              <Badge color={account.isOnline ? "success" : "muted"}>
+                {account.isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+                {account.isOnline ? "Online" : "Offline"}
+              </Badge>
+              {account.lastSeen && <span className="text-[10px] text-[var(--text-muted)]">Lần cuối: {dateTime(account.lastSeen)}</span>}
+            </div>
+          ) : <span className="text-xs text-[var(--text-muted)]">Chưa có tài khoản</span> },
+          { header: "Trạng thái", cell: ({ employee, account }) => (
+            <div className="flex min-w-28 flex-col items-start gap-1">
+              {employee && <Badge color={employee.status === "Active" ? "success" : "muted"}>{employee.status === "Active" ? "Đang làm" : "Đã nghỉ · mất truy cập"}</Badge>}
+              {account && <Badge color={account.approvalStatus === "Pending" ? "warning" : account.isActive ? "accent" : "danger"}>
+                {account.approvalStatus === "Pending" ? "Chờ duyệt" : account.isActive ? "Hoạt động" : "Tài khoản khóa"}
+              </Badge>}
+            </div>
+          ) },
           {
             header: "", align: "right",
-            cell: (r) => (
-              <div className="flex justify-end gap-1.5">
-                <button onClick={() => setBenefits(r)} className="rounded-lg p-2 text-violet-600 hover:bg-violet-500/10" title="Quyền lợi"><Gift className="h-4 w-4" /></button>
-                <button onClick={() => setEdit(r)} className="rounded-lg p-2 text-[var(--accent)] hover:bg-[var(--accent-soft)]" title="Sửa"><Pencil className="h-4 w-4" /></button>
-                <button onClick={() => remove(r)} className="rounded-lg p-2 text-red-600 hover:bg-red-500/10" title="Xóa"><Trash2 className="h-4 w-4" /></button>
+            cell: (row) => (
+              <div className="flex justify-end">
+                <button onClick={() => setManage(row)} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)]" title="Hồ sơ, tài khoản và quyền lợi"><Pencil className="h-3.5 w-3.5" /> Quản lý</button>
               </div>
             ),
           },
         ]}
       />
-      {edit && (
-        <EmployeeModal
-          value={edit === "new" ? null : edit}
-          departments={departments ?? []}
-          locations={locations ?? []}
-          employees={data ?? []}
-          onClose={() => setEdit(null)}
-          onSaved={() => { setEdit(null); reload({ silent: true }); notify.success("Đã lưu hồ sơ."); }}
-        />
-      )}
-      {benefits && <BenefitsModal emp={benefits} onClose={() => setBenefits(null)} />}
+      {manage && <PersonModal
+        target={manage}
+        departments={departments ?? []} locations={locations ?? []}
+        employees={employees ?? []} accounts={accounts ?? []}
+        canManageProfiles={canManageProfiles} canManageAccounts={canManageAccounts}
+        onClose={() => setManage(null)}
+        onEmployeesChanged={() => reloadEmployees({ silent: true })}
+        onAccountsChanged={() => reloadAccounts({ silent: true })} />}
     </GlassPanel>
   );
 }
 
-function EmployeeModal({ value, departments, locations, employees, onClose, onSaved }: {
-  value: EmployeeCard | null; departments: Department[]; locations: Location[]; employees: EmployeeCard[]; onClose: () => void; onSaved: () => void;
+type PersonTarget = EmployeeAccountRow | "new";
+
+/**
+ * Một người = hồ sơ nhân viên + tài khoản đăng nhập (ghép theo username). Modal này gom cả hai vào MỘT
+ * chỗ với các mục con: Hồ sơ · Tài khoản · Quyền lợi — thay cho việc mở nhiều hộp thoại rời rạc trước đây.
+ */
+function PersonModal({
+  target, departments, locations, employees, accounts, canManageProfiles, canManageAccounts,
+  onClose, onEmployeesChanged, onAccountsChanged,
+}: {
+  target: PersonTarget;
+  departments: Department[];
+  locations: Location[];
+  employees: EmployeeCard[];
+  accounts: UserAdmin[];
+  canManageProfiles: boolean;
+  canManageAccounts: boolean;
+  onClose: () => void;
+  onEmployeesChanged: () => void;
+  onAccountsChanged: () => void;
 }) {
-  const { notify } = useAppNotifications();
-  const [detail] = useState(value);
+  const isNew = target === "new";
+  // Lấy bản mới nhất từ danh sách vừa tải lại (sau khi đổi vai trò/khóa…) để modal không hiển thị dữ liệu cũ.
+  const employee = isNew || !target.employee ? null : employees.find((e) => e.id === target.employee!.id) ?? target.employee;
+  const account = isNew || !target.account ? null : accounts.find((a) => a.id === target.account!.id) ?? target.account;
+
+  type Sub = "profile" | "account" | "benefits";
+  const subs: { key: Sub; label: string }[] = [];
+  if (canManageProfiles) subs.push({ key: "profile", label: employee ? "Hồ sơ" : "Tạo hồ sơ" });
+  // Thêm người mới: "Tạo hồ sơ" đã tự tạo luôn tài khoản đăng nhập, nên bỏ tab "Tạo tài khoản" cho gọn
+  // (chỉ giữ khi người quản trị này không quản được hồ sơ mà chỉ quản tài khoản).
+  const hideAccountCreateForNew = isNew && canManageProfiles;
+  if (canManageAccounts && !hideAccountCreateForNew) subs.push({ key: "account", label: account ? "Tài khoản" : "Tạo tài khoản" });
+  if (canManageProfiles && employee) subs.push({ key: "benefits", label: "Quyền lợi" });
+
+  const [sub, setSub] = useState<Sub>(
+    employee && canManageProfiles ? "profile" : account && canManageAccounts ? "account" : subs[0]?.key ?? "profile",
+  );
+
+  const title = isNew
+    ? "Thêm người mới"
+    : `Quản lý · ${employee?.fullName?.trim() || account?.fullName?.trim() || account?.username || "—"}`;
+
+  return (
+    <Modal open onClose={onClose} title={title} panel wide footer={<Button variant="ghost" onClick={onClose}>Đóng</Button>}>
+      {subs.length > 1 && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {subs.map((s) => (
+            <button key={s.key} type="button" onClick={() => setSub(s.key)}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${sub === s.key ? "bg-[var(--accent)] text-white" : "bg-[var(--accent-soft)] text-[var(--text-secondary)]"}`}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {sub === "profile" && (
+        <ProfilePanel
+          employee={employee} initialAccount={account}
+          departments={departments} locations={locations} employees={employees}
+          onSavedEdit={onEmployeesChanged}
+          onCreated={() => { onEmployeesChanged(); onClose(); }}
+          onDeleted={() => { onEmployeesChanged(); onClose(); }}
+        />
+      )}
+      {sub === "account" && (account
+        ? <AccountManagePanel value={account} onChanged={onAccountsChanged} onClose={onClose} />
+        : <AccountCreateForm
+            initial={{ username: employee?.username ?? undefined, fullName: employee?.fullName ?? undefined, email: employee?.email ?? undefined }}
+            onSaved={() => { onAccountsChanged(); onClose(); }} />)}
+      {sub === "benefits" && employee && <BenefitsPanel empId={employee.id} />}
+    </Modal>
+  );
+}
+
+function ProfilePanel({ employee, initialAccount, departments, locations, employees, onSavedEdit, onCreated, onDeleted }: {
+  employee: EmployeeCard | null; initialAccount?: UserAdmin | null; departments: Department[]; locations: Location[]; employees: EmployeeCard[];
+  onSavedEdit: () => void; onCreated: () => void; onDeleted: () => void;
+}) {
+  const { notify, confirm } = useAppNotifications();
+  const [detail] = useState(employee);
   const [form, setForm] = useState({
-    employeeCode: value?.employeeCode ?? "",
-    username: value?.username ?? "",
-    fullName: value?.fullName ?? "",
-    position: value?.position ?? "",
-    departmentId: value?.departmentId ?? "",
-    locationId: value?.locationId ?? "",
-    accessRole: value?.accessRole ?? "staff",
-    status: value?.status ?? "Active",
-    phone: value?.phone ?? "",
-    email: value?.email ?? "",
+    employeeCode: employee?.employeeCode ?? "",
+    username: employee?.username ?? initialAccount?.username ?? "",
+    fullName: employee?.fullName ?? initialAccount?.fullName ?? "",
+    position: employee?.position ?? "",
+    // Chỉ dùng khi TẠO MỚI: "Chức vụ" là dropdown vai trò hệ thống → quyết định quyền của tài khoản tạo ra.
+    role: "Employee",
+    departmentId: employee?.departmentId ?? "",
+    locationId: employee?.locationId ?? "",
+    accessRole: employee?.accessRole ?? "staff",
+    status: employee?.status ?? "Active",
+    phone: employee?.phone ?? "",
+    email: employee?.email ?? initialAccount?.email ?? "",
     managerId: "",
-    hireDate: "",
+    hireDate: employee?.hireDate ?? accountCreatedDateValue(initialAccount?.createdAt),
     dob: "",
     gender: "",
     address: "",
   });
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const set = (k: keyof typeof form, v: string) => setForm((s) => ({ ...s, [k]: v }));
 
   const save = async () => {
@@ -193,9 +655,18 @@ function EmployeeModal({ value, departments, locations, employees, onClose, onSa
         hireDate: form.hireDate || null,
         dob: form.dob || null,
       };
-      if (detail) await api.put(`/api/hr/employees/${detail.id}`, body);
-      else await api.post("/api/hr/employees", body);
-      onSaved();
+      if (detail) { await api.put(`/api/hr/employees/${detail.id}`, body); notify.success("Đã lưu hồ sơ."); onSavedEdit(); }
+      else {
+        // Tạo hồ sơ mới LUÔN kèm tài khoản đăng nhập (backend tự sinh mã NV + username, mật khẩu mặc định 123).
+        // "Chức vụ" chọn = vai trò hệ thống: lưu nhãn vào position để hiển thị, gửi role để đặt quyền tài khoản.
+        const roleLabel = ASSIGNABLE_ROLES.find((r) => r.key === form.role)?.label ?? "";
+        const res = await api.post<{ username?: string; accountCreated?: boolean; password?: string }>(
+          "/api/hr/employees", { ...body, position: roleLabel, role: form.role, createAccount: true });
+        if (res?.accountCreated)
+          notify.success(`Đã tạo hồ sơ và tài khoản đăng nhập “${res.username}” · mật khẩu ${res.password}.`);
+        else notify.success("Đã tạo hồ sơ nhân viên.");
+        onCreated();
+      }
     } catch (e) {
       notify.error(e instanceof Error ? e.message : "Không lưu được.");
     } finally {
@@ -203,14 +674,38 @@ function EmployeeModal({ value, departments, locations, employees, onClose, onSa
     }
   };
 
+  const remove = async () => {
+    if (!detail) return;
+    const ok = await confirm({ title: `Xóa hồ sơ ${detail.fullName}?`, description: "Toàn bộ hợp đồng, phiếu lương, phép của nhân viên này sẽ bị xóa.", confirmLabel: "Xóa", tone: "danger" });
+    if (!ok) return;
+    setRemoving(true);
+    try {
+      await api.del(`/api/hr/employees/${detail.id}`);
+      notify.success("Đã xóa hồ sơ.");
+      onDeleted();
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không xóa được.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
-    <Modal open onClose={onClose} title={detail ? "Sửa hồ sơ nhân viên" : "Thêm nhân viên"} panel wide
-      footer={<><Button variant="ghost" onClick={onClose}>Hủy</Button><Button onClick={save} loading={saving}>Lưu</Button></>}>
+    <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Mã nhân viên"><Input value={form.employeeCode} onChange={(e) => set("employeeCode", e.target.value)} placeholder="Tự sinh nếu để trống" /></Field>
-        <Field label="Tài khoản đăng nhập"><Input value={form.username} onChange={(e) => set("username", e.target.value)} placeholder="username (để chấm công/đơn từ)" /></Field>
+        {detail && <Field label="Mã nhân viên"><Input value={form.employeeCode} onChange={(e) => set("employeeCode", e.target.value)} placeholder="Tự sinh nếu để trống" /></Field>}
+        {detail && <Field label="Tài khoản đăng nhập"><Input value={form.username} onChange={(e) => set("username", e.target.value)} placeholder="username" /></Field>}
         <Field label="Họ tên *"><Input value={form.fullName} onChange={(e) => set("fullName", e.target.value)} /></Field>
-        <Field label="Chức vụ"><Input value={form.position} onChange={(e) => set("position", e.target.value)} /></Field>
+        {detail ? (
+          <Field label="Chức vụ"><Input value={form.position} onChange={(e) => set("position", e.target.value)} /></Field>
+        ) : (
+          <Field label="Chức vụ (vai trò hệ thống) *">
+            <Select value={form.role} onChange={(e) => set("role", e.target.value)} className="w-full">
+              {ASSIGNABLE_ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+            </Select>
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">Vừa là chức vụ hiển thị, vừa quyết định quyền của tài khoản đăng nhập được tạo.</p>
+          </Field>
+        )}
         <Field label="Phòng ban *">
           <Select value={form.departmentId} onChange={(e) => set("departmentId", e.target.value)} className="w-full">
             <option value="">— Chọn phòng ban —</option>
@@ -223,10 +718,11 @@ function EmployeeModal({ value, departments, locations, employees, onClose, onSa
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </Select>
         </Field>
-        <Field label="Vai trò truy cập (phân quyền)">
+        <Field label="Phạm vi dữ liệu nhân sự">
           <Select value={form.accessRole} onChange={(e) => set("accessRole", e.target.value)} className="w-full">
             {ACCESS_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
           </Select>
+          <p className="mt-1 text-[11px] text-[var(--text-muted)]">Chỉ giới hạn dữ liệu HR được xem/quản lý; không thay đổi quyền sử dụng ứng dụng.</p>
         </Field>
         <Field label="Quản lý trực tiếp">
           <Select value={form.managerId} onChange={(e) => set("managerId", e.target.value)} className="w-full">
@@ -234,11 +730,11 @@ function EmployeeModal({ value, departments, locations, employees, onClose, onSa
             {employees.filter((e) => e.id !== detail?.id).map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)}
           </Select>
         </Field>
-        <Field label="Ngày vào làm"><Input type="date" value={form.hireDate} onChange={(e) => set("hireDate", e.target.value)} /></Field>
+        <Field label="Ngày vào làm / ngày tạo tài khoản"><Input type="date" value={form.hireDate} onChange={(e) => set("hireDate", e.target.value)} /></Field>
         <Field label="Trạng thái">
           <Select value={form.status} onChange={(e) => set("status", e.target.value)} className="w-full">
             <option value="Active">Đang làm việc</option>
-            <option value="Inactive">Đã nghỉ</option>
+            <option value="Inactive">Đã nghỉ — khóa quyền truy cập</option>
           </Select>
         </Field>
         <Field label="Số điện thoại"><Input value={form.phone} onChange={(e) => set("phone", e.target.value)} /></Field>
@@ -247,13 +743,26 @@ function EmployeeModal({ value, departments, locations, employees, onClose, onSa
         <Field label="Giới tính"><Input value={form.gender} onChange={(e) => set("gender", e.target.value)} placeholder="Nam / Nữ" /></Field>
         <div className="sm:col-span-2"><Field label="Địa chỉ"><Input value={form.address} onChange={(e) => set("address", e.target.value)} /></Field></div>
       </div>
-      {detail && <p className="mt-3 text-xs text-[var(--text-muted)]">Lưu ý: ngày sinh/giới tính/địa chỉ đầy đủ sẽ ghi đè khi lưu ở chế độ quản trị.</p>}
-    </Modal>
+      {!detail && !initialAccount && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-[var(--gc-border)] bg-[var(--accent-soft)]/30 p-3">
+          <UserPlus className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" />
+          <span className="text-sm">
+            <span className="font-semibold text-[var(--text)]">Tài khoản đăng nhập sẽ được tạo tự động</span>
+            <span className="block text-xs text-[var(--text-secondary)]">Hệ thống tự sinh mã nhân viên và tên đăng nhập từ họ tên (vd: <code className="font-mono">annv01</code>), mật khẩu mặc định <b>123</b>. Quyền của tài khoản lấy theo <b>Chức vụ</b> đã chọn ở trên.</span>
+          </span>
+        </div>
+      )}
+      {detail && <p className="text-xs text-[var(--text-muted)]">Lưu ý: ngày sinh/giới tính/địa chỉ đầy đủ sẽ ghi đè khi lưu ở chế độ quản trị.</p>}
+      <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--gc-border)] pt-4">
+        {detail && <Button variant="danger" loading={removing} disabled={saving} onClick={() => void remove()}><Trash2 className="h-4 w-4" /> Xóa hồ sơ</Button>}
+        <Button onClick={save} loading={saving} disabled={removing}><Save className="h-4 w-4" /> {detail ? "Lưu hồ sơ" : "Tạo hồ sơ"}</Button>
+      </div>
+    </div>
   );
 }
 
 // ---------------- Quyền lợi (hợp đồng / phiếu lương / phép / bằng cấp) ----------------
-function BenefitsModal({ emp, onClose }: { emp: EmployeeCard; onClose: () => void }) {
+function BenefitsPanel({ empId }: { empId: string }) {
   const [sub, setSub] = useState<"contract" | "payslip" | "leave" | "docs">("contract");
   const subs = [
     { k: "contract", l: "Hợp đồng" },
@@ -262,7 +771,7 @@ function BenefitsModal({ emp, onClose }: { emp: EmployeeCard; onClose: () => voi
     { k: "docs", l: "Bằng cấp" },
   ] as const;
   return (
-    <Modal open onClose={onClose} title={`Quyền lợi · ${emp.fullName}`} panel wide footer={<Button variant="ghost" onClick={onClose}>Đóng</Button>}>
+    <div>
       <div className="mb-4 flex flex-wrap gap-2">
         {subs.map((s) => (
           <button key={s.k} onClick={() => setSub(s.k)}
@@ -271,11 +780,11 @@ function BenefitsModal({ emp, onClose }: { emp: EmployeeCard; onClose: () => voi
           </button>
         ))}
       </div>
-      {sub === "contract" && <ContractAdmin empId={emp.id} />}
-      {sub === "payslip" && <PayslipAdmin empId={emp.id} />}
-      {sub === "leave" && <LeaveAdmin empId={emp.id} />}
-      {sub === "docs" && <DocsAdmin empId={emp.id} />}
-    </Modal>
+      {sub === "contract" && <ContractAdmin empId={empId} />}
+      {sub === "payslip" && <PayslipAdmin empId={empId} />}
+      {sub === "leave" && <LeaveAdmin empId={empId} />}
+      {sub === "docs" && <DocsAdmin empId={empId} />}
+    </div>
   );
 }
 
@@ -498,7 +1007,12 @@ function DepartmentsTab() {
       <Table<Department> loading={loading} rows={data ?? []} keyOf={(r) => r.id} empty="Chưa có phòng ban"
         columns={[
           { header: "Mã", cell: (r) => <span className="font-mono text-xs">{r.code || "—"}</span> },
-          { header: "Tên", cell: (r) => <span className="font-semibold">{r.name}</span> },
+          { header: "Tên", cell: (r) => (
+            <span className="inline-flex items-center gap-1.5 font-semibold">
+              {r.name}
+              {r.isAccounting && <Badge color="success">Kế toán</Badge>}
+            </span>
+          ) },
           { header: "Trực thuộc", cell: (r) => r.parentName || "—" },
           { header: "Trưởng phòng", cell: (r) => r.managerName || "—" },
           { header: "Nhân sự", align: "right", cell: (r) => <Badge>{r.employeeCount}</Badge> },
@@ -522,14 +1036,13 @@ function DepartmentModal({ value, departments, employees, onClose, onSaved }: {
 }) {
   const { notify } = useAppNotifications();
   const [f, setF] = useState({ code: value?.code ?? "", name: value?.name ?? "", parentId: value?.parentId ?? "", managerEmployeeId: value?.managerEmployeeId ?? "" });
-  const [isAccounting, setIsAccounting] = useState(value?.isAccounting ?? false);
   const [saving, setSaving] = useState(false);
   const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
   const save = async () => {
     if (!f.name.trim()) { notify.error("Nhập tên phòng ban."); return; }
     setSaving(true);
     try {
-      const body = { code: f.code, name: f.name, parentId: f.parentId || null, managerEmployeeId: f.managerEmployeeId || null, isAccounting };
+      const body = { code: f.code, name: f.name, parentId: f.parentId || null, managerEmployeeId: f.managerEmployeeId || null };
       if (value) await api.put(`/api/hr/departments/${value.id}`, body);
       else await api.post("/api/hr/departments", body);
       onSaved();
@@ -553,13 +1066,12 @@ function DepartmentModal({ value, departments, employees, onClose, onSaved }: {
             {employees.map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)}
           </Select>
         </Field>
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--glass-border)] bg-white/40 p-3 dark:bg-white/5">
-          <input type="checkbox" checked={isAccounting} onChange={(e) => setIsAccounting(e.target.checked)} className="mt-0.5 h-4 w-4" />
-          <span className="text-sm">
-            <span className="font-semibold text-[var(--text)]">Phòng Kế toán</span>
-            <span className="block text-xs text-[var(--text-secondary)]">Nhân viên phòng này được duyệt khoản chi hoàn tiền phạt.</span>
-          </span>
-        </label>
+        {value?.isAccounting && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <Badge color="success">Phòng kế toán</Badge>
+            <span className="text-xs text-[var(--text-secondary)]">Phòng do hệ thống quản lý: nhân viên phòng này được lập/duyệt phiếu chi tiền mặt & hoàn tiền phạt. Cờ này không chỉnh trong biểu mẫu.</span>
+          </div>
+        )}
       </div>
     </Modal>
   );

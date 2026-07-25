@@ -15,6 +15,12 @@ public interface IFaceEngine
     /// <summary>Ngưỡng khớp khuyến nghị: similarity ≥ ngưỡng ⇒ coi là cùng một người.</summary>
     double MatchThreshold { get; }
 
+    /// <summary>
+    /// Mức chống giả mạo ĐANG chạy thật. CỐ Ý không có giá trị mặc định: engine nào cũng phải tự khai,
+    /// vì mặc định "đầy đủ" là một lời nói dối im lặng đúng ở chỗ nguy hiểm nhất.
+    /// </summary>
+    AntiSpoofStatus AntiSpoof { get; }
+
     /// <summary>Kiểm tra ảnh là người thật (chống giơ ảnh/màn hình). Trả false nếu nghi giả mạo.</summary>
     bool CheckLiveness(byte[] imageBytes);
 
@@ -60,34 +66,40 @@ public interface IFaceEngine
     double Compare(float[] a, float[] b);
 
     /// <summary>
-    /// Ước lượng hướng mặt từ landmark (dùng khi đăng ký để kiểm tra tư thế). Trả null nếu
-    /// không thấy mặt. Yaw &gt; 0 = người dùng quay sang TRÁI, &lt; 0 = quay sang PHẢI;
-    /// Pitch nhỏ hơn = ngước lên, lớn hơn = cúi xuống. Là TỈ LỆ tương đối theo hình học, không phải độ.
-    /// </summary>
-    FacePose? EstimatePose(byte[] imageBytes);
-
-    /// <summary>
     /// Đánh giá chất lượng MỘT khung hình để chọn "ảnh tốt nhất" trong loạt chụp chấm công:
     /// đo độ nét, độ sáng, độ loá, kích cỡ &amp; hướng mặt rồi tổng hợp thành điểm 0..1.
     /// Trả null nếu ảnh hỏng; trả <see cref="FaceFrameQuality.FaceFound"/> = false nếu không thấy mặt.
     /// KHÔNG trích vector/chống giả mạo (nhẹ) — chỉ để xếp hạng khung, khâu nặng chạy 1 lần trên khung tốt nhất.
     /// </summary>
     FaceFrameQuality? AssessFrame(byte[] imageBytes);
-
-    /// <summary>
-    /// Lấy màu TRUNG BÌNH vùng da khuôn mặt (mỗi kênh R,G,B trong 0..1) từ pixel GỐC — KHÔNG tăng
-    /// sáng/CLAHE (vì làm méo màu) — phục vụ active-flash liveness: đối chiếu ánh phản xạ trên mặt với
-    /// màu màn hình đang chiếu. Trả null nếu không thấy mặt. Mặc định null ⇒ engine không hỗ trợ
-    /// (endpoint sẽ bỏ qua bước flash liveness cho engine đó).
-    /// </summary>
-    FaceSkinColor? SampleFaceSkinColor(byte[] imageBytes) => null;
 }
+
+/// <summary>
+/// Mức chống giả mạo (ảnh/màn hình) thực sự đang chạy.
+///
+/// Vì sao phải phơi ra thay vì để trong log: khi model chống giả mạo không nạp được, engine vẫn chạy
+/// bình thường nhưng <see cref="IFaceEngine.LivenessProbability"/> trả 1 cho MỌI ảnh — tức mọi thứ đưa
+/// vào camera đều được coi là người thật. Đó là kiểu hỏng KHÔNG có triệu chứng: chấm công vẫn "chạy tốt",
+/// chỉ là hết chống giả. Nên trạng thái này phải đi tới tận màn hình quản trị.
+/// </summary>
+public enum AntiSpoofLevel
+{
+    /// <summary>
+    /// KHÔNG có model nào — mọi ảnh đều được coi là người thật, và KHÔNG còn lớp nào khác gác thay:
+    /// giơ ảnh/màn hình là chấm công được. Đây là mức phải báo động đỏ tận panel quản trị.
+    /// </summary>
+    None = 0,
+    /// <summary>Chỉ còn model MiniFASNet đơn lẻ cũ (yếu hơn Silent-Face hai model).</summary>
+    Basic = 1,
+    /// <summary>Đủ Silent-Face (MiniFASNetV2 + MiniFASNetV1SE) như thiết kế.</summary>
+    Full = 2,
+}
+
+/// <summary>Mức chống giả mạo + mô tả ngắn để hiện lên panel quản trị.</summary>
+public readonly record struct AntiSpoofStatus(AntiSpoofLevel Level, string Detail);
 
 /// <summary>Hướng mặt tương đối (tỉ lệ hình học từ 5 điểm landmark, không phải độ).</summary>
 public readonly record struct FacePose(double Yaw, double Pitch);
-
-/// <summary>Màu trung bình vùng da mặt (mỗi kênh 0..1) + tỉ lệ diện tích mặt/ảnh — cho active-flash liveness.</summary>
-public readonly record struct FaceSkinColor(double R, double G, double B, double FaceRatio);
 
 /// <summary>
 /// Chất lượng một khung hình khuôn mặt. Mọi chỉ số (trừ <see cref="Score"/>) là giá trị thô để
@@ -101,7 +113,10 @@ public readonly record struct FaceFrameQuality(
     double GlareRatio,   // tỉ lệ điểm gần bão hòa (loá) trong vùng mặt 0..1
     double FaceRatio,    // diện tích mặt / diện tích ảnh
     FacePose Pose,
-    double DetectScore); // độ tin cậy phát hiện 0..1
+    double DetectScore,  // độ tin cậy phát hiện 0..1
+    // Độ MỞ MẮT ước lượng 0..1 (min hai mắt) — để chặn "nhắm mắt/lim dim" phía SERVER. Đây là heuristic
+    // hình học (không phải model), 1.0 = không đánh giá được ⇒ fail-open (không chặn). Xem AdaFaceR50Engine.EyeOpenScore.
+    double EyeOpen = 1.0);
 
 /// <summary>Chuyển vector đặc trưng ↔ byte[] để lưu cột bytea trong PostgreSQL.</summary>
 public static class EmbeddingCodec

@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
 import android.util.Rational
+import android.util.Size
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
@@ -29,6 +30,7 @@ import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -202,17 +204,33 @@ class QrLoginCaptureActivity : ComponentActivity() {
                 showCameraUnavailable("Không khởi tạo được camera.")
                 return@addListener
             }
-            val resolution = ResolutionSelector.Builder()
+            val previewResolution = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
                 .build()
 
+            // Phân tích ở độ phân giải CAO hơn hẳn preview để đọc được mã nhìn CHẾCH. Mã QR dán một độ
+            // cao cố định, người cao/thấp khác nhau sẽ nhìn mã chếch lên/xuống → mã hiện ra hình thang,
+            // cạnh xa bị dồn pixel; ML Kit chỉ giải mã được khi cạnh đó còn đủ điểm ảnh. Không đặt gì thì
+            // CameraX chọn mức khiêm tốn (~cỡ preview) nên góc nghiêng "hết pixel" sớm — chốt cứng 1080p,
+            // thiếu thì lấy mức gần nhất cao hơn rồi mới xuống thấp hơn. Vẫn KEEP_ONLY_LATEST nên máy yếu
+            // chỉ giảm SỐ khung phân tích chứ không dồn ứ khung cũ; phiên quét ngắn nên không lo nóng máy.
+            val analysisResolution = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        Size(1920, 1080),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                    ),
+                )
+                .build()
+
             val preview = Preview.Builder()
-                .setResolutionSelector(resolution)
+                .setResolutionSelector(previewResolution)
                 .build()
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
             val analysis = ImageAnalysis.Builder()
-                .setResolutionSelector(resolution)
+                .setResolutionSelector(analysisResolution)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
 

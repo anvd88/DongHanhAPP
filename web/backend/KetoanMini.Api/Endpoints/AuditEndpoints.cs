@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using ClosedXML.Excel;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -91,9 +92,10 @@ public static class AuditEndpoints
 
     public static void MapAudit(this WebApplication app)
     {
-        // Quyền không còn chặn ở tầng route: kế toán cũng vào được nhưng CHỈ thấy phần tiền, nên phải
-        // kiểm tra trong từng handler (cần tra DB để biết phòng ban) — xem ResolveScopeAsync.
-        var g = app.MapGroup("/api/audit").RequireAuthorization();
+        // Cửa vào chốt bằng quyền audit.read (admin + kế toán có). PHẠM VI thì hẹp hơn quyền: kế toán
+        // CHỈ thấy phần tiền, và phạm vi đó do server ép trong từng handler (cần tra DB để biết phòng
+        // ban) — xem ResolveScopeAsync. Quyền mở cửa, phạm vi mới quyết định thấy được gì.
+        var g = app.MapGroup("/api/audit").RequirePermission(Permissions.AuditRead);
 
         // Danh sách có phân trang + lọc. Trả envelope { items, total, page, pageSize }.
         g.MapGet("/", async (Database db, ClaimsPrincipal u, HttpRequest http,

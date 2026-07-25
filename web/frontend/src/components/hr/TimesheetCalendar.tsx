@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlarmClock, Clock, RefreshCw, TimerReset, TrendingUp } from "lucide-react";
 import { GlassPanel } from "../glass/GlassPanel";
 import { Badge } from "../ui";
@@ -128,8 +128,15 @@ export function TimesheetCalendar({
   emptyHint?: string;
 }) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  // Đổi tháng / đổi nhân viên thì bỏ chọn ngày cũ.
-  useEffect(() => setSelectedDate(null), [month, data]);
+  // Đổi tháng / đổi nhân viên thì bỏ chọn ngày cũ. Gán lúc render thay vì trong useEffect: effect
+  // vẽ thừa một khung hình còn giữ ngày của tháng trước, và React Compiler cấm setState đồng bộ
+  // trong effect. Mốc chặn giữ ĐÚNG hành vi cũ — reset theo cả `month` lẫn từng lần nạp lại `data`
+  // (đúng bộ deps cũ), chứ không phải mỗi lần render.
+  const [dateSeed, setDateSeed] = useState<{ month: string; data: Timesheet | null }>({ month, data });
+  if (dateSeed.month !== month || dateSeed.data !== data) {
+    setDateSeed({ month, data });
+    setSelectedDate(null);
+  }
 
   const s = data?.summary;
   const daysByDate = new Map((data?.days ?? []).map((day) => [day.date.slice(0, 10), day]));

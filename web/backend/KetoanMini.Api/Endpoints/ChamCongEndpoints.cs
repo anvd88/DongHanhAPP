@@ -40,16 +40,29 @@ public static class ChamCongEndpoints
 
     // ── Chính sách chấm công NGOẠI TUYẾN (chờ duyệt) — có thể ghi đè bằng khóa cấu hình trong
     //    web_system_settings (attendance.offline.*). Mặc định đủ dùng nếu chưa cấu hình.
-    // Active-flash liveness LUÔN BẬT + CHẶN THẬT (đã bỏ công tắc runtime/UI để tránh lỡ tắt). An toàn vì
-    // FlashLivenessChallenge.Verify fail-open: thiếu challenge/dữ liệu ⇒ cho qua (Silent-Face vẫn gác);
-    // chỉ chặn khi mặt HOÀN TOÀN không phản ứng với ánh sáng màn hình (chữ ký ảnh/màn hình/luồng giả).
+    // ĐÃ GỠ HẲN active-flash liveness (chuỗi màu màn hình). Nó đã CHẾT trên thực tế từ lâu mà code phía
+    // máy chủ vẫn tự nhận là "luôn bật + chặn thật": đo trên máy thật cho thấy react≈0 kể cả người thật
+    // (AWB camera triệt hết cast màu) nên không tách được thật/giả, camera trong APK đã bỏ toàn bộ pha
+    // chiếu màu, và không client nào còn gửi challengeId/slotIndices — tức khối kiểm tra chưa từng chạy.
+    // Giữ lại chỉ tạo ra một lời hứa bảo mật sai. Lớp chống giả mạo thật hiện nay: Silent-Face (bắt buộc)
+    // + self-only; liveness QUAY ĐẦU là lớp chủ động thay thế, bật bằng hai cờ dưới đây khi đã hiệu chỉnh.
     private const string CfgMotionEnabled = "attendance.motion.enabled"; // app yêu cầu quay đầu lúc quét
     private const string CfgMotionEnforce = "attendance.motion.enforce"; // chặn nếu biên độ quay quá nhỏ
 
     // Liveness QUAY ĐẦU: cần người dùng chủ động quay đầu → để admin tự bật khi sẵn sàng (tránh phiền hà).
     private const bool DefaultMotionEnabled = false;
     private const bool DefaultMotionEnforce = false;
-    private const double MinMotionSpan = 0.30; // yaw span tối thiểu (đơn vị EstimatePose) — tinh chỉnh theo số đo
+    // yaw span tối thiểu, theo thang của FacePose (tỉ lệ hình học từ 5 landmark, KHÔNG phải độ) —
+    // xem AdaFaceR50Engine.PoseFrom. CẦN hiệu chỉnh bằng số đo thật trước khi bật enforce.
+    private const double MinMotionSpan = 0.30;
+
+    // Kiểm tra MỞ MẮT phía server (xem AdaFaceR50Engine.EyeOpenScore). Luôn ĐO (ghi vào panel để hiệu
+    // chỉnh); chỉ CHẶN khi admin bật enforce → tránh khoá nhầm nhân viên vì heuristic chưa chuẩn. Ngưỡng
+    // theo thang EyeOpenScore 0..1: bestEyeOpen (khung mở mắt nhất của loạt) < ngưỡng ⇒ coi là nhắm mắt.
+    private const string CfgEyeOpenEnforce = "attendance.eyeopen.enforce";
+    private const string CfgEyeOpenThreshold = "attendance.eyeopen.threshold";
+    private const bool DefaultEyeOpenEnforce = false;
+    private const double DefaultEyeOpenThreshold = 0.35;
     private const string CfgMaxBackdate = "attendance.offline.maxBackdateMinutes";
     private const string CfgGeofenceLat = "attendance.offline.geofenceLat";
     private const string CfgGeofenceLng = "attendance.offline.geofenceLng";
@@ -181,15 +194,18 @@ public static class ChamCongEndpoints
 
         // Cho frontend/kiosk biết tên engine + ngưỡng khớp.
         // Ẩn danh: màn hình kiosk (ngoài trang đăng nhập) cần đọc trạng thái này.
+        //
+        // Gác bằng KioskAccessFilter như /nhandien và /cham. Lý do: endpoint này có inject IFaceEngine,
+        // mà engine là singleton dựng LƯỜI — nên chỉ cần chạm vào là nạp adaface.onnx (~174 MB) vào RAM.
+        // Không gác thì bất kỳ ai trên Internet (hệ thống có mở qua Cloudflare Tunnel) cũng ép được server
+        // nạp model dù họ không hề chấm công được. Sau khi gác, đúng những thiết bị ĐƯỢC PHÉP chấm công
+        // mới chạm tới engine — và vì APK gọi /trangthai ngay khi mở màn hình chấm công, việc nạp model
+        // vẫn diễn ra sớm như cũ (làm nóng trong lúc người dùng còn đang đọc màn hình), không ai chậm đi.
         g.MapGet("/trangthai", (IFaceEngine engine) =>
             Results.Ok(new FaceEngineStatusDto(engine.Name, engine.MatchThreshold)))
-            .AllowAnonymous();
+            .AllowAnonymous().AddEndpointFilter<KioskAccessFilter>();
 
-        // Active-flash liveness: cấp một chuỗi màu ngẫu nhiên (ràng buộc theo tài khoản đăng nhập) để app
-        // chiếu lên mặt lúc quét. BẮT BUỘC đăng nhập (không cho kiosk ẩn danh) vì challenge bind theo user.
-        // LUÔN BẬT (đã bỏ công tắc runtime để tránh lỡ tắt) — cơ chế fail-open ở FlashLivenessChallenge.Verify.
-        g.MapGet("/flash-challenge", (ClaimsPrincipal u, FlashLivenessChallenge flash) =>
-            Results.Ok(flash.Issue(u.Username())));
+        // ĐÃ GỠ: GET /flash-challenge (cấp chuỗi màu active-flash). Xem ghi chú ở đầu lớp.
 
         // Cấu hình liveness QUAY ĐẦU. GET cho MỌI tài khoản (app đọc để biết có yêu cầu quay đầu không);
         // PUT chỉ Admin. Runtime, không build lại app.
@@ -247,13 +263,38 @@ public static class ChamCongEndpoints
             await db.RecordAudit(u.Username(), "Cấu hình liveness quay đầu", "ChamCong", "",
                 $"motion enabled={cfg.Enabled} enforce={cfg.Enforce}");
             return Results.Ok(new { message = "Đã lưu cấu hình liveness quay đầu (áp dụng ngay)." });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
+
+        // Cấu hình kiểm tra MỞ MẮT phía server (Admin). Mặc định enforce=false (chỉ đo). Bật enforce sau khi
+        // xem số đo EyeOpen ở panel liveness và chọn ngưỡng hợp lý (thường ~0.30–0.40).
+        g.MapPut("/eyeopen-config", async (EyeOpenConfigDto cfg, ClaimsPrincipal u, Database db) =>
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var threshold = Math.Clamp(cfg.Threshold, 0, 1);
+            await using var conn = await db.OpenAsync();
+            await SetSettingAsync(conn, CfgEyeOpenEnforce, cfg.Enforce ? "1" : "0", u.Username());
+            await SetSettingAsync(conn, CfgEyeOpenThreshold, threshold.ToString(inv), u.Username());
+            await db.RecordAudit(u.Username(), "Cấu hình kiểm tra mở mắt", "ChamCong", "",
+                $"eyeopen enforce={cfg.Enforce} threshold={threshold.ToString(inv)}");
+            return Results.Ok(new { message = "Đã lưu cấu hình kiểm tra mở mắt (áp dụng ngay)." });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Số đo Silent-Face (chống ảnh/màn hình) gần nhất (Admin) — hiệu chỉnh ngưỡng ngay trên panel.
-        g.MapGet("/liveness-metrics", (LivenessMetricsLog log) =>
-            Results.Ok(log.Recent().Select(m => new LivenessMetricDto(
-                m.AtUtc, m.User, m.Best, m.Mean, m.Second, m.Frames, m.Threshold, m.Passed, m.MotionSpan))))
-            .RequireAuthorization(p => p.RequireRole("Admin"));
+        // Kèm MỨC chống giả mạo đang chạy thật: nếu model không nạp được thì mọi ảnh đều được coi là
+        // người thật mà chấm công vẫn chạy y như bình thường — kiểu hỏng không có triệu chứng, nên phải
+        // hiện ngay tại panel admin chứ không chỉ nằm trong log.
+        g.MapGet("/liveness-metrics", async (LivenessMetricsLog log, IFaceEngine engine, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var eyeCfg = new EyeOpenConfigDto(
+                await GetSettingBoolAsync(conn, CfgEyeOpenEnforce, DefaultEyeOpenEnforce),
+                await GetSettingDoubleAsync(conn, CfgEyeOpenThreshold) ?? DefaultEyeOpenThreshold);
+            return Results.Ok(new LivenessPanelDto(
+                new AntiSpoofDto(engine.AntiSpoof.Level.ToString(), engine.AntiSpoof.Detail),
+                [.. log.Recent().Select(m => new LivenessMetricDto(
+                    m.AtUtc, m.User, m.Best, m.Mean, m.Second, m.Frames, m.Threshold, m.Passed, m.MotionSpan, m.EyeOpen))],
+                eyeCfg));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Danh sách nhân viên đã đăng ký khuôn mặt (gộp theo username).
         g.MapGet("/dadangky", async (Database db) =>
@@ -267,7 +308,7 @@ public static class ChamCongEndpoints
                 list.Add(new FaceNguoiDungDto(r.Str("username"), r.Str("full_name"),
                     r.Int("so_mau"), r.DtNull("created_at")));
             return Results.Ok(list);
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Nhật ký từng mẫu khuôn mặt đã đăng ký. Chỉ Admin được xem/quản lý dữ liệu sinh trắc.
         g.MapGet("/dangky/log", async (Database db, string? search) =>
@@ -288,7 +329,7 @@ public static class ChamCongEndpoints
                 list.Add(new FaceRegistrationLogDto(r.Long("id"), r.Str("username"), r.Str("full_name"),
                     r.Dt("created_at"), r.Str("created_by")));
             return Results.Ok(list);
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Đăng ký 1 mẫu khuôn mặt cho nhân viên (Admin). Gọi nhiều lần để thêm nhiều góc chụp.
         g.MapPost("/dangky", async (DangKyKhuonMatRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher) =>
@@ -317,7 +358,7 @@ public static class ChamCongEndpoints
 
             await db.RecordAudit(u.Username(), "Đăng ký khuôn mặt", "ChamCong", req.Username, "Thêm mẫu khuôn mặt (web).");
             return Results.Ok(new { message = "Đã lưu mẫu khuôn mặt." });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // ── Tự đăng ký khuôn mặt (nhân viên tự làm trên app) ────────────────────────
         // Trạng thái đã đăng ký của CHÍNH tài khoản đang đăng nhập → app dùng để làm mờ nút "Đăng ký
@@ -428,14 +469,12 @@ public static class ChamCongEndpoints
             return Results.Ok(new SelfFaceEnrollResult("Đăng ký khuôn mặt thành công.", samples.Count));
         });
 
-        // Ước lượng hướng mặt — trình đăng ký khuôn mặt (EnrollWizard) dùng để hướng dẫn từng tư thế.
-        g.MapPost("/huongmat", (NhanDienRequest req, IFaceEngine engine) =>
-        {
-            if (!TryDecodeImage(req.ImageBase64, out var bytes))
-                return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
-            var pose = engine.EstimatePose(bytes);
-            return Results.Ok(pose is { } p ? new FacePoseDto(true, p.Yaw, p.Pitch) : new FacePoseDto(false, 0, 0));
-        }).AllowAnonymous();
+        // ĐÃ GỠ: POST /huongmat (ước lượng hướng mặt cho EnrollWizard). Trình đăng ký khuôn mặt trên web
+        // nay tự tính tư thế NGAY TRÊN TRÌNH DUYỆT bằng đúng công thức hình học đó (xem
+        // FaceTrackingOverlay/EnrollWizard) nên endpoint không còn ai gọi. Giữ lại thì hở đúng chỗ vừa bịt
+        // ở /trangthai, mà còn nặng hơn: ẩn danh, không gác KioskAccessFilter, và mỗi request đều chạy
+        // YuNet thật trên ảnh tùy ý — tức bất kỳ ai trên Internet cũng ép được server nạp model rồi suy
+        // luận hộ. Cần lại thì dựng lại kèm .AddEndpointFilter<KioskAccessFilter>() như /nhandien.
 
         // Xóa toàn bộ mẫu khuôn mặt của 1 nhân viên (Admin).
         g.MapDelete("/dangky/{username}", async (string username, ClaimsPrincipal u, Database db) =>
@@ -445,7 +484,7 @@ public static class ChamCongEndpoints
                 .With("@u", username).ExecuteNonQueryAsync();
             if (n > 0) await db.RecordAudit(u.Username(), "Xóa khuôn mặt", "ChamCong", username, "Xóa mẫu khuôn mặt (web).");
             return n > 0 ? Results.NoContent() : Results.NotFound();
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Xóa 1 mẫu khuôn mặt cụ thể trong nhật ký đăng ký (Admin).
         g.MapDelete("/dangky/mau/{id:long}", async (long id, ClaimsPrincipal u, Database db) =>
@@ -462,7 +501,7 @@ public static class ChamCongEndpoints
                 .With("@id", id).ExecuteNonQueryAsync();
             if (n > 0) await db.RecordAudit(u.Username(), "Xóa mẫu khuôn mặt", "ChamCong", owner, $"Xóa mẫu khuôn mặt id={id} (web).");
             return n > 0 ? Results.NoContent() : Results.NotFound();
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Chấm công: chụp ảnh -> liveness -> trích vector -> so khớp -> ghi Vào/Ra.
         // Ẩn danh: cho phép chấm công ở kiosk màn hình đăng nhập (không cần tài khoản).
@@ -539,8 +578,60 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, FlashLivenessChallenge flash, LivenessMetricsLog livenessLog, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, LivenessMetricsLog livenessLog, AttendancePreviewTokens previewTokens, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http) =>
         {
+            // ── XÁC NHẬN BẰNG TOKEN XEM TRƯỚC ────────────────────────────────────────────────────
+            // Người dùng vừa xem trước xong và bấm "Xác nhận": mọi cổng (tư thế, chất lượng, Silent-Face,
+            // quay đầu, so khớp đúng người) ĐÃ qua vài giây trước và kết quả còn nguyên
+            // trong token. Chỉ việc ghi công — không nhận diện lại, tiết kiệm một nửa suy luận mỗi lượt.
+            if (!string.IsNullOrWhiteSpace(req?.ConfirmToken))
+            {
+                // Hai cờ này loại trừ nhau: token LÀ lệnh ghi công. Nhận cả hai rồi vẫn ghi thì token bị
+                // tiêu trong một request tự nhận là "chỉ xem trước" — từ chối thẳng cho khỏi mập mờ.
+                if (req.PreviewOnly)
+                    return Results.BadRequest(new { message = "Không thể vừa xem trước vừa xác nhận." });
+
+                var requester = u.Username();
+                if (previewTokens.Consume(requester, req.ConfirmToken) is not { } pending)
+                    return Results.Ok(new ChamCongResult("expired", false, null, null, 0, null, null, 0,
+                        "Phiên xác nhận đã hết hạn.", "Vui lòng quét lại khuôn mặt."));
+
+                await using var confirmConn = await db.OpenAsync();
+
+                // Quyết định Vào/Ra tính LẠI ở đây chứ không lấy từ lúc xem trước: giữa hai bước có thể đã
+                // qua mốc giờ, hoặc đã có lượt chấm khác chen vào. Đây là truy vấn nhẹ, không phải AI.
+                var confirmDecision = await AttendancePolicy.DecideAsync(
+                    confirmConn, pending.MatchedUser, pending.MatchedName);
+
+                if (!confirmDecision.ShouldRecord)
+                    return Results.Ok(new ChamCongResult("ok", true, pending.MatchedUser, pending.MatchedName,
+                        pending.Similarity, confirmDecision.Loai, confirmDecision.ExistingAt, pending.Quality,
+                        confirmDecision.Message, null));
+
+                await confirmConn.Cmd(
+                    @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
+                      VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP, '')")
+                    .With("@u", pending.MatchedUser).With("@fn", pending.MatchedName)
+                    .With("@loai", confirmDecision.Loai).With("@sim", pending.Similarity)
+                    .ExecuteNonQueryAsync();
+
+                await db.RecordAudit(pending.MatchedUser, $"Chấm công {confirmDecision.Loai}", "ChamCong",
+                    pending.MatchedUser,
+                    $"Độ khớp {pending.Similarity:0.000}, chất lượng ảnh {pending.Quality:0.00} (xác nhận sau xem trước).");
+
+                // Tự học vẫn chạy như luồng cũ nhờ vector đặc trưng đã giữ trong token.
+                try
+                {
+                    await TryAdaptiveLearnAsync(confirmConn, pending.MatchedUser, pending.MatchedName,
+                        pending.Probe, pending.Similarity, cipher);
+                }
+                catch { /* tự học là phụ trợ, lỗi không được làm hỏng chấm công */ }
+
+                return Results.Ok(new ChamCongResult("ok", true, pending.MatchedUser, pending.MatchedName,
+                    pending.Similarity, confirmDecision.Loai, DateTime.UtcNow, pending.Quality,
+                    confirmDecision.Message, null));
+            }
+
             if (req?.Images is null || req.Images.Count == 0)
                 return Results.BadRequest(new { message = "Thiếu ảnh chấm công." });
             if (req.Images.Count > PayloadLimits.MaxImagesPerRequest)
@@ -556,6 +647,11 @@ public static class ChamCongEndpoints
             var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.IsAdmin();
             // Ẩn danh (kiosk, chưa đăng nhập) ⇒ che username/họ tên trong phản hồi để tránh thu thập danh tính.
             var anon = string.IsNullOrWhiteSpace(currentUser);
+
+            // Đồng hồ đo TOÀN BỘ khâu nhận diện (giải mã ảnh + YuNet + Silent-Face + AdaFace + quét mẫu).
+            // Đây chính là phần mà bước "Xác nhận" từng chạy lại lần thứ hai; giữ lại để còn đo được
+            // thay vì phải suy đoán. Rẻ: một Stopwatch và một dòng log cho mỗi lượt chấm.
+            var recognizeSw = System.Diagnostics.Stopwatch.StartNew();
 
             // 1) Lấy mọi khung CÓ MẶT, xếp theo chất lượng giảm dần (nét, đủ sáng, mặt to & chính diện).
             var candidates = new List<(byte[] Bytes, FaceFrameQuality Q)>();
@@ -573,6 +669,11 @@ public static class ChamCongEndpoints
             candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
             var bestBytes = candidates[0].Bytes;
             var best = candidates[0].Q;
+
+            // MỞ MẮT: lấy khung "mở mắt nhất" của loạt — người thật chỉ cần MỞ MẮT ở MỘT khung tốt là đủ
+            // (chớp mắt vài khung không sao). Đo phía server nên không tin được cờ client. Giá trị ~1.0 khi
+            // heuristic không đánh giá được (mặt nhỏ/lỗi) ⇒ fail-open.
+            var bestEyeOpen = candidates.Max(c => c.Q.EyeOpen);
 
             // 2) Cổng tư thế — báo trực tiếp, KHÔNG ghi nhật ký nếu sai.
             var posture = CheckPosture(best.Pose);
@@ -601,15 +702,22 @@ public static class ChamCongEndpoints
             var yaws = candidates.Where(c => c.Q.FaceFound).Select(c => c.Q.Pose.Yaw).ToList();
             var motionSpan = req.MotionCheck && yaws.Count >= 2 ? yaws.Max() - yaws.Min() : -1;
             bool motionEnabled = false, motionEnforce = false;
-            if (req.MotionCheck)
+            // Cấu hình MỞ MẮT: đọc LUÔN (không phụ thuộc motionCheck) vì đây là lớp server độc lập.
+            bool eyeOpenEnforce;
+            double eyeOpenThreshold;
             {
                 await using var smc = await db.OpenAsync();
-                motionEnabled = await GetSettingBoolAsync(smc, CfgMotionEnabled, DefaultMotionEnabled);
-                motionEnforce = await GetSettingBoolAsync(smc, CfgMotionEnforce, DefaultMotionEnforce);
+                if (req.MotionCheck)
+                {
+                    motionEnabled = await GetSettingBoolAsync(smc, CfgMotionEnabled, DefaultMotionEnabled);
+                    motionEnforce = await GetSettingBoolAsync(smc, CfgMotionEnforce, DefaultMotionEnforce);
+                }
+                eyeOpenEnforce = await GetSettingBoolAsync(smc, CfgEyeOpenEnforce, DefaultEyeOpenEnforce);
+                eyeOpenThreshold = await GetSettingDoubleAsync(smc, CfgEyeOpenThreshold) ?? DefaultEyeOpenThreshold;
             }
 
-            // Ghi số đo (Silent-Face + biên độ quay) để hiển thị lên panel hiệu chỉnh.
-            livenessLog.Record(currentUser, liveScores, engine.LivenessThreshold, livePassed, motionSpan);
+            // Ghi số đo (Silent-Face + biên độ quay + độ mở mắt) để hiển thị lên panel hiệu chỉnh.
+            livenessLog.Record(currentUser, liveScores, engine.LivenessThreshold, livePassed, motionSpan, bestEyeOpen);
             // These diagnostics only live in memory, so no database trigger can publish them.
             // Notify the open admin panel instead of making it poll this endpoint every four seconds.
             try { await hub.Clients.All.SendAsync("changed", "liveness", http.RequestAborted); }
@@ -626,30 +734,16 @@ public static class ChamCongEndpoints
                     "Chưa xác nhận được người thật (không thấy quay đầu).",
                     "Làm theo hướng dẫn: nhìn thẳng rồi từ từ quay đầu sang hai bên."));
 
-            // 4b) ACTIVE-FLASH LIVENESS — chỉ khi client gửi kèm challenge (app online). Đối chiếu màu phản
-            // xạ trên mặt theo từng slot với chuỗi màu server đã phát. Bịt đúng lỗ hổng Silent-Face để hở:
-            // phát lại video / deepfake stream / bơm luồng camera giả (không thể khớp chuỗi màu ngẫu nhiên).
-            // Consume (vô hiệu hóa) challenge chỉ khi GHI công thật (không phải bước xem trước).
-            if (!string.IsNullOrWhiteSpace(req.ChallengeId) && req.SlotIndices is { Count: > 0 })
-            {
-                // LUÔN BẬT + CHẶN THẬT (không còn công tắc runtime để tránh lỡ tắt). An toàn vì Verify
-                // fail-open: thiếu challenge/slot/sai user ⇒ cho qua (Silent-Face vẫn gác); chỉ chặn khi
-                // mặt hoàn toàn không phản ứng với ánh sáng màn hình.
-                var samples = new List<(int, FaceSkinColor)>();
-                for (var k = 0; k < req.Images.Count && k < req.SlotIndices.Count; k++)
-                {
-                    if (!TryDecodeImage(req.Images[k], out var fb)) continue;
-                    if (engine.SampleFaceSkinColor(fb) is { } sc) samples.Add((req.SlotIndices[k], sc));
-                }
-                var fl = flash.Verify(currentUser, req.ChallengeId, samples, enforce: true, consume: !req.PreviewOnly);
-                lf.CreateLogger("FlashLiveness").LogInformation(
-                    "user={User} slots={Slots} corr={Corr:0.000} react={React:0.0000} reason={Reason} suspect={Suspect} blocked={Blocked}",
-                    currentUser, fl.SlotsWithFace, fl.Correlation, fl.Reactivity, fl.Reason, fl.Suspect, fl.Blocked);
-                if (fl.Blocked)
-                    return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
-                        "Không xác minh được người thật (kiểm tra ánh sáng động).",
-                        "Giữ khuôn mặt trong khung khi màn hình đổi màu, tránh ngược sáng hoặc che mặt."));
-            }
+            // 4c) MỞ MẮT: chặn nếu KHÔNG có khung nào mắt mở đủ (nhắm mắt/lim dim/giơ ảnh mắt nhắm). Chỉ khi
+            // admin bật enforce; mặc định chỉ ghi log để hiệu chỉnh trước. Fail-open khi heuristic không đo
+            // được (bestEyeOpen ~1.0). Client cũng đã nhắc mở mắt lúc quét nên người thật gần như luôn qua.
+            if (eyeOpenEnforce && bestEyeOpen < eyeOpenThreshold)
+                return Results.Ok(new ChamCongResult("eyesclosed", false, null, null, 0, null, null, best.Score,
+                    "Chưa xác nhận mở mắt.", "Hãy mở mắt và nhìn thẳng vào màn hình rồi chấm lại."));
+
+            // ĐÃ GỠ: 4b) active-flash liveness (đối chiếu màu phản xạ với chuỗi màu màn hình). Khối này
+            // chỉ chạy khi client gửi challengeId + slotIndices, mà cả APK lẫn web đều đã ngừng gửi từ
+            // lâu ⇒ nó chưa từng gác gì trên thực tế. Xem ghi chú đầu lớp.
 
             // Gộp vector NHIỀU khung CHÍNH DIỆN tốt nhất (trung bình + chuẩn hóa) → ổn định hơn 1 khung,
             // giảm nhận nhầm/từ chối nhầm. Loại khung QUAY ĐẦU (yaw lớn — khi bật liveness quay đầu) để
@@ -689,6 +783,13 @@ public static class ChamCongEndpoints
                     { selfSim = sim; selfName = r.Str("full_name"); }
                 }
             }
+
+            recognizeSw.Stop();
+            // Con số này là thứ bước "Xác nhận" từng tiêu tốn lần thứ hai cho mỗi lượt chấm công. Ghi ở
+            // mức Information để đo được ngay trên máy thật mà không phải bật chế độ gỡ lỗi.
+            lf.CreateLogger("ChamCongPerf").LogInformation(
+                "Nhận diện xong trong {Ms} ms — {Frames} khung gửi lên, {Faces} khung có mặt, xem trước={Preview}.",
+                recognizeSw.ElapsedMilliseconds, req.Images.Count, candidates.Count, req.PreviewOnly);
 
             // 5b) Self-only: chỉ cho phép nhân viên chấm công cho CHÍNH MÌNH.
             if (selfOnly)
@@ -736,8 +837,18 @@ public static class ChamCongEndpoints
             if (req.PreviewOnly)
             {
                 var previewAt = decision.ShouldRecord ? (occurredAtUtc ?? DateTime.UtcNow) : decision.ExistingAt;
+
+                // Cấp token giữ sẵn kết quả để bước "Xác nhận" khỏi chạy lại toàn bộ khâu nhận diện.
+                // Chỉ cấp cho request đã đăng nhập (kiosk ẩn danh giữ nguyên luồng gửi lại ảnh).
+                //
+                // KHÔNG cấp cho lượt có occurredAt (đồng bộ ngoại tuyến): lượt đó phải đi qua bảng chờ
+                // duyệt kèm cờ rủi ro, mà nhánh xác nhận bằng token thì ghi thẳng vào sổ công. Client
+                // nắm cả hai cờ này nên phải chặn ở server, không dựa vào việc app "không gửi như thế".
+                var previewToken = isOffline ? null : previewTokens.Issue(new AttendancePreviewTokens.Pending(
+                    currentUser, bestUser, bestName ?? "", bestSim, best.Score, probe));
+
                 return Results.Ok(new ChamCongResult("ok", true, outUser, outName, bestSim, decision.Loai,
-                    previewAt, best.Score, decision.Message, null));
+                    previewAt, best.Score, decision.Message, null, previewToken));
             }
 
             // ĐỒNG BỘ NGOẠI TUYẾN: KHÔNG ghi thẳng vào bảng công (không chứng minh được có mặt tại công
@@ -797,7 +908,7 @@ public static class ChamCongEndpoints
                     r.Str("loai"), r.IsDBNull(r.GetOrdinal("similarity")) ? 0 : r.GetDouble(r.GetOrdinal("similarity")),
                     r.Dt("occurred_at"), r.Str("ghi_chu")));
             return Results.Ok(list);
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // ── Chấm công ngoại tuyến chờ duyệt (Admin) ─────────────────────────────
         // Danh sách bản chờ duyệt (mặc định status=pending; truyền status=all để xem cả đã xử lý).
@@ -862,7 +973,7 @@ public static class ChamCongEndpoints
                     r.IsDBNull(r.GetOrdinal("in_geofence")) ? null : r.Bool("in_geofence"),
                     r.Str("flags"), r.Str("status"), r.Str("reviewed_by"), r.DtNull("reviewed_at"), r.Str("review_note")));
             return Results.Ok(list);
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Duyệt: ghi bản ngoại tuyến vào bảng công (đúng giờ chấm thật) rồi đánh dấu approved.
         g.MapPost("/offline/{id:long}/approve", async (long id, OfflineReviewRequest? body, ClaimsPrincipal u, Database db) =>
@@ -898,7 +1009,7 @@ public static class ChamCongEndpoints
             await db.RecordAudit(u.Username(), "Duyệt chấm công ngoại tuyến", "ChamCong", username!,
                 $"Duyệt bản #{id} · {loai} · {occurredAt:yyyy-MM-dd HH:mm} (UTC).");
             return Results.Ok(new { message = "Đã duyệt và ghi công." });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Từ chối: đánh dấu rejected, KHÔNG ghi công.
         g.MapPost("/offline/{id:long}/reject", async (long id, OfflineReviewRequest? body, ClaimsPrincipal u, Database db) =>
@@ -912,7 +1023,7 @@ public static class ChamCongEndpoints
             if (n == 0) return Results.BadRequest(new { message = "Không tìm thấy bản chờ duyệt." });
             await db.RecordAudit(u.Username(), "Từ chối chấm công ngoại tuyến", "ChamCong", "", $"Từ chối bản #{id}.");
             return Results.Ok(new { message = "Đã từ chối." });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // Cấu hình chính sách chấm công ngoại tuyến (Admin): geofence công ty + ngưỡng lùi giờ.
         g.MapGet("/offline-config", async (Database db) =>
@@ -923,7 +1034,7 @@ public static class ChamCongEndpoints
                 await GetSettingDoubleAsync(conn, CfgGeofenceLng),
                 await GetSettingDoubleAsync(conn, CfgGeofenceRadius) ?? DefaultGeofenceRadiusM,
                 (int)(await GetSettingDoubleAsync(conn, CfgMaxBackdate) ?? DefaultMaxBackdateMinutes)));
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
 
         g.MapPut("/offline-config", async (OfflineConfigDto cfg, ClaimsPrincipal u, Database db) =>
         {
@@ -937,7 +1048,7 @@ public static class ChamCongEndpoints
             await db.RecordAudit(u.Username(), "Cập nhật cấu hình chấm công ngoại tuyến", "ChamCong", "",
                 $"Geofence bán kính {cfg.GeofenceRadiusM:0}m · lùi giờ tối đa {cfg.MaxBackdateMinutes} phút.");
             return Results.Ok(new { message = "Đã lưu cấu hình." });
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.AttendanceManage);
     }
 
     private static async Task SetSettingAsync(NpgsqlConnection conn, string key, string value, string by)

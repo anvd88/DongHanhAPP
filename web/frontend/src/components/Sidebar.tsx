@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, KeyRound, LogOut, UserCog } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
-import { NAV } from "./nav";
+import { visibleNav } from "./nav";
 import { useAuth } from "../lib/auth";
-import { isAccountingRole, isAdmin } from "../lib/types";
+import { useWorkArea } from "../lib/workArea";
 import { APP_BRAND_NAME } from "../lib/branding";
-import { HR_APK_NAV_KEYS, IS_HR_APK } from "../lib/appConfig";
 import { initials } from "../lib/format";
 import { ChangePasswordModal, EditProfileModal } from "./AccountModals";
-import { useChatNotifications } from "./ChatNotifications";
+import { useChatNotifications } from "./chat-notifications-context";
 
 interface IndicatorState {
   x: number;
@@ -56,8 +55,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
   const { unreadCount } = useChatNotifications();
   const location = useLocation();
-  const admin = isAdmin(user);
-  const accounting = isAccountingRole(user);
+  const { area, setArea, canSwitch, can } = useWorkArea();
   const [profileOpen, setProfileOpen] = useState(false);
   const [modal, setModal] = useState<null | "profile" | "password">(null);
   const navRef = useRef<HTMLElement | null>(null);
@@ -67,19 +65,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const animateIndicatorRef = useRef<(time: number) => void>(() => {});
   const measureFrame = useRef(0);
 
-  const visibleSections = useMemo(
-    () =>
-      NAV.map((section) => ({
-        ...section,
-        items: section.items.filter(
-          (it) =>
-            (!IS_HR_APK || HR_APK_NAV_KEYS.has(it.key)) &&
-            (!it.adminOnly || admin) &&
-            (!it.accountingOnly || admin || accounting),
-        ),
-      })).filter((section) => section.items.length),
-    [admin, accounting],
-  );
+  // Menu lọc theo QUYỀN THẬT (hồ sơ truy cập backend trả về), không theo tên vai trò lưu ở client.
+  const visibleSections = useMemo(() => visibleNav(area, can), [area, can]);
 
   const activeKey = useMemo(() => {
     for (const section of visibleSections) {
@@ -265,10 +252,33 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="min-w-0 leading-tight">
           <div className="km-brand-title text-sm font-bold text-white">{APP_BRAND_NAME}</div>
           <div className="mt-1 text-[11px] text-[var(--sidebar-text)]">
-            {IS_HR_APK ? "Cổng nhân sự công ty" : "Hệ thống quản lý kế toán"}
+            Hệ thống quản lý kế toán
           </div>
         </div>
       </div>
+
+      {/* Chuyển giữa "Làm việc" và "Quản trị". CHỈ đổi menu đang hiện — không cấp thêm quyền nào,
+          nên chỉ hiện với người thật sự có cả hai không gian. */}
+      {canSwitch && (
+        <div className="km-area-switch" role="group" aria-label="Không gian làm việc">
+          <button
+            type="button"
+            className={area === "work" ? "is-active" : ""}
+            aria-pressed={area === "work"}
+            onClick={() => setArea("work")}
+          >
+            Làm việc
+          </button>
+          <button
+            type="button"
+            className={area === "admin" ? "is-active" : ""}
+            aria-pressed={area === "admin"}
+            onClick={() => setArea("admin")}
+          >
+            Quản trị
+          </button>
+        </div>
+      )}
 
       <nav ref={navRef} className="liquid-sidebar-nav scroll-thin relative flex-1">
         <div ref={indicatorRef} className="liquid-active-indicator" aria-hidden="true" />

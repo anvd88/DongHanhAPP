@@ -23,7 +23,7 @@ import { Badge, Button, EmptyState, Field, Input } from "../components/ui";
 import { api } from "../lib/api";
 import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 
 type PortalKind = "news" | "event";
 type Tab = PortalKind | "about";
@@ -507,15 +507,18 @@ function PostEditor({
 
 function AboutEditor({ notify }: { notify: Notify }) {
   const { data, loading, reload } = useApi<PortalAbout>("/api/portal/about");
-  const [form, setForm] = useState<PortalAbout | null>(null);
+  // Bản NHÁP chỉ tồn tại khi người dùng đã sửa gì đó; chưa sửa thì hiển thị thẳng dữ liệu máy chủ.
+  // Nhờ vậy không cần useEffect chép dữ liệu sang state, và dữ liệu mới tải về (sau khi lưu, hoặc do
+  // tín hiệu realtime) tự hiện ra — thay vì bị bản sao cũ trong state che mất.
+  const [draft, setDraft] = useState<PortalAbout | null>(null);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (data) setForm(data);
-  }, [data]);
+  const form = draft ?? data ?? null;
 
   const set = <K extends keyof PortalAbout>(key: K, value: PortalAbout[K]) =>
-    setForm((f) => (f ? { ...f, [key]: value } : f));
+    setDraft((f) => {
+      const base = f ?? data;
+      return base ? { ...base, [key]: value } : base ?? null;
+    });
 
   const save = async () => {
     if (!form) return;
@@ -523,6 +526,8 @@ function AboutEditor({ notify }: { notify: Notify }) {
     try {
       await api.put("/api/portal/about", form);
       notify.success("Đã lưu giới thiệu công ty.");
+      // Lưu xong thì bỏ bản nháp: từ đây lại bám theo dữ liệu máy chủ (kể cả phần máy chủ tự chuẩn hoá).
+      setDraft(null);
       reload({ silent: true });
     } catch (e) {
       notify.error(e instanceof Error ? e.message : "Không lưu được giới thiệu.");

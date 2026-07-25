@@ -21,9 +21,9 @@ import { RecoveryResetModal } from "../components/RecoveryResetModal";
 import { AppLoginModal } from "../components/AppLoginModal";
 import { QrLoginModal } from "../components/QrLoginModal";
 import { useAuth, IDLE_LOGOUT_FLAG } from "../lib/auth";
-import { DEFAULT_AUTH_PATH, IS_HR_APK } from "../lib/appConfig";
+import { DEFAULT_AUTH_PATH } from "../lib/appConfig";
 import { APP_BRAND_NAME } from "../lib/branding";
-import { useTheme } from "../lib/theme";
+import { useTheme } from "../lib/theme-context";
 import "./login.css";
 
 export function Login() {
@@ -104,6 +104,24 @@ export function Login() {
         </aside>
 
         <section className="login-card">
+          {qrOpen ? (
+            <>
+              <div className="login-card-head">
+                <span className="login-welcome-icon"><QrCode aria-hidden="true" /></span>
+                <div>
+                  <p>Đăng nhập nhanh</p>
+                  <h2>Đăng nhập bằng mã QR</h2>
+                </div>
+              </div>
+              <p className="login-card-subtitle">Dùng ứng dụng Nhân sự đã đăng nhập để quét mã bên dưới và vào hệ thống.</p>
+              <QrLoginModal
+                embedded
+                onClose={() => setQrOpen(false)}
+                onSuccess={() => nav(DEFAULT_AUTH_PATH)}
+              />
+            </>
+          ) : (
+            <>
           <div className="login-card-head">
             <span className="login-welcome-icon"><LogIn aria-hidden="true" /></span>
             <div>
@@ -176,8 +194,7 @@ export function Login() {
             </button>
           </form>
 
-          {!IS_HR_APK && (
-            <>
+          <>
               <div className="login-divider"><span>hoặc</span></div>
               <button
                 type="button"
@@ -208,6 +225,7 @@ export function Login() {
                   <ArrowRight aria-hidden="true" />
                 </Link>
               </nav>
+          </>
             </>
           )}
 
@@ -215,12 +233,6 @@ export function Login() {
         </section>
       </section>
 
-      {qrOpen && (
-        <QrLoginModal
-          onClose={() => setQrOpen(false)}
-          onSuccess={() => nav(DEFAULT_AUTH_PATH)}
-        />
-      )}
       {appLoginOpen && (
         <AppLoginModal
           onClose={() => setAppLoginOpen(false)}

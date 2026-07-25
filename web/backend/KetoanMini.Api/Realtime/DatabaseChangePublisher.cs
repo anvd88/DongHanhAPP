@@ -33,8 +33,12 @@ public static class DatabaseChangePublisher
         ("customer_aliases", ["data"]),
         ("gia_cong_phieu", ["data"]),
         ("gia_cong_hang_hoa", ["data"]),
-        ("cham_cong_face", ["data", "hr"]),
-        ("cham_cong_log", ["data", "hr"]),
+        // Chấm công đứng riêng scope 'attendance' thay vì đi chung 'data'. 'data' là scope BẮT-TẤT của
+        // useApi (mọi path không khớp luật nào đều nghe nó), nên để chung có hai chiều lãng phí: một bút
+        // toán kế toán làm trang chấm công tải lại, và một lượt chấm công làm mọi màn kế toán tải lại.
+        // Vẫn giữ 'hr' vì bảng công/hồ sơ nhân sự tính trực tiếp từ các bảng này.
+        ("cham_cong_face", ["attendance", "hr"]),
+        ("cham_cong_log", ["attendance", "hr"]),
 
         ("app_users", ["presence"]),
         ("user_sessions", ["presence"]),
@@ -57,6 +61,7 @@ public static class DatabaseChangePublisher
         ("hr_payslips", ["hr"]),
         ("hr_leave_balances", ["hr"]),
         ("hr_documents", ["hr"]),
+        ("hr_anniversary_letter", ["hr"]),
         ("hr_shifts", ["hr"]),
         ("hr_shift_assignments", ["hr"]),
         ("hr_requests", ["hr"]),
@@ -65,8 +70,8 @@ public static class DatabaseChangePublisher
         ("hr_approval_delegations", ["hr"]),
         ("hr_locations", ["hr"]),
         ("hr_holidays", ["hr"]),
-        ("cham_cong_offline", ["hr"]),
-        ("cham_cong_qr_sites", ["hr"]),
+        ("cham_cong_offline", ["attendance", "hr"]),
+        ("cham_cong_qr_sites", ["attendance", "hr"]),
         ("web_system_settings", ["hr"]),
 
         // Lương / phạt / chi tiền / tài khoản ngân hàng: trước đây các endpoint này tự gọi hub.

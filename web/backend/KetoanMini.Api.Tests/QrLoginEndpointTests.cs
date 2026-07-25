@@ -31,7 +31,7 @@ public sealed class QrLoginEndpointTests
                 "stale:qr-poll:" + Guid.NewGuid().ToString("N"));
         }
 
-        var browser = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var browser = _factory.CreateBrowserClient();
         var start = await browser.PostAsJsonAsync(
             "/api/auth/qr/start",
             new { sid = "web:qr-stale-token:" + Guid.NewGuid().ToString("N") });
@@ -75,7 +75,7 @@ public sealed class QrLoginEndpointTests
                 new UserDto(userId, username, "QR Test", "", "Employee", true, "Approved", DateTime.UtcNow));
         }
 
-        var browser = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var browser = _factory.CreateBrowserClient();
         var start = await browser.PostAsJsonAsync("/api/auth/qr/start", new { sid });
         Assert.Equal(HttpStatusCode.OK, start.StatusCode);
         using var started = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
@@ -110,8 +110,18 @@ public sealed class QrLoginEndpointTests
         Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
         var result = await authenticated.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("authenticated", result.GetProperty("status").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(result.GetProperty("token").GetString()));
         Assert.Equal(username, result.GetProperty("user").GetProperty("username").GetString());
+
+        // HỢP ĐỒNG MỚI: phiên của trình duyệt về bằng COOKIE HttpOnly, thân phản hồi KHÔNG có token.
+        // Còn trả token ra cho JavaScript thì nó lại nằm trong localStorage và XSS vẫn lấy được —
+        // tức là đổi sang cookie mà chẳng được gì. Xem Security/AuthCookies.cs.
+        Assert.False(result.TryGetProperty("token", out var leaked) && leaked.ValueKind != JsonValueKind.Null,
+            "Đăng nhập QR trên trình duyệt không được trả JWT ra thân phản hồi.");
+        var setCookies = authenticated.Headers.GetValues("Set-Cookie").ToArray();
+        var authCookie = Assert.Single(setCookies, c => c.StartsWith("km_auth=", StringComparison.Ordinal));
+        Assert.Contains("httponly", authCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=lax", authCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(setCookies, c => c.StartsWith("km_csrf=", StringComparison.Ordinal));
 
         // Mô phỏng response đầu bị mất: poll lại vẫn nhận authenticated; ack mới xóa phiên khỏi RAM.
         var deliveredAgain = await browser.PostAsJsonAsync("/api/auth/qr/poll", new { pollToken });
@@ -164,7 +174,7 @@ public sealed class QrLoginEndpointTests
                 new UserDto(userId, username, "Mobile App Test", "", "Employee", true, "Approved", DateTime.UtcNow));
         }
 
-        var browser = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var browser = _factory.CreateBrowserClient();
         var invalidMode = await browser.PostAsJsonAsync("/api/auth/app-login/start",
             new { sid, clientMode = "desktop_qr" });
         Assert.Equal(HttpStatusCode.BadRequest, invalidMode.StatusCode);

@@ -18,6 +18,17 @@ function scopesForPath(path: string): RealtimeScope[] {
   if (path.startsWith("/api/audit")) return ["audit"];
   if (path.startsWith("/api/talent")) return ["talent"];
   if (path.startsWith("/api/chamcong/liveness-metrics")) return ["liveness"];
+  // Hai nhóm này đọc dữ liệu KHÔNG nằm ở bảng cham_cong_*: cấu hình lưu ở web_system_settings (phát
+  // scope 'hr'), còn màn duyệt chấm công ngoại tuyến nằm trong khu nhân sự. Nghe thiếu 'hr' thì chúng
+  // đứng im khi người khác vừa sửa — nên giữ cả hai scope.
+  if (
+    path.startsWith("/api/chamcong/offline") ||
+    path.startsWith("/api/chamcong/motion-config")
+  )
+    return ["attendance", "hr"];
+  // Các màn chấm công còn lại đọc thẳng bảng cham_cong_* nên chỉ cần 'attendance' — thay đổi kế toán
+  // hay nhân sự không còn làm chúng tải lại vô ích.
+  if (path.startsWith("/api/chamcong")) return ["attendance"];
   if (
     path.startsWith("/api/users") ||
     path.startsWith("/api/directory") ||
@@ -34,8 +45,7 @@ function scopesForPath(path: string): RealtimeScope[] {
     path.startsWith("/api/bank-accounts") ||
     path.startsWith("/api/penalt") ||
     path.startsWith("/api/payout-vouchers") ||
-    path.startsWith("/api/payroll") ||
-    path.startsWith("/api/chamcong")
+    path.startsWith("/api/payroll")
   )
     return ["hr", "data"];
   // Presence đổi mỗi nhịp tim (45 giây/người dùng). Chỉ màn hình thật sự hiển thị online

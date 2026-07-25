@@ -5,12 +5,11 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Checklist
@@ -41,6 +40,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ketoanapk.hr.data.AppConfig
@@ -103,6 +105,8 @@ import com.ketoanapk.hr.network.ApiException
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -159,14 +163,12 @@ enum class HrDestination(
     Benefits("Phúc lợi", "Phúc lợi", Icons.Filled.CardGiftcard),
     Feedback("Khảo sát & phản hồi", "Khảo sát", Icons.Filled.Poll),
     Help("Trung tâm trợ giúp", "Trợ giúp", Icons.Filled.HelpCenter),
+    // Màn công việc DUY NHẤT (đã gộp màn "Giao việc" cũ vào đây): nhân viên thấy việc được giao +
+    // đơn/chấm công cần xử lý; Thủ kho/Admin có thêm tab "Việc tôi giao" để giao & nghiệm thu.
     Tasks("Việc cần làm", "Công việc", Icons.Filled.TaskAlt),
-    // Giao việc & nghiệm thu: nhân viên xem việc được giao; Thủ kho/Admin giao việc + nghiệm thu.
-    WorkTasks("Giao việc", "Giao việc", Icons.Filled.AssignmentTurnedIn),
     Chat("Chat nội bộ", "Chat", Icons.Filled.Chat),
     Directory("Danh bạ", "Danh bạ", Icons.Filled.Contacts),
     Calls("Lịch sử cuộc gọi", "Cuộc gọi", Icons.Filled.Call),
-    // Nhân viên tự xem lương dự tính tháng hiện tại (gồm phạt nếu có).
-    MySalary("Lương của tôi", "Lương", Icons.Filled.AccountBalanceWallet),
     // Nhân viên tự xem các phiếu lương đã nhận (mỗi tháng một thẻ).
     MyPayslips("Phiếu lương", "Phiếu lương", Icons.Filled.ReceiptLong),
     // Phiếu chi tiền mặt: nhân viên xem phiếu của mình; kế toán lập phiếu + hiện QR ngay trên app.
@@ -358,8 +360,9 @@ sealed interface AttendanceCapture {
     data object Preparing : AttendanceCapture      // đang xin chuỗi màu flash trước khi mở camera
     data object Collecting : AttendanceCapture    // camera đang căn khung 2 bước + quét 3s soi sáng
     data object Recognizing : AttendanceCapture   // đã gửi loạt ảnh, máy chủ đang nhận diện (xem trước)
-    // Đã nhận diện xong nhưng CHƯA ghi công — chờ người dùng bấm Xác nhận. Giữ lại loạt khung (kèm nhãn
-    // slot flash) + challengeId để gửi lại đúng loạt đó khi ghi công thật.
+    // Đã nhận diện xong nhưng CHƯA ghi công — chờ người dùng bấm Xác nhận. Bình thường chỉ cần gửi
+    // result.previewToken là server ghi công ngay; loạt khung vẫn giữ lại để lùi về cách cũ (gửi lại ảnh)
+    // khi máy chủ chưa hỗ trợ token.
     data class AwaitingConfirm(
         val result: ChamCongResult,
         val frames: List<CapturedFrame>,
@@ -385,10 +388,18 @@ sealed interface PortraitCapture {
     data class Done(val success: Boolean, val message: String) : PortraitCapture
 }
 
+/**
+ * Trạng thái kết nối để báo cho người dùng khi mất mạng. [Online] = mọi thứ ổn (ẩn banner);
+ * [NoInternet] = máy KHÔNG có mạng (wifi/di động tắt, máy bay…); [ServerUnreachable] = có mạng nhưng
+ * KHÔNG chạm được máy chủ (server sập, tunnel chết, DNS lỗi). Phân biệt hai loại để hiển thị đúng lý do.
+ */
+enum class ConnectionStatus { Online, NoInternet, ServerUnreachable }
+
 class HrViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = HrRepository.foreground(application)
     private val notificationCenter = NotificationCenter(application)
     private val tokenStore = TokenStore(application)
+    private val anniversaryStore = com.ketoanapk.hr.data.AnniversaryGreetingStore(application)
     // Client SignalR (realtime tức thì khi app đang mở, như bản web). Bật/tắt theo foreground.
     private val realtime = RealtimeClient(tokenStore)
 
@@ -406,6 +417,58 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         CallManager.bindHistory { session, reason, endedAt ->
             viewModelScope.launch { repo.recordCall(session, reason, endedAt) }
         }
+    }
+
+    // ── Trạng thái kết nối (báo mất mạng cho người dùng) ──────────────────────────────────
+    /** Trạng thái kết nối hiện tại — UI hiện banner khi khác [ConnectionStatus.Online]. */
+    var connection: ConnectionStatus by mutableStateOf(ConnectionStatus.Online)
+        private set
+
+    private val connectivityManager: ConnectivityManager? =
+        application.getSystemService(ConnectivityManager::class.java)
+
+    /** Máy có đường ra Internet không (không đảm bảo chạm được máy chủ). */
+    private fun hasInternet(): Boolean {
+        val cm = connectivityManager ?: return true // không đọc được → coi như có, tránh báo nhầm
+        val net = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(net) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    /** Cập nhật trạng thái kết nối trên luồng chính (callback mạng chạy ở luồng nền). */
+    private fun postConnection(status: ConnectionStatus) {
+        viewModelScope.launch { connection = status }
+    }
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLost(network: Network) = postConnection(ConnectionStatus.NoInternet)
+        override fun onUnavailable() = postConnection(ConnectionStatus.NoInternet)
+        override fun onAvailable(network: Network) {
+            // Có mạng lại → hỏi máy chủ NGAY để gỡ/đổi banner cho đúng, không phải chờ hết nhịp dò 10s.
+            // Chỉ hỏi khi đang đăng nhập & đang có banner (khỏi ping thừa khi mọi thứ vẫn ổn).
+            if (connection != ConnectionStatus.Online && authState is AuthState.SignedIn) {
+                viewModelScope.launch { checkConnectionOnce() }
+            }
+        }
+    }
+
+    /** Hỏi máy chủ một nhịp (heartbeat) và cập nhật [connection]. Trả về trạng thái phiên để nơi gọi xử lý. */
+    private suspend fun checkConnectionOnce(): SessionStatus {
+        val status = repo.heartbeat()
+        when (status) {
+            is SessionStatus.Invalid -> {} // phiên bị thu hồi → để vòng heartbeat lo đăng xuất
+            is SessionStatus.Ok -> connection = ConnectionStatus.Online
+            // Không chạm được máy chủ: phân biệt "máy không có mạng" với "có mạng nhưng server im".
+            is SessionStatus.Unknown ->
+                connection = if (hasInternet()) ConnectionStatus.ServerUnreachable else ConnectionStatus.NoInternet
+        }
+        return status
+    }
+
+    init {
+        // Đăng ký sau khi [connectivityManager] & [networkCallback] đã khởi tạo (khối init này đặt SAU các
+        // khai báo đó). Theo dõi mạng của MÁY để báo NGAY khi mất Internet, không phải chờ nhịp tim 45s.
+        runCatching { connectivityManager?.registerDefaultNetworkCallback(networkCallback) }
     }
     private var heartbeatJob: Job? = null
     private var timesheetLoadJob: Job? = null
@@ -437,6 +500,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val history = mutableStateListOf<HrDestination>()
     var homeState by mutableStateOf(HomeUiState(loading = true))
+        private set
+    // Thư tri ân "tròn X năm gắn bó" đang chờ hiện (null = không có/đã đóng). Xem [checkAnniversaryGreeting].
+    var anniversaryGreeting: com.ketoanapk.hr.data.AnniversaryGreeting? by mutableStateOf(null)
+        private set
+    var anniversaryPreviewLoading by mutableStateOf(false)
         private set
     var profileDocuments: List<EmployeeDocument> by mutableStateOf(emptyList())
         private set
@@ -515,6 +583,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var settingsState by mutableStateOf(SettingsUiState())
         private set
+    // Dung lượng cache dễ đọc (vd "12 MB") cho màn "Bộ nhớ & dữ liệu tạm"; null = chưa đo xong.
+    var cacheSizeText: String? by mutableStateOf(null)
+        private set
+    var cacheClearing by mutableStateOf(false)
+        private set
     // Màn con đang mở trong tab Cài đặt. Đặt ở ViewModel để nút Back của điện thoại lùi về đúng cấp
     // (từ màn con → Cài đặt gốc) thay vì nhảy thẳng về Trang chủ.
     var settingsRoute by mutableStateOf(SettingsRoute.Home)
@@ -592,10 +665,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Thanh dưới theo vai trò: nhân viên cần Bảng công + Đơn từ, quản trị cần Chờ duyệt + Quản lý
-     * nhân sự. Chat có mặt ở cả hai vì huy hiệu tin chưa đọc phải thấy được mà không cần mở ngăn kéo.
+     * nhân sự. Ô cuối là "Cá nhân" (hồ sơ) — thay cho nút ảnh đại diện trên header đã bỏ; Chat đã chuyển
+     * thành nút "Hỗ trợ" trong màn Đơn từ nên không còn ở thanh dưới.
      *
-     * RÀNG BUỘC: đúng 5 mục và Chấm công LUÔN ở giữa (chỉ số 2) — nút tròn nổi được căn TopCenter nên
-     * đổi thứ tự sẽ khiến nút lệch khỏi khe trống.
+     * RÀNG BUỘC: đúng 5 mục và nút QR nổi LUÔN ở giữa (chỉ số 2) — nút tròn nổi được căn TopCenter nên
+     * đổi thứ tự sẽ khiến nút lệch khỏi khe trống. Vị trí giữa (Scan) chỉ là chỗ trống giữ khe cho nút QR.
      */
     fun bottomDestinations(user: HrUser): List<HrDestination> = if (user.isAdmin) {
         listOf(
@@ -603,7 +677,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Approval,
             HrDestination.Scan,
             HrDestination.People,
-            HrDestination.Chat,
+            HrDestination.Personal,
         )
     } else {
         listOf(
@@ -611,7 +685,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Timesheet,
             HrDestination.Scan,
             HrDestination.Requests,
-            HrDestination.Chat,
+            HrDestination.Personal,
         )
     }
 
@@ -640,8 +714,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Số trên huy hiệu của một điểm đến (0 = không hiện). Dùng chung cho thanh dưới và các màn chứa. */
     fun badgeCount(destination: HrDestination): Int = when (destination) {
         HrDestination.Approval -> pendingApprovalCount
-        HrDestination.Tasks -> taskCenterItems.size
-        HrDestination.WorkTasks -> workTasksState.badge
+        HrDestination.Tasks -> taskCenterItems.size + workTasksState.badge
         HrDestination.Chat -> chatUnreadCount
         else -> 0
     }
@@ -758,6 +831,50 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         loadAppConfig(force = true)
         consumePendingTarget(user)
         autoCheckForUpdate(force = true)
+        checkAnniversaryGreeting(user)
+    }
+
+    /**
+     * Hỏi server xem hôm nay có phải tuần kỷ niệm tròn năm gắn bó của người dùng không. Nếu có và mốc đó
+     * CHƯA từng bật popup trên máy này (lưu cục bộ), dựng thư để [HrShell] hiện overlay gõ chữ.
+     * Best-effort: lỗi mạng thì thôi, không làm phiền và sẽ thử lại ở lần mở app sau.
+     */
+    private fun checkAnniversaryGreeting(user: HrUser) {
+        viewModelScope.launch {
+            val greeting = runCatching { repo.anniversaryGreeting() }.getOrNull() ?: return@launch
+            val activeUser = (authState as? AuthState.SignedIn)?.user?.username
+            if (!activeUser.equals(user.username, ignoreCase = true)) return@launch
+            if (!greeting.show || greeting.key.isBlank()) return@launch
+            if (anniversaryStore.wasSeen(user.username, greeting.key)) return@launch
+            anniversaryGreeting = greeting
+        }
+    }
+
+    /** Quản lý chủ động mở bản mẫu 5 năm để kiểm tra giao diện, không cần sửa ngày vào làm thật. */
+    fun previewAnniversaryGreeting() {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return
+        if (anniversaryPreviewLoading) return
+        viewModelScope.launch {
+            anniversaryPreviewLoading = true
+            runCatching { repo.anniversaryGreeting(preview = true) }
+                .onSuccess { greeting ->
+                    val activeUser = (authState as? AuthState.SignedIn)?.user?.username
+                    if (activeUser.equals(user.username, ignoreCase = true) && greeting.show) {
+                        anniversaryGreeting = greeting
+                    }
+                }
+                .onFailure { actionMessage = readable(it) }
+            anniversaryPreviewLoading = false
+        }
+    }
+
+    /** Đóng thư tri ân và ghi nhớ đã xem để mốc này không bật lại trong suốt tuần kỷ niệm. */
+    fun dismissAnniversaryGreeting() {
+        val greeting = anniversaryGreeting ?: return
+        if (!greeting.preview) {
+            (authState as? AuthState.SignedIn)?.let { anniversaryStore.markSeen(it.user.username, greeting.key) }
+        }
+        anniversaryGreeting = null
     }
 
     private fun syncPushDelivery() {
@@ -984,7 +1101,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         // Thông báo "bản cập nhật mới" → kiểm tra lại ngay và mở bảng cập nhật (không phải điều hướng).
         // Bỏ qua mốc hoãn: người dùng vừa chủ động bấm vào thông báo thì đương nhiên muốn xem bản mới.
         if (target == UPDATE_TARGET) { autoCheckForUpdate(force = true, bypassSnooze = true); return }
-        val dest = target?.let { runCatching { HrDestination.valueOf(it) }.getOrNull() } ?: return
+        // "WorkTasks" là tên màn CŨ (trước khi gộp vào "Việc cần làm") — thông báo do máy chủ bản cũ
+        // gửi vẫn còn mang tên này nên phải quy về màn mới, nếu không bấm vào sẽ không đi đâu cả.
+        val name = if (target == "WorkTasks") HrDestination.Tasks.name else target
+        val dest = name?.let { runCatching { HrDestination.valueOf(it) }.getOrNull() } ?: return
         val user = (authState as? AuthState.SignedIn)?.user
         if (user == null) { pendingTarget = dest; pendingEntityId = entityId; return }
         if (dest.adminOnly && !user.isAdmin) return
@@ -1130,13 +1250,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Profile -> loadProfileDocuments()
             HrDestination.Onboarding, HrDestination.Performance, HrDestination.Training, HrDestination.Benefits -> loadTalent()
             HrDestination.Timesheet -> if (timesheetState.timesheet == null && !timesheetState.loading) loadTimesheet(timesheetState.month, silent = false)
-            HrDestination.MySalary -> if (payEstimateState.data == null && !payEstimateState.loading) loadMyEstimate()
             HrDestination.MyPayslips -> if (payslipsState.items.isEmpty() && !payslipsState.loading) loadMyPayslips()
             // Sổ chi đổi liên tục (người nhận vừa quét, kế toán khác vừa lập) → luôn tải lại khi mở.
             HrDestination.Payout -> loadPayouts(silent = payoutState.items.isNotEmpty())
             HrDestination.Portal -> if (portalState.feed == null && !portalState.loading) loadPortal(silent = false)
             HrDestination.Tasks -> refreshTasks()
-            HrDestination.WorkTasks -> loadWorkTasks(silent = workTasksState.inbox.isNotEmpty() || workTasksState.outbox.isNotEmpty())
             HrDestination.Chat -> {
                 chatTab = ChatTab.Conversations // vào mini app Chat luôn bắt đầu ở tab Hội thoại
                 if (realChatState.conversations.isEmpty()) refreshChat()
@@ -1163,12 +1281,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Feedback -> loadFeedback()
             HrDestination.Help -> runDiagnostics()
             HrDestination.Scan -> checkAttendanceServer()
-            HrDestination.Timesheet -> loadTimesheet(timesheetState.month, silent = false)
-            HrDestination.MySalary -> loadMyEstimate()
+            HrDestination.Timesheet -> { loadTimesheet(timesheetState.month, silent = false); if (payEstimateState.data != null) loadMyEstimate() }
             HrDestination.MyPayslips -> loadMyPayslips()
             HrDestination.Portal -> loadPortal(silent = false)
             HrDestination.Tasks -> refreshTasks()
-            HrDestination.WorkTasks -> loadWorkTasks()
             HrDestination.Chat -> refreshChat()
             HrDestination.Directory -> refreshDirectory()
             HrDestination.Calls -> refreshCallHistory()
@@ -1214,9 +1330,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancel(id: String) = decide { repo.cancelRequest(id); "Đã hủy đơn." }
 
+    /** Làm mới màn "Việc cần làm" — gồm cả việc được giao vì hai thứ nay nằm chung một màn. */
     fun refreshTasks() {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
         refreshHome(user, silent = false)
+        loadWorkTasks(silent = workTasksState.inbox.isNotEmpty() || workTasksState.outbox.isNotEmpty())
         if (user.isAdmin) refreshManager(silent = true)
     }
 
@@ -1611,6 +1729,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startShiftSwap(date: String?) {
         requestDraftType = "shift_swap"
+        requestDraftValues = date?.takeIf { it.isNotBlank() }?.let { mapOf("date" to it) } ?: emptyMap()
+        select(HrDestination.Requests)
+    }
+
+    /** Mở form "Báo quên chấm công" (loại forgot_checkin) điền sẵn ngày đang chọn ở bảng công. */
+    fun startForgotCheckin(date: String?) {
+        requestDraftType = "forgot_checkin"
         requestDraftValues = date?.takeIf { it.isNotBlank() }?.let { mapOf("date" to it) } ?: emptyMap()
         select(HrDestination.Requests)
     }
@@ -2062,8 +2187,36 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         syncMissedCalls() // hiện cuộc gọi nhỡ đã lưu server (kể cả lúc bị gọi đang offline)
         syncPushDelivery()
         registerPush() // LUÔN đăng ký token FCM để nhận được cuộc gọi dù tắt thông báo nghiệp vụ
-        refreshHome(user, silent = false)
-        loadTimesheet(currentMonthKey(), silent = false)
+        // Mở lại app sau khi đã thoát HẲN (tiến trình bị thu hồi): hiện NGAY dữ liệu lần trước từ ảnh chụp
+        // trên đĩa để không thấy màn trống + vòng quay tải, rồi làm mới IM LẶNG ở nền. Không có ảnh chụp
+        // (lần đầu) thì tải bình thường. refreshHome ghi lại ảnh chụp sau mỗi lần tải thành công. Xem
+        // [com.ketoanapk.hr.data.HomeCacheStore].
+        viewModelScope.launch {
+            // Chỉ khôi phục khi Trang chủ còn trống (mở app mới), tránh đè lên dữ liệu đã có trong bộ nhớ.
+            val snapshot = if (homeState.employee == null)
+                runCatching { repo.loadHomeSnapshot(user.username) }.getOrNull() else null
+            val restored = snapshot != null
+            if (snapshot != null) {
+                applyServerRequestFields(snapshot.requestTypes)
+                homeState = HomeUiState(
+                    loading = false,
+                    employee = snapshot.employee,
+                    timesheet = snapshot.timesheet,
+                    requests = snapshot.requests,
+                    inbox = snapshot.inbox,
+                    penalties = snapshot.penalties,
+                    salaries = snapshot.salaries,
+                    requestTypes = snapshot.requestTypes,
+                )
+                snapshot.timesheet?.let { sheet ->
+                    val key = runCatching { YearMonth.parse(sheet.period.take(7)).toString() }
+                        .getOrElse { currentMonthKey() }
+                    timesheetCache[key] = sheet // để tab Bảng công cũng hiện ngay, không nhấp nháy
+                }
+            }
+            refreshHome(user, silent = restored)
+            loadTimesheet(currentMonthKey(), silent = restored)
+        }
         loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
         if (user.isAdmin) refreshManager(silent = true)
         faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
@@ -2079,22 +2232,54 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 // Tải danh mục loại đơn kèm định nghĩa field, rồi nạp vào registry để dựng form động.
                 val types = runCatching { repo.requestTypes() }.getOrDefault(emptyList())
                 applyServerRequestFields(types)
-                HomeUiState(
-                    loading = false,
-                    employee = runCatching { repo.myProfile() }.getOrNull(),
-                    timesheet = runCatching { repo.myTimesheet(month) }.getOrNull(),
-                    requests = runCatching { repo.requests("mine") }.getOrDefault(emptyList()),
+                // Gọi SONG SONG các API độc lập. Trước đây gọi tuần tự → 6 vòng mạng nối đuôi nhau, mở app
+                // (và mỗi lần làm mới) chậm hẳn; async chạy đồng thời nên chỉ tốn bằng lời gọi lâu nhất.
+                coroutineScope {
+                    val employee = async { runCatching { repo.myProfile() }.getOrNull() }
+                    val timesheet = async { runCatching { repo.myTimesheet(month) }.getOrNull() }
+                    val requests = async { runCatching { repo.requests("mine") }.getOrDefault(emptyList()) }
                     // Hộp thư duyệt cho MỌI người: máy chủ đã lọc theo người duyệt (quản lý trực tiếp) hoặc quản trị.
-                    inbox = runCatching { repo.requests("inbox") }.getOrDefault(emptyList()),
-                    penalties = runCatching { repo.penalties(if (user.isAdmin) "all" else "mine", if (user.isAdmin) month else null) }.getOrDefault(emptyList()),
-                    salaries = if (user.isAdmin) runCatching { repo.salaries() }.getOrDefault(emptyList()) else emptyList(),
-                    requestTypes = types,
-                )
+                    val inbox = async { runCatching { repo.requests("inbox") }.getOrDefault(emptyList()) }
+                    val penalties = async { runCatching { repo.penalties(if (user.isAdmin) "all" else "mine", if (user.isAdmin) month else null) }.getOrDefault(emptyList()) }
+                    val salaries = async { if (user.isAdmin) runCatching { repo.salaries() }.getOrDefault(emptyList()) else emptyList() }
+                    HomeUiState(
+                        loading = false,
+                        employee = employee.await(),
+                        timesheet = timesheet.await(),
+                        requests = requests.await(),
+                        inbox = inbox.await(),
+                        penalties = penalties.await(),
+                        salaries = salaries.await(),
+                        requestTypes = types,
+                    )
+                }
             }.onSuccess {
                 homeState = it
                 syncNotifications(user, it)
+                // Ghi ảnh chụp để lần mở app sau hiện ngay, không phụ thuộc mạng. Best-effort. Xem [enterSignedIn].
+                runCatching {
+                    repo.saveHomeSnapshot(
+                        com.ketoanapk.hr.data.HomeSnapshot(
+                            username = user.username,
+                            employee = it.employee,
+                            timesheet = it.timesheet,
+                            requests = it.requests,
+                            inbox = it.inbox,
+                            penalties = it.penalties,
+                            salaries = it.salaries,
+                            requestTypes = it.requestTypes,
+                        ),
+                    )
+                }
             }
-                .onFailure { homeState = homeState.copy(loading = false, error = readable(it)) }
+                .onFailure {
+                    // Đã có dữ liệu sẵn (từ ảnh chụp/ lần tải trước) thì đừng phủ lỗi lên trên — giữ dữ liệu
+                    // cũ cho người dùng xem (giống cách tab Bảng công xử lý mất mạng). Chỉ báo lỗi khi trống trơn.
+                    homeState = homeState.copy(
+                        loading = false,
+                        error = if (homeState.employee == null) readable(it) else null,
+                    )
+                }
         }
     }
 
@@ -2113,19 +2298,36 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Nhịp tim THÍCH ỨNG theo SignalR để app chạy nhẹ nhất mà KHÔNG mất an toàn phiên:
+    //  • SignalR đang mở (foreground khỏe) → trạng thái kết nối lấy thẳng từ SignalR (khỏi ping) và hiện
+    //    diện online do hub cập nhật qua chính kết nối; chỉ ping HTTP THƯA (5') làm lưới an toàn thu hồi.
+    //  • SignalR tắt (ở nền) hoặc mất kết nối → ping 45s/10s như cũ, gánh đủ presence + banner + thu hồi.
+    // 401 = phiên bị thu hồi (đăng nhập máy khác / bị khoá / quá hạn nhàn rỗi) → đăng xuất kèm ĐÚNG lý do
+    // máy chủ trả về. Mất mạng = Unknown → giữ phiên (fail-open).
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = viewModelScope.launch {
+            var lastBackstopAt = 0L
             while (isActive) {
-                // 401 = phiên bị thu hồi (đăng nhập máy khác), tài khoản bị khoá, hoặc quá hạn nhàn
-                // rỗi → đăng xuất ngay kèm ĐÚNG lý do máy chủ trả về. Đây là lưới dự phòng cho tín
-                // hiệu "kicked" realtime (khi lúc đó SignalR chưa kết nối). Mất mạng = Unknown → giữ phiên.
-                val status = repo.heartbeat()
-                if (status is SessionStatus.Invalid) {
-                    logout(status.message)
-                    break
+                if (realtime.isConnected()) {
+                    // Thu hồi TRONG LÚC đang kết nối đã có sự kiện "kicked" bắt tức thì; ping thưa ở đây chỉ
+                    // phòng trường hợp hiếm lỡ mất "kicked" (rớt mạng chớp nhoáng rồi nối lại).
+                    connection = ConnectionStatus.Online
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastBackstopAt >= HEARTBEAT_BACKSTOP_MS) {
+                        lastBackstopAt = now
+                        val status = repo.heartbeat()
+                        if (status is SessionStatus.Invalid) { logout(status.message); break }
+                    }
+                    // Dò lại nhanh để ĐỔI NHÁNH kịp khi SignalR rớt (không phải chờ hết chu kỳ backstop).
+                    delay(15_000)
+                } else {
+                    lastBackstopAt = 0L // nối lại được thì cho ping lưới-an-toàn chạy ngay một nhịp
+                    val status = checkConnectionOnce()
+                    if (status is SessionStatus.Invalid) { logout(status.message); break }
+                    // Mất kết nối → dò lại nhanh (10s) để GỠ banner ngay khi phục hồi; bình thường 45s.
+                    delay(if (connection == ConnectionStatus.Online) 45_000 else 10_000)
                 }
-                delay(45_000)
             }
         }
     }
@@ -2139,6 +2341,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Activity gọi khi app quay lại foreground: làm mới ngay + bật vòng poll nhẹ. */
     fun onAppResumed() {
         val signedIn = authState as? AuthState.SignedIn ?: return
+        startHeartbeat()        // bật lại nhịp tim (đã tắt lúc xuống nền để đỡ pin) — bắt ngay nếu bị thu hồi phiên
         pollLiveData()          // cập nhật ngay khi vừa mở lại app
         loadAppConfig()         // lấy remote config mới (tiết chế 60s)
         startForegroundPoll()
@@ -2147,10 +2350,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         syncMissedCalls() // cuộc gọi nhỡ đã lưu server (mỗi lần vào lại app)
     }
 
-    /** Activity gọi khi app xuống nền: dừng poll + SignalR (nền đã có WorkManager + push FCM). */
+    /**
+     * Activity gọi khi app xuống nền: dừng poll + SignalR + NHỊP TIM để đỡ pin/mạng. Ở nền đã có
+     * WorkManager + push FCM lo thông báo; còn thu hồi phiên (đăng nhập máy khác) sẽ được bắt ngay ở
+     * [onAppResumed] khi mở lại — không cần ping HTTP đều đặn suốt lúc app nằm nền.
+     */
     fun onAppPaused() {
         foregroundPollJob?.cancel()
         foregroundPollJob = null
+        stopHeartbeat()
         realtime.stop()
     }
 
@@ -2213,6 +2421,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             loadWorkTasks(silent = true)
             workTaskDetail.id?.let { refreshWorkTaskDetail(it) }
         }
+        // Bảng công + lương dự tính bám thẳng vào log chấm công / hồ sơ nhân sự (scope attendance|hr) →
+        // làm mới IM LẶNG khi đang xem tab Bảng công để số liệu đổi tại chỗ (admin sửa công, duyệt đơn…).
+        // Chỉ nạp lương khi nhân viên đã mở khoá (data != null) để không lộ/không gọi thừa lúc còn che.
+        if (changeScope == "attendance" || changeScope == "hr" || changeScope == "data" || changeScope == "all") {
+            if (selected == HrDestination.Timesheet) {
+                loadTimesheet(timesheetState.month, silent = true)
+                if (payEstimateState.data != null) loadMyEstimate()
+            }
+        }
     }
 
     /** Làm mới im lặng chi tiết đơn đang mở (không hiện lại vòng quay tải, không đụng nếu đã đóng/đổi đơn). */
@@ -2245,6 +2462,35 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     settingsState = settingsState.copy(webLoginEnabled = !enabled)
                     actionMessage = readable(it)
                 }
+        }
+    }
+
+    // ── Bộ nhớ & dữ liệu tạm ─────────────────────────────────────────────────────
+    /** Đo dung lượng cache để hiện trên màn "Bộ nhớ & dữ liệu tạm". */
+    fun loadCacheSize() {
+        viewModelScope.launch {
+            val ctx = getApplication<Application>()
+            val bytes = runCatching { com.ketoanapk.hr.data.CacheManager.sizeBytes(ctx) }.getOrDefault(0L)
+            cacheSizeText = com.ketoanapk.hr.data.CacheManager.format(ctx, bytes)
+        }
+    }
+
+    /**
+     * Dọn cache của ứng dụng (gói cập nhật tải sẵn, ảnh/PDF/âm thanh tạm, cache chat, ảnh chụp Trang chủ).
+     * GIỮ nguyên phiên đăng nhập, đơn nháp và hàng đợi chấm công ngoại tuyến. Xem [com.ketoanapk.hr.data.CacheManager].
+     */
+    fun clearCache() {
+        if (cacheClearing) return
+        viewModelScope.launch {
+            cacheClearing = true
+            val ctx = getApplication<Application>()
+            val freed = runCatching { com.ketoanapk.hr.data.CacheManager.clear(ctx) }.getOrDefault(0L)
+            val bytes = runCatching { com.ketoanapk.hr.data.CacheManager.sizeBytes(ctx) }.getOrDefault(0L)
+            cacheSizeText = com.ketoanapk.hr.data.CacheManager.format(ctx, bytes)
+            cacheClearing = false
+            actionMessage = if (freed > 0)
+                "Đã dọn ${com.ketoanapk.hr.data.CacheManager.format(ctx, freed)} cache."
+            else "Không có cache nào cần dọn."
         }
     }
 
@@ -2627,14 +2873,28 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Người dùng bấm "Xác nhận" → gửi lại đúng loạt ảnh (previewOnly=false) để ghi công thật. */
+    /**
+     * Người dùng bấm "Xác nhận" → ghi công thật.
+     *
+     * Đường chính: gửi TOKEN mà bước xem trước đã cấp. Server ghi công theo kết quả đã nhận diện vài giây
+     * trước, không chạy lại AdaFace/Silent-Face lần hai — nhanh hơn hẳn và giảm một nửa tải suy luận.
+     * Đường lùi: máy chủ cũ chưa cấp token thì vẫn gửi lại loạt ảnh như trước để app không kén phiên bản.
+     */
     fun confirmAttendance() {
         val pending = attendanceCapture as? AttendanceCapture.AwaitingConfirm ?: return
-        val images = pending.frames.map { it.image }
+        val token = pending.result.previewToken
         attendanceCapture = AttendanceCapture.Submitting
         viewModelScope.launch {
             runCatching {
-                repo.chamCong(images, previewOnly = false, motionCheck = pending.motionCheck)
+                if (!token.isNullOrBlank()) {
+                    repo.chamCongXacNhan(token)
+                } else {
+                    repo.chamCong(
+                        pending.frames.map { it.image },
+                        previewOnly = false,
+                        motionCheck = pending.motionCheck,
+                    )
+                }
             }
                 .onSuccess { result ->
                     attendanceCapture = AttendanceCapture.Done(result)
@@ -2820,6 +3080,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         stopHeartbeat()
+        runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
         onAppPaused()
         super.onCleared()
     }
@@ -2830,5 +3091,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         /** Bấm "Để sau" thì im 24 giờ (bản bắt buộc không áp dụng). */
         private const val UPDATE_SNOOZE_MS = 24 * 60 * 60 * 1000L
         private const val AUDIT_PAGE_SIZE = 50
+        /** Khi SignalR đang mở (foreground): chỉ ping HTTP thưa cỡ này làm lưới an toàn phát hiện phiên
+         *  bị thu hồi phòng khi lỡ sự kiện "kicked". Presence + banner lúc đó đã do kết nối SignalR lo. */
+        private const val HEARTBEAT_BACKSTOP_MS = 5 * 60_000L
     }
 }

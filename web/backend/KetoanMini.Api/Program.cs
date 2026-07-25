@@ -91,6 +91,10 @@ builder.Services.AddSingleton<QrConfiguredActionRegistry>();
 // Mã hóa dữ liệu nhạy cảm khi lưu trữ (embedding khuôn mặt…) — khóa từ Security:FieldEncryptionKey.
 builder.Services.AddSingleton<FieldCipher>();
 
+// NGUỒN PHÂN QUYỀN THỐNG NHẤT (vai trò + quyền + phạm vi dữ liệu + giao diện mặc định), đọc thẳng
+// từ CSDL. Xem Security/AccessProfileService.cs — mọi quyết định phân quyền phải đi qua đây.
+builder.Services.AddSingleton<AccessProfileService>();
+
 // HttpClient (dùng gọi API Cloudflare TURN cấp credential cho WebRTC).
 builder.Services.AddHttpClient();
 
@@ -105,9 +109,11 @@ builder.Services.AddHostedService<OutboxWorker>();
 // Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
 builder.Services.AddSingleton<IFaceEngine, AdaFaceR50Engine>();
 
-// Active-flash liveness: sinh + xác minh chuỗi màu chống giả mạo chủ động (lưu tạm challenge trong RAM).
+// Bộ nhớ đệm RAM dùng chung (token xác nhận chấm công, và các thứ tạm thời khác).
 builder.Services.AddMemoryCache();
-builder.Services.AddSingleton<FlashLivenessChallenge>();
+// Token xác nhận chấm công: giữ kết quả xem trước để bước "Xác nhận" khỏi nhận diện lại (xem
+// Services/AttendancePreviewTokens.cs — tiết kiệm một nửa khối lượng suy luận mỗi lượt chấm).
+builder.Services.AddSingleton<AttendancePreviewTokens>();
 // Vòng đệm số đo Silent-Face gần nhất (hiển thị lên panel để hiệu chỉnh ngưỡng chống ảnh/màn hình).
 builder.Services.AddSingleton<LivenessMetricsLog>();
 
@@ -115,6 +121,11 @@ builder.Services.AddSingleton<LivenessMetricsLog>();
 builder.Services.AddSignalR();
 // Định danh kết nối hub theo username để phát tín hiệu chat đúng thành viên (Clients.Users).
 builder.Services.AddSingleton<Microsoft.AspNetCore.SignalR.IUserIdProvider, NameUserIdProvider>();
+// HIỆN DIỆN ONLINE qua chính kết nối SignalR (thay nhịp tim HTTP 45s cho web; app foreground cũng
+// dùng): hub đánh dấu online khi kết nối, service nền làm tươi last_seen theo lô mỗi 45s cho các phiên
+// đang mở socket. Xem HubPresenceRegistry.
+builder.Services.AddSingleton<HubPresenceRegistry>();
+builder.Services.AddHostedService<HubPresenceRefresher>();
 builder.Services.AddHostedService<ChangeWatcher>();
 // Dọn tệp "giữ tạm" (gửi tệp qua LAN khi người nhận offline) đã quá hạn khỏi đĩa.
 builder.Services.AddHostedService<LanFileCleanupService>();
@@ -155,12 +166,27 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = jwt["Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!)),
         };
-        // WebSocket không gửi header Authorization được → SignalR truyền token qua query "access_token".
-        // Đọc token đó cho riêng đường hub /hubs để định danh kết nối (chat nhắm đúng người).
         o.Events = new JwtBearerEvents
         {
             OnMessageReceived = ctx =>
             {
+                // Thứ tự tìm token, dừng ở cái đầu tiên có:
+                //  1. Header Authorization — ỨNG DỤNG ANDROID (giữ nguyên, không đụng gì).
+                //  2. Cookie HttpOnly km_auth — TRÌNH DUYỆT. JavaScript không đọc được cookie này,
+                //     nên XSS không mang được phiên đăng nhập ra khỏi máy. Cookie cũng tự đi theo
+                //     WebSocket handshake của SignalR nên hub không cần token trên URL nữa.
+                //  3. Query "access_token" cho /hubs — CHỈ còn cho app native (WebSocket của app
+                //     không gắn được header Authorization). Web không dùng đường này nữa: token
+                //     nằm trên URL sẽ lọt vào log máy chủ, proxy và lịch sử trình duyệt.
+                if (!string.IsNullOrEmpty(ctx.Request.Headers.Authorization)) return Task.CompletedTask;
+
+                var cookie = ctx.Request.Cookies[AuthCookies.AuthCookie];
+                if (!string.IsNullOrEmpty(cookie))
+                {
+                    ctx.Token = cookie;
+                    return Task.CompletedTask;
+                }
+
                 var accessToken = ctx.Request.Query["access_token"];
                 if (!string.IsNullOrEmpty(accessToken) &&
                     ctx.HttpContext.Request.Path.StartsWithSegments("/hubs"))
@@ -173,10 +199,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("Accounting", p => p.RequireRole(AppRoles.Admin, AppRoles.Accounting));
-    options.AddPolicy("HR", p => p.RequireRole(AppRoles.Admin, AppRoles.Hr));
-    options.AddPolicy("Workforce", p => p.RequireRole(AppRoles.Admin, AppRoles.Hr, AppRoles.Employee, AppRoles.Accounting));
-    options.AddPolicy("Kiosk", p => p.RequireRole(AppRoles.Admin, AppRoles.Kiosk));
+    // MỘT policy cho MỖI quyền trong Security/Permissions.cs. Endpoint chốt cửa bằng .RequirePermission(...)
+    // chứ không liệt kê tên vai trò — thêm vai trò mới chỉ cần sửa bảng vai trò→quyền, không sửa endpoint.
+    //
+    // Đã GỠ các policy theo tên vai trò ("Accounting", "HR", "Workforce", "Kiosk"): chúng buộc mỗi lần
+    // thêm vai trò phải đi sửa từng chỗ liệt kê, và không nói lên endpoint đó bảo vệ ĐIỀU GÌ.
+    options.AddPermissionPolicies();
 });
 
 static string RateLimitKey(HttpContext context)
@@ -357,6 +385,59 @@ app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
 
+// ── CHỐNG CSRF cho phiên bằng cookie ─────────────────────────────────────────────────────────────
+// Cookie được trình duyệt gửi TỰ ĐỘNG, nên một trang web lạ có thể ép trình duyệt của người đang
+// đăng nhập gọi API của ta. Double-submit: header X-CSRF-Token phải khớp cookie km_csrf — trang lạ
+// gửi được cookie nhưng KHÔNG ĐỌC được nó (khác origin) nên không dựng nổi header khớp.
+//
+// Chỉ áp cho request xác thực BẰNG COOKIE: ứng dụng Android gửi Bearer (không phải ambient
+// credential, trang lạ không có cách nào bắt app gắn header đó) nên không cần và không bị ảnh hưởng.
+// Cũng bỏ qua mọi phương thức chỉ-đọc (GET/HEAD/OPTIONS).
+if (AuthCookies.Enabled(app.Configuration))
+{
+    app.Use(async (ctx, next) =>
+    {
+        if (AuthCookies.UsesCookieAuth(ctx))
+        {
+            // ── /hubs: chốt bằng ORIGIN, không bằng CSRF token ──────────────────────────────────
+            // WebSocket KHÔNG bị CORS chặn, nên với phiên cookie thì trang web lạ có thể mở kết nối
+            // realtime dưới danh nghĩa người đang đăng nhập và nghe lén tín hiệu của họ
+            // (Cross-Site WebSocket Hijacking). Header Origin do trình duyệt tự đặt, JavaScript không
+            // sửa được, nên nó chặn đúng thứ cần chặn — cho CẢ negotiate (POST, có Origin khi chéo
+            // site) LẪN WebSocket handshake (GET, không gắn được header tuỳ ý nên CSRF token bất lực).
+            //
+            // Vì Origin đã bao trùm, /hubs không đi qua chốt CSRF: bắt SignalR tự gắn header cho
+            // negotiate là thứ rất dễ vỡ (kết nối dựng một lần rồi thử lại mãi với header đã cũ).
+            if (ctx.Request.Path.StartsWithSegments("/hubs"))
+            {
+                if (!AuthCookies.IsAllowedOrigin(ctx, corsOrigins))
+                {
+                    app.Logger.LogWarning("Chan ket noi hub tu origin la: {Origin}", ctx.Request.Headers.Origin.ToString());
+                    ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    await ctx.Response.WriteAsJsonAsync(new { message = "Origin không được phép.", code = "origin_denied" });
+                    return;
+                }
+                await next();
+                return;
+            }
+
+            if (!AuthCookies.ValidateCsrf(ctx))
+            {
+                app.Logger.LogWarning("Chan request thieu/sai CSRF token: {Method} {Path}",
+                    ctx.Request.Method, ctx.Request.Path);
+                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await ctx.Response.WriteAsJsonAsync(new
+                {
+                    message = "Yêu cầu không hợp lệ (thiếu mã chống giả mạo). Hãy tải lại trang và thử lại.",
+                    code = "csrf_required"
+                });
+                return;
+            }
+        }
+        await next();
+    });
+}
+
 // Số ngày một phiên được phép "nhàn rỗi" trước khi hết hiệu lực (đăng nhập bền cho người dùng năng
 // động, nhưng phiên bỏ không dùng quá lâu thì tự vô hiệu → phải đăng nhập lại). 0 = tắt (giữ 365 ngày).
 var sessionIdleDays = app.Configuration.GetValue("Security:SessionIdleDays", 7);
@@ -402,7 +483,9 @@ app.Use(async (ctx, next) =>
                               AND s.last_seen < CURRENT_TIMESTAMP - make_interval(days => @idleDays)) AS idle_expired,
                              u.role,
                              COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
-                                       FROM user_roles ur WHERE ur.username = u.username), '') AS secondary_roles
+                                       FROM user_roles ur
+                                       WHERE ur.username = u.username
+                                         AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)), '') AS secondary_roles
                       FROM app_users u
                       LEFT JOIN user_sessions s ON s.session_token = @sid
                       WHERE u.username = @u AND u.is_deleted = FALSE
@@ -423,10 +506,9 @@ app.Use(async (ctx, next) =>
 
                         // Gộp vai trò chính + phụ theo đúng cách TokenService dựng claim lúc đăng nhập
                         // (chính thiếu/không hợp lệ thì coi là Employee) để hai đường cho kết quả giống nhau.
-                        var roles = new List<string> { AppRoles.Normalize(r.IsDBNull(3) ? null : r.GetString(3)) ?? AppRoles.Employee };
-                        foreach (var extra in (r.IsDBNull(4) ? "" : r.GetString(4)).Split(',', StringSplitOptions.RemoveEmptyEntries))
-                            if (AppRoles.Normalize(extra) is { } norm && !roles.Contains(norm)) roles.Add(norm);
-                        freshRoles = roles;
+                        freshRoles = AccessProfileService.Combine(
+                            r.IsDBNull(3) ? null : r.GetString(3),
+                            r.IsDBNull(4) ? "" : r.GetString(4));
                     }
                 }
 
@@ -445,36 +527,60 @@ app.Use(async (ctx, next) =>
                 // DB chập chờn → không đá người dùng ra (fail-open), giống heartbeat của app desktop.
             }
 
-            if (locked)
+            // Phiên không còn hiệu lực → XOÁ LUÔN cookie. Không xoá thì trình duyệt cứ gửi lại cookie
+            // chết ở mọi request cho tới ngày hết hạn, và người dùng thấy một vòng 401 không lối ra.
+            async Task Reject(string message)
             {
+                AuthCookies.Clear(ctx);
                 ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await ctx.Response.WriteAsJsonAsync(new { message = "Tài khoản đã bị khóa." });
-                return;
+                await ctx.Response.WriteAsJsonAsync(new { message });
             }
-            if (revoked)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await ctx.Response.WriteAsJsonAsync(new { message = "Thiết bị này đã bị thu hồi. Vui lòng đăng nhập lại." });
-                return;
-            }
-            if (idleExpired)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await ctx.Response.WriteAsJsonAsync(new { message = "Phiên đăng nhập đã hết hạn do lâu không hoạt động. Vui lòng đăng nhập lại." });
-                return;
-            }
+
+            if (locked) { await Reject("Tài khoản đã bị khóa."); return; }
+            if (revoked) { await Reject("Thiết bị này đã bị thu hồi. Vui lòng đăng nhập lại."); return; }
+            if (idleExpired) { await Reject("Phiên đăng nhập đã hết hạn do lâu không hoạt động. Vui lòng đăng nhập lại."); return; }
 
             // VAI TRÒ LẤY TỪ DB, KHÔNG TIN CLAIM TRONG JWT. Token sống tới 365 ngày, nên nếu cứ tin
             // claim thì admin bị hạ quyền vẫn qua được mọi endpoint RequireRole("Admin") cho tới khi
             // token hết hạn. Thay claim ở đây => cấp/thu quyền có hiệu lực ngay từ request kế tiếp mà
             // KHÔNG phải đăng xuất ai — người dùng không hề bị gián đoạn.
             // DB lỗi (freshRoles == null) thì giữ nguyên claim cũ, đồng bộ với hướng fail-open ở trên.
-            if (freshRoles is not null && ctx.User.Identity is ClaimsIdentity identity)
+            if (ctx.User.Identity is ClaimsIdentity identity)
             {
-                foreach (var stale in identity.FindAll(identity.RoleClaimType).ToList())
-                    identity.TryRemoveClaim(stale);
-                foreach (var role in freshRoles)
-                    identity.AddClaim(new Claim(identity.RoleClaimType, role));
+                // Claim QUYỀN luôn được dựng lại từ đầu và CHỈ từ dữ liệu DB vừa đọc. Nó cố tình
+                // KHÔNG có trong JWT: token cũ không thể mang theo quyền cũ, và khi DB không đọc được
+                // (freshRoles == null) thì request này KHÔNG có quyền nào ⇒ mọi endpoint chốt bằng
+                // .RequirePermission(...) trả 403 (đóng mặc định) thay vì tin vào quyền cũ.
+                foreach (var stalePerm in identity.FindAll(Permissions.ClaimType).ToList())
+                    identity.TryRemoveClaim(stalePerm);
+
+                if (freshRoles is not null)
+                {
+                    foreach (var stale in identity.FindAll(identity.RoleClaimType).ToList())
+                        identity.TryRemoveClaim(stale);
+                    foreach (var role in freshRoles)
+                        identity.AddClaim(new Claim(identity.RoleClaimType, role));
+                    foreach (var perm in Permissions.For(freshRoles))
+                        identity.AddClaim(new Claim(Permissions.ClaimType, perm));
+                }
+            }
+
+            // GIA HẠN TRƯỢT phiên web. Cookie sống ngắn (mặc định 7 ngày) để phiên bỏ quên trên máy
+            // dùng chung tự chết, nhưng người dùng ĐANG LÀM VIỆC thì không được đá ra giữa chừng.
+            // Chỉ cấp lại khi đã đi qua nửa vòng đời — tránh viết Set-Cookie ở mọi phản hồi.
+            // KHÔNG gia hạn cho vòng poll nền: nó không phải người dùng đang dùng máy, cùng lý do với
+            // last_seen ở trên (nếu không, một tab bỏ quên sẽ tự giữ phiên sống mãi).
+            if (AuthCookies.Enabled(app.Configuration)
+                && AuthCookies.UsesCookieAuth(ctx)
+                && !ctx.Request.Headers.ContainsKey("X-Background-Poll")
+                && ctx.User.FindFirst("exp")?.Value is { } expRaw
+                && long.TryParse(expRaw, out var expUnix))
+            {
+                var tokens = ctx.RequestServices.GetRequiredService<TokenService>();
+                var expiresAt = DateTimeOffset.FromUnixTimeSeconds(expUnix);
+                var full = TimeSpan.FromHours(AuthCookies.WebExpireHours(app.Configuration));
+                if (expiresAt - DateTimeOffset.UtcNow < full / 2)
+                    AuthCookies.Refresh(ctx, tokens.RenewWebToken(ctx.User), tokens.WebExpiresAt());
             }
         }
     }

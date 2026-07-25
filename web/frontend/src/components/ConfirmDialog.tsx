@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import "./confirm-dialog.css";
 
@@ -33,9 +33,14 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  // Quên cờ "đang xử lý" mỗi khi hộp thoại đóng. Gán lúc render thay vì trong useEffect: effect
+  // tốn thêm một vòng render, và React Compiler cấm setState đồng bộ trong effect. Mốc `busySeenOpen`
+  // chỉ cho reset đúng lúc `open` ĐỔI (không phải mỗi lần render) nên không đè lên lần bấm đang chạy.
+  const [busySeenOpen, setBusySeenOpen] = useState(open);
+  if (busySeenOpen !== open) {
+    setBusySeenOpen(open);
     if (!open) setBusy(false);
-  }, [open]);
+  }
 
   if (!open) return null;
 

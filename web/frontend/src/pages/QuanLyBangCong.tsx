@@ -5,7 +5,7 @@ import { GlassPanel } from "../components/glass/GlassPanel";
 import { TimesheetCalendar } from "../components/hr/TimesheetCalendar";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import type { EmployeeCard, Timesheet } from "../lib/hr";
 
 function currentMonth() {
@@ -33,16 +33,25 @@ function EmployeePicker({
   value: string;
   onChange: (id: string) => void;
 }) {
-  const [query, setQuery] = useState("");
+  const selected = useMemo(() => employees.find((e) => e.id === value), [employees, value]);
+  // Ô nhập khởi tạo THẲNG bằng tên người đang chọn — trước đây việc này do effect làm sau khi
+  // render lần đầu, nên có một khung hình ô trống.
+  const [query, setQuery] = useState(selected ? selected.fullName : "");
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
-  const selected = useMemo(() => employees.find((e) => e.id === value), [employees, value]);
 
-  // Đồng bộ ô nhập với nhân viên đang chọn khi không mở dropdown.
-  useEffect(() => {
+  // Đồng bộ ô nhập với nhân viên đang chọn khi không mở dropdown. Gán lúc render thay vì trong
+  // useEffect (React Compiler cấm setState đồng bộ trong effect). Mốc `pickerSeed` giữ đúng bộ deps
+  // cũ [selected, open]: chỉ ghi đè ô nhập khi một trong hai ĐỔI, nên không xoá chữ đang gõ dở.
+  const [pickerSeed, setPickerSeed] = useState<{ selected: EmployeeCard | undefined; open: boolean }>({
+    selected,
+    open: false,
+  });
+  if (pickerSeed.selected !== selected || pickerSeed.open !== open) {
+    setPickerSeed({ selected, open });
     if (!open) setQuery(selected ? selected.fullName : "");
-  }, [selected, open]);
+  }
 
   // Đóng khi bấm ra ngoài.
   useEffect(() => {
@@ -154,10 +163,10 @@ export function QuanLyBangCong() {
     [empId, month],
   );
 
-  // Tự chọn nhân viên đầu tiên khi có danh sách.
-  useEffect(() => {
-    if (!empId && employees && employees.length > 0) setEmpId(employees[0].id);
-  }, [employees, empId]);
+  // Tự chọn nhân viên đầu tiên khi có danh sách. Gán lúc render thay vì trong useEffect: effect vẽ
+  // thừa một khung hình "chưa chọn ai" rồi mới nhảy, và React Compiler cấm setState đồng bộ trong
+  // effect. Điều kiện tự chặn — chọn xong thì `empId` có giá trị nên không vào lại nhánh này.
+  if (!empId && employees && employees.length > 0) setEmpId(employees[0].id);
 
   const selected = useMemo(() => employees?.find((e) => e.id === empId), [employees, empId]);
 

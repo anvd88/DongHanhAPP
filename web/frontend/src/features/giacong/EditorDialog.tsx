@@ -73,31 +73,26 @@ export function EditorDialog({
   const loggedInName = user?.fullName?.trim() || user?.username?.trim() || "";
   const [loaiPhieu, setLoaiPhieu] = useState<LoaiGiaCong>(initialLoaiPhieu);
   const [doiTac, setDoiTac] = useState("");
-  const [nhanVien, setNhanVien] = useState("");
+  const [nhanVien, setNhanVien] = useState(loggedInName);
   const [ngayLap, setNgayLap] = useState(() => new Date().toISOString().slice(0, 10));
   const [hanHoanThanh, setHanHoanThanh] = useState("");
   const [ghiChu, setGhiChu] = useState("");
   const [lines, setLines] = useState<GiaCongLine[]>([emptyLine(initialLoaiPhieu)]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  // Vào thẳng trạng thái "đang tải" nếu lần mở này có phiếu để tải. Component được dựng lại mỗi lần
+  // mở (key ở GiaCongPage) nên biết ngay từ đầu, không phải bật cờ trong effect — và cũng không còn
+  // khung hình nào hiện form rỗng trước khi spinner kịp xuất hiện.
+  const [loadingDetail, setLoadingDetail] = useState(() => open && (isEdit || seedId !== undefined));
 
+  // CHỈ còn việc TẢI phiếu về — không còn đoạn "dọn sạch các ô" nào ở đây. Trang cha gắn key theo
+  // từng lần mở (xem `editorSession` trong GiaCongPage), nên mỗi lần mở là một component mới với giá
+  // trị khởi tạo đã đúng cho phiếu mới. Nhờ vậy hết cảnh mở phiếu B mà thoáng thấy dữ liệu phiếu A.
   useEffect(() => {
     if (!open) return;
     const source = isEdit ? (id as number) : seedId;
-    setError("");
-    if (source === undefined) {
-      setLoaiPhieu(initialLoaiPhieu);
-      setDoiTac("");
-      setNhanVien(loggedInName);
-      setNgayLap(new Date().toISOString().slice(0, 10));
-      setHanHoanThanh("");
-      setGhiChu("");
-      setLines([emptyLine(initialLoaiPhieu)]);
-      return;
-    }
+    if (source === undefined) return; // phiếu mới: giá trị khởi tạo đã đúng, không phải tải gì
 
-    setLoadingDetail(true);
     api
       .get<GiaCongDetail>(`/api/giacong/${source}`)
       .then((d) => {

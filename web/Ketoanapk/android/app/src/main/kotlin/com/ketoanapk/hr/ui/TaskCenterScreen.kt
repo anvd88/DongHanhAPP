@@ -5,13 +5,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
@@ -24,7 +27,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.Timesheet
+import com.ketoanapk.hr.data.WorkTask
 import java.time.Duration
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -124,8 +130,12 @@ private fun parseTaskInstant(value: String): Instant? = runCatching { OffsetDate
     .recoverCatching { Instant.parse(value) }
     .getOrNull()
 
+/**
+ * Thẻ lối vào DUY NHẤT cho công việc trên Trang chủ (đã gộp thẻ "Giao việc" cũ vào đây). Số đếm bao
+ * gồm cả việc được giao lẫn đơn/chấm công/hợp đồng cần xử lý.
+ */
 @Composable
-fun TaskCenterEntryCard(count: Int, onClick: () -> Unit) {
+fun TaskCenterEntryCard(count: Int, canAssign: Boolean, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -142,7 +152,11 @@ fun TaskCenterEntryCard(count: Int, onClick: () -> Unit) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Việc cần làm", fontWeight = FontWeight.Bold)
                 Text(
-                    if (count > 0) "$count việc đang chờ bạn xử lý" else "Bạn đã xử lý hết công việc",
+                    when {
+                        count > 0 -> "$count việc đang chờ bạn xử lý"
+                        canAssign -> "Giao việc cho nhân viên & nghiệm thu"
+                        else -> "Bạn đã xử lý hết công việc"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -152,10 +166,25 @@ fun TaskCenterEntryCard(count: Int, onClick: () -> Unit) {
     }
 }
 
+/**
+ * Màn "Việc cần làm" HỢP NHẤT: một chỗ duy nhất cho mọi việc của người đăng nhập — việc được giao
+ * (giao việc & nghiệm thu) + đơn chờ duyệt, chấm công, hợp đồng sắp hết hạn.
+ *
+ * Phần GIAO việc (tab "Việc tôi giao" + nút "Giao việc mới") chỉ dựng khi máy chủ trả `canAssign`
+ * (Thủ kho/Admin), nên nhân viên thường không còn thấy màn/nhãn "Giao việc" ở bất kỳ đâu — họ chỉ
+ * thấy việc được giao cho mình. Quyền thật vẫn do máy chủ chốt; đây chỉ là lớp giao diện.
+ */
 @Composable
 fun TaskCenterScreen(vm: HrViewModel) {
     val tasks = vm.taskCenterItems
+    val work = vm.workTasksState
     var approving by remember { mutableStateOf<TaskCenterItem?>(null) }
+    var tab by remember { mutableIntStateOf(0) }          // 0 = việc cần làm, 1 = việc tôi giao
+    var formOpen by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<WorkTask?>(null) }
+
+    // Bị thu quyền giao việc khi đang đứng ở tab "Việc tôi giao" → kéo về tab của nhân viên.
+    LaunchedEffect(work.canAssign) { if (!work.canAssign) tab = 0 }
 
     approving?.let { task ->
         AlertDialog(
@@ -175,35 +204,104 @@ fun TaskCenterScreen(vm: HrViewModel) {
         )
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        if (vm.homeState.loading && tasks.isEmpty()) {
-            item { LoadingBlock() }
-        } else if (tasks.isEmpty()) {
-            item { EmptyState("Đã xử lý hết", vm.homeState.error ?: "Hiện không có công việc nào cần bạn xử lý.") }
-            if (vm.homeState.error != null) item { Button(onClick = vm::refreshTasks, modifier = Modifier.fillMaxWidth()) { Text("Thử lại") } }
-        } else {
-            TaskBucket.entries.forEach { bucket ->
-                val group = tasks.filter { it.bucket == bucket }
-                if (group.isNotEmpty()) {
-                    item(key = "header-$bucket") {
-                        Text(bucket.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp, start = 4.dp))
+    Column(Modifier.fillMaxSize()) {
+        // Chỉ người có quyền giao mới thấy thanh tab + nút giao việc.
+        if (work.canAssign) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SegTab("Việc cần làm", tasks.size + work.summary.inboxActionable, tab == 0, Modifier.weight(1f)) { tab = 0 }
+                SegTab("Việc tôi giao", work.summary.outboxReview, tab == 1, Modifier.weight(1f)) { tab = 1 }
+            }
+            if (tab == 1) {
+                Button(
+                    onClick = { editing = null; formOpen = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Giao việc mới")
+                }
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (tab == 1) {
+                // ── Việc tôi giao (chỉ Thủ kho/Admin) ──
+                if (work.loading && work.outbox.isEmpty()) {
+                    item { LoadingBlock() }
+                } else if (work.outbox.isEmpty()) {
+                    item { EmptyState("Bạn chưa giao việc nào", work.error ?: "Bấm \"Giao việc mới\" để bắt đầu.") }
+                    if (work.error != null) item {
+                        Button(onClick = { vm.loadWorkTasks() }, modifier = Modifier.fillMaxWidth()) { Text("Thử lại") }
                     }
-                    items(group, key = { it.id }) { task ->
-                        TaskCenterCard(
-                            task = task,
-                            busy = vm.taskActionBusyId == task.entityId,
-                            onOpen = { vm.openTask(task) },
-                            onApprove = { approving = task },
-                        )
+                } else {
+                    items(work.outbox, key = { "out-${it.id}" }) { task ->
+                        WorkTaskCard(task = task, isInbox = false) { vm.openWorkTask(task.id) }
+                    }
+                }
+            } else {
+                val loading = vm.homeState.loading || work.loading
+                val error = vm.homeState.error ?: work.error
+                if (loading && tasks.isEmpty() && work.inbox.isEmpty()) {
+                    item { LoadingBlock() }
+                } else if (tasks.isEmpty() && work.inbox.isEmpty()) {
+                    item { EmptyState("Đã xử lý hết", error ?: "Hiện không có công việc nào cần bạn xử lý.") }
+                    if (error != null) item { Button(onClick = vm::refreshTasks, modifier = Modifier.fillMaxWidth()) { Text("Thử lại") } }
+                } else {
+                    // Việc được giao cho tôi lên trước: đó là việc có người chờ mình nghiệm thu.
+                    if (work.inbox.isNotEmpty()) {
+                        item(key = "header-assigned") { GroupHeader("Việc được giao cho bạn") }
+                        items(work.inbox, key = { "in-${it.id}" }) { task ->
+                            WorkTaskCard(task = task, isInbox = true) { vm.openWorkTask(task.id) }
+                        }
+                    }
+                    TaskBucket.entries.forEach { bucket ->
+                        val group = tasks.filter { it.bucket == bucket }
+                        if (group.isNotEmpty()) {
+                            item(key = "header-$bucket") { GroupHeader(bucket.label) }
+                            items(group, key = { it.id }) { task ->
+                                TaskCenterCard(
+                                    task = task,
+                                    busy = vm.taskActionBusyId == task.entityId,
+                                    onOpen = { vm.openTask(task) },
+                                    onApprove = { approving = task },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
+
+    WorkTaskDialogs(
+        vm = vm,
+        formOpen = formOpen,
+        editing = editing,
+        onEdit = { task -> editing = task; formOpen = true },
+        onCloseForm = { formOpen = false; editing = null },
+    )
+}
+
+@Composable
+private fun GroupHeader(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(top = 6.dp, start = 4.dp),
+    )
 }
 
 @Composable

@@ -20,7 +20,7 @@ import {
 import { QRCodeCanvas } from "qrcode.react";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Badge, Button, Skeleton } from "../components/ui";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { appUrl } from "../lib/appConfig";
 import { dateTime } from "../lib/format";
 import type { AppUpdateInfo } from "../lib/types";

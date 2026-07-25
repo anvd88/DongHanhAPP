@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -73,7 +74,7 @@ public static class GiaCongEndpoints
 
     public static void MapGiaCong(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/giacong").RequireAuthorization("Accounting");
+        var g = app.MapGroup("/api/giacong").RequirePermission(Permissions.AccountingAccess);
 
         g.MapGet("/", async (Database db, string? filter, string? search) =>
         {

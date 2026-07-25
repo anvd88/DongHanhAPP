@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -49,6 +50,11 @@ public static class AppConfigEndpoints
             -- Nội dung ONBOARDING / lý do xin quyền (camera, vị trí, thông báo, micro) sửa từ xa — app hiển thị
             -- khi xin quyền, đổi câu chữ mà KHÔNG cần build lại APK.
             ALTER TABLE app_config ADD COLUMN IF NOT EXISTS onboarding jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+            -- Danh sách LỜI NHẮC/THÔNG BÁO chạy chữ trên Trang chủ app (mỗi phần tử một dòng), sửa từ xa.
+            -- Khác với "announcement" (một câu duy nhất, có mức độ + banner): đây là NHIỀU lời nhắc luân phiên
+            -- cùng dải gõ chữ với lời chào theo buổi và nhắc chấm công. Bỏ trống ⇒ chỉ còn lời nhắc gắn sẵn.
+            ALTER TABLE app_config ADD COLUMN IF NOT EXISTS notices jsonb NOT NULL DEFAULT '[]'::jsonb;
             """).ExecuteNonQueryAsync(ct);
     }
 
@@ -77,6 +83,8 @@ public static class AppConfigEndpoints
             // Công tắc tính năng + nội dung onboarding: chỉ ghi khi patch có gửi khối tương ứng.
             var featuresJson = req.Features is null ? null : JsonSerializer.Serialize(req.Features);
             var onboardingJson = req.Onboarding is null ? null : JsonSerializer.Serialize(Clamp(req.Onboarding));
+            // Lời nhắc chạy chữ: chỉ ghi khi patch có gửi (kể cả mảng rỗng = xoá hết); đã lọc rỗng & kẹp độ dài/số lượng.
+            var noticesJson = req.Notices is null ? null : JsonSerializer.Serialize(CleanNotices(req.Notices));
             await conn.Cmd("""
                 UPDATE app_config SET
                     announcement = COALESCE(@ann, announcement),
@@ -90,6 +98,7 @@ public static class AppConfigEndpoints
                     call_config = COALESCE(@call::jsonb, call_config),
                     feature_flags = COALESCE(@features::jsonb, feature_flags),
                     onboarding = COALESCE(@onboarding::jsonb, onboarding),
+                    notices = COALESCE(@notices::jsonb, notices),
                     updated_at = CURRENT_TIMESTAMP,
                     updated_by = @by
                 WHERE id = 1
@@ -105,12 +114,13 @@ public static class AppConfigEndpoints
                 .With("@call", (object?)callJson ?? DBNull.Value)
                 .With("@features", (object?)featuresJson ?? DBNull.Value)
                 .With("@onboarding", (object?)onboardingJson ?? DBNull.Value)
+                .With("@notices", (object?)noticesJson ?? DBNull.Value)
                 .With("@by", u.Username())
                 .ExecuteNonQueryAsync();
 
             await db.RecordAudit(u.Username(), "Sửa cấu hình ứng dụng", "AppConfig", "app", "Cập nhật remote config.");
             return Results.Ok(await Read(conn));
-        }).RequireAuthorization(p => p.RequireRole("Admin"));
+        }).RequirePermission(Permissions.SystemSettingsManage);
     }
 
     private static async Task<AppConfigDto> Read(Npgsql.NpgsqlConnection conn)
@@ -118,11 +128,12 @@ public static class AppConfigEndpoints
         await using var r = await conn.Cmd("""
             SELECT announcement, announcement_level, face_enroll_banner_enabled, foreground_poll_seconds,
                    portrait_height_factor, portrait_vertical_nudge, portrait_aspect, portrait_min_width_factor,
-                   call_config::text AS call_config, feature_flags::text AS feature_flags, onboarding::text AS onboarding
+                   call_config::text AS call_config, feature_flags::text AS feature_flags, onboarding::text AS onboarding,
+                   notices::text AS notices
             FROM app_config WHERE id = 1
             """).ExecuteReaderAsync();
         if (!await r.ReadAsync())
-            return new AppConfigDto("", "info", true, 20, 1.85, 0.15, 0.75, 1.35, ParseCall(null), new FeatureFlagsDto(), new OnboardingDto());
+            return new AppConfigDto("", "info", true, 20, 1.85, 0.15, 0.75, 1.35, ParseCall(null), new FeatureFlagsDto(), new OnboardingDto(), Array.Empty<string>());
         return new AppConfigDto(
             r.Str("announcement"),
             r.Str("announcement_level"),
@@ -134,7 +145,8 @@ public static class AppConfigEndpoints
             r.GetDouble(r.GetOrdinal("portrait_min_width_factor")),
             ParseCall(r.Str("call_config")),
             ParseFeatures(r.Str("feature_flags")),
-            ParseOnboarding(r.Str("onboarding")));
+            ParseOnboarding(r.Str("onboarding")),
+            ParseNotices(r.Str("notices")));
     }
 
     private static readonly string[] DefaultStun =
@@ -168,6 +180,22 @@ public static class AppConfigEndpoints
         return new OnboardingDto();
     }
 
+    /// <summary>Đọc danh sách lời nhắc chạy chữ (jsonb mảng chuỗi) → mảng; bản ghi trống ⇒ mảng rỗng.</summary>
+    private static string[] ParseNotices(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "[]") return Array.Empty<string>();
+        return CleanNotices(JsonSerializer.Deserialize<string[]>(json, CallJson) ?? Array.Empty<string>());
+    }
+
+    /// <summary>Chuẩn hoá lời nhắc: cắt khoảng trắng, bỏ dòng rỗng/trùng, kẹp độ dài (300) và số lượng (20).</summary>
+    private static string[] CleanNotices(string[] notices) => notices
+        .Select(n => (n ?? "").Trim())
+        .Where(n => n.Length > 0)
+        .Select(n => n.Length > 300 ? n[..300] : n)
+        .Distinct()
+        .Take(20)
+        .ToArray();
+
     /// <summary>Kẹp độ dài nội dung onboarding (tránh lạm dụng lưu chuỗi khổng lồ).</summary>
     private static OnboardingDto Clamp(OnboardingDto o) => new(
         Cap(o.CameraReason), Cap(o.LocationReason), Cap(o.NotificationReason), Cap(o.MicrophoneReason), Cap(o.IntroText));
@@ -197,10 +225,10 @@ public static class AppConfigEndpoints
 
     public record AppConfigDto(string Announcement, string AnnouncementLevel, bool FaceEnrollBannerEnabled, int ForegroundPollSeconds,
         double PortraitHeightFactor, double PortraitVerticalNudge, double PortraitAspect, double PortraitMinWidthFactor,
-        CallConfigDto Call, FeatureFlagsDto Features, OnboardingDto Onboarding);
+        CallConfigDto Call, FeatureFlagsDto Features, OnboardingDto Onboarding, string[] Notices);
     public record AppConfigPatch(string? Announcement, string? AnnouncementLevel, bool? FaceEnrollBannerEnabled, int? ForegroundPollSeconds,
         double? PortraitHeightFactor = null, double? PortraitVerticalNudge = null, double? PortraitAspect = null, double? PortraitMinWidthFactor = null,
-        CallConfigDto? Call = null, FeatureFlagsDto? Features = null, OnboardingDto? Onboarding = null);
+        CallConfigDto? Call = null, FeatureFlagsDto? Features = null, OnboardingDto? Onboarding = null, string[]? Notices = null);
 
     /// <summary>
     /// Công tắc TÍNH NĂNG điều khiển từ xa — admin bật/tắt là app áp dụng ngay, KHÔNG cần build lại APK.

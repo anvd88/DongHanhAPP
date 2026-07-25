@@ -29,21 +29,24 @@ export function AvatarCropper({
   onDelete?: () => void;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
-  const natural = useRef({ w: 0, h: 0 });
-  const coverScale = useRef(1); // tỉ lệ tối thiểu để ảnh phủ kín khung (zoom = 1)
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
 
-  const [ready, setReady] = useState(false);
+  // Kích thước gốc của ảnh + tỉ lệ tối thiểu để ảnh phủ kín khung (zoom = 1). Đây là STATE chứ không
+  // phải ref: khung ảnh được TÍNH LÚC RENDER từ mấy số này (chiều rộng/cao thẻ <img>, `scale`), mà đọc
+  // ref lúc render thì React không biết có gì đổi — với React Compiler bật ghi nhớ, khung ảnh sẽ giữ
+  // nguyên số cũ sau khi ảnh mới tải xong. Để ở state thì mỗi lần ảnh tải là một lần render đúng.
+  const [image, setImage] = useState<{ w: number; h: number; coverScale: number } | null>(null);
   const [grabbing, setGrabbing] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
 
-  const scale = coverScale.current * zoom; // px hiển thị / px gốc
+  const ready = image !== null;
+  const scale = (image?.coverScale ?? 1) * zoom; // px hiển thị / px gốc
 
   // Giữ ảnh luôn phủ kín khung: góc trên-trái không vượt quá 0 và không lùi quá mép phải/dưới.
   const clamp = (o: Point, s: number): Point => {
-    const dispW = natural.current.w * s;
-    const dispH = natural.current.h * s;
+    const dispW = (image?.w ?? 0) * s;
+    const dispH = (image?.h ?? 0) * s;
     return {
       x: Math.min(0, Math.max(VIEW - dispW, o.x)),
       y: Math.min(0, Math.max(VIEW - dispH, o.y)),
@@ -53,19 +56,18 @@ export function AvatarCropper({
   const onImgLoad = () => {
     const el = imgRef.current;
     if (!el) return;
-    natural.current = { w: el.naturalWidth, h: el.naturalHeight };
-    coverScale.current = Math.max(VIEW / el.naturalWidth, VIEW / el.naturalHeight);
-    const s = coverScale.current;
+    const s = Math.max(VIEW / el.naturalWidth, VIEW / el.naturalHeight);
+    setImage({ w: el.naturalWidth, h: el.naturalHeight, coverScale: s });
     setZoom(1);
     setOffset({ x: (VIEW - el.naturalWidth * s) / 2, y: (VIEW - el.naturalHeight * s) / 2 });
-    setReady(true);
   };
 
   // Phóng to/thu nhỏ quanh tâm khung (điểm gốc dưới tâm giữ nguyên).
   const applyZoom = (nextZoom: number) => {
     const z = Math.min(MAX_ZOOM, Math.max(1, nextZoom));
-    const sOld = coverScale.current * zoom;
-    const sNew = coverScale.current * z;
+    const cover = image?.coverScale ?? 1;
+    const sOld = cover * zoom;
+    const sNew = cover * z;
     const cx = (VIEW / 2 - offset.x) / sOld;
     const cy = (VIEW / 2 - offset.y) / sOld;
     setZoom(z);
@@ -154,8 +156,8 @@ export function AvatarCropper({
             style={{
               left: offset.x,
               top: offset.y,
-              width: natural.current.w * scale,
-              height: natural.current.h * scale,
+              width: (image?.w ?? 0) * scale,
+              height: (image?.h ?? 0) * scale,
               opacity: ready ? 1 : 0,
             }}
           />

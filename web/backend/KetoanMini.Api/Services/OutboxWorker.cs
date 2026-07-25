@@ -53,7 +53,7 @@ public sealed class OutboxWorker(
                     var dead = await queue.DeadCountAsync(stoppingToken);
                     if (dead > 0)
                         logger.LogWarning(
-                            "Hàng chờ còn {Count} việc đã bỏ hẳn — tương ứng {Count} thông báo không tới " +
+                            "Hàng chờ còn {Count} việc đã bỏ hẳn — mỗi việc là một thông báo KHÔNG tới " +
                             "nơi. Xem bảng app_outbox (status='dead', cột last_error).", dead);
                 }
 

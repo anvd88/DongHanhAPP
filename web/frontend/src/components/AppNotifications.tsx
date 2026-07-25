@@ -1,16 +1,14 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
-import { ConfirmDialog, type ConfirmDialogTone } from "./ConfirmDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
+import {
+  NotificationsContext,
+  type ConfirmInput,
+  type NotificationsApi,
+  type ToastInput,
+  type ToastTone,
+} from "./app-notifications-context";
 import "./app-notifications.css";
-
-type ToastTone = "success" | "error" | "info" | "warning";
-
-type ToastInput = {
-  title?: string;
-  message: ReactNode;
-  tone?: ToastTone;
-  duration?: number;
-};
 
 type Toast = Required<Pick<ToastInput, "tone" | "duration">> & {
   id: number;
@@ -18,32 +16,10 @@ type Toast = Required<Pick<ToastInput, "tone" | "duration">> & {
   message: ReactNode;
 };
 
-type ConfirmInput = {
-  title?: string;
-  description: ReactNode;
-  detail?: ReactNode;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  tone?: ConfirmDialogTone;
-};
-
 type PendingConfirm = Required<Pick<ConfirmInput, "title" | "confirmLabel" | "cancelLabel" | "tone">> &
   Pick<ConfirmInput, "description" | "detail"> & {
     resolve: (value: boolean) => void;
   };
-
-type NotificationsApi = {
-  notify: {
-    show: (input: ToastInput) => void;
-    success: (message: ReactNode, title?: string) => void;
-    error: (message: ReactNode, title?: string) => void;
-    info: (message: ReactNode, title?: string) => void;
-    warning: (message: ReactNode, title?: string) => void;
-  };
-  confirm: (input: ConfirmInput) => Promise<boolean>;
-};
-
-const NotificationsContext = createContext<NotificationsApi | null>(null);
 
 const toneTitle: Record<ToastTone, string> = {
   success: "Thành công",
@@ -146,10 +122,4 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
       )}
     </NotificationsContext.Provider>
   );
-}
-
-export function useAppNotifications() {
-  const context = useContext(NotificationsContext);
-  if (!context) throw new Error("useAppNotifications must be used inside AppNotificationProvider");
-  return context;
 }

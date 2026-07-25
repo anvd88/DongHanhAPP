@@ -2,7 +2,9 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
+using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
+using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -11,8 +13,26 @@ public static class UserEndpoints
 {
     public static void MapUsers(this IEndpointRouteBuilder app)
     {
-        // Toàn bộ module nhân sự chỉ dành cho Admin.
-        var g = app.MapGroup("/api/users").RequireAuthorization(p => p.RequireRole("Admin"));
+        // Quản lý tài khoản & phân quyền — chốt bằng QUYỀN users.manage (xem Security/Permissions.cs),
+        // không phải bằng tên vai trò "Admin".
+        var g = app.MapGroup("/api/users").RequirePermission(Permissions.UsersManage);
+
+        // Danh mục vai trò gán được + QUYỀN mỗi vai trò cấp — để UI hiện rõ "vai trò này làm được gì".
+        // Chỉ đọc, nguồn là Security/Permissions.cs (không nhân bản mapping ở frontend).
+        app.MapGet("/api/roles/catalog", () =>
+        {
+            string[] roles =
+                [AppRoles.Admin, AppRoles.Accounting, AppRoles.ChiefAccountant, AppRoles.Hr, AppRoles.Manager, AppRoles.Warehouse, AppRoles.Employee];
+            var catalog = roles.Select(role => new
+            {
+                role,
+                label = AppRoles.Label(role),
+                permissions = (Permissions.RolePermissions.TryGetValue(role, out var perms) ? perms : Array.Empty<string>())
+                    .Select(p => new { key = p, label = Permissions.Label(p) })
+                    .ToArray(),
+            }).ToArray();
+            return Results.Ok(catalog);
+        }).RequirePermission(Permissions.UsersManage);
 
         g.MapGet("/", async (Database db, string? search, string? role) =>
         {
@@ -81,20 +101,28 @@ public static class UserEndpoints
             var id = Guid.NewGuid();
             await conn.Cmd(
                 @"INSERT INTO app_users (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
-                  VALUES (@id, @u, @fn, @em, @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, @by, CURRENT_TIMESTAMP)")
+                  VALUES (@id, @u, @fn, @em, @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, @by,
+                          COALESCE((SELECT (e.hire_date::timestamp + TIME '09:00') AT TIME ZONE 'Asia/Ho_Chi_Minh'
+                                    FROM hr_employees e
+                                    WHERE lower(e.username)=lower(@u) AND e.hire_date IS NOT NULL LIMIT 1), CURRENT_TIMESTAMP))")
                 .With("@id", id).With("@u", req.Username.Trim()).With("@fn", req.FullName ?? "")
                 .With("@em", req.Email ?? "")
                 .With("@role", role)
                 .With("@ph", PasswordHasher.Hash(req.Password)).With("@by", u.Username())
                 .ExecuteNonQueryAsync();
 
+            var employeeId = await conn.Cmd("SELECT id FROM hr_employees WHERE lower(username)=lower(@u) LIMIT 1")
+                .With("@u", req.Username.Trim()).ExecuteScalarAsync();
+            if (employeeId is Guid eid) await HrEndpoints.SyncEmployeeAccountSharedFields(conn, eid);
+
             await db.RecordAudit(u.Username(), "Tạo người dùng", "User", req.Username, "Admin tạo tài khoản (web).");
             return Results.Ok(new { id });
         });
 
-        // Đổi vai trò của một tài khoản đã có. Không có endpoint này thì role Accounting/HR chỉ đặt được
-        // lúc tạo tài khoản — tức là không cấp được quyền kế toán cho người đang làm việc.
-        g.MapPost("/{id:guid}/role", async (Guid id, SetRoleRequest req, ClaimsPrincipal u, Database db) =>
+        // Đổi vai trò CHÍNH của một tài khoản đã có. Không có endpoint này thì role Accounting/HR chỉ đặt
+        // được lúc tạo tài khoản — tức là không cấp được quyền kế toán cho người đang làm việc.
+        g.MapPost("/{id:guid}/role", async (Guid id, SetRoleRequest req, ClaimsPrincipal u, Database db,
+            IHubContext<ChangesHub> hub, HttpContext http) =>
         {
             var role = AppRoles.Normalize(req.Role);
             if (role is null)
@@ -108,44 +136,66 @@ public static class UserEndpoints
             if (string.Equals(target, u.Username(), StringComparison.OrdinalIgnoreCase))
                 return Results.BadRequest(new { message = "Không thể tự đổi vai trò của chính mình." });
 
+            var before = await SnapshotRolesAsync(conn, target);
             await conn.Cmd("UPDATE app_users SET role=@r WHERE id=@id").With("@id", id).With("@r", role)
                 .ExecuteNonQueryAsync();
-            await db.RecordAudit(u.Username(), "Đổi vai trò người dùng", "User", target, $"Đổi vai trò thành {role} (web).");
+            await AfterAuthorizationChangeAsync(conn, db, hub, http, u.Username(), target,
+                "Đổi vai trò chính", before, req.Reason);
             return Results.NoContent();
         });
 
-        // Cấp / thu hồi một VAI TRÒ PHỤ (đa vai trò). Hiện dùng cho "Thủ kho" (Warehouse) — quyền giao việc
-        // & nghiệm thu. Không đụng tới vai trò chính; một người có thể vừa giữ vai trò chính vừa là Thủ kho.
-        g.MapPost("/{id:guid}/secondary-role", async (Guid id, SetSecondaryRoleRequest req, ClaimsPrincipal u, Database db) =>
+        // Cấp / thu hồi một VAI TRÒ PHỤ (đa vai trò): Thủ kho, Trưởng phòng, Kế toán trưởng… Không đụng
+        // tới vai trò chính — một người có thể vừa là Kế toán vừa được cấp thêm Thủ kho.
+        // ExpiresAt cho phép ỦY QUYỀN TẠM (vd trưởng phòng đi vắng): hết hạn tự mất, không cần nhớ thu hồi.
+        g.MapPost("/{id:guid}/secondary-role", async (Guid id, SetSecondaryRoleRequest req, ClaimsPrincipal u,
+            Database db, IHubContext<ChangesHub> hub, HttpContext http) =>
         {
             var role = AppRoles.Normalize(req.Role);
-            // Chỉ cho phép cấp các vai trò PHỤ hợp lệ — hiện tại là Thủ kho. Không cho cấp Admin/Kiosk kiểu này.
-            if (role != AppRoles.Warehouse)
-                return Results.BadRequest(new { message = "Vai trò phụ không hợp lệ." });
+            // Chỉ cấp được các vai trò nằm trong danh sách vai trò PHỤ hợp lệ. Cố ý không cho cấp
+            // Admin/Kiosk kiểu này: nâng lên Admin phải đổi vai trò CHÍNH để còn đối chiếu được audit.
+            if (role is null || !AppRoles.Secondary.Contains(role))
+                return Results.BadRequest(new
+                {
+                    message = $"Vai trò phụ phải là một trong: {string.Join(", ", AppRoles.Secondary.Select(AppRoles.Label))}."
+                });
 
             await using var conn = await db.OpenAsync();
             var target = await conn.Cmd("SELECT username FROM app_users WHERE id=@id AND is_deleted=FALSE")
                 .With("@id", id).ExecuteScalarAsync() as string;
             if (string.IsNullOrWhiteSpace(target)) return Results.NotFound();
 
+            var before = await SnapshotRolesAsync(conn, target);
             if (req.Grant)
                 await conn.Cmd(
-                    @"INSERT INTO user_roles (username, role, granted_by, granted_at)
-                      VALUES (@u, @r, @by, CURRENT_TIMESTAMP)
-                      ON CONFLICT (username, role) DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = EXCLUDED.granted_at")
-                    .With("@u", target).With("@r", role).With("@by", u.Username()).ExecuteNonQueryAsync();
+                    @"INSERT INTO user_roles (username, role, granted_by, granted_at, expires_at)
+                      VALUES (@u, @r, @by, CURRENT_TIMESTAMP, @exp)
+                      ON CONFLICT (username, role) DO UPDATE SET
+                          granted_by = EXCLUDED.granted_by,
+                          granted_at = EXCLUDED.granted_at,
+                          expires_at = EXCLUDED.expires_at")
+                    .With("@u", target).With("@r", role).With("@by", u.Username())
+                    .With("@exp", (object?)req.ExpiresAt ?? DBNull.Value).ExecuteNonQueryAsync();
             else
                 await conn.Cmd("DELETE FROM user_roles WHERE username=@u AND role=@r")
                     .With("@u", target).With("@r", role).ExecuteNonQueryAsync();
 
-            await db.RecordAudit(u.Username(), req.Grant ? "Cấp vai trò Thủ kho" : "Thu hồi vai trò Thủ kho",
-                "User", target, $"{(req.Grant ? "Cấp" : "Thu hồi")} vai trò {AppRoles.Label(role)} (web).");
+            var what = $"{(req.Grant ? "Cấp" : "Thu hồi")} vai trò {AppRoles.Label(role)}";
+            await AfterAuthorizationChangeAsync(conn, db, hub, http, u.Username(), target, what, before, req.Reason);
             return Results.NoContent();
         });
 
         g.MapPost("/{id:guid}/approve", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
+            var resigned = await conn.Cmd("""
+                SELECT EXISTS(
+                    SELECT 1 FROM hr_employees e
+                    JOIN app_users au ON au.id=@id AND (au.id=e.user_id OR lower(au.username)=lower(e.username))
+                    WHERE lower(e.status)<>'active'
+                )
+                """).With("@id", id).ExecuteScalarAsync() is bool stopped && stopped;
+            if (resigned)
+                return Results.BadRequest(new { message = "Nhân viên đã nghỉ làm nên không thể phê duyệt quyền truy cập." });
             var n = await conn.Cmd(
                 @"UPDATE app_users SET approval_status='Approved', is_active=TRUE, approved_at=CURRENT_TIMESTAMP, approved_by=@by
                   WHERE id=@id AND is_deleted=FALSE").With("@id", id).With("@by", u.Username()).ExecuteNonQueryAsync();
@@ -178,6 +228,17 @@ public static class UserEndpoints
                 }
 
                 if (!reader.IsClosed) await reader.CloseAsync();
+                if (!req.Locked)
+                {
+                    var resigned = await conn.Cmd("""
+                        SELECT EXISTS(
+                            SELECT 1 FROM hr_employees e
+                            WHERE lower(e.username)=lower(@u) AND lower(e.status)<>'active'
+                        )
+                        """).With("@u", username).ExecuteScalarAsync() is bool stopped && stopped;
+                    if (resigned)
+                        return Results.BadRequest(new { message = "Nhân viên đã nghỉ làm. Hãy chuyển hồ sơ về Đang làm trước khi mở khóa tài khoản." });
+                }
                 var n = await conn.Cmd("UPDATE app_users SET is_active=@active WHERE id=@id AND is_deleted=FALSE")
                     .With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
                 if (n > 0) await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", username, "(web)");
@@ -314,6 +375,49 @@ public static class UserEndpoints
                 return Results.Json(new { message = "Khong xoa duoc tai khoan (du lieu lien quan hoac rang buoc)." }, statusCode: 400);
             }
         });
+    }
+
+    /// <summary>Ảnh chụp vai trò hiện tại của một tài khoản, để ghi audit "trước → sau".</summary>
+    private static async Task<string> SnapshotRolesAsync(NpgsqlConnection conn, string username)
+        => string.Join(", ", await AccessProfileService.LoadRolesAsync(conn, username) ?? []);
+
+    /// <summary>
+    /// VIỆC PHẢI LÀM SAU MỖI LẦN ĐỔI QUYỀN — gom về một chỗ để không lần nào quên bước nào:
+    ///  1. Tăng authorization_version (client so sánh để biết phải nạp lại hồ sơ truy cập).
+    ///  2. Ghi lịch sử phân quyền có "trước → sau", ai đổi, lý do, địa chỉ truy cập.
+    ///  3. Ghi audit chung (để tra cùng dòng thời gian với các thao tác khác).
+    ///  4. Bắn tín hiệu realtime tới ĐÚNG người bị đổi quyền → web/app nạp lại menu, layout, route ngay.
+    ///
+    /// Quyền mới thực ra đã có hiệu lực từ request kế tiếp rồi (middleware đọc vai trò từ CSDL mỗi
+    /// request); tín hiệu realtime chỉ để GIAO DIỆN khỏi hiển thị sai cho tới lần bấm tiếp theo.
+    /// </summary>
+    private static async Task AfterAuthorizationChangeAsync(
+        NpgsqlConnection conn, Database db, IHubContext<ChangesHub> hub, HttpContext http,
+        string actor, string target, string action, string rolesBefore, string? reason)
+    {
+        await conn.Cmd(
+            "UPDATE app_users SET authorization_version = COALESCE(authorization_version, 1) + 1 WHERE username = @u")
+            .With("@u", target).ExecuteNonQueryAsync();
+
+        var rolesAfter = await SnapshotRolesAsync(conn, target);
+        var note = string.IsNullOrWhiteSpace(reason) ? "" : reason.Trim();
+        try
+        {
+            await conn.Cmd(
+                @"INSERT INTO user_role_history (username, changed_by, action, roles_before, roles_after, reason, client_ip)
+                  VALUES (@u, @by, @a, @b, @af, @r, @ip)")
+                .With("@u", target).With("@by", actor).With("@a", action)
+                .With("@b", rolesBefore).With("@af", rolesAfter).With("@r", note)
+                .With("@ip", http.Connection.RemoteIpAddress?.ToString() ?? "")
+                .ExecuteNonQueryAsync();
+        }
+        catch (NpgsqlException) { /* bảng lịch sử chưa có → vẫn còn audit_logs bên dưới */ }
+
+        await db.RecordAudit(actor, action, "User", target,
+            $"{action}: [{rolesBefore}] → [{rolesAfter}]{(note.Length > 0 ? $". Lý do: {note}" : "")} (web).");
+
+        // Chỉ gửi cho ĐÚNG người bị đổi quyền (không phát tán ra toàn hệ thống).
+        try { await hub.Clients.User(target).SendAsync("changed", "access"); } catch { /* không online → thôi */ }
     }
 
     private static async Task DeleteUserEverywhere(NpgsqlConnection conn, NpgsqlTransaction tx, Guid id, string username)

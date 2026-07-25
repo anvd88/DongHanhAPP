@@ -23,7 +23,7 @@ import { GlassPanel } from "../components/glass/GlassPanel";
 import { PageHeader } from "../components/Layout";
 import { Table } from "../components/Table";
 import { Badge, Button, Field, Input } from "../components/ui";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../shadcn/tooltip";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -96,14 +96,24 @@ export function SystemSettings() {
   const eyeCountdown = user && eyeEnabled
     ? formatHHMMSS(countdownToNextReminder(ensureEyeDailyLogin(user.id, now), EYE_INTERVAL_MS, now))
     : formatHHMMSS(EYE_INTERVAL_MS);
-  useEffect(() => {
-    if (!user) return;
-
+  // Nạp lại tuỳ chọn (nhắc nước / nhắc mắt / giữ form phiếu / xem trước tin nhắn) từ localStorage khi
+  // ĐỔI tài khoản. Gán lúc render thay vì trong useEffect: React Compiler cấm setState đồng bộ trong
+  // effect, và các giá trị khởi tạo useState bên trên vốn đã đọc đúng localStorage cho lần đầu — nên
+  // mốc `prefsSeededFor` chỉ cần bắt đúng lúc `user` đổi (giữ nguyên bộ deps [user] cũ).
+  const [prefsSeededFor, setPrefsSeededFor] = useState(user);
+  if (user && prefsSeededFor !== user) {
+    setPrefsSeededFor(user);
     setWaterEnabled(isWaterReminderEnabled(user.id));
     setEyeEnabled(isEyeReminderEnabled(user.id));
     setKeepCreateVoucherOpen(isKeepCreateVoucherOpenEnabled(user.id));
     setMessagePreviewEnabled(isMessagePreviewEnabled(user.id));
     setPreferenceError(null);
+  }
+
+  // Việc CÒN LẠI vẫn đúng là của effect: nạp tuỳ chọn theo tài khoản từ server và đăng ký lắng nghe
+  // thay đổi từ nơi khác (đồng bộ với thứ NGOÀI React).
+  useEffect(() => {
+    if (!user) return;
 
     loadUserPreferences(user.id).catch(() => {
       setPreferenceError("Không tải được tuỳ chọn đã lưu theo tài khoản.");
@@ -543,6 +553,7 @@ type AppConfig = {
   portraitVerticalNudge: number;
   portraitAspect: number;
   portraitMinWidthFactor: number;
+  notices: string[];
 };
 
 /**
@@ -555,6 +566,7 @@ function AppConfigPanel() {
   const { notify } = useAppNotifications();
   const [announcement, setAnnouncement] = useState("");
   const [level, setLevel] = useState("info");
+  const [notices, setNotices] = useState("");
   const [faceBanner, setFaceBanner] = useState(true);
   const [pollSeconds, setPollSeconds] = useState("20");
   const [portraitHeight, setPortraitHeight] = useState("1.85");
@@ -563,17 +575,23 @@ function AppConfigPanel() {
   const [portraitMinWidth, setPortraitMinWidth] = useState("1.35");
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (!data) return;
+  // Nạp cấu hình đã lưu vào form. Gán lúc render thay vì trong useEffect: bỏ được khung hình trung
+  // gian hiện form rỗng trước khi dữ liệu về, và React Compiler cấm setState đồng bộ trong effect.
+  // Mốc `seededData` giữ ĐÚNG bộ deps cũ [data]: nạp lại mỗi lần dữ liệu được tải lại (kể cả sau khi
+  // lưu), chứ không phải mỗi lần render.
+  const [seededData, setSeededData] = useState<AppConfig | null>(null);
+  if (data && seededData !== data) {
+    setSeededData(data);
     setAnnouncement(data.announcement);
     setLevel(data.announcementLevel || "info");
+    setNotices((data.notices || []).join("\n"));
     setFaceBanner(data.faceEnrollBannerEnabled);
     setPollSeconds(String(data.foregroundPollSeconds || 20));
     setPortraitHeight(String(data.portraitHeightFactor ?? 1.85));
     setPortraitNudge(String(data.portraitVerticalNudge ?? 0.15));
     setPortraitAspect(String(data.portraitAspect ?? 0.75));
     setPortraitMinWidth(String(data.portraitMinWidthFactor ?? 1.35));
-  }, [data]);
+  }
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -597,6 +615,10 @@ function AppConfigPanel() {
       await api.put<AppConfig>("/api/app-config", {
         announcement: announcement.trim(),
         announcementLevel: level,
+        notices: notices
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean),
         faceEnrollBannerEnabled: faceBanner,
         foregroundPollSeconds: secs,
         ...nums,
@@ -638,6 +660,20 @@ function AppConfigPanel() {
             <option value="critical">Quan trọng (đỏ)</option>
           </select>
         </Field>
+        <div className="lg:col-span-2">
+          <Field label="Lời nhắc chạy chữ trên Trang chủ app (mỗi dòng một lời nhắc)">
+            <textarea
+              value={notices}
+              onChange={(e) => setNotices(e.target.value)}
+              rows={4}
+              className="km-form-control w-full rounded-xl border px-3.5 py-2.5 text-sm outline-none transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+              placeholder={"VD:\nNhớ nộp báo cáo tuần trước 17h thứ Sáu\nGiữ gìn vệ sinh nơi làm việc"}
+            />
+          </Field>
+          <p className="mt-1 text-xs font-semibold text-[var(--text-muted)]">
+            Các lời nhắc này luân phiên cùng dải gõ chữ với lời chào theo buổi và nhắc chấm công. Để trống = chỉ còn lời nhắc gắn sẵn của app.
+          </p>
+        </div>
         <Field label="Nhịp tự làm mới khi mở app (giây)">
           <Input
             value={pollSeconds}
@@ -714,10 +750,17 @@ function ReleaseUpdatePanel() {
   const codeNum = Number(versionCode);
   const codeTooLow = isPublished && (!Number.isInteger(codeNum) || codeNum <= highestPublishedVersionCode);
 
-  useEffect(() => {
-    if (versionCodeTouched) return;
-    setVersionCode(String(Math.max(highestVersionCode, highestPublishedVersionCode) + 1));
-  }, [highestVersionCode, highestPublishedVersionCode, versionCodeTouched]);
+  // Gợi ý mã phiên bản kế tiếp = mốc cao nhất + 1. Gán lúc render thay vì trong useEffect: effect làm
+  // ô mã hiện số cũ thêm một khung hình sau khi danh sách bản phát hành đã về (dễ đọc nhầm số), và
+  // React Compiler cấm setState đồng bộ trong effect. Mốc `codeSeed` giữ ĐÚNG bộ deps cũ — gồm cả
+  // `versionCodeTouched`, nên vẫn không bao giờ đè lên số người dùng tự sửa.
+  const suggestedVersionCode = Math.max(highestVersionCode, highestPublishedVersionCode) + 1;
+  const versionCodeSeedKey = `${suggestedVersionCode}|${versionCodeTouched}`;
+  const [codeSeed, setCodeSeed] = useState<string | null>(null);
+  if (!versionCodeTouched && codeSeed !== versionCodeSeedKey) {
+    setCodeSeed(versionCodeSeedKey);
+    setVersionCode(String(suggestedVersionCode));
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();

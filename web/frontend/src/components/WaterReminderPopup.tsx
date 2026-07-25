@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { BellRing, CheckCircle2, Droplet, TimerReset, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useGlow } from "./Glass";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useGlow } from "./useGlow";
 import type { User } from "../lib/types";
 import {
   ensureWaterDailyLogin,
@@ -114,7 +114,9 @@ function ReminderArtwork() {
 export function WaterReminderPopup({ user }: { user: User }) {
   const [now, setNow] = useState(() => new Date());
   const dayKey = waterReminderDayKey(now);
-  const firstLoginIso = useMemo(() => ensureWaterDailyLogin(user.id, now), [dayKey, now, user.id]);
+  // dayKey suy ra TỪ `now` nên để trong deps là thừa (đã có `now` rồi) — bỏ đi cho khỏi hiểu nhầm
+  // rằng ngày đổi mới là một tín hiệu độc lập.
+  const firstLoginIso = useMemo(() => ensureWaterDailyLogin(user.id, now), [now, user.id]);
   const firstLoginMs = new Date(firstLoginIso).getTime();
   const reminderIndex = Math.max(1, Math.floor((now.getTime() - firstLoginMs) / HOUR_MS));
   const scheduleId = `${dayKey}:${firstLoginMs}`;
@@ -122,19 +124,24 @@ export function WaterReminderPopup({ user }: { user: User }) {
   const reminderAt = firstLoginMs + reminderIndex * HOUR_MS;
   const nextReminderAt = firstLoginMs + (reminderIndex + 1) * HOUR_MS;
   const [dayState, setDayState] = useState(() => loadDayState(user.id, dayKey));
-  const [enabled, setEnabled] = useState(() => isWaterReminderEnabled(user.id));
+  // Cờ bật/tắt nằm ở localStorage — một NGUỒN NGOÀI React. Đọc bằng useSyncExternalStore thay vì
+  // useState + useEffect(setState): React tự đăng ký/huỷ đăng ký và đọc lại đúng lúc render, nên không
+  // còn cảnh "render một nhịp bằng giá trị cũ rồi mới setState sửa lại" (chính là lỗi set-state-in-effect).
+  const enabled = useSyncExternalStore(
+    useCallback((onChange: () => void) => subscribeWaterReminderEnabled(user.id, onChange), [user.id]),
+    () => isWaterReminderEnabled(user.id),
+  );
   const { ref, onMouseMove } = useGlow();
 
-  useEffect(() => {
+  // Nạp lại trạng thái của NGÀY khi sang ngày mới (hoặc đổi tài khoản). Gán lúc render thay vì trong
+  // effect: React Compiler cấm setState đồng bộ trong effect, và giá trị khởi tạo useState ở trên đã
+  // lo lần đầu — nên mốc `dayStateFor` chỉ cần bắt đúng lúc cặp (user.id, dayKey) đổi, đúng bộ deps cũ.
+  const dayStateKey = `${user.id}:${dayKey}`;
+  const [dayStateFor, setDayStateFor] = useState(dayStateKey);
+  if (dayStateFor !== dayStateKey) {
+    setDayStateFor(dayStateKey);
     setDayState(loadDayState(user.id, dayKey));
-  }, [dayKey, user.id]);
-
-  useEffect(() => {
-    setEnabled(isWaterReminderEnabled(user.id));
-    return subscribeWaterReminderEnabled(user.id, () => {
-      setEnabled(isWaterReminderEnabled(user.id));
-    });
-  }, [user.id]);
+  }
 
   useEffect(() => {
     const tick = () => setNow(new Date());

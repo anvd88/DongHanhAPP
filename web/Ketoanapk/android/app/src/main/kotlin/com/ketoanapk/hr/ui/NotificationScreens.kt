@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,13 +98,17 @@ fun NotificationsScreen(
 @Composable
 private fun NotificationRow(n: AppNotification, onClick: () -> Unit) {
     val accent = notificationColor(n.kind)
+    // Nền dòng CHƯA ĐỌC phải là màu ĐẶC (đổ accent lên nền surface). Nếu để màu trong suốt (alpha thấp),
+    // bóng đổ từ shadowElevation hắt XUYÊN QUA nền, tạo "khung xám lồng hộp" trông như vỡ giao diện.
+    val surface = MaterialTheme.colorScheme.surface
+    val rowColor = if (n.read) surface else accent.copy(alpha = 0.08f).compositeOver(surface)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(22.dp),
-        color = if (n.read) MaterialTheme.colorScheme.surface else accent.copy(alpha = 0.06f),
+        color = rowColor,
         border = BorderStroke(1.dp, if (n.read) MaterialTheme.colorScheme.outline else accent.copy(alpha = 0.35f)),
         shadowElevation = 1.dp,
     ) {

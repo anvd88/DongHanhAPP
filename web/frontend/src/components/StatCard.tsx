@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import type { LucideIcon } from "lucide-react";
-import { useGlow } from "./Glass";
+import { useGlow } from "./useGlow";
 import { CountUp } from "./CountUp";
 
 const iosSpring = { type: "spring", stiffness: 330, damping: 25, mass: 0.82 } as const;

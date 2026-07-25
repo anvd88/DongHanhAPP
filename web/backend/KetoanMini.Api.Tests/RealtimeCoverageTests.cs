@@ -37,6 +37,9 @@ public sealed class RealtimeCoverageTests
         // Hạ tầng nội bộ, không có màn hình nào đọc.
         ["app_outbox"] = "hàng chờ nội bộ của OutboxWorker",
         ["schema_migrations"] = "sổ di trú lược đồ",
+        // Sổ chỉ-ghi-thêm để tra soát phân quyền về sau; chưa màn hình nào đọc trực tiếp, và người
+        // BỊ đổi quyền đã được báo riêng qua tín hiệu "access" (nhắm đúng một người, xem bên dưới).
+        ["user_role_history"] = "sổ lịch sử phân quyền, người bị ảnh hưởng đã được báo qua tín hiệu access",
     };
 
     private static string ApiSourceDir()
@@ -123,9 +126,9 @@ public sealed class RealtimeCoverageTests
     }
 
     /// <summary>
-    /// Endpoint KHÔNG được tự gọi hub nữa. Chỉ còn bốn ngoại lệ, mỗi cái vì một lý do trigger không
-    /// làm thay được: nhắm đúng người (chat, đá thiết bị, trả lời góp ý) hoặc dữ liệu chỉ nằm trong
-    /// bộ nhớ (số đo liveness). Thêm lời gọi hub mới ngoài danh sách này là đi ngược "một đường".
+    /// Endpoint KHÔNG được tự gọi hub nữa. Chỉ còn vài ngoại lệ, mỗi cái vì một lý do trigger không
+    /// làm thay được: nhắm đúng người (chat, đá thiết bị, trả lời góp ý, đổi quyền) hoặc dữ liệu chỉ
+    /// nằm trong bộ nhớ (số đo liveness). Thêm lời gọi hub mới ngoài danh sách này là đi ngược "một đường".
     /// </summary>
     [Fact]
     public void EndpointsDoNotPublishRealtimeByHand()
@@ -136,6 +139,10 @@ public sealed class RealtimeCoverageTests
             ("ChatEndpoints.cs", "chat"),              // nhắm đúng thành viên cuộc trò chuyện
             ("FeedbackEndpoints.cs", "feedbackResolved"), // báo riêng người đã gửi góp ý
             ("ChamCongEndpoints.cs", "liveness"),      // số đo trong RAM, không có bảng để gắn trigger
+            // Đổi quyền: chỉ MỘT người cần biết. Trigger trên app_users/user_roles sẽ bắt cả công ty
+            // nạp lại hồ sơ truy cập mỗi lần admin sửa quyền của một ai đó — đúng thứ "realtime scoping"
+            // muốn tránh. Quyền mới vẫn có hiệu lực ngay dù tín hiệu này không tới (server chốt theo DB).
+            ("UserEndpoints.cs", "\"access\""),
         };
 
         var offenders = new List<string>();

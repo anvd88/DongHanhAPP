@@ -73,8 +73,9 @@ public sealed class InfrastructureTests
         Assert.DoesNotContain("COUNT(*) FROM documents", sql, StringComparison.Ordinal);
 
         // Một hành động nghiệp vụ có thể chạm nhiều dòng; trigger mức STATEMENT chỉ phát một lần.
+        // Chấm công phát 'attendance' (không còn đi chung scope bắt-tất 'data') + 'hr' cho bảng công.
         var chamCong = Array.Find(DatabaseChangePublisher.Watched, w => w.Table == "cham_cong_log");
-        Assert.Equal(["data", "hr"], chamCong.Scopes);
+        Assert.Equal(["attendance", "hr"], chamCong.Scopes);
     }
 
     [Fact]
@@ -105,6 +106,7 @@ public sealed class InfrastructureTests
     [InlineData("UPDATE app_config SET updated_at = updated_at WHERE FALSE", "config")]
     [InlineData("UPDATE audit_logs SET occurred_at = occurred_at WHERE FALSE", "audit")]
     [InlineData("UPDATE hr_onboarding_tasks SET created_at = created_at WHERE FALSE", "talent")]
+    [InlineData("UPDATE cham_cong_log SET occurred_at = occurred_at WHERE FALSE", "attendance")]
     public async Task RealtimeChanges_PublishGranularScopes(string statement, string expectedScope)
     {
         using var scope = _factory.Services.CreateScope();

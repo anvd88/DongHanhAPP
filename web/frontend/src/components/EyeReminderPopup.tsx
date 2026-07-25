@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { BellRing, CheckCircle2, Clock3, Eye, TimerReset, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import { useGlow } from "./Glass";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useGlow } from "./useGlow";
 import type { User } from "../lib/types";
 import {
   ensureEyeDailyLogin,
@@ -123,21 +123,26 @@ export function EyeReminderPopup({ user }: { user: User }) {
   const reminderAt = firstLoginMs + reminderNumber * EYE_INTERVAL_MS;
   const nextReminderAt = reminderAt + EYE_INTERVAL_MS;
   const [dayState, setDayState] = useState(() => loadDayState(user.id, dayKey));
-  const [enabled, setEnabled] = useState(() => isEyeReminderEnabled(user.id));
+  // Cờ bật/tắt nằm ở localStorage — một NGUỒN NGOÀI React. Đọc bằng useSyncExternalStore thay vì
+  // useState + useEffect(setState): React tự đăng ký/huỷ đăng ký và đọc lại đúng lúc render, nên không
+  // còn cảnh "render một nhịp bằng giá trị cũ rồi mới setState sửa lại" (chính là lỗi set-state-in-effect).
+  const enabled = useSyncExternalStore(
+    useCallback((onChange: () => void) => subscribeEyeReminderEnabled(user.id, onChange), [user.id]),
+    () => isEyeReminderEnabled(user.id),
+  );
   const [resting, setResting] = useState(false);
   const [restSecondsLeft, setRestSecondsLeft] = useState(REST_SECONDS);
   const { ref, onMouseMove } = useGlow();
 
-  useEffect(() => {
+  // Nạp lại trạng thái của NGÀY khi sang ngày mới (hoặc đổi tài khoản). Gán lúc render thay vì trong
+  // effect: React Compiler cấm setState đồng bộ trong effect, và giá trị khởi tạo useState ở trên đã
+  // lo lần đầu — nên mốc `dayStateFor` chỉ cần bắt đúng lúc cặp (user.id, dayKey) đổi, đúng bộ deps cũ.
+  const dayStateKey = `${user.id}:${dayKey}`;
+  const [dayStateFor, setDayStateFor] = useState(dayStateKey);
+  if (dayStateFor !== dayStateKey) {
+    setDayStateFor(dayStateKey);
     setDayState(loadDayState(user.id, dayKey));
-  }, [dayKey, user.id]);
-
-  useEffect(() => {
-    setEnabled(isEyeReminderEnabled(user.id));
-    return subscribeEyeReminderEnabled(user.id, () => {
-      setEnabled(isEyeReminderEnabled(user.id));
-    });
-  }, [user.id]);
+  }
 
   useEffect(() => {
     const tick = () => setNow(new Date());
@@ -187,27 +192,33 @@ export function EyeReminderPopup({ user }: { user: User }) {
   const isHandled = Boolean(dayState.completed[reminderId] || dayState.dismissed[reminderId]);
   const visible = enabled && now.getTime() >= reminderAt && !isHandled && !isSnoozed;
 
+  // Popup ẩn đi thì bỏ trạng thái "đang nghỉ"; rời chế độ nghỉ thì nạp lại đồng hồ. Gán lúc render
+  // thay vì trong effect (React Compiler cấm setState đồng bộ trong effect). Hai mốc dưới chỉ chạy
+  // đúng lúc `visible` / `resting` ĐỔI, nên không cắt ngang một phiên nghỉ đang chạy.
+  const [restSeenVisible, setRestSeenVisible] = useState(visible);
+  if (restSeenVisible !== visible) {
+    setRestSeenVisible(visible);
+    if (!visible) setResting(false);
+  }
+  const [restSeenResting, setRestSeenResting] = useState(resting);
+  if (restSeenResting !== resting) {
+    setRestSeenResting(resting);
+    if (!resting) setRestSecondsLeft(REST_SECONDS);
+  }
+
   useEffect(() => {
-    if (!visible) {
-      setResting(false);
-      setRestSecondsLeft(REST_SECONDS);
-      return;
-    }
+    if (!visible || !resting) return;
 
-    if (!resting) {
-      setRestSecondsLeft(REST_SECONDS);
-      return;
-    }
-
-    if (restSecondsLeft <= 0) {
-      completeReminder();
-      setResting(false);
-      setRestSecondsLeft(REST_SECONDS);
-      return;
-    }
-
+    // Đếm lùi mỗi giây. Giây cuối cùng vừa hạ đồng hồ về 0 vừa ghi nhận "đã nghỉ" NGAY TRONG hàm của
+    // setTimeout — không phải trong thân effect — nên hợp luật mà tổng thời lượng nghỉ không đổi
+    // (vẫn đúng REST_SECONDS nhịp). Rời chế độ nghỉ xong, đồng hồ tự nạp lại nhờ `restSeenResting`.
     const timeoutId = window.setTimeout(() => {
-      setRestSecondsLeft((current) => Math.max(0, current - 1));
+      const next = Math.max(0, restSecondsLeft - 1);
+      setRestSecondsLeft(next);
+      if (next <= 0) {
+        completeReminder();
+        setResting(false);
+      }
     }, 1000);
 
     return () => window.clearTimeout(timeoutId);

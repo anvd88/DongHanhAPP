@@ -8,7 +8,8 @@ import { FaceTrackingOverlay, type Framing } from "./FaceTrackingOverlay";
  * Đăng ký khuôn mặt theo THỜI GIAN THỰC: bám hướng mặt liên tục bằng MediaPipe ngay trên trình
  * duyệt (KHÔNG còn chụp loạt ảnh rồi hỏi server từng khung). Mỗi bước nhắc 1 tư thế; khi người dùng
  * GIỮ ĐÚNG góc đủ ổn định, hệ thống tự chụp ĐÚNG MỘT khung và gửi /dangky để lưu mẫu. Hướng mặt được
- * tính client-side bằng đúng công thức hình học với /huongmat của server (xem estimatePose).
+ * tính HOÀN TOÀN client-side (xem estimatePose trong FaceTrackingOverlay) — server không còn endpoint
+ * ước lượng tư thế nào nữa, /huongmat đã gỡ vì không ai gọi.
  */
 type Dir = "center" | "left" | "right" | "up" | "down";
 type Step = { dir: Dir; label: string };
@@ -19,7 +20,8 @@ const STEPS: Step[] = [
   { dir: "right", label: "Quay mặt sang phải một chút" },
 ];
 
-// Ngưỡng (tỉ lệ hình học landmark, không phải độ) — giữ cùng thang với server /huongmat.
+// Ngưỡng (tỉ lệ hình học landmark, không phải độ) — cùng thang với FacePose phía máy chủ
+// (AdaFaceR50Engine.PoseFrom), vì server vẫn dùng thang đó để chấm tư thế khi lưu mẫu.
 const YAW_FRONTAL = 0.13; // |yaw| dưới mức này coi là chính diện
 const YAW_DELTA = 0.14; // mức quay trái/phải tối thiểu so với chính diện
 const PITCH_DELTA = 0.07; // mức ngước/cúi tối thiểu so với chính diện

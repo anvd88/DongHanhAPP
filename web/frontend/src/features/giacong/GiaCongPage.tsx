@@ -3,7 +3,7 @@ import { MotionConfig, motion } from "motion/react";
 import { ArrowDownToLine, ArrowUpFromLine, RefreshCw } from "lucide-react";
 import { TooltipProvider } from "../../shadcn/tooltip";
 import { Button } from "../../shadcn/button";
-import { useAppNotifications } from "../../components/AppNotifications";
+import { useAppNotifications } from "../../components/app-notifications-context";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
 import type { GiaCongListItem } from "../../lib/types";
@@ -26,6 +26,7 @@ export function GiaCongPage() {
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [seedId, setSeedId] = useState<number | undefined>(undefined);
+  const [editorSession, setEditorSession] = useState(0);
   const [initialLoaiPhieu, setInitialLoaiPhieu] = useState<LoaiGiaCong>(LOAI_XUAT);
   const [refreshing, setRefreshing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -61,22 +62,33 @@ export function GiaCongPage() {
     window.setTimeout(() => setRefreshing(false), 650);
   };
 
-  const openNew = (loai: LoaiGiaCong) => {
-    setInitialLoaiPhieu(loai);
-    setSeedId(undefined);
-    setEditing("new");
+  // Mỗi lần mở form là một "phiên" mới. Dùng làm key cho EditorDialog để nó tự dựng lại với dữ liệu
+  // đúng, thay vì phải xoá/nạp lại từng ô bằng useEffect. Cố ý KHÔNG lấy `editing` làm key: đóng form
+  // sẽ đổi key và làm form nháy trắng ngay giữa lúc đang chạy hiệu ứng đóng.
+  const openEditor = (apply: () => void) => {
+    apply();
+    setEditorSession((n) => n + 1);
   };
 
-  const openEdit = (id: number) => {
-    setSeedId(undefined);
-    setEditing(id);
-  };
+  const openNew = (loai: LoaiGiaCong) =>
+    openEditor(() => {
+      setInitialLoaiPhieu(loai);
+      setSeedId(undefined);
+      setEditing("new");
+    });
 
-  const openDuplicate = (id: number) => {
-    setInitialLoaiPhieu(LOAI_XUAT);
-    setSeedId(id);
-    setEditing("new");
-  };
+  const openEdit = (id: number) =>
+    openEditor(() => {
+      setSeedId(undefined);
+      setEditing(id);
+    });
+
+  const openDuplicate = (id: number) =>
+    openEditor(() => {
+      setInitialLoaiPhieu(LOAI_XUAT);
+      setSeedId(id);
+      setEditing("new");
+    });
 
   const closeEditor = () => setEditing(null);
 
@@ -153,6 +165,7 @@ export function GiaCongPage() {
         </div>
 
         <EditorDialog
+          key={editorSession}
           open={editing !== null}
           id={editing ?? "new"}
           seedId={seedId}

@@ -89,7 +89,7 @@ public static class ReleaseEndpoints
 
         user.MapGet("/{id:long}/download", DownloadPublishedRelease);
 
-        var g = app.MapGroup("/api/releases").RequireAuthorization(p => p.RequireRole("Admin"));
+        var g = app.MapGroup("/api/releases").RequirePermission(Permissions.SystemReleasesManage);
 
         g.MapGet("/", async (Database db) =>
         {

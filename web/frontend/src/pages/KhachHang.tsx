@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { MotionConfig, motion } from "motion/react";
 import {
   Building2,
@@ -17,7 +17,7 @@ import {
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { Button, Field, Input } from "../components/ui";
 import { Button as GlassButton } from "../shadcn/button";
 import { api } from "../lib/api";
@@ -83,16 +83,16 @@ export function KhachHang() {
     });
   }, [customers, search]);
 
-  useEffect(() => {
-    if (!customers?.length) {
-      setSelectedId(null);
-      return;
-    }
-
-    if (!selectedId || !customers.some((customer) => customer.id === selectedId)) {
-      setSelectedId(customers[0].id);
-    }
-  }, [customers, selectedId]);
+  // Giữ lựa chọn luôn hợp lệ: danh sách rỗng thì bỏ chọn, còn nếu khách đang chọn không có trong
+  // danh sách (vừa xoá, vừa lọc lại) thì nhảy về khách đầu tiên. SUY RA lúc render thay vì đồng bộ
+  // trong useEffect — cùng một điểm dừng, nhưng React nhận state mới TRƯỚC khi chạy effect nên
+  // không còn nhịp gọi `/report` bằng id đã chết. Điều kiện tự chặn: gán xong thì lần sau khớp ngay.
+  const validId = customers?.length
+    ? customers.some((customer) => customer.id === selectedId)
+      ? selectedId
+      : customers[0].id
+    : null;
+  if (validId !== selectedId) setSelectedId(validId);
 
   const removeCustomer = async (customer: Customer) => {
     if (deletingId) return;

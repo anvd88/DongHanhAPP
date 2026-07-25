@@ -13,7 +13,7 @@ public static class AccountingEndpoints
 
     public static void MapAccounting(this IEndpointRouteBuilder app)
     {
-        var api = app.MapGroup("/api").RequireAuthorization("Accounting");
+        var api = app.MapGroup("/api").RequirePermission(Permissions.AccountingAccess);
 
         // ---------- Dashboard ----------
         api.MapGet("/dashboard", async (Database db) =>

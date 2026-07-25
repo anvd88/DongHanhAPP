@@ -1,6 +1,7 @@
 package com.ketoanapk.hr.network
 
 import com.ketoanapk.hr.BuildConfig
+import com.ketoanapk.hr.data.ServerClock
 import com.ketoanapk.hr.data.TokenStore
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.runBlocking
@@ -60,8 +61,17 @@ object ApiClient {
             else HttpLoggingInterceptor.Level.NONE
         }
 
+        // Đồng bộ đồng hồ máy chủ từ header "Date" của mọi phản hồi → giờ hiển thị (lời chào theo buổi…)
+        // luôn theo máy chủ, không lệ thuộc đồng hồ máy có thể bị chỉnh sai.
+        val serverClock = Interceptor { chain ->
+            val response = chain.proceed(chain.request())
+            response.headers.getDate("Date")?.let { ServerClock.sync(it.time) }
+            response
+        }
+
         val client = OkHttpClient.Builder()
             .addInterceptor(auth)
+            .addInterceptor(serverClock)
             .addInterceptor(logging)
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)

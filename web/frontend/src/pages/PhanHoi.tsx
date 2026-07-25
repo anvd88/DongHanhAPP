@@ -10,7 +10,7 @@ import { dateTime, initials } from "../lib/format";
 import { useAuth } from "../lib/auth";
 import { useApi } from "../lib/useApi";
 import { isAdmin, type ChatConversation, type ChatMessage, type FeedbackItem } from "../lib/types";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 
 type FeedbackFilter = "all" | "ChatReport" | "AttendanceIssue";
 type FeedbackPage = "feedback" | "support";
@@ -117,10 +117,13 @@ export function PhanHoi() {
   );
   const supportMessages = supportMessageData ?? [];
 
-  useEffect(() => {
-    if (!admin || activeSupportId || supportConversations.length === 0) return;
+  // Chọn sẵn cuộc hỗ trợ đầu tiên khi admin mở trang mà chưa chọn gì. Gán lúc render thay vì trong
+  // useEffect: effect vẽ thừa một khung hình "chưa chọn cuộc nào" rồi mới nhảy, và React Compiler
+  // cấm setState đồng bộ trong effect. Điều kiện tự chặn — chọn xong thì `activeSupportId` có giá
+  // trị nên lần render sau không vào nhánh này nữa.
+  if (admin && !activeSupportId && supportConversations.length > 0) {
     setActiveSupportId(supportConversations[0].id);
-  }, [activeSupportId, admin, supportConversations]);
+  }
 
   useEffect(() => {
     requestAnimationFrame(() => {

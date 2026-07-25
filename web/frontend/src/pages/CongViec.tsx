@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   CalendarClock,
   CheckCircle2,
@@ -19,7 +19,7 @@ import { GlassPanel } from "../components/glass/GlassPanel";
 import { Badge, Button, Field, Input, Select, Spinner, EmptyState } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { useApi } from "../lib/useApi";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { dateTime, date as fmtDate } from "../lib/format";
 import {
   PRIORITY_COLOR,
@@ -105,21 +105,15 @@ function TaskFormModal({
   onSaved: () => void;
 }) {
   const { notify } = useAppNotifications();
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [assignee, setAssignee] = useState("");
-  const [priority, setPriority] = useState("normal");
-  const [dueAt, setDueAt] = useState("");
+  // Nạp thẳng vào giá trị khởi tạo: trang cha gắn key theo từng lần mở form (xem `formSession`), nên
+  // mỗi lần mở là một component mới với dữ liệu đúng ngay từ khung hình đầu. Không cần useEffect
+  // nạp lại từng ô — cách cũ còn có nguy cơ đè lên chữ người dùng đang gõ nếu `editing` được tải lại.
+  const [title, setTitle] = useState(editing?.title ?? "");
+  const [description, setDescription] = useState(editing?.description ?? "");
+  const [assignee, setAssignee] = useState(editing?.assigneeUsername ?? "");
+  const [priority, setPriority] = useState(editing?.priority ?? "normal");
+  const [dueAt, setDueAt] = useState(editing?.dueAt ? toLocalInput(editing.dueAt) : "");
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setTitle(editing?.title ?? "");
-    setDescription(editing?.description ?? "");
-    setAssignee(editing?.assigneeUsername ?? "");
-    setPriority(editing?.priority ?? "normal");
-    setDueAt(editing?.dueAt ? toLocalInput(editing.dueAt) : "");
-  }, [open, editing]);
 
   const submit = async () => {
     if (!title.trim()) return notify.error("Vui lòng nhập tên công việc.");
@@ -224,9 +218,14 @@ function TaskDetailModal({
   const [rating, setRating] = useState(0);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (data?.task) setProgress(data.task.progress);
-  }, [data?.task]);
+  // Nạp tiến độ từ máy chủ vào thanh kéo, nhưng KHÔNG đè lên khi người dùng đang kéo dở: chỉ nạp lại
+  // khi bản ghi công việc thực sự đổi. Làm ngay lúc render (không qua useEffect) nên không có khung
+  // hình nào hiển thị số cũ rồi mới nhảy sang số mới.
+  const [seededTask, setSeededTask] = useState<WorkTask | null>(null);
+  if (data?.task && data.task !== seededTask) {
+    setSeededTask(data.task);
+    setProgress(data.task.progress);
+  }
 
   const run = async (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true);
@@ -498,25 +497,29 @@ function toLocalInput(iso: string): string {
 export function CongViec() {
   const { data, loading, error, reload } = useApi<TaskListResult>("/api/tasks");
   const { data: meta, reload: reloadMeta } = useApi<TaskMeta>("/api/tasks/meta");
-  const [tab, setTab] = useState<Tab>("inbox");
+  const [selectedTab, setTab] = useState<Tab>("inbox");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<WorkTask | null>(null);
+  const [formSession, setFormSession] = useState(0);
 
   const canAssign = data?.canAssign ?? meta?.canAssign ?? false;
   const inbox = data?.inbox ?? [];
   const outbox = data?.outbox ?? [];
   const summary = data?.summary;
 
-  // Nếu không phải người giao thì luôn ở tab "của tôi".
-  useEffect(() => {
-    if (!canAssign && tab === "outbox") setTab("inbox");
-  }, [canAssign, tab]);
+  // Nếu không phải người giao thì luôn ở tab "của tôi". SUY RA thay vì sửa state trong effect: quyền
+  // giao việc có thể bị thu hồi giữa chừng (admin đổi vai trò → tín hiệu realtime), và cách này khoá
+  // tab ngay trong lần render đó, không để lọt một khung hình hiển thị tab "Tôi giao".
+  const tab: Tab = !canAssign && selectedTab === "outbox" ? "inbox" : selectedTab;
 
   const rows = tab === "inbox" ? inbox : outbox;
   const openForm = useCallback((task: WorkTask | null) => {
     setEditing(task);
     setFormOpen(true);
+    // Mỗi lần mở là một "phiên" mới → dùng làm key để form tự dựng lại với dữ liệu đúng, thay vì
+    // phải nạp lại từng ô bằng useEffect. Đóng form KHÔNG đổi key nên không nháy trắng lúc đóng.
+    setFormSession((n) => n + 1);
   }, []);
 
   const refreshAll = useCallback(() => {
@@ -611,6 +614,7 @@ export function CongViec() {
         />
       )}
       <TaskFormModal
+        key={formSession}
         open={formOpen}
         onClose={() => setFormOpen(false)}
         meta={meta}

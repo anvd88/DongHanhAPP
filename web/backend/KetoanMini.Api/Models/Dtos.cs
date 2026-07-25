@@ -11,7 +11,9 @@ public record FacePasswordResetRequest(string Username, string NewPassword, List
 public record RecoveryResetRequest(string Username, string Code, string NewPassword);
 // Trả về mã khôi phục vừa tạo cho admin xem một lần (không lưu bản rõ ở server).
 public record RecoveryCodeResponse(string Code);
-public record LoginResponse(string Token, UserDto User);
+/// <summary>Token CHỈ có với client native (ứng dụng Android). Với trình duyệt, phiên nằm trong cookie
+/// HttpOnly và trường này là null — cố ý, để JavaScript không cầm được token (xem Security/AuthCookies.cs).</summary>
+public record LoginResponse(string? Token, UserDto User);
 public record QrLoginStartRequest(string? Sid, string ClientMode = "desktop_qr");
 public record QrLoginStartResponse(
     string QrCode,
@@ -90,9 +92,12 @@ public record UserDto(Guid Id, string Username, string FullName, string Email, s
     /// hiện/ẩn tính năng giao việc &amp; nghiệm thu. Rỗng ⇒ chỉ có vai trò chính trong <see cref="Role"/>.</summary>
     public IReadOnlyList<string> Roles { get; init; } = System.Array.Empty<string>();
 
-    /// <summary>Có thẩm quyền giao việc &amp; nghiệm thu (Admin hoặc giữ vai trò Thủ kho).</summary>
-    public bool CanAssignTasks => IsAdmin
-        || Roles.Any(r => string.Equals(r, "Warehouse", StringComparison.OrdinalIgnoreCase));
+    /// <summary>Có thẩm quyền giao việc &amp; nghiệm thu = có quyền tasks.assign. Suy từ BẢNG vai trò→quyền
+    /// (Security/Permissions.cs) chứ không liệt kê tên vai trò ở đây, để thêm vai trò được giao việc
+    /// (Trưởng phòng…) không phải nhớ sửa thêm chỗ này.</summary>
+    public bool CanAssignTasks =>
+        KetoanMini.Api.Security.Permissions.For(Roles.Count > 0 ? Roles : [Role])
+            .Contains(KetoanMini.Api.Security.Permissions.TasksAssign);
 }
 
 // ----- Dashboard -----
@@ -129,9 +134,12 @@ public record UserAdminDto(Guid Id, string Username, string FullName, string Ema
     IReadOnlyList<string> SecondaryRoles);
 public record CreateUserRequest(string Username, string FullName, string Email, string Password, string Role);
 public record SetLockRequest(bool Locked);
-public record SetRoleRequest(string Role);
+// Reason: lý do đổi quyền, ghi vào lịch sử phân quyền (user_role_history) để sau này tra soát được
+// vì sao một người từng có quyền đó. Không bắt buộc để không chặn thao tác gấp.
+public record SetRoleRequest(string Role, string? Reason = null);
 // Cấp/thu một vai trò PHỤ (vd "Warehouse" = Thủ kho) cho tài khoản. Grant=true để cấp, false để thu hồi.
-public record SetSecondaryRoleRequest(string Role, bool Grant);
+// ExpiresAt: cấp TẠM tới thời điểm này rồi tự hết hiệu lực (ủy quyền khi người phụ trách đi vắng).
+public record SetSecondaryRoleRequest(string Role, bool Grant, DateTime? ExpiresAt = null, string? Reason = null);
 public record SetVerifiedRequest(bool Verified);
 public record SetDiamondRequest(bool IsDiamond);
 public record ResetPasswordResponse(string Code);
@@ -213,7 +221,6 @@ public record DangKyKhuonMatRequest(string Username, string FullName, string Ima
 public record FaceNguoiDungDto(string Username, string FullName, int SoMau, DateTime? CreatedAt);
 public record FaceRegistrationLogDto(long Id, string Username, string FullName, DateTime CreatedAt, string CreatedBy);
 public record NhanDienRequest(string ImageBase64);
-public record FacePoseDto(bool Found, double Yaw, double Pitch);
 
 // Tự đăng ký khuôn mặt (app): mỗi tài khoản chỉ đăng ký MỘT lần, gồm nhiều tư thế (góc) để mẫu bền.
 // Mỗi góc là một loạt ảnh; server chọn khung tốt nhất, kiểm tra chất lượng + liveness rồi lưu 1 mẫu/góc.
@@ -237,33 +244,45 @@ public record NhanDienResult(bool Matched, string? Username, string? FullName, d
 /// </summary>
 // MotionCheck=true: loạt ảnh này được chụp KHI người dùng QUAY ĐẦU (chống ảnh tĩnh) ⇒ server kiểm tra
 // biên độ góc quay (yaw span). Ngoại tuyến/kiosk giữ hình tĩnh ⇒ false ⇒ bỏ qua kiểm tra chuyển động.
-public record ChamCongBurstRequest(List<string> Images, DateTime? OccurredAt = null, bool SelfOnly = false,
+// ConfirmToken: token do bước XEM TRƯỚC cấp. Có token thì KHÔNG cần gửi lại ảnh — server ghi công theo
+// kết quả đã nhận diện, không chạy lại AdaFace/Silent-Face lần hai. Client cũ không gửi trường này vẫn
+// chạy đúng luồng gửi lại ảnh như trước (tương thích ngược cho APK đã phát hành).
+public record ChamCongBurstRequest(List<string>? Images = null, DateTime? OccurredAt = null, bool SelfOnly = false,
     bool PreviewOnly = false, double? GpsLat = null, double? GpsLng = null,
-    string? ChallengeId = null, List<int>? SlotIndices = null, bool MotionCheck = false);
-
-/// <summary>
-/// Active-flash liveness: server phát chuỗi màu ngẫu nhiên; client hiển thị đúng thứ tự từng
-/// <see cref="SlotMs"/>ms (chờ <see cref="SettleMs"/>ms cho màn hình + camera ổn định) rồi gắn nhãn slot
-/// cho từng khung gửi lên. <see cref="FlashSlot.Color"/> là mã hex CSS phủ đầy màn hình.
-/// </summary>
-public record FlashChallengeResponse(string ChallengeId, List<FlashSlot> Slots, int SlotMs, int SettleMs);
-public record FlashSlot(int Index, string Color);
+    bool MotionCheck = false, string? ConfirmToken = null);
 
 // Cấu hình liveness QUAY ĐẦU (challenge-response): Enabled = app yêu cầu quay đầu lúc quét;
 // Enforce = chặn nếu biên độ quay quá nhỏ (nghi ảnh tĩnh) hay chỉ ghi log để hiệu chỉnh.
 public record MotionConfigDto(bool Enabled, bool Enforce);
 
+// Cấu hình kiểm tra MỞ MẮT phía server: Enforce = chặn khi mắt nhắm/lim dim (bestEyeOpen < Threshold);
+// mặc định TẮT (chỉ đo) để hiệu chỉnh trước. Threshold theo thang EyeOpenScore (0..1).
+public record EyeOpenConfigDto(bool Enforce, double Threshold);
+
 // Một lượt đo Silent-Face (chống ảnh/màn hình): điểm P(real) cao nhất/trung bình/nhì + biên độ quay đầu.
+// EyeOpen = độ mở mắt cao nhất của loạt (−1 = không đo được); để hiệu chỉnh ngưỡng chặn nhắm mắt.
 public record LivenessMetricDto(DateTime AtUtc, string User, double Best, double Mean, double Second,
-    int Frames, double Threshold, bool Passed, double MotionSpan);
+    int Frames, double Threshold, bool Passed, double MotionSpan, double EyeOpen = -1);
+
+// Mức chống giả mạo đang chạy thật: Level = Full | Basic | None (xem AntiSpoofLevel).
+// None nghĩa là MỌI ảnh được coi là người thật — panel admin phải cảnh báo đỏ.
+public record AntiSpoofDto(string Level, string Detail);
+
+// Dữ liệu cho panel "Chống ảnh/màn hình giả": trạng thái model + cấu hình mở mắt + các lượt đo gần nhất.
+public record LivenessPanelDto(AntiSpoofDto AntiSpoof, List<LivenessMetricDto> Metrics, EyeOpenConfigDto? EyeOpen = null);
 
 /// <summary>
 /// Kết quả chấm công theo loạt ảnh. <see cref="Status"/>:
 /// ok | posture (sai tư thế) | lowquality | noface | spoof | unknown.
 /// <see cref="Guidance"/> là hướng dẫn sửa tư thế/điều kiện chụp (nếu có).
 /// </summary>
+/// <remarks>
+/// <c>PreviewToken</c> chỉ có ở phản hồi của bước xem trước: client gửi lại token này (thay cho cả loạt
+/// ảnh) khi bấm "Xác nhận" để ghi công mà không phải nhận diện lại.
+/// </remarks>
 public record ChamCongResult(string Status, bool Matched, string? Username, string? FullName,
-    double Similarity, string? Loai, DateTime? OccurredAt, double Quality, string Message, string? Guidance);
+    double Similarity, string? Loai, DateTime? OccurredAt, double Quality, string Message, string? Guidance,
+    string? PreviewToken = null);
 public record ChamCongLogDto(long Id, string Username, string FullName, string Loai, double Similarity,
     DateTime OccurredAt, string GhiChu);
 

@@ -23,12 +23,15 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -78,15 +81,20 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -124,6 +132,12 @@ private const val HOLD_MS = 3000L          // quét giữ khung 3 giây (kèm so
 private const val MOTION_CENTER_YAW = 12f  // |yaw| < mức này = coi như nhìn thẳng (độ)
 private const val MOTION_TURN_YAW = 20f    // |yaw| > mức này = đã quay đủ sang một bên (độ)
 private const val MOTION_FRONTAL_MS = 350L // giữ nhìn thẳng ngần này trước khi yêu cầu quay
+// ── Kiểm tra "đang nhìn vào màn hình" trong lúc quét (mở mắt + hướng mặt thẳng) ──
+// Không có eye-tracking con ngươi (ML Kit không cho) nên "ánh nhìn" = tư thế đầu hướng vào máy trên
+// cả hai trục + mắt đang mở. Nhắm mắt / nhìn đi chỗ khác sẽ TẠM DỪNG đồng hồ giữ khung.
+private const val GAZE_MAX_YAW = 18f       // |yaw| < mức này = mặt hướng vào màn hình (trục ngang)
+private const val GAZE_MAX_PITCH = 18f     // |pitch| < mức này = không cúi/ngẩng quá (trục dọc)
+private const val EYE_OPEN_MIN = 0.35f     // xác suất mở mắt tối thiểu (dưới = coi như nhắm/lim dim)
 private const val POLL_MS = 40L
 private const val FACE_STALE_MS = 350L     // không thấy mặt quá lâu = coi như rời khung
 private const val AIM_TIMEOUT_MS = 45_000L // không căn được khung đủ lâu → tự huỷ để thử lại
@@ -180,25 +194,14 @@ fun AttendanceScreen(vm: HrViewModel) {
         capture is AttendanceCapture.Preparing ->
             AttendanceStatusScreen("Đang chuẩn bị máy quét…")
 
-        capture is AttendanceCapture.Recognizing ->
-            AttendanceStatusScreen("Đang so khớp khuôn mặt…")
-
-        capture is AttendanceCapture.AwaitingConfirm -> ConfirmScreen(
-            result = capture.result,
-            onConfirm = vm::confirmAttendance,
-            onRescan = vm::rescanAttendance,
-            onClose = vm::resetCapture,
-        )
-
-        capture is AttendanceCapture.Submitting ->
-            AttendanceStatusScreen("Đang xử lý…")
-
-        capture is AttendanceCapture.Done -> ResultScreen(
-            result = capture.result,
-            onRescan = vm::rescanAttendance,
-            onClose = vm::resetCapture,
-            onExplain = { vm.startAttendanceExplanation(capture.result) },
-        )
+        // Nhận diện → xác nhận → ghi công: MỘT màn hình duy nhất (cùng một call-site) để hiệu ứng
+        // "vòng loading → vẽ dấu tích/dấu X → trượt lên góc trái → hiện thông tin" liền mạch, không
+        // bị Compose thay composable giữa chừng làm giật. Kiểu xác thực giao dịch Techcombank.
+        capture is AttendanceCapture.Recognizing ||
+            capture is AttendanceCapture.AwaitingConfirm ||
+            capture is AttendanceCapture.Submitting ||
+            capture is AttendanceCapture.Done ->
+            AttendanceVerifyScreen(vm)
 
         else -> AttendanceLanding(
             server = server,
@@ -486,194 +489,389 @@ private fun CameraHint(icon: ImageVector, text: String) {
     }
 }
 
+// ── Xác thực chấm công kiểu Techcombank ─────────────────────────────────────────
+// Vòng loading → vẽ dấu tích (thành công) / dấu X đỏ (thất bại) ngay trên vòng tròn → trượt badge
+// lên góc trên bên trái → các dòng thông tin đi từ dưới lên, mờ dần hiện rõ (~1.5s). Nền TẠM để
+// trắng theo yêu cầu; chữ để màu tối cố định cho dễ đọc ở mọi theme.
+private val VerifyGreen = Color(0xFF2FB44E)
+private val VerifyRed = Color(0xFFF23A33)
+private val VerifyInk = Color(0xFF17181C)
+private val VerifyInkSoft = Color(0xFF6B7280)
+
+private enum class VerifyBadge { Check, Cross }
+private enum class VerifyPhase { Loading, Resolving, Revealed }
+
+/** Trạng thái "coi như thành công" để chọn dấu tích (còn lại vẽ dấu X). */
+private fun isVerifySuccess(status: String) =
+    status.equals("ok", true) || status.equals("offline", true) || status.equals("pending", true)
+
 /**
- * Màn hình XÁC NHẬN RIÊNG (không đè lên camera): hiện "Nhân viên / Giờ vào (hoặc Giờ ra)" trên nền
- * ứng dụng, dưới có nút Xác nhận (ghi công thật) và Quét lại. Nút Đóng ở góc để thoát về màn chờ.
+ * MỘT màn hình cho cả Recognizing / AwaitingConfirm / Submitting / Done (cùng một call-site ở
+ * [AttendanceScreen]) để hiệu ứng liền mạch, không bị Compose thay composable giữa chừng. Máy trạng
+ * thái nội bộ:
+ *  - Loading  : vòng xoay tròn ở giữa (đang so khớp / đang ghi công).
+ *  - Resolving: vòng tròn đặc + dấu tích/dấu X vẽ dần rồi trượt lên góc trái.
+ *  - Revealed : badge ở góc trên trái, các dòng thông tin lần lượt hiện lên + nút hành động.
  */
 @Composable
-private fun ConfirmScreen(
-    result: ChamCongResult,
-    onConfirm: () -> Unit,
-    onRescan: () -> Unit,
-    onClose: () -> Unit,
-) {
-    val isOut = result.loai.equals("Ra", true)
-    val timeLabel = if (isOut) "Giờ ra" else "Giờ vào"
-    val timeIcon = if (isOut) Icons.AutoMirrored.Filled.Logout else Icons.AutoMirrored.Filled.Login
-    val accent = MaterialTheme.colorScheme.primary
-    Column(
+private fun AttendanceVerifyScreen(vm: HrViewModel) {
+    val cap = vm.attendanceCapture
+
+    // Trạng thái + animation phải sống xuyên suốt các lần đổi state → remember (call-site duy nhất).
+    var phase by remember { mutableStateOf(VerifyPhase.Loading) }
+    var badge by remember { mutableStateOf<VerifyBadge?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    // Kết quả + kiểu hiển thị được "chốt" lúc phân giải để không mất khi state nhảy sang Submitting.
+    var shownResult by remember { mutableStateOf<ChamCongResult?>(null) }
+    var confirmMode by remember { mutableStateOf(false) }
+
+    val badgeDraw = remember { Animatable(0f) } // 0 = còn vòng xoay, 1 = tích/X vẽ xong
+    val centerT = remember { Animatable(1f) }   // 1 = badge to & ở giữa, 0 = nhỏ & ở góc trái
+    val reveal = remember { Animatable(0f) }    // 0..1 tiến độ hiện thông tin (tween ~1.5s)
+
+    // "Chữ ký" state để biết khi nào chạy lại chuỗi animation.
+    val key = when (cap) {
+        is AttendanceCapture.Recognizing -> "load:recog"
+        is AttendanceCapture.Submitting -> "load:submit"
+        is AttendanceCapture.AwaitingConfirm -> "resolve:confirm"
+        is AttendanceCapture.Done -> if (isVerifySuccess(cap.result.status)) "resolve:ok" else "resolve:fail"
+        else -> "load:other"
+    }
+
+    LaunchedEffect(key) {
+        if (key.startsWith("load")) {
+            if (phase == VerifyPhase.Revealed) {
+                // Đang hiện thông tin xác nhận thì bấm "Xác nhận" → ghi công: giữ nguyên bố cục, chỉ
+                // hiện tiến trình ở khu nút (KHÔNG thu badge về giữa để vẽ lại).
+                busy = true
+            } else {
+                busy = false
+                phase = VerifyPhase.Loading
+                badge = null
+                badgeDraw.snapTo(0f); centerT.snapTo(1f); reveal.snapTo(0f)
+            }
+        } else {
+            val target = if (key == "resolve:fail") VerifyBadge.Cross else VerifyBadge.Check
+            busy = false
+            shownResult = when (cap) {
+                is AttendanceCapture.AwaitingConfirm -> cap.result
+                is AttendanceCapture.Done -> cap.result
+                else -> shownResult
+            }
+            confirmMode = cap is AttendanceCapture.AwaitingConfirm
+            if (phase == VerifyPhase.Revealed && badge == target) {
+                // Ví dụ: xác nhận (tích) → ghi công xong (vẫn tích): chỉ đổi nội dung, không vẽ lại.
+                badgeDraw.snapTo(1f); centerT.snapTo(0f); reveal.snapTo(1f)
+            } else {
+                phase = VerifyPhase.Resolving
+                badge = target
+                badgeDraw.snapTo(0f); centerT.snapTo(1f); reveal.snapTo(0f)
+                badgeDraw.animateTo(1f, tween(680))         // vòng tròn đặc + vẽ dấu
+                delay(160)
+                centerT.animateTo(0f, tween(520, easing = FastOutSlowInEasing)) // trượt lên góc trái
+                reveal.animateTo(1f, tween(1500))           // các dòng thông tin hiện dần
+                phase = VerifyPhase.Revealed
+            }
+        }
+    }
+
+    val loadingLabel = if (cap is AttendanceCapture.Submitting) "Đang ghi công…" else "Đang so khớp khuôn mặt…"
+
+    // Nền TRẮNG cho vùng nội dung (dưới thanh tiêu đề Scaffold). KHÔNG thêm statusBars/navigationBars
+    // padding: Scaffold đã trừ insets qua padding(innerPadding) ở HrApp, thêm nữa sẽ dôi kép.
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .background(Color.White),
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) {
-                Icon(Icons.Filled.Close, contentDescription = "Đóng", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.weight(1f))
-        }
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val density = LocalDensity.current
+            val cw = constraints.maxWidth.toFloat()
+            val chh = constraints.maxHeight.toFloat()
+            val bigPx = with(density) { 104.dp.toPx() } // vòng tích/X ở GIỮA giữ như cũ
+            val smallScale = 56f / 104f                  // badge ở GÓC trên-trái to hơn (~44→56dp)
+            val cornerPad = with(density) { 20.dp.toPx() }
+            val cornerTop = with(density) { 10.dp.toPx() }
+            // Tâm badge: giữa màn hình (centerT=1) ↔ góc trên trái (centerT=0).
+            val centerCx = cw / 2f
+            val centerCy = chh / 2f
+            val cornerCx = cornerPad + bigPx * smallScale / 2f
+            val cornerCy = cornerTop + bigPx * smallScale / 2f
+            val t = centerT.value
+            val scale = lerp(smallScale, 1f, t)
+            val tx = lerp(cornerCx, centerCx, t) - centerCx
+            val ty = lerp(cornerCy, centerCy, t) - centerCy
 
-        Spacer(Modifier.weight(1f))
-        Box(
-            modifier = Modifier
-                .size(84.dp)
-                .clip(CircleShape)
-                .background(accent.copy(alpha = 0.16f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = accent, modifier = Modifier.size(52.dp))
-        }
-        Spacer(Modifier.height(14.dp))
-        Text("Xác nhận chấm công", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
-        Spacer(Modifier.height(4.dp))
-        Text("Vui lòng kiểm tra thông tin trước khi ghi công", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-
-        Spacer(Modifier.height(20.dp))
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(18.dp),
-        ) {
-            Text("Nhân viên", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(2.dp))
-            Text(
-                result.fullName?.takeIf { it.isNotBlank() } ?: result.username ?: "--",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(14.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(accent.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(timeIcon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
-                }
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(timeLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        formatIsoTimeLocal(result.occurredAt),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
+            // Thông tin (chỉ dựng khi đã có kết quả) — nằm dưới vị trí badge ở góc trái.
+            shownResult?.let { res ->
+                if (reveal.value > 0f || phase == VerifyPhase.Revealed) {
+                    VerifyInfo(
+                        result = res,
+                        confirmMode = confirmMode,
+                        busy = busy && cap is AttendanceCapture.Submitting,
+                        reveal = reveal.value,
+                        topPad = with(density) { (cornerTop + bigPx * smallScale + 18.dp.toPx()).toDp() },
+                        onConfirm = vm::confirmAttendance,
+                        onRescan = vm::rescanAttendance,
+                        onClose = vm::resetCapture,
+                        onExplain = { vm.startAttendanceExplanation(res) },
                     )
                 }
             }
-        }
-        if (result.message.isNotBlank()) {
-            Spacer(Modifier.height(10.dp))
-            Text(result.message, color = Warning, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        }
 
-        Spacer(Modifier.weight(1f))
-        Button(
-            onClick = onConfirm,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Xác nhận", fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(10.dp))
-        OutlinedButton(
-            onClick = onRescan,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Quét lại", fontWeight = FontWeight.Bold)
+            // Nhãn "đang xử lý" ở giữa, mờ dần khi vòng tròn đặc hiện ra.
+            val labelAlpha = (1f - badgeDraw.value / 0.3f).coerceIn(0f, 1f)
+            if (labelAlpha > 0.01f) {
+                Text(
+                    loadingLabel,
+                    color = VerifyInkSoft,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .graphicsLayer { alpha = labelAlpha; translationY = with(density) { 92.dp.toPx() } },
+                )
+            }
+
+            // Badge (vòng xoay → tròn đặc + dấu tích/X). Luôn ở call-site này; di chuyển bằng graphicsLayer.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(with(density) { bigPx.toDp() })
+                    .graphicsLayer {
+                        translationX = tx
+                        translationY = ty
+                        scaleX = scale
+                        scaleY = scale
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                val spinnerAlpha = (1f - badgeDraw.value / 0.28f).coerceIn(0f, 1f)
+                if (spinnerAlpha > 0.01f) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(64.dp) // giữ vòng loading như cũ, chỉ vòng tích/X phóng to
+                            .graphicsLayer { alpha = spinnerAlpha },
+                        color = Color(0xFF9AA3AF),
+                        strokeWidth = 4.dp,
+                    )
+                }
+                badge?.let { b ->
+                    if (badgeDraw.value > 0f) {
+                        VerifyBadgeCanvas(badge = b, draw = badgeDraw.value, modifier = Modifier.fillMaxSize())
+                    }
+                }
+            }
+
+            // Nút đóng ở góc phải trên (badge đã chiếm góc trái) — chỉ hiện khi đã ra thông tin.
+            if (phase == VerifyPhase.Revealed) {
+                IconButton(
+                    onClick = vm::resetCapture,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .graphicsLayer { alpha = reveal.value },
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Đóng", tint = VerifyInkSoft)
+                }
+            }
         }
     }
 }
 
-/** Màn hình KẾT QUẢ RIÊNG sau khi ghi công (hoặc lỗi nhận diện): nền ứng dụng + nút Quét lại / Đóng. */
+/** Vẽ vòng tròn đặc + dấu tích (hoặc dấu X) theo tiến độ [draw] (0..1) như đang được vẽ tay. */
 @Composable
-private fun ResultScreen(result: ChamCongResult, onRescan: () -> Unit, onClose: () -> Unit, onExplain: () -> Unit) {
-    val (tone, title, icon) = attendanceVisual(result.status)
-    val color = when (tone) {
-        Tone.Success -> Success
-        Tone.Warning -> Warning
-        else -> Danger
+private fun VerifyBadgeCanvas(badge: VerifyBadge, draw: Float, modifier: Modifier = Modifier) {
+    val fill = if (badge == VerifyBadge.Check) VerifyGreen else VerifyRed
+    Canvas(modifier) {
+        val s = size.minDimension
+        val c = Offset(size.width / 2f, size.height / 2f)
+        // Vòng tròn đặc "nở" ra nhanh trong ~30% đầu (nối tiếp vòng xoay đang mờ đi).
+        val popT = (draw / 0.3f).coerceIn(0f, 1f)
+        drawCircle(color = fill, radius = s / 2f * lerp(0.82f, 1f, popT), center = c, alpha = popT)
+
+        // Nét trắng của dấu, bắt đầu sau khi vòng tròn đã hiện (~32%).
+        val strokeProg = ((draw - 0.32f) / 0.68f).coerceIn(0f, 1f)
+        if (strokeProg <= 0f) return@Canvas
+        val stroke = Stroke(width = s * 0.09f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val pm = PathMeasure()
+        if (badge == VerifyBadge.Check) {
+            val p = Path().apply {
+                moveTo(s * 0.28f, s * 0.52f)
+                lineTo(s * 0.44f, s * 0.68f)
+                lineTo(s * 0.72f, s * 0.34f)
+            }
+            pm.setPath(p, false)
+            val seg = Path()
+            pm.getSegment(0f, pm.length * strokeProg, seg, true)
+            drawPath(seg, color = Color.White, style = stroke)
+        } else {
+            // Dấu X: vẽ nét 1 rồi nét 2 nối tiếp cho có cảm giác "đang vẽ".
+            val a = Path().apply { moveTo(s * 0.35f, s * 0.35f); lineTo(s * 0.65f, s * 0.65f) }
+            val b2 = Path().apply { moveTo(s * 0.65f, s * 0.35f); lineTo(s * 0.35f, s * 0.65f) }
+            val p1 = (strokeProg / 0.5f).coerceIn(0f, 1f)
+            val p2 = ((strokeProg - 0.5f) / 0.5f).coerceIn(0f, 1f)
+            pm.setPath(a, false)
+            val sa = Path(); pm.getSegment(0f, pm.length * p1, sa, true)
+            drawPath(sa, color = Color.White, style = stroke)
+            if (p2 > 0f) {
+                pm.setPath(b2, false)
+                val sb = Path(); pm.getSegment(0f, pm.length * p2, sb, true)
+                drawPath(sb, color = Color.White, style = stroke)
+            }
+        }
     }
+}
+
+/** Khối thông tin hiện dần (mỗi dòng đi từ dưới lên + mờ→rõ) + nút hành động, theo tiến độ [reveal]. */
+@Composable
+private fun VerifyInfo(
+    result: ChamCongResult,
+    confirmMode: Boolean,
+    busy: Boolean,
+    reveal: Float,
+    topPad: androidx.compose.ui.unit.Dp,
+    onConfirm: () -> Unit,
+    onRescan: () -> Unit,
+    onClose: () -> Unit,
+    onExplain: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val dyPx = with(density) { 22.dp.toPx() }
+    fun lineMod(index: Int): Modifier {
+        val start = index * 0.12f
+        val local = ((reveal - start) / 0.42f).coerceIn(0f, 1f)
+        return Modifier.graphicsLayer { alpha = local; translationY = (1f - local) * dyPx }
+    }
+
+    val isOut = result.loai.equals("Ra", true)
+    val timeLabel = if (isOut) "Giờ ra" else "Giờ vào"
+    val name = result.fullName?.takeIf { it.isNotBlank() } ?: result.username ?: "--"
+    val time = formatIsoTimeLocal(result.occurredAt)
+
+    val title: String
+    val subtitle: String?
+    val rows = ArrayList<Pair<String, String>>()
+    var note: String? = null
+    var noteColor = Warning
+    if (confirmMode) {
+        title = "Đã xác thực khuôn mặt"
+        subtitle = "Kiểm tra thông tin trước khi ghi công"
+        rows += "Nhân viên" to name
+        rows += timeLabel to time
+        note = result.message.takeIf { it.isNotBlank() }
+    } else when {
+        result.status.equals("ok", true) -> {
+            title = "Chấm công thành công"; subtitle = null
+            rows += "Nhân viên" to name
+            if (time != "--") rows += timeLabel to time
+        }
+        result.status.equals("offline", true) -> {
+            title = "Đã lưu ngoại tuyến"; subtitle = null
+            note = result.message.takeIf { it.isNotBlank() } ?: "Sẽ tự đồng bộ và chờ duyệt khi có mạng."
+        }
+        else -> {
+            val (_, t, _) = attendanceVisual(result.status)
+            title = t; subtitle = null
+            note = result.guidance?.takeIf { it.isNotBlank() } ?: result.message.ifBlank { "Vui lòng thử lại." }
+            noteColor = Danger
+        }
+    }
+    val isError = !confirmMode && !result.status.equals("ok", true) && !result.status.equals("offline", true)
+    val btnAlpha = ((reveal - (3 + rows.size) * 0.1f) / 0.3f).coerceIn(0f, 1f)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(start = 24.dp, end = 24.dp, bottom = 20.dp)
+            .padding(top = topPad),
     ) {
-        Spacer(Modifier.weight(1f))
-        Box(
-            modifier = Modifier
-                .size(88.dp)
-                .clip(CircleShape)
-                .background(color.copy(alpha = 0.16f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(52.dp))
+        Text(title, color = VerifyInk, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, modifier = lineMod(0))
+        if (subtitle != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(subtitle, color = VerifyInkSoft, style = MaterialTheme.typography.bodyMedium, modifier = lineMod(1))
         }
-        Spacer(Modifier.height(14.dp))
-        Text(title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center)
-        if (result.status.equals("ok", true) && !result.fullName.isNullOrBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(result.fullName, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-            val meta = buildString {
-                result.loai?.takeIf { it.isNotBlank() }?.let { append(if (it.equals("Ra", true)) "Giờ ra" else "Giờ vào") }
-                val time = formatIsoTimeLocal(result.occurredAt)
-                if (time != "--") { if (isNotEmpty()) append(": "); append(time) }
+
+        if (rows.isNotEmpty()) {
+            Spacer(Modifier.height(18.dp))
+            rows.forEachIndexed { i, (label, value) ->
+                if (i > 0) Spacer(Modifier.height(12.dp))
+                Column(modifier = lineMod(2 + i)) {
+                    Text(label, color = VerifyInkSoft, style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.height(2.dp))
+                    Text(value, color = VerifyInk, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
             }
-            if (meta.isNotBlank()) Text(meta, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-        } else {
-            Spacer(Modifier.height(8.dp))
+        }
+        if (note != null) {
+            Spacer(Modifier.height(14.dp))
             Text(
-                result.guidance?.takeIf { it.isNotBlank() } ?: result.message.ifBlank { "Vui lòng thử lại." },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                note,
+                color = noteColor,
                 style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
+                modifier = lineMod(2 + rows.size),
                 maxLines = 4,
                 overflow = TextOverflow.Ellipsis,
             )
         }
 
         Spacer(Modifier.weight(1f))
-        Button(
-            onClick = onRescan,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Quét lại", fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(10.dp))
-        if (!result.status.equals("ok", true) && !result.status.equals("offline", true)) {
-            OutlinedButton(onClick = onExplain, modifier = Modifier.fillMaxWidth()) { Text("Gửi giải trình kèm ảnh/tài liệu") }
-        }
-        OutlinedButton(
-            onClick = onClose,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Text("Đóng", fontWeight = FontWeight.Bold)
+
+        if (busy) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Text("Đang ghi công…", color = VerifyInkSoft, fontWeight = FontWeight.SemiBold)
+            }
+        } else if (confirmMode) {
+            Button(
+                onClick = onConfirm,
+                modifier = Modifier.fillMaxWidth().height(52.dp).graphicsLayer { alpha = btnAlpha },
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Xác nhận", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onRescan,
+                modifier = Modifier.fillMaxWidth().height(50.dp).graphicsLayer { alpha = btnAlpha },
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Quét lại", fontWeight = FontWeight.Bold)
+            }
+        } else {
+            Button(
+                onClick = onRescan,
+                modifier = Modifier.fillMaxWidth().height(52.dp).graphicsLayer { alpha = btnAlpha },
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Quét lại", fontWeight = FontWeight.Bold)
+            }
+            if (isError) {
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onExplain,
+                    modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = btnAlpha },
+                ) { Text("Gửi giải trình kèm ảnh/tài liệu") }
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onClose,
+                modifier = Modifier.fillMaxWidth().height(50.dp).graphicsLayer { alpha = btnAlpha },
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Text("Đóng", fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -713,10 +911,14 @@ private fun attendanceVisual(status: String): Triple<Tone, String, ImageVector> 
     "offline" -> Triple(Tone.Warning, "Đã lưu ngoại tuyến", Icons.Filled.Schedule)
     "pending" -> Triple(Tone.Warning, "Đã gửi — chờ duyệt", Icons.Filled.Schedule)
     "posture" -> Triple(Tone.Warning, "Sai tư thế", Icons.Filled.WarningAmber)
+    "eyesclosed" -> Triple(Tone.Warning, "Chưa mở mắt", Icons.Filled.WarningAmber)
     "lowquality" -> Triple(Tone.Warning, "Ảnh chưa đủ rõ", Icons.Filled.WarningAmber)
     "noface" -> Triple(Tone.Warning, "Không thấy khuôn mặt", Icons.Filled.WarningAmber)
     "spoof" -> Triple(Tone.Danger, "Nghi ngờ giả mạo", Icons.Filled.ErrorOutline)
     "proxy" -> Triple(Tone.Danger, "Không phải tài khoản của bạn", Icons.Filled.ErrorOutline)
+    // Nhận diện ĐÃ thành công, chỉ là để form xác nhận quá lâu — không phải lỗi khuôn mặt, nên báo
+    // đúng bản chất (và ở mức nhắc nhở) thay vì rơi vào "Chưa nhận diện được".
+    "expired" -> Triple(Tone.Warning, "Hết hạn xác nhận", Icons.Filled.Schedule)
     else -> Triple(Tone.Danger, "Chưa nhận diện được", Icons.Filled.ErrorOutline)
 }
 
@@ -726,6 +928,8 @@ private data class FaceObs(
     val cy: Float,        // tâm mặt theo trục Y (0..1)
     val widthFrac: Float, // bề rộng mặt / bề rộng ảnh (to hơn = ở gần hơn)
     val yaw: Float,       // góc quay đầu trái/phải (độ, từ ML Kit headEulerAngleY) — cho liveness quay đầu
+    val pitch: Float,     // góc ngẩng/cúi (độ, headEulerAngleX) — cùng yaw để biết mặt có hướng vào màn hình
+    val eyeOpen: Float,   // xác suất mở mắt (min hai mắt; 1f nếu ML Kit chưa chắc) — cho bước kiểm tra ánh nhìn
     val t: Long,          // mốc thời gian (elapsedRealtime) để biết khung còn "tươi"
 )
 
@@ -786,6 +990,9 @@ fun BiometricFaceCamera(
         FaceDetection.getClient(
             FaceDetectorOptions.Builder()
                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                // Bật phân loại để lấy xác suất MỞ MẮT (leftEye/rightEyeOpenProbability) cho bước kiểm
+                // tra ánh nhìn. FAST + classification vẫn chạy realtime tốt trên máy hiện đời.
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
                 .setMinFaceSize(0.15f)
                 .build(),
         )
@@ -829,11 +1036,19 @@ fun BiometricFaceCamera(
                                         val face = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }
                                         aim.latest = if (face != null) {
                                             val bb = face.boundingBox
+                                            // ML Kit trả null khi CHƯA chắc mắt mở/nhắm → coi như mở (1f) để
+                                            // không chặn oan; chỉ chặn khi thực sự thấy mắt nhắm/lim dim.
+                                            val eyeOpen = minOf(
+                                                face.leftEyeOpenProbability ?: 1f,
+                                                face.rightEyeOpenProbability ?: 1f,
+                                            )
                                             FaceObs(
                                                 cx = (bb.exactCenterX() / iw).coerceIn(0f, 1f),
                                                 cy = (bb.exactCenterY() / ih).coerceIn(0f, 1f),
                                                 widthFrac = (bb.width().toFloat() / iw).coerceIn(0f, 1f),
                                                 yaw = face.headEulerAngleY,
+                                                pitch = face.headEulerAngleX,
+                                                eyeOpen = eyeOpen,
                                                 t = SystemClock.elapsedRealtime(),
                                             )
                                         } else {
@@ -892,6 +1107,7 @@ fun BiometricFaceCamera(
 
         var goodSince = 0L
         var holdStart = 0L
+        var holdTick = 0L        // mốc vòng lặp trước ở pha giữ khung — để TẠM DỪNG đồng hồ khi chưa nhìn/nhắm mắt
         val startedAt = SystemClock.elapsedRealtime()
 
         // Trạng thái pha giữ khung khi bật liveness QUAY ĐẦU (motionMode):
@@ -935,7 +1151,7 @@ fun BiometricFaceCamera(
                         else -> {
                             if (goodSince == 0L) goodSince = now
                             if (now - goodSince >= STAGE_STABLE_MS) {
-                                stage = AimStage.Hold; holdStart = now
+                                stage = AimStage.Hold; holdStart = now; holdTick = now
                                 aim.clearFrames(); aim.collect.set(true)
                                 motionStep = 0; sideASign = 0; frontalSince = 0L
                             }
@@ -960,8 +1176,10 @@ fun BiometricFaceCamera(
                                 when (motionStep) {
                                     0 -> {
                                         aim.currentSlot = 0; holdProgress = 0f
-                                        hint = "Nhìn thẳng vào camera"
-                                        if (abs(yaw) < MOTION_CENTER_YAW) {
+                                        // Phải MỞ MẮT và nhìn thẳng (yaw & pitch nhỏ) mới cho qua bước quay đầu.
+                                        val eyesOpen = face.eyeOpen >= EYE_OPEN_MIN
+                                        hint = if (!eyesOpen) "Hãy mở mắt nhìn vào camera" else "Nhìn thẳng vào camera"
+                                        if (eyesOpen && abs(yaw) < MOTION_CENTER_YAW && abs(face.pitch) < GAZE_MAX_PITCH) {
                                             if (frontalSince == 0L) frontalSince = now
                                             if (now - frontalSince >= MOTION_FRONTAL_MS) motionStep = 1
                                         } else frontalSince = 0L
@@ -993,30 +1211,47 @@ fun BiometricFaceCamera(
                                 }
                             }
                         } else {
-                            // ── Giữ khung tĩnh 3 giây (như cũ) ──
+                            // ── Giữ khung tĩnh 3 giây, KÈM kiểm tra "đang nhìn vào màn hình" ──
+                            // Chỉ đếm giờ + thu khung khi: mặt trong khung + MỞ MẮT + nhìn thẳng (yaw & pitch
+                            // nhỏ). Nhắm mắt / nhìn đi chỗ khác → TẠM DỪNG đồng hồ (không reset về Near để
+                            // chớp mắt tự nhiên không phá cả lượt) và ngừng thu khung tới khi nhìn lại.
                             val inBand = centered && w in NEAR_MIN..NEAR_TOO_CLOSE
-                            if (!inBand) {
-                                stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
-                                lightColor = null; aim.currentSlot = -1
-                                aim.collect.set(false); aim.clearFrames()
-                                hint = if (w > NEAR_TOO_CLOSE) "Quá gần — lùi ra xa" else "Giữ khuôn mặt trong khung"
-                            } else {
-                                val held = now - holdStart
-                                holdProgress = (held.toFloat() / HOLD_MS).coerceIn(0f, 1f)
-                                aim.currentSlot = -1
-                                lightColor = softFlashColor(held)
-                                val remain = ((HOLD_MS - held) / 1000f).toInt() + 1
-                                hint = "Đang quét khuôn mặt… ${remain.coerceAtLeast(1)}s"
-                                if (held >= HOLD_MS) {
-                                    val frames = aim.snapshot()
+                            val eyesOpen = face.eyeOpen >= EYE_OPEN_MIN
+                            val looking = eyesOpen && abs(face.yaw) < GAZE_MAX_YAW && abs(face.pitch) < GAZE_MAX_PITCH
+                            when {
+                                !inBand -> {
+                                    stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
+                                    lightColor = null; aim.currentSlot = -1
+                                    aim.collect.set(false); aim.clearFrames()
+                                    hint = if (w > NEAR_TOO_CLOSE) "Quá gần — lùi ra xa" else "Giữ khuôn mặt trong khung"
+                                }
+                                !looking -> {
+                                    // DỪNG đồng hồ: đẩy mốc bắt đầu theo nhịp vừa trôi qua → held đứng yên,
+                                    // vòng tiến độ giữ nguyên. Ngừng thu khung để ảnh gửi lên chỉ có mắt-mở/thẳng.
+                                    holdStart += now - holdTick
                                     aim.collect.set(false); lightColor = null; aim.currentSlot = -1
-                                    if (frames.isNotEmpty()) { onCapturedNow(frames); return@LaunchedEffect }
-                                    else {
-                                        stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
-                                        hint = "Chưa bắt được ảnh, thử lại"
+                                    hint = if (!eyesOpen) "Hãy mở mắt nhìn vào màn hình" else "Nhìn thẳng vào màn hình"
+                                }
+                                else -> {
+                                    aim.collect.set(true)
+                                    val held = now - holdStart
+                                    holdProgress = (held.toFloat() / HOLD_MS).coerceIn(0f, 1f)
+                                    aim.currentSlot = -1
+                                    lightColor = softFlashColor(held)
+                                    val remain = ((HOLD_MS - held) / 1000f).toInt() + 1
+                                    hint = "Đang quét khuôn mặt… ${remain.coerceAtLeast(1)}s"
+                                    if (held >= HOLD_MS) {
+                                        val frames = aim.snapshot()
+                                        aim.collect.set(false); lightColor = null; aim.currentSlot = -1
+                                        if (frames.isNotEmpty()) { onCapturedNow(frames); return@LaunchedEffect }
+                                        else {
+                                            stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
+                                            hint = "Chưa bắt được ảnh, thử lại"
+                                        }
                                     }
                                 }
                             }
+                            holdTick = now
                         }
                     }
                 }

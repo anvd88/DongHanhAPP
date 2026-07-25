@@ -158,7 +158,9 @@ function useBurstCheckIn(framingRef?: RefObject<Framing | null>, selfOnly = fals
       await wait(AIM_POLL_MS);
     }
     return { status: "cancelled", frames };
-  }, [framingRef, capture]);
+    // setHold là useCallback (không phải setter thuần của useState) nên danh tính CÓ THỂ đổi ⇒ phải
+    // khai báo, nếu không vòng quét sẽ giữ mãi bản cũ.
+  }, [framingRef, capture, setHold]);
 
   const run = useCallback(async () => {
     if (runningRef.current) return;
@@ -478,7 +480,7 @@ function BiometricCheckInScanner({
               <Camera className="h-4 w-4" /> Chấm tiếp
             </button>
             {returnToLoginOnOk && (
-              <button className="cc-bio-start" onClick={() => navigate("/login", { replace: true })} type="button">
+              <button className="cc-bio-start" onClick={() => navigate("/", { replace: true })} type="button">
                 Xong
               </button>
             )}

@@ -18,9 +18,10 @@ public sealed class LivenessMetricsLog
     /// </summary>
     public readonly record struct LivenessMetric(
         DateTime AtUtc, string User, double Best, double Mean, double Second, int Frames, double Threshold,
-        bool Passed, double MotionSpan);
+        bool Passed, double MotionSpan, double EyeOpen);
 
-    public void Record(string user, IReadOnlyList<double> scores, double threshold, bool passed, double motionSpan = -1)
+    public void Record(string user, IReadOnlyList<double> scores, double threshold, bool passed,
+        double motionSpan = -1, double eyeOpen = -1)
     {
         double best = 0, mean = 0, second = 0;
         if (scores.Count > 0)
@@ -33,7 +34,7 @@ public sealed class LivenessMetricsLog
         lock (_gate)
         {
             _items.AddFirst(new LivenessMetric(DateTime.UtcNow, user ?? "", best, mean, second, scores.Count,
-                threshold, passed, motionSpan));
+                threshold, passed, motionSpan, eyeOpen));
             while (_items.Count > MaxItems) _items.RemoveLast();
         }
     }

@@ -110,8 +110,15 @@ class HrRepository(context: Context, background: Boolean = false) {
     private val attendanceApi: HrApi = ApiClient.createAttendance(tokenStore)
     private val offlineStore = OfflineAttendanceStore(context.applicationContext)
     private val chatCache = ChatCacheStore(context.applicationContext)
+    private val homeCache = HomeCacheStore(context.applicationContext)
     @Volatile private var chatFromCache = false
     fun chatUsingCache(): Boolean = chatFromCache
+
+    /** Ảnh chụp Trang chủ của lần mở trước (chỉ trả về khi đúng tài khoản). Xem [HomeCacheStore]. */
+    suspend fun loadHomeSnapshot(username: String): HomeSnapshot? = homeCache.load(username)
+
+    /** Ghi ảnh chụp Trang chủ để lần mở app sau hiện ngay dữ liệu, không phải chờ mạng. */
+    suspend fun saveHomeSnapshot(snapshot: HomeSnapshot) = homeCache.save(snapshot)
 
     suspend fun savedToken(): String? = tokenStore.token()
 
@@ -175,6 +182,7 @@ class HrRepository(context: Context, background: Boolean = false) {
     private suspend fun clearLocalSession() {
         tokenStore.clearToken()
         chatCache.clear()
+        homeCache.clear() // ảnh chụp Trang chủ chứa hồ sơ/lương → phải xoá khi phiên kết thúc/bị thu hồi
     }
 
     /**
@@ -232,6 +240,8 @@ class HrRepository(context: Context, background: Boolean = false) {
 
     suspend fun appConfig(): AppConfig = call { api.appConfig() }
     suspend fun myProfile(): EmployeeDetail = call { api.myProfile() }
+    suspend fun anniversaryGreeting(preview: Boolean = false): AnniversaryGreeting =
+        call { api.anniversaryGreeting(preview) }
     suspend fun employeeDetail(id:String)=call{api.employeeDetail(id)}
     suspend fun updateEmployee(id:String,body:SaveEmployeeBody)=callUnit{api.updateEmployee(id,body)}
     suspend fun updateSalary(id:String,body:SaveSalaryBody)=callUnit{api.updateSalary(id,body)}
@@ -464,6 +474,14 @@ class HrRepository(context: Context, background: Boolean = false) {
                 ),
             )
         }
+
+    /**
+     * Ghi công theo token đã cấp ở bước xem trước — KHÔNG gửi lại ảnh. Server bỏ qua toàn bộ khâu nhận
+     * diện (đã chạy vài giây trước ở bước xem trước) nên lượt xác nhận gần như tức thì và không tốn thêm
+     * suy luận. Token dùng một lần, sống 2 phút, ràng buộc theo tài khoản đang đăng nhập.
+     */
+    suspend fun chamCongXacNhan(previewToken: String): ChamCongResult =
+        call { attendanceApi.chamCong(ChamCongBurstRequest(confirmToken = previewToken)) }
 
     // Đọc cấu hình liveness quay đầu (có yêu cầu quay đầu lúc quét không).
     suspend fun motionConfig(): MotionConfig = call { attendanceApi.motionConfig() }

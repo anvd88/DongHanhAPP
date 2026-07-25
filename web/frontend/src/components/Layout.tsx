@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
+import { PageSkeleton } from "./PageSkeleton";
 import { QuickToolsDrawer } from "./QuickToolsDrawer";
-import { HRLayout } from "./hr/HRLayout";
 import { NAV } from "./nav";
-import { useAuth } from "../lib/auth";
-import { isAdmin } from "../lib/types";
-import { IS_HR_APK } from "../lib/appConfig";
-import { useChatNotifications } from "./ChatNotifications";
+import { useWorkArea } from "../lib/workArea";
+import { useChatNotifications } from "./chat-notifications-context";
 
-const MOBILE_NAV_KEYS = new Set(["dashboard", "giacong", "ketoan", "khachhang", "chats", "chamcong"]);
-const HR_APK_BOTTOM_NAV_KEYS = new Set(["nhan-su-portal", "chamcong", "bangcong", "dontu", "pheduyet"]);
+// Thanh điều hướng dưới cùng (mobile) khác nhau theo không gian: người làm nghiệp vụ cần lối tắt tới
+// chứng từ/khách hàng, còn nhân viên cần lối tắt tới việc của mình.
+const MOBILE_NAV_KEYS: Record<"admin" | "work", string[]> = {
+  admin: ["dashboard", "giacong", "ketoan", "khachhang", "chats"],
+  work: ["nhan-su-portal", "cong-viec", "chamcong", "dontu", "chats"],
+};
 
 export function Layout({
   children,
@@ -20,7 +22,6 @@ export function Layout({
   children: ReactNode;
   suppressMainWebSystem?: boolean;
 }) {
-  if (IS_HR_APK) return <HRLayout>{children}</HRLayout>;
   return <ClassicLayout suppressMainWebSystem={suppressMainWebSystem}>{children}</ClassicLayout>;
 }
 
@@ -68,15 +69,21 @@ function ClassicLayout({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-  const { user } = useAuth();
   const { unreadCount } = useChatNotifications();
-  const admin = isAdmin(user);
-  const bottomNavKeys = IS_HR_APK ? HR_APK_BOTTOM_NAV_KEYS : MOBILE_NAV_KEYS;
+  const { area, can } = useWorkArea();
+  const wanted = MOBILE_NAV_KEYS[area];
   const mobileNavItems = NAV.flatMap((section) => section.items)
-    .filter((item) => bottomNavKeys.has(item.key) && (!item.adminOnly || admin));
+    .filter((item) =>
+      wanted.includes(item.key) &&
+      (!item.permission || can(item.permission)) &&
+      (!item.permissionsAny || item.permissionsAny.some(can))
+    )
+    .sort((a, b) => wanted.indexOf(a.key) - wanted.indexOf(b.key));
 
   return (
-    <div className="km-app-shell">
+    // data-area cho phép CSS phân biệt khu quản trị và không gian làm việc mà không cần dựng hai cây
+    // component riêng (mọi khác biệt thật đã nằm ở menu + route, đều chốt bằng quyền).
+    <div className="km-app-shell" data-area={area}>
       {/* Sidebar desktop */}
       <div ref={railRef} className="km-sidebar-rail hidden lg:block">
         <Sidebar />
@@ -95,7 +102,11 @@ function ClassicLayout({
       <div className="km-main-shell">
         <Header onMenu={() => setMobileOpen(true)} />
         <main key={location.pathname} className="km-page scroll-thin">
-          {children}
+          {/* Ranh giới Suspense NẰM TRONG vỏ app: chuyển sang trang lazy chưa tải thì chỉ vùng này
+              hiện skeleton, còn sidebar + header đứng yên (không nháy cả màn hình như trước). */}
+          <Suspense fallback={<PageSkeleton />}>
+            {children}
+          </Suspense>
         </main>
       </div>
       <nav

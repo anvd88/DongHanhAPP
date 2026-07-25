@@ -44,7 +44,7 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
     private byte[]? _lastBytes;
     private FaceDetection? _lastDet;
 
-    public AdaFaceR50Engine(IConfiguration config)
+    public AdaFaceR50Engine(IConfiguration config, ILogger<AdaFaceR50Engine> logger)
     {
         var modelDir = Path.Combine(AppContext.BaseDirectory, "Models", "Face");
         var detectorPath = Path.Combine(modelDir, "face_detection_yunet_2023mar.onnx");
@@ -85,9 +85,23 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
         try
         {
             var sf = new SilentFaceLiveness(modelDir);
-            if (sf.Available) _silentFace = sf; else sf.Dispose();
+            if (sf.Available)
+            {
+                _silentFace = sf;
+            }
+            else
+            {
+                sf.Dispose();
+                logger.LogWarning("Không nạp được Silent-Face từ {Dir} (thiếu file model?).", modelDir);
+            }
         }
-        catch { _silentFace = null; }
+        catch (Exception ex)
+        {
+            // KHÔNG nuốt lỗi: hỏng ở đây làm chống giả mạo tụt hạng mà chấm công vẫn chạy như thường,
+            // nên nếu không ghi lại thì sẽ không ai biết cho tới lúc có người giơ ảnh qua được.
+            _silentFace = null;
+            logger.LogError(ex, "Lỗi khi nạp Silent-Face từ {Dir}.", modelDir);
+        }
 
         if (_silentFace is null)
         {
@@ -101,10 +115,44 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
                     net?.SetPreferableTarget(Target.CPU);
                     _livenessNet = net;
                 }
-                catch { _livenessNet = null; }
+                catch (Exception ex)
+                {
+                    _livenessNet = null;
+                    logger.LogError(ex, "Lỗi khi nạp MiniFASNet dự phòng từ {Path}.", livenessPath);
+                }
             }
         }
+
+        // Kêu to theo đúng mức độ nghiêm trọng. Mức None là hỏng NGẦM nguy hiểm nhất trong cả hệ thống
+        // chấm công: LivenessProbability trả 1 cho mọi ảnh nên giơ ảnh/màn hình cũng chấm được, mà không
+        // có triệu chứng nào khác. Ghi Error để nó nổi lên trong log chứ không lẫn vào tiếng ồn.
+        AntiSpoof = _silentFace is not null
+            ? new AntiSpoofStatus(AntiSpoofLevel.Full, "Silent-Face (MiniFASNetV2 + MiniFASNetV1SE)")
+            : _livenessNet is not null
+                ? new AntiSpoofStatus(AntiSpoofLevel.Basic, "MiniFASNet đơn lẻ (bản cũ, yếu hơn)")
+                : new AntiSpoofStatus(AntiSpoofLevel.None, "KHÔNG có model chống giả mạo");
+
+        switch (AntiSpoof.Level)
+        {
+            case AntiSpoofLevel.Full:
+                logger.LogInformation("Chống giả mạo: {Detail}.", AntiSpoof.Detail);
+                break;
+            case AntiSpoofLevel.Basic:
+                logger.LogWarning(
+                    "Chống giả mạo ĐÃ TỤT HẠNG: {Detail}. Đặt lại 2 file Silent-Face vào {Dir} " +
+                    "(xem SilentFace-AntiSpoof-README.md).", AntiSpoof.Detail, modelDir);
+                break;
+            default:
+                logger.LogError(
+                    "KHÔNG CÓ CHỐNG GIẢ MẠO: mọi ảnh sẽ được coi là người thật, giơ ảnh/màn hình vẫn " +
+                    "chấm công được và KHÔNG còn lớp nào gác thay (active-flash đã gỡ; liveness quay đầu " +
+                    "mặc định tắt). Đặt model chống giả mạo vào {Dir} rồi khởi động lại.", modelDir);
+                break;
+        }
     }
+
+    /// <inheritdoc />
+    public AntiSpoofStatus AntiSpoof { get; }
 
     public string Name => _silentFace is not null
         ? "AdaFace R50 (YuNet + 5-point alignment + ONNX Runtime + Silent-Face MiniFASNetV2/V1SE anti-spoof)"
@@ -167,18 +215,6 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
         return dot / (Math.Sqrt(na) * Math.Sqrt(nb));
     }
 
-    public FacePose? EstimatePose(byte[] imageBytes)
-    {
-        using var image = Decode(imageBytes);
-        if (image is null) return null;
-
-        lock (_gate)
-        {
-            var face = DetectCached(imageBytes, image);
-            return face is null ? null : PoseFrom(face);
-        }
-    }
-
     public FaceFrameQuality? AssessFrame(byte[] imageBytes)
     {
         using var image = Decode(imageBytes);
@@ -222,37 +258,10 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
             var score = (0.34 * sharpNorm + 0.22 * sizeNorm + 0.16 * brightScore
                          + 0.18 * frontal + 0.10 * face.Score) * (1.0 - 0.6 * glarePenalty);
 
+            var eyeOpen = EyeOpenScore(image, face);
+
             return new FaceFrameQuality(true, Math.Clamp(score, 0, 1),
-                sharpNorm, brightness, glare, faceRatio, pose, face.Score);
-        }
-    }
-
-    public FaceSkinColor? SampleFaceSkinColor(byte[] imageBytes)
-    {
-        if (imageBytes is null || imageBytes.Length == 0) return null;
-        // Giải mã RAW — cố ý KHÔNG gọi EnhanceForLowLight: CLAHE/gamma sẽ làm méo sắc độ ⇒ hỏng tín hiệu
-        // flash (màu phản xạ phải giữ nguyên như camera thu được).
-        using var image = Cv2.ImDecode(imageBytes, ImreadModes.Color);
-        if (image.Empty()) return null;
-
-        lock (_gate)
-        {
-            var face = DetectLargest(image);
-            if (face is null) return null;
-
-            var rect = ClampRect(face.Rect, image.Width, image.Height);
-            // Thu vào vùng TRUNG TÂM khuôn mặt (bỏ 20% mỗi biên) để lấy da má/trán, tránh tóc/viền/nền.
-            var insetX = (int)(rect.Width * 0.20);
-            var insetY = (int)(rect.Height * 0.20);
-            var inner = ClampRect(
-                new Rect2d(rect.X + insetX, rect.Y + insetY, rect.Width - 2 * insetX, rect.Height - 2 * insetY),
-                image.Width, image.Height);
-            if (inner.Width < 4 || inner.Height < 4) return null;
-
-            using var roi = new Mat(image, inner);
-            var mean = Cv2.Mean(roi); // Scalar theo thứ tự BGR
-            var faceRatio = rect.Width * rect.Height / (double)(image.Width * image.Height);
-            return new FaceSkinColor(mean.Val2 / 255.0, mean.Val1 / 255.0, mean.Val0 / 255.0, faceRatio);
+                sharpNorm, brightness, glare, faceRatio, pose, face.Score, eyeOpen);
         }
     }
 
@@ -370,6 +379,80 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
         var yaw = (face.Nose.X - eyeMidX) / eyeDist;
         var pitch = Math.Abs(faceVert) < 1 ? 0.5 : (face.Nose.Y - eyeMidY) / faceVert;
         return new FacePose(yaw, pitch);
+    }
+
+    // ── Ước lượng độ MỞ MẮT (0..1) từ 5 landmark của YuNet ─────────────────────────────────────────
+    // YuNet chỉ cho TÂM hai mắt (không có viền mắt) nên không tính được EAR như dlib/mediapipe. Thay vào
+    // đó dùng một heuristic hình học: cắt một ô nhỏ quanh tâm mỗi mắt (cỡ theo khoảng cách hai mắt), soi
+    // xem vùng TỐI (mống mắt/đồng tử) trải rộng theo chiều DỌC bao nhiêu — mắt mở thì mống mắt cao, mắt
+    // nhắm chỉ còn một vệt lông mi mỏng. Lấy mắt "mở kém hơn" để bắt cả lim dim/nhắm một mắt.
+    //
+    // Đây KHÔNG phải model: mục đích là một tín hiệu ĐƠN ĐIỆU để hiệu chỉnh ngưỡng ở panel; server mặc
+    // định chỉ ĐO (không chặn) tới khi admin bật enforce. Muốn chính xác hơn thì thả một model open/closed
+    // (ONNX) vào và thay hàm này. Mọi trục trặc OpenCV → trả 1.0 (fail-open, không khoá nhầm nhân viên).
+    private static double EyeOpenScore(Mat imageBgr, FaceDetection face)
+    {
+        try
+        {
+            var dx = face.LeftEye.X - face.RightEye.X;
+            var dy = face.LeftEye.Y - face.RightEye.Y;
+            var interOcular = Math.Sqrt(dx * dx + dy * dy);
+            if (interOcular < 12) return 1.0; // mặt quá nhỏ/xa → không đánh giá được
+
+            var left = EyeOpenOne(imageBgr, face.LeftEye, interOcular);
+            var right = EyeOpenOne(imageBgr, face.RightEye, interOcular);
+            if (double.IsNaN(left) && double.IsNaN(right)) return 1.0;
+            if (double.IsNaN(left)) return right;
+            if (double.IsNaN(right)) return left;
+            return Math.Min(left, right);
+        }
+        catch
+        {
+            return 1.0;
+        }
+    }
+
+    private static double EyeOpenOne(Mat imageBgr, Point2f eye, double interOcular)
+    {
+        var halfW = (int)Math.Round(interOcular * 0.32);
+        var halfH = (int)Math.Round(interOcular * 0.22);
+        if (halfW < 3 || halfH < 3) return double.NaN;
+
+        var raw = new Rect((int)Math.Round(eye.X) - halfW, (int)Math.Round(eye.Y) - halfH, halfW * 2, halfH * 2);
+        var roiRect = raw & new Rect(0, 0, imageBgr.Width, imageBgr.Height); // giao với ảnh, tránh tràn biên
+        if (roiRect.Width < 6 || roiRect.Height < 6) return double.NaN;
+
+        using var roi = new Mat(imageBgr, roiRect);
+        using var gray = new Mat();
+        Cv2.CvtColor(roi, gray, ColorConversionCodes.BGR2GRAY);
+        Cv2.EqualizeHist(gray, gray); // bớt phụ thuộc độ sáng
+
+        using var dark = new Mat();
+        // Otsu ngược: điểm TỐI (mống mắt/đồng tử/lông mi) → 255.
+        Cv2.Threshold(gray, dark, 0, 255, ThresholdTypes.Otsu | ThresholdTypes.BinaryInv);
+        using var kernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(3, 3));
+        Cv2.MorphologyEx(dark, dark, MorphTypes.Open, kernel); // dọn đốm nhiễu
+
+        // Chỉ xét dải NGANG GIỮA (bỏ mép trái/phải dễ dính tóc/gọng kính/sống mũi).
+        var mx = (int)(dark.Cols * 0.22);
+        var bandRect = new Rect(mx, 0, dark.Cols - 2 * mx, dark.Rows);
+        if (bandRect.Width < 3) return double.NaN;
+
+        using var bandView = new Mat(dark, bandRect);
+        using var band = bandView.Clone(); // clone → liên tục để đọc mảng
+        band.GetArray(out byte[] buf);
+        int cols = band.Cols, rows = band.Rows;
+        var need = Math.Max(1, (int)(cols * 0.15)); // một hàng "có mống mắt" nếu ≥15% điểm tối
+        var rowsWithDark = 0;
+        for (var r = 0; r < rows; r++)
+        {
+            var cnt = 0;
+            var off = r * cols;
+            for (var c = 0; c < cols; c++) if (buf[off + c] != 0) cnt++;
+            if (cnt >= need) rowsWithDark++;
+        }
+        // Mắt mở → vùng tối cao ~nửa ô; chia 0.5 để mở hẳn ≈ 1.0. Ngưỡng chặn hiệu chỉnh ở panel.
+        return Math.Clamp((rowsWithDark / (double)rows) / 0.5, 0, 1);
     }
 
     private static Rect ClampRect(Rect2d r, int imgW, int imgH)

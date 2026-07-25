@@ -48,6 +48,20 @@ public static class AuthEndpoints
 
             await reader.CloseAsync();
 
+            // DI TRÚ BĂM: mật khẩu đã xác thực đúng ở trên và ta đang giữ bản thô. Nếu hash trong DB còn
+            // là PBKDF2 cũ (hoặc Argon2id tham số yếu hơn cấu hình hiện tại) thì băm lại bằng Argon2id
+            // ngay bây giờ — người dùng không hề hay biết, không phải đổi mật khẩu. Best-effort: ghi
+            // không được (DB chập chờn) cũng KHÔNG chặn đăng nhập, lần sau thử lại.
+            if (PasswordHasher.NeedsRehash(hash))
+            {
+                try
+                {
+                    await conn.Cmd("UPDATE app_users SET password_hash = @ph WHERE username = @u AND is_deleted = FALSE")
+                        .With("@ph", PasswordHasher.Hash(req.Password)).With("@u", user.Username).ExecuteNonQueryAsync();
+                }
+                catch { /* di trú hụt lần này thì lần đăng nhập kế tiếp thử lại */ }
+            }
+
             // Cờ "tắt đăng nhập trên web": chỉ áp cho trình duyệt web, app native vẫn đăng nhập được.
             if (!IsNativeClient(req.Client) && !await IsWebLoginEnabledAsync(conn, user.Username))
                 return Results.Json(new { message = "Đăng nhập trên web đã bị tắt cho tài khoản này. Hãy dùng ứng dụng để đăng nhập." }, statusCode: 403);
@@ -92,7 +106,7 @@ public static class AuthEndpoints
 
             await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username, $"Đăng nhập ({clientKind}).");
 
-            return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
+            return IssueSession(http, tokens, user, sid, isNative);
         }).AllowAnonymous().RequireRateLimiting("login");
 
         // ── Đăng nhập web bằng QR ──────────────────────────────────────────────────
@@ -251,14 +265,16 @@ public static class AuthEndpoints
                     await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username, "Đăng nhập web bằng QR.");
                 }
 
-                var login = new LoginResponse(tokens.CreateToken(user, session.BrowserSid), user);
+                // Người POLL ở đây luôn là TRÌNH DUYỆT (điện thoại chỉ quét mã và xác nhận), nên phiên
+                // đi bằng cookie HttpOnly y như đăng nhập mật khẩu — không trả token ra cho JavaScript.
+                var token = IssueBrowserSession(http, tokens, user, session.BrowserSid);
                 qr.CompleteConsume(session, success: true);
                 return Results.Ok(new
                 {
                     status = "authenticated",
                     expiresAt = attempt.ExpiresAt,
-                    token = login.Token,
-                    user = login.User
+                    token,
+                    user
                 });
             }
             catch
@@ -426,14 +442,15 @@ public static class AuthEndpoints
                         "Đăng nhập web mobile bằng ứng dụng Nhân sự.");
                 }
 
-                var login = new LoginResponse(tokens.CreateToken(user, session.BrowserSid), user);
+                // Cũng là trình duyệt (web trên điện thoại) đang chờ ứng dụng xác nhận hộ → cookie.
+                var token = IssueBrowserSession(http, tokens, user, session.BrowserSid);
                 logins.CompleteConsume(session, success: true);
                 return Results.Ok(new
                 {
                     status = "authenticated",
                     expiresAt = attempt.ExpiresAt,
-                    token = login.Token,
-                    user = login.User
+                    token,
+                    user
                 });
             }
             catch
@@ -613,6 +630,19 @@ public static class AuthEndpoints
             });
         }).RequireAuthorization();
 
+        // HỒ SƠ TRUY CẬP — client dựng giao diện (layout, menu, nút, trang đích) từ ĐÂY và chỉ từ đây.
+        // Tính lại từ CSDL mỗi lần gọi: admin vừa thu quyền thì lần gọi kế tiếp đã thấy quyền mới.
+        // Client KHÔNG được tự suy quyền từ role trong localStorage/URL — những thứ đó người dùng sửa được.
+        g.MapGet("/access-profile", async (ClaimsPrincipal principal, AccessProfileService access, CancellationToken ct) =>
+        {
+            var profile = await access.LoadAsync(principal.Username(), ct);
+            // Không dựng được hồ sơ (tài khoản đã xóa / CSDL lỗi) ⇒ TỪ CHỐI, không trả hồ sơ rỗng:
+            // hồ sơ rỗng sẽ bị client hiểu nhầm là "đăng nhập được nhưng không có quyền gì".
+            return profile is null
+                ? Results.Json(new { message = "Không xác định được quyền hiện hành. Vui lòng thử lại." }, statusCode: 503)
+                : Results.Ok(profile);
+        }).RequireAuthorization();
+
         // Sửa hồ sơ của chính mình (web): đổi tên hiển thị. (Ảnh đại diện trên desktop lưu cục bộ
         // từng máy nên bản web chưa hỗ trợ — header hiển thị bằng chữ cái đầu.)
         g.MapPut("/profile", async (UpdateProfileRequest req, ClaimsPrincipal principal, Database db) =>
@@ -627,6 +657,14 @@ public static class AuthEndpoints
             var n = await conn.Cmd("UPDATE app_users SET full_name = @fn, email = @em WHERE username = @u AND is_deleted = FALSE")
                 .With("@fn", fullName).With("@em", email).With("@u", username).ExecuteNonQueryAsync();
             if (n == 0) return Results.Unauthorized();
+
+            // Họ tên và email là thông tin chung của một người, không được để tài khoản và hồ sơ HR
+            // giữ hai phiên bản khác nhau khi người dùng tự sửa hồ sơ cá nhân.
+            await conn.Cmd("""
+                UPDATE hr_employees
+                SET full_name=@fn, email=@em, updated_at=CURRENT_TIMESTAMP
+                WHERE lower(username)=lower(@u)
+                """).With("@fn", fullName).With("@em", email).With("@u", username).ExecuteNonQueryAsync();
 
             await db.RecordAudit(username, "Sửa hồ sơ", "User", username, "Đổi tên hiển thị (web).");
 
@@ -740,11 +778,13 @@ public static class AuthEndpoints
             return Results.NoContent();
         }).RequireAuthorization().RequireRateLimiting("reauth");
 
-        // Nhịp tim hiện diện cho bản web: cập nhật last_seen trong user_sessions để app desktop
-        // thấy người dùng "đang online". Mỗi trình duyệt gửi một sid ổn định (lưu localStorage).
-        // Phiên này là 'Web' nên KHÔNG bị single-login của desktop kết thúc và cũng không kết
-        // thúc phiên desktop. (Nếu tài khoản bị khóa, middleware ở Program.cs đã chặn bằng 401.)
-        // Dùng CURRENT_TIMESTAMP để PostgreSQL ghi cùng chuẩn thời gian cho started_at/last_seen.
+        // Nhịp tim hiện diện + KIỂM TRA PHIÊN: cập nhật last_seen trong user_sessions và trả 401 khi
+        // phiên bị thu hồi/khóa (middleware Program.cs chặn) để client tự đăng xuất.
+        //
+        // HIỆN DIỆN GIỜ CHỦ YẾU ĐI QUA KẾT NỐI SignalR (ChangesHub.OnConnectedAsync + HubPresenceRefresher):
+        // web bỏ hẳn đường này, app CHỈ còn gọi khi SignalR tắt (ở nền) hoặc ping thưa làm lưới an toàn
+        // phát hiện phiên bị thu hồi. ON CONFLICT giữ nguyên client_kind đặt lúc đăng nhập (App/Web) nên
+        // phiên App không bị hiểu nhầm thành Web. CURRENT_TIMESTAMP để ghi cùng chuẩn started_at/last_seen.
         g.MapPost("/heartbeat", async (HeartbeatRequest req, ClaimsPrincipal principal, Database db) =>
         {
             var username = principal.Username();
@@ -776,8 +816,11 @@ public static class AuthEndpoints
         }).RequireAuthorization();
 
         // Đăng xuất chủ động trên web → tắt phiên ngay để ẩn khỏi danh sách online.
-        g.MapPost("/logout", async (HeartbeatRequest req, ClaimsPrincipal principal, Database db) =>
+        g.MapPost("/logout", async (HeartbeatRequest req, ClaimsPrincipal principal, Database db, HttpContext http) =>
         {
+            // Xoá cookie phiên NGAY, trước cả khi đụng tới CSDL: đăng xuất mà CSDL đang chập chờn thì
+            // vẫn phải đăng xuất được. Trình duyệt hết cookie là hết phiên, không còn gì để dùng lại.
+            AuthCookies.Clear(http);
             var sid = WebSessionId(req?.Sid, principal.Username());
             await using var conn = await db.OpenAsync();
             await conn.Cmd(
@@ -869,6 +912,36 @@ public static class AuthEndpoints
     }
 
     // Xác định client native (app) — client này KHÔNG bị chặn bởi cờ tắt đăng nhập web.
+    /// <summary>
+    /// Trả phiên đăng nhập về cho client — ĐÚNG MỘT CHỖ cho cả ba đường đăng nhập (mật khẩu, QR,
+    /// ứng dụng xác nhận), để không đường nào lỡ quên đặt cookie hay lỡ trả token ra cho trình duyệt.
+    ///
+    /// • App native  → JWT trong thân phản hồi (app tự lưu vào vùng bảo mật của thiết bị).
+    /// • Trình duyệt → JWT trong cookie HttpOnly, và thân phản hồi KHÔNG có token. Đây là điểm mấu
+    ///   chốt: còn trả token ra cho JavaScript thì nó lại nằm trong localStorage và XSS vẫn lấy được,
+    ///   tức là đổi sang cookie mà chẳng được gì.
+    /// </summary>
+    private static IResult IssueSession(HttpContext http, TokenService tokens, UserDto user, string sid, bool isNative)
+    {
+        var config = http.RequestServices.GetRequiredService<IConfiguration>();
+        if (isNative || !AuthCookies.Enabled(config))
+            return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
+
+        var expiresAt = tokens.WebExpiresAt();
+        AuthCookies.Issue(http, tokens.CreateWebToken(user, sid), expiresAt);
+        return Results.Ok(new LoginResponse(null, user));
+    }
+
+    /// <summary>Phiên cho TRÌNH DUYỆT (đăng nhập QR / ứng dụng xác nhận hộ): đặt cookie và trả về null
+    /// để thân phản hồi không mang token. Trả lại chuỗi token chỉ khi cookie bị tắt bằng cấu hình.</summary>
+    private static string? IssueBrowserSession(HttpContext http, TokenService tokens, UserDto user, string sid)
+    {
+        var config = http.RequestServices.GetRequiredService<IConfiguration>();
+        if (!AuthCookies.Enabled(config)) return tokens.CreateToken(user, sid);
+        AuthCookies.Issue(http, tokens.CreateWebToken(user, sid), tokens.WebExpiresAt());
+        return null;
+    }
+
     private static bool IsNativeClient(string? client)
     {
         if (string.IsNullOrWhiteSpace(client)) return false;

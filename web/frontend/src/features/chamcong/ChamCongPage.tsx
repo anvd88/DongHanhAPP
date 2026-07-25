@@ -8,7 +8,8 @@ import type {
   ChamCongOffline,
   FaceRegistrationLog,
   FaceNguoiDung,
-  LivenessMetric,
+  EyeOpenConfig,
+  LivenessPanel,
   MotionConfig,
   OfflineConfig,
   UserAdmin,
@@ -93,6 +94,7 @@ function OfflineTab() {
   return (
     <>
       <MotionConfigPanel />
+      <EyeOpenConfigPanel />
       <LivenessMetricsPanel />
       <OfflineConfigPanel />
 
@@ -244,9 +246,81 @@ function MotionConfigPanel() {
   );
 }
 
+/* -------- Cấu hình + hiệu chỉnh kiểm tra MỞ MẮT phía server -------- */
+function EyeOpenConfigPanel() {
+  const { data, reload } = useApi<LivenessPanel>("/api/chamcong/liveness-metrics");
+  const cfg: EyeOpenConfig | null = data?.eyeOpen ?? null;
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  // Ngưỡng đang kéo (chưa lưu); null = dùng giá trị máy chủ. Lưu khi thả chuột/phím.
+  const [draft, setDraft] = useState<number | null>(null);
+  const th = draft ?? cfg?.threshold ?? 0.35;
+
+  const save = async (patch: Partial<EyeOpenConfig>) => {
+    if (!cfg) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.put("/api/chamcong/eyeopen-config", {
+        enforce: patch.enforce ?? cfg.enforce,
+        threshold: patch.threshold ?? th,
+      });
+      setMsg("Đã lưu — áp dụng ngay.");
+      reload();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Lỗi lưu cấu hình.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cc-result glass" style={{ marginBottom: 12 }}>
+      <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <ShieldAlert className="h-4 w-4" /> Kiểm tra mở mắt (chống nhắm mắt / giơ ảnh mắt nhắm)
+      </div>
+      <div className="cc-note" style={{ marginBottom: 10 }}>
+        💡 Máy chủ đo độ <b>mở mắt</b> trên khung app gửi lên (cột <code>mắt</code> ở bảng dưới, 0–1). Bật thử ở
+        chế độ <b>chỉ ghi log</b> trước: quét khi mở mắt và khi nhắm/lim dim vài lần, xem cột <code>mắt</code> để
+        chọn ngưỡng (thường ~0.30–0.40), rồi mới bật chặn. Đây là ước lượng hình học (chưa phải model) nên chỉ
+        chặn khi đã hiệu chỉnh — <b>fail-open</b> để không khoá nhầm nhân viên.
+      </div>
+      {cfg ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={cfg.enforce} disabled={busy}
+              onChange={(e) => save({ enforce: e.target.checked })} />
+            <span>
+              <b>Chặn nếu không mở mắt</b>
+              <div className="cc-note">Tắt = chỉ đo &amp; ghi log độ mở mắt để hiệu chỉnh, KHÔNG chặn chấm công.</div>
+            </span>
+          </label>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ minWidth: 110 }}>Ngưỡng mở mắt</span>
+              <input type="range" min={0} max={1} step={0.01} value={th} disabled={busy}
+                onChange={(e) => setDraft(Number(e.target.value))}
+                onPointerUp={() => draft != null && save({ threshold: draft })}
+                onKeyUp={() => draft != null && save({ threshold: draft })}
+                style={{ flex: 1 }} />
+              <b style={{ fontVariantNumeric: "tabular-nums", minWidth: 42, textAlign: "right" }}>{th.toFixed(2)}</b>
+            </div>
+            <div className="cc-note">Độ mở mắt của lượt chấm &lt; ngưỡng ⇒ bị chặn (báo "Chưa mở mắt").</div>
+          </div>
+          {msg && <span className="cc-note">{msg}</span>}
+        </div>
+      ) : (
+        <div className="cc-note">Đang tải cấu hình…</div>
+      )}
+    </div>
+  );
+}
+
 /* -------- Số đo Silent-Face (chống ảnh/màn hình) — hiệu chỉnh ngưỡng có số liệu -------- */
 function LivenessMetricsPanel() {
-  const { data } = useApi<LivenessMetric[]>("/api/chamcong/liveness-metrics");
+  const { data: panel } = useApi<LivenessPanel>("/api/chamcong/liveness-metrics");
+  const data = panel?.metrics;
+  const antiSpoof = panel?.antiSpoof;
 
   const hhmmss = (iso: string) => {
     const d = new Date(iso);
@@ -259,6 +333,26 @@ function LivenessMetricsPanel() {
       <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <ShieldAlert className="h-4 w-4" /> Chống ảnh/màn hình giả (Silent-Face)
       </div>
+      {antiSpoof && antiSpoof.level !== "Full" && (
+        // Model chống giả mạo hỏng thì chấm công vẫn chạy y như bình thường — không có triệu chứng nào
+        // khác ngoài dòng cảnh báo này. Mức None nghĩa là MỌI ảnh đều được coi là người thật.
+        <div
+          className="cc-note"
+          style={{
+            marginBottom: 8,
+            padding: "8px 10px",
+            borderRadius: 8,
+            fontWeight: 600,
+            border: "1px solid",
+            borderColor: antiSpoof.level === "None" ? "#ef4444" : "#f59e0b",
+            color: antiSpoof.level === "None" ? "#b91c1c" : "#b45309",
+          }}
+        >
+          {antiSpoof.level === "None"
+            ? `⛔ KHÔNG có model chống giả mạo — giơ ảnh/màn hình vẫn chấm công được, và KHÔNG còn lớp nào gác thay. Đặt lại model trên máy chủ rồi khởi động lại. ${antiSpoof.detail}.`
+            : `⚠️ Chống giả mạo đang chạy ở mức yếu hơn thiết kế: ${antiSpoof.detail}.`}
+        </div>
+      )}
       <div className="cc-note" style={{ marginBottom: 8 }}>
         📊 Điểm "người thật" (P_real) mỗi lượt quét. Hiện quét <b>qua</b> nếu <b>khung cao nhất</b> ≥ ngưỡng.
         Quét <b>mặt thật</b> và <b>ảnh giả</b> vài lần rồi so <code>best</code>/<code>mean</code>: nếu ảnh vẫn
@@ -279,6 +373,7 @@ function LivenessMetricsPanel() {
                 <th style={{ textAlign: "right" }}>khung</th>
                 <th style={{ textAlign: "right" }}>ngưỡng</th>
                 <th style={{ textAlign: "right" }}>span</th>
+                <th style={{ textAlign: "right" }}>mắt</th>
                 <th style={{ textAlign: "left" }}>Kết luận</th>
               </tr>
             </thead>
@@ -293,6 +388,7 @@ function LivenessMetricsPanel() {
                   <td style={{ textAlign: "right" }}>{m.frames}</td>
                   <td style={numCell}>{m.threshold.toFixed(2)}</td>
                   <td style={numCell}>{m.motionSpan < 0 ? "—" : m.motionSpan.toFixed(3)}</td>
+                  <td style={numCell}>{m.eyeOpen == null || m.eyeOpen < 0 ? "—" : m.eyeOpen.toFixed(2)}</td>
                   <td style={{ color: m.passed ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
                     {m.passed ? "Qua (thật)" : "Chặn (giả)"}
                   </td>

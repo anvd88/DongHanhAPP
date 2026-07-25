@@ -5,22 +5,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Send
@@ -45,7 +39,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -110,110 +103,28 @@ private fun fmtDateInput(v: String?): String {
     return DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneId.systemDefault()).format(i)
 }
 
-/** Thẻ lối vào "Giao việc" trên Trang chủ. */
+/**
+ * Hai hộp thoại của giao việc (chi tiết + form giao/sửa) tách riêng để màn "Việc cần làm" — nơi duy
+ * nhất chứa công việc sau khi hợp nhất — dựng lại được mà không cần màn "Giao việc" riêng.
+ */
 @Composable
-fun WorkTaskEntryCard(badge: Int, canAssign: Boolean, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = if (badge > 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(Icons.Filled.AssignmentTurnedIn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Giao việc", fontWeight = FontWeight.Bold)
-                Text(
-                    when {
-                        badge > 0 -> "$badge việc cần bạn xử lý"
-                        canAssign -> "Giao việc cho nhân viên & nghiệm thu"
-                        else -> "Việc được giao cho bạn"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (badge > 0) StatusChip("$badge", Tone.Warning)
-        }
-    }
-}
-
-@Composable
-fun WorkTaskScreen(vm: HrViewModel) {
-    val state = vm.workTasksState
-    var tab by remember { mutableIntStateOf(0) } // 0 = việc của tôi, 1 = việc tôi giao
-    var formOpen by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<WorkTask?>(null) }
-
-    LaunchedEffect(state.canAssign) { if (!state.canAssign) tab = 0 }
-
-    val rows = if (tab == 0) state.inbox else state.outbox
-
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            SegTab("Việc của tôi", state.summary.inboxActionable, tab == 0, Modifier.weight(1f)) { tab = 0 }
-            if (state.canAssign) SegTab("Việc tôi giao", state.summary.outboxReview, tab == 1, Modifier.weight(1f)) { tab = 1 }
-        }
-
-        if (state.canAssign) {
-            Button(
-                onClick = { editing = null; formOpen = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp),
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Giao việc mới")
-            }
-        }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (state.loading && rows.isEmpty()) {
-                item { LoadingBlock() }
-            } else if (rows.isEmpty()) {
-                item {
-                    EmptyState(
-                        if (tab == 0) "Chưa có việc được giao" else "Bạn chưa giao việc nào",
-                        state.error ?: if (tab == 1 && state.canAssign) "Bấm \"Giao việc mới\" để bắt đầu." else "Việc được giao cho bạn sẽ hiện ở đây.",
-                    )
-                }
-                if (state.error != null) item {
-                    Button(onClick = { vm.loadWorkTasks() }, modifier = Modifier.fillMaxWidth()) { Text("Thử lại") }
-                }
-            } else {
-                items(rows, key = { it.id }) { task ->
-                    WorkTaskCard(task = task, isInbox = tab == 0) { vm.openWorkTask(task.id) }
-                }
-            }
-        }
-    }
-
+fun WorkTaskDialogs(
+    vm: HrViewModel,
+    formOpen: Boolean,
+    editing: WorkTask?,
+    onEdit: (WorkTask) -> Unit,
+    onCloseForm: () -> Unit,
+) {
     if (vm.workTaskDetail.id != null) {
-        WorkTaskDetailDialog(vm, onEdit = { task -> vm.closeWorkTaskDetail(); editing = task; formOpen = true })
+        WorkTaskDetailDialog(vm, onEdit = { task -> vm.closeWorkTaskDetail(); onEdit(task) })
     }
     if (formOpen) {
-        WorkTaskFormDialog(vm = vm, meta = state.meta, editing = editing) { formOpen = false; editing = null }
+        WorkTaskFormDialog(vm = vm, meta = vm.workTasksState.meta, editing = editing, onDismiss = onCloseForm)
     }
 }
 
 @Composable
-private fun SegTab(label: String, badge: Int, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+internal fun SegTab(label: String, badge: Int, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         modifier = modifier,
@@ -242,7 +153,7 @@ private fun SegTab(label: String, badge: Int, selected: Boolean, modifier: Modif
 }
 
 @Composable
-private fun WorkTaskCard(task: WorkTask, isInbox: Boolean, onOpen: () -> Unit) {
+internal fun WorkTaskCard(task: WorkTask, isInbox: Boolean, onOpen: () -> Unit) {
     Surface(
         onClick = onOpen,
         modifier = Modifier.fillMaxWidth(),

@@ -379,6 +379,31 @@ export interface LivenessMetric {
   passed: boolean;
   /** Biên độ góc quay đầu (yaw span) của lượt; < 0 nghĩa là lượt không kiểm tra chuyển động. */
   motionSpan: number;
+  /** Độ mở mắt cao nhất của loạt (0..1); < 0 nghĩa là không đo được. */
+  eyeOpen?: number;
+}
+
+/** Cấu hình kiểm tra MỞ MẮT phía server: chặn khi độ mở mắt < ngưỡng. Mặc định chỉ đo (enforce=false). */
+export interface EyeOpenConfig {
+  enforce: boolean;
+  threshold: number;
+}
+
+/**
+ * Mức chống giả mạo ĐANG chạy thật trên máy chủ.
+ * "None" = không nạp được model nào ⇒ mọi ảnh đều được coi là người thật (chấm công vẫn chạy bình
+ * thường, không có triệu chứng gì khác) — panel phải cảnh báo đỏ.
+ */
+export interface AntiSpoofStatus {
+  level: "Full" | "Basic" | "None";
+  detail: string;
+}
+
+/** Dữ liệu panel "Chống ảnh/màn hình giả": trạng thái model + cấu hình mở mắt + các lượt đo gần nhất. */
+export interface LivenessPanel {
+  antiSpoof: AntiSpoofStatus;
+  metrics: LivenessMetric[];
+  eyeOpen?: EyeOpenConfig | null;
 }
 
 export interface Release {

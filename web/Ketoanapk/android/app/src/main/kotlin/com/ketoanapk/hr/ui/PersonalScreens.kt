@@ -25,10 +25,13 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +56,10 @@ import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonOff
@@ -61,6 +68,8 @@ import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -91,18 +100,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ketoanapk.hr.data.AppNotification
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.data.PayEstimate
@@ -112,14 +124,21 @@ import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
 import com.ketoanapk.hr.data.ShiftReminderSettings
 import com.ketoanapk.hr.data.AppPersonalization
+import com.ketoanapk.hr.data.ServerClock
 import com.ketoanapk.hr.ui.theme.BrandRed
 import com.ketoanapk.hr.ui.theme.Danger
+import com.ketoanapk.hr.ui.theme.HeroBottom
+import com.ketoanapk.hr.ui.theme.HeroTop
 import com.ketoanapk.hr.ui.theme.InfoBlue
 import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import kotlin.math.absoluteValue
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -129,30 +148,47 @@ fun HomeScreen(
     manager: ManagerUiState,
     hub: List<HrDestination>,
     workTasks: WorkTasksUiState,
+    notifications: List<AppNotification>,
+    announcement: String,
+    serverNotices: List<String>,
+    onOpenNotifications: () -> Unit,
     onSelect: (HrDestination) -> Unit,
 ) {
     val today = state.timesheet?.days?.firstOrNull { it.date.take(10) == todayKey() }
     val name = state.employee?.fullName?.ifBlank { user.displayName } ?: user.displayName
-    val position = buildString {
-        append(state.employee?.position?.ifBlank { "Nhân viên" } ?: "Nhân viên")
-        val dept = state.employee?.departmentName
-        if (!dept.isNullOrBlank()) append(" · $dept")
-    }
     val summary = state.timesheet?.summary
+
+    val checkedIn = !today?.checkIn.isNullOrBlank()
+    val checkedOut = !today?.checkOut.isNullOrBlank()
+    // Danh sách thông báo cho hiệu ứng gõ chữ: gộp thông báo điều hành + lời nhắc admin sửa từ xa +
+    // thông báo nghiệp vụ + nhắc việc + lời nhắc gắn sẵn.
+    val notices = remember(announcement, serverNotices, notifications, today, name) {
+        homeNotices(announcement, serverNotices, notifications, name, checkedIn, checkedOut)
+    }
+    // Lời chào theo buổi (sáng/trưa/chiều/tối) tính từ GIỜ MÁY CHỦ, luôn đứng đầu dải thông báo. Tính
+    // mỗi lần dựng lại giao diện (rẻ); chuỗi ổn định trong cùng một buổi nên không làm hiệu ứng gõ khởi
+    // động lại vô cớ, và tự đổi khi qua buổi mới hoặc khi đồng hồ máy chủ vừa đồng bộ xong.
+    val greeting = timeGreetingLine(name)
+    val tickerMessages = remember(greeting, notices) { listOf(greeting) + notices }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { HomeHeroCard(name, position, today, state.employee?.avatar) { onSelect(HrDestination.Scan) } }
+        item { NotificationTickerCard(messages = tickerMessages, onClick = onOpenNotifications) }
+
+        item { CheckInCard(today) { onSelect(HrDestination.Scan) } }
 
         item { PortalEntryCard { onSelect(HrDestination.Portal) } }
+        // MỘT thẻ công việc duy nhất: việc được giao và việc cần xử lý đã gộp về cùng một màn.
         item {
             val taskCount = buildTaskCenterItems(state.inbox, state.timesheet, manager.summary?.headcount).size
-            TaskCenterEntryCard(taskCount) { onSelect(HrDestination.Tasks) }
+            TaskCenterEntryCard(
+                count = taskCount + workTasks.badge,
+                canAssign = workTasks.canAssign,
+            ) { onSelect(HrDestination.Tasks) }
         }
-        item { WorkTaskEntryCard(badge = workTasks.badge, canAssign = workTasks.canAssign) { onSelect(HrDestination.WorkTasks) } }
 
         if (user.isAdmin) {
             item { AdminDashboardCard(manager.summary?.headcount) { onSelect(HrDestination.Approval) } }
@@ -190,9 +226,20 @@ fun HomeScreen(
     }
 }
 
-/** Thẻ tiêu đề tối: avatar + tên + trạng thái ca + Vào/Ra + nút Chấm công ngay. */
+/**
+ * Header Trang chủ tràn viền: nền tối gradient kéo lên dưới thanh trạng thái và sát hai mép màn hình,
+ * chỉ bo hai góc dưới. Dùng làm topBar của Scaffold để tự "ăn" phần chèn thanh trạng thái và ghim ở
+ * đỉnh. Gồm avatar + tên + phòng ban + trạng thái ca, kèm chuông thông báo ở góc phải.
+ */
 @Composable
-private fun HomeHeroCard(name: String, position: String, today: TimesheetDay?, avatar: String? = null, onScan: () -> Unit) {
+fun HomeHeaderBar(user: HrUser, state: HomeUiState, unread: Int, onBell: () -> Unit) {
+    val name = state.employee?.fullName?.ifBlank { user.displayName } ?: user.displayName
+    val position = buildString {
+        append(state.employee?.position?.ifBlank { "Nhân viên" } ?: "Nhân viên")
+        val dept = state.employee?.departmentName
+        if (!dept.isNullOrBlank()) append(" · $dept")
+    }
+    val today = state.timesheet?.days?.firstOrNull { it.date.take(10) == todayKey() }
     val checkedIn = !today?.checkIn.isNullOrBlank()
     val checkedOut = !today?.checkOut.isNullOrBlank()
     val statusText = when {
@@ -205,14 +252,77 @@ private fun HomeHeroCard(name: String, position: String, today: TimesheetDay?, a
         checkedIn && checkedOut -> Color(0xFF60A5FA)
         else -> Color(0xFF94A3B8)
     }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp))
+            .background(Brush.verticalGradient(listOf(HeroTop, HeroBottom)))
+            .statusBarsPadding()
+            .padding(start = 18.dp, end = 10.dp, top = 8.dp, bottom = 16.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                UserAvatar(name, 56, avatar = state.employee?.avatar)
+                Spacer(Modifier.width(14.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(name, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(position, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C0CE), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    HeroBadge(statusText, statusColor)
+                }
+            }
+            HeroBell(unread = unread, onClick = onBell)
+        }
+    }
+}
+
+/** Chuông thông báo trên nền hero tối, kèm chấm đỏ đếm số chưa đọc. */
+@Composable
+private fun HeroBell(unread: Int, onClick: () -> Unit) {
+    Box(contentAlignment = Alignment.TopEnd) {
+        IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
+            Icon(
+                if (unread > 0) Icons.Filled.Notifications else Icons.Filled.NotificationsNone,
+                contentDescription = "Thông báo",
+                tint = Color.White,
+                modifier = Modifier.size(26.dp),
+            )
+        }
+        if (unread > 0) {
+            Box(
+                modifier = Modifier
+                    .padding(top = 2.dp, end = 2.dp)
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(BrandRed),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (unread > 9) "9+" else "$unread",
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
+
+/** Thẻ chấm công tối: ngày lớn + thứ/tháng, hàng Vào/Ra, nút "Chấm công ngay". */
+@Composable
+private fun CheckInCard(today: TimesheetDay?, onScan: () -> Unit) {
+    val now = LocalDate.now()
     HeroContainer {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            UserAvatar(name, 56, avatar = avatar)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${now.dayOfMonth}",
+                color = Color.White,
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Bold,
+            )
             Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(name, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(position, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C0CE), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                HeroBadge(statusText, statusColor)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(weekdayVi(now.dayOfWeek), color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Tháng ${now.monthValue} · ${now.year}", color = Color(0xFFB7C0CE), style = MaterialTheme.typography.bodyMedium)
             }
         }
         Row(
@@ -245,6 +355,188 @@ private fun HomeHeroCard(name: String, position: String, today: TimesheetDay?, a
             Text("Chấm công ngay", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
     }
+}
+
+private fun weekdayVi(d: DayOfWeek): String = when (d) {
+    DayOfWeek.MONDAY -> "Thứ Hai"
+    DayOfWeek.TUESDAY -> "Thứ Ba"
+    DayOfWeek.WEDNESDAY -> "Thứ Tư"
+    DayOfWeek.THURSDAY -> "Thứ Năm"
+    DayOfWeek.FRIDAY -> "Thứ Sáu"
+    DayOfWeek.SATURDAY -> "Thứ Bảy"
+    DayOfWeek.SUNDAY -> "Chủ Nhật"
+}
+
+/**
+ * Gộp danh sách thông báo để chạy hiệu ứng gõ chữ trên Trang chủ. Thứ tự ưu tiên: thông báo điều hành
+ * (admin, một câu) → lời nhắc admin sửa từ xa ([serverNotices]) → thông báo nghiệp vụ chưa đọc → nhắc
+ * chấm công → lời nhắc gắn sẵn. Lọc rỗng, khử trùng lặp. Lời chào theo buổi được ghép ở đầu dải tại
+ * [HomeScreen]; luôn có ít nhất mấy lời nhắc gắn sẵn nên dải không bao giờ trống.
+ */
+private fun homeNotices(
+    announcement: String,
+    serverNotices: List<String>,
+    notifications: List<AppNotification>,
+    name: String,
+    checkedIn: Boolean,
+    checkedOut: Boolean,
+): List<String> {
+    val out = ArrayList<String>()
+    announcement.trim().takeIf { it.isNotEmpty() }?.let { out.add(it) }
+    serverNotices.forEach { it.trim().takeIf { s -> s.isNotEmpty() }?.let(out::add) }
+    notifications.asSequence()
+        .filter { !it.read }
+        .take(5)
+        .forEach { n ->
+            val body = n.body.trim()
+            val title = n.title.trim()
+            val line = when {
+                body.isNotEmpty() && title.isNotEmpty() && !body.startsWith(title) -> "$title — $body"
+                body.isNotEmpty() -> body
+                else -> title
+            }
+            if (line.isNotEmpty()) out.add(line)
+        }
+    when {
+        !checkedIn -> out.add("Bạn chưa chấm công vào hôm nay. Đừng quên chấm công khi bắt đầu ca nhé!")
+        checkedIn && !checkedOut -> out.add("Bạn đã vào ca. Nhớ chấm công ra khi tan làm nhé!")
+    }
+    out.addAll(builtInReminders())
+    return out.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+}
+
+/**
+ * Lời nhắc GẮN SẴN trong app (không cần server): vài câu hữu ích luân phiên để dải luôn phong phú, kèm
+ * một câu theo THỨ trong tuần (tính từ GIỜ MÁY CHỦ). Admin có thể thêm lời nhắc riêng qua trang Hệ thống
+ * ([AppConfig.notices]); hai nguồn được gộp & khử trùng lặp ở [homeNotices].
+ */
+private fun builtInReminders(): List<String> {
+    val out = ArrayList<String>()
+    when (ServerClock.nowVietnam().dayOfWeek) {
+        DayOfWeek.MONDAY -> out.add("Chào tuần mới! Lên kế hoạch cho một tuần suôn sẻ nào 🚀")
+        DayOfWeek.FRIDAY -> out.add("Sắp hết tuần rồi — cố lên và nhớ tổng kết công việc nhé 💪")
+        else -> {}
+    }
+    out.add("Nghỉ mắt và uống đủ nước sau mỗi giờ làm để giữ sức khoẻ 💧")
+    out.add("Kiểm tra danh sách công việc được giao cho bạn hôm nay 📋")
+    out.add("Đơn từ (nghỉ phép, tạm ứng…) nên nộp sớm để được duyệt kịp thời 📝")
+    return out
+}
+
+/**
+ * Lời chào theo buổi trong ngày (sáng/trưa/chiều/tối) tính từ GIỜ MÁY CHỦ ([ServerClock]) quy về múi
+ * giờ Việt Nam — không lệ thuộc đồng hồ máy có thể bị chỉnh sai. Chưa đồng bộ được giờ máy chủ (mới mở
+ * app/offline) thì tạm dùng giờ máy.
+ */
+private fun timeGreetingLine(name: String): String {
+    val who = name.trim().ifEmpty { "bạn" }
+    val (part, emoji) = when (ServerClock.nowVietnam().hour) {
+        in 5..10 -> "buổi sáng" to "☀️"
+        in 11..12 -> "buổi trưa" to "🌤️"
+        in 13..17 -> "buổi chiều" to "🌇"
+        else -> "buổi tối" to "🌙"
+    }
+    return "Chào $part, $who $emoji"
+}
+
+/**
+ * Dải thông báo động với hiệu ứng máy đánh chữ: gõ từng ký tự → giữ → xoá dần → thông báo kế tiếp,
+ * lặp vô hạn. Chiều cao thẻ cố định để nội dung dài/ngắn không làm các thẻ dưới nhảy vị trí; chữ luôn
+ * căn giữa cả chiều ngang lẫn chiều dọc. Hiệu ứng tự dừng khi rời màn/nền và chạy lại khi quay lại,
+ * không rò rỉ nhờ gắn với vòng đời & phạm vi hợp thành.
+ */
+@Composable
+private fun NotificationTickerCard(
+    messages: List<String>,
+    onClick: (() -> Unit)? = null,
+    typeDelayMs: Long = 48L,
+    deleteDelayMs: Long = 26L,
+    holdMs: Long = 4000L,
+    pauseMs: Long = 400L,
+) {
+    // Tách theo cụm ký tự hiển thị (grapheme) để gõ đúng dấu tiếng Việt, emoji, ký tự ghép.
+    val clusters = remember(messages) {
+        messages.map { it.trim() }.filter { it.isNotEmpty() }.distinct().map { splitGraphemes(it) }
+    }
+    if (clusters.isEmpty()) return
+
+    var shown by remember(clusters) { mutableStateOf("") }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(clusters, lifecycleOwner) {
+        // repeatOnLifecycle(RESUMED): dừng khi màn nền/tắt, tự chạy lại khi quay về foreground.
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            var index = 0
+            while (true) {
+                val g = clusters[index % clusters.size]
+                for (i in 1..g.size) {
+                    shown = g.subList(0, i).joinToString("")
+                    delay(typeDelayMs)
+                }
+                delay(holdMs)
+                for (i in g.size - 1 downTo 0) {
+                    shown = g.subList(0, i).joinToString("")
+                    delay(deleteDelayMs)
+                }
+                delay(pauseMs)
+                index++
+            }
+        }
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shadowElevation = 1.dp,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 88.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(InfoBlue.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.Info, contentDescription = null, tint = InfoBlue, modifier = Modifier.size(20.dp))
+            }
+            Text(
+                text = shown,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 40.dp),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Chia chuỗi thành các cụm ký tự hiển thị (grapheme cluster) để gõ/xoá đúng emoji & dấu tiếng Việt. */
+private fun splitGraphemes(s: String): List<String> {
+    val it = java.text.BreakIterator.getCharacterInstance()
+    it.setText(s)
+    val out = ArrayList<String>()
+    var start = it.first()
+    var end = it.next()
+    while (end != java.text.BreakIterator.DONE) {
+        out.add(s.substring(start, end))
+        start = end
+        end = it.next()
+    }
+    return out
 }
 
 @Composable
@@ -566,15 +858,24 @@ private fun HeroFooterStat(label: String, value: String, modifier: Modifier = Mo
 @Composable
 fun TimesheetScreen(
     state: TimesheetUiState,
+    payEstimate: PayEstimateUiState,
+    username: String,
     onMonthOffset: (Int) -> Unit,
     onSelectMonth: (String) -> Unit,
     onShiftSwap: (String?) -> Unit,
+    onForgotCheckin: (String?) -> Unit,
+    onLoadSalary: () -> Unit,
+    onVerifyAccountPassword: (String, (Boolean, String?) -> Unit) -> Unit,
 ) {
     val period = state.month.take(7)
     val ts = state.timesheet?.takeIf { it.period.take(7) == period }
     var selectedDate by rememberSaveable(period) { mutableStateOf<String?>(null) }
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var weekMode by rememberSaveable { mutableStateOf(false) }
+    // Lương che sẵn; chỉ hiện sau khi xác thực PIN/vân tay. Dùng remember (không saveable) để rời tab
+    // là che lại ngay — tránh lộ lương khi người khác cầm máy.
+    var salaryRevealed by remember { mutableStateOf(false) }
+    var salaryPinOpen by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val reminderSettings = remember { ShiftReminderSettings(context) }
     var beforeShift by rememberSaveable { mutableStateOf(reminderSettings.beforeShift) }
@@ -586,6 +887,12 @@ fun TimesheetScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { PageHeader(Icons.Filled.CalendarMonth, "Bảng công", formatTimesheetPeriod(period), Tone.Neutral) }
+        timesheetSalarySection(
+            state = payEstimate,
+            revealed = salaryRevealed,
+            onRequestReveal = { salaryPinOpen = true },
+            onHide = { salaryRevealed = false },
+        )
         item {
             MonthSelectorBar(
                 label = formatTimesheetPeriod(period),
@@ -624,7 +931,7 @@ fun TimesheetScreen(
         } else {
             val selectedDay = selectedDate?.let { daysByDate[it] }
             if (selectedDate != null) {
-                item { TimesheetDayDetailCard(selectedDate.orEmpty(), selectedDay, onShiftSwap) }
+                item { TimesheetDayDetailCard(selectedDate.orEmpty(), selectedDay, onShiftSwap, onForgotCheckin) }
             }
             item {
                 HrCard {
@@ -635,11 +942,6 @@ fun TimesheetScreen(
                     ReminderToggle("Cảnh báo sắp trễ", "Nhắc khi qua giờ vào mà chưa chấm công", lateWarning) {
                         lateWarning = it; reminderSettings.lateWarning = it
                     }
-                }
-            }
-            item {
-                Button(onClick = { onShiftSwap(selectedDate) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (selectedDate == null) "Xin đổi / nhận ca" else "Xin đổi / nhận ca ngày ${formatIsoDate(selectedDate.orEmpty())}")
                 }
             }
             item { SectionTitle("Tổng hợp tháng", modifier = Modifier.padding(start = 4.dp)) }
@@ -674,6 +976,141 @@ fun TimesheetScreen(
                 onSelectMonth("%04d-%02d".format(year, month))
             },
         )
+    }
+
+    // Xác thực để bỏ che phần lương (giống mở phiếu lương). Thành công → hiện + tải lại số liệu mới nhất.
+    AppPinGate(
+        visible = salaryPinOpen,
+        username = username,
+        purpose = "Xác thực để xem lương của bạn.",
+        onDismiss = { salaryPinOpen = false },
+        onUnlocked = {
+            salaryPinOpen = false
+            salaryRevealed = true
+            onLoadSalary()
+        },
+        onVerifyAccountPassword = onVerifyAccountPassword,
+    )
+}
+
+/**
+ * Phần "Lương của tôi" nhúng trong tab Bảng công. Mặc định CHE số tiền (hiện ***********); nhân viên bấm
+ * biểu tượng con mắt + xác thực PIN/vân tay mới hiện chi tiết. Gộp trọn nội dung màn "Lương của tôi" cũ
+ * (thực nhận dự tính, ngày công/tăng ca, khoản cộng, khoản trừ, ghi chú) để xem công và lương cùng một chỗ.
+ */
+private fun LazyListScope.timesheetSalarySection(
+    state: PayEstimateUiState,
+    revealed: Boolean,
+    onRequestReveal: () -> Unit,
+    onHide: () -> Unit,
+) {
+    val est = state.data
+    item {
+        HrCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(38.dp).clip(CircleShape).background(Success.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Filled.Payments, contentDescription = null, tint = Success, modifier = Modifier.size(22.dp)) }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Lương của tôi", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    Text("Dự tính ${formatTimesheetPeriod(est?.period)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = { if (revealed) onHide() else onRequestReveal() }) {
+                    Icon(
+                        if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = if (revealed) "Ẩn lương" else "Xem lương",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            if (!revealed) {
+                Spacer(Modifier.height(10.dp))
+                Text("Thực nhận dự tính", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("***********", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Bấm con mắt và xác thực để xem chi tiết.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+    if (!revealed) return
+
+    if (state.loading && est == null) item { LoadingBlock() }
+    if (est == null && !state.loading) {
+        item { EmptyState("Chưa có dữ liệu lương", state.error ?: "Không tải được lương dự tính.") }
+    }
+    if (est != null) {
+        if (!est.hasSalary) {
+            item {
+                HrCard {
+                    Text(
+                        "Bạn chưa được thiết lập mức lương. Số liệu dưới đây có thể chưa đầy đủ — vui lòng liên hệ quản trị nhân sự.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        // Thẻ nổi bật: thực nhận dự tính.
+        item {
+            HrCard {
+                Text("Thực nhận dự tính", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    formatMoney(est.netPay),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    "Tổng thu ${formatMoney(est.totalEarnings)} − Khấu trừ ${formatMoney(est.totalDeductions)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(Icons.Filled.EventAvailable, "Ngày công", "${est.workedDays}", Success, Modifier.weight(1f))
+                StatTile(Icons.Filled.Schedule, "Tăng ca", "${trimNum(est.overtimeHours)}h", InfoBlue, Modifier.weight(1f))
+            }
+        }
+        item { SectionTitle("Khoản cộng", modifier = Modifier.padding(start = 4.dp)) }
+        item {
+            HrCard {
+                if (est.earnings.isEmpty()) {
+                    Text("Không có khoản cộng.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    est.earnings.forEach { line -> LabelValue(line.label, formatMoney(line.amount)) }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                LabelValue("Tổng thu nhập", formatMoney(est.totalEarnings))
+            }
+        }
+        item { SectionTitle("Khoản trừ", modifier = Modifier.padding(start = 4.dp)) }
+        item {
+            HrCard {
+                if (est.deductions.isEmpty()) {
+                    Text("Không có khoản trừ.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    est.deductions.forEach { line -> LabelValue(line.label, "− ${formatMoney(line.amount)}") }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                LabelValue("Tổng khấu trừ", "− ${formatMoney(est.totalDeductions)}")
+            }
+        }
+        item {
+            Text(
+                "Đây là lương DỰ TÍNH của tháng hiện tại, đã gồm khấu trừ tiền phạt (nếu có). Số liệu có thể thay đổi khi quản trị chốt phiếu lương.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+        }
     }
 }
 
@@ -1088,7 +1525,12 @@ private fun TimesheetCalendarDayCell(
 }
 
 @Composable
-private fun TimesheetDayDetailCard(dateKey: String, day: TimesheetDay?, onShiftSwap: (String?) -> Unit) {
+private fun TimesheetDayDetailCard(
+    dateKey: String,
+    day: TimesheetDay?,
+    onShiftSwap: (String?) -> Unit,
+    onForgotCheckin: (String?) -> Unit,
+) {
     val holidayLabel = day?.takeIf { isTimesheetHoliday(it) }?.let { timesheetHolidayLabel(it) }
     HrCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1111,7 +1553,7 @@ private fun TimesheetDayDetailCard(dateKey: String, day: TimesheetDay?, onShiftS
         }
         if (day == null) {
             Text(
-                "Ngày này chưa có dữ liệu chấm công để rà soát.",
+                "Ngày này chưa có dữ liệu chấm công. Nếu bạn có đi làm, bấm \"Báo quên chấm\" để được bù công.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1138,7 +1580,19 @@ private fun TimesheetDayDetailCard(dateKey: String, day: TimesheetDay?, onShiftS
             if (day.shiftStart.isNotBlank() || day.shiftEnd.isNotBlank()) {
                 TimesheetDetailMetric("Khung giờ ca", "${day.shiftStart.ifBlank { "--:--" }} – ${day.shiftEnd.ifBlank { "--:--" }}")
             }
-            OutlinedButton(onClick = { onShiftSwap(dateKey) }, modifier = Modifier.fillMaxWidth()) { Text("Đổi / nhận ca ngày này") }
+        }
+        // Thao tác cho NGÀY ĐANG CHỌN — luôn hiện (kể cả ngày chưa có log, để còn báo quên chấm).
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = { onShiftSwap(dateKey) },
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 6.dp),
+            ) { Text("Đổi / nhận ca", maxLines = 1) }
+            Button(
+                onClick = { onForgotCheckin(dateKey) },
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 6.dp),
+            ) { Text("Báo quên chấm", maxLines = 1) }
         }
     }
 }
@@ -1328,103 +1782,6 @@ fun timesheetTone(status: String?): Tone {
         normalized.contains("muộn") || normalized.contains("sớm") || normalized.contains("thiếu") || normalized == "late" -> Tone.Warning
         normalized.contains("không phân ca") -> Tone.Muted
         else -> Tone.Neutral
-    }
-}
-
-// ── Lương của tôi (nhân viên tự xem lương dự tính tháng hiện tại) ─────────────
-@Composable
-fun MySalaryScreen(state: PayEstimateUiState) {
-    val est = state.data
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item {
-            PageHeader(
-                Icons.Filled.Payments,
-                "Lương của tôi",
-                "Dự tính ${formatTimesheetPeriod(est?.period)}",
-                Tone.Success,
-            )
-        }
-        if (state.loading && est == null) item { LoadingBlock() }
-        if (est == null && !state.loading) {
-            item { EmptyState("Chưa có dữ liệu lương", state.error ?: "Không tải được lương dự tính.") }
-        }
-        if (est != null) {
-            if (!est.hasSalary) {
-                item {
-                    HrCard {
-                        Text(
-                            "Bạn chưa được thiết lập mức lương. Số liệu dưới đây có thể chưa đầy đủ — vui lòng liên hệ quản trị nhân sự.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-
-            // Thẻ nổi bật: thực nhận dự tính.
-            item {
-                HrCard {
-                    Text("Thực nhận dự tính", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        formatMoney(est.netPay),
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.ExtraBold,
-                    )
-                    Text(
-                        "Tổng thu ${formatMoney(est.totalEarnings)} − Khấu trừ ${formatMoney(est.totalDeductions)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    StatTile(Icons.Filled.EventAvailable, "Ngày công", "${est.workedDays}", Success, Modifier.weight(1f))
-                    StatTile(Icons.Filled.Schedule, "Tăng ca", "${trimNum(est.overtimeHours)}h", InfoBlue, Modifier.weight(1f))
-                }
-            }
-
-            item { SectionTitle("Khoản cộng", modifier = Modifier.padding(start = 4.dp)) }
-            item {
-                HrCard {
-                    if (est.earnings.isEmpty()) {
-                        Text("Không có khoản cộng.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        est.earnings.forEach { line -> LabelValue(line.label, formatMoney(line.amount)) }
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                    LabelValue("Tổng thu nhập", formatMoney(est.totalEarnings))
-                }
-            }
-
-            item { SectionTitle("Khoản trừ", modifier = Modifier.padding(start = 4.dp)) }
-            item {
-                HrCard {
-                    if (est.deductions.isEmpty()) {
-                        Text("Không có khoản trừ.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        est.deductions.forEach { line -> LabelValue(line.label, "− ${formatMoney(line.amount)}") }
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                    LabelValue("Tổng khấu trừ", "− ${formatMoney(est.totalDeductions)}")
-                }
-            }
-
-            item {
-                Text(
-                    "Đây là lương DỰ TÍNH của tháng hiện tại, đã gồm khấu trừ tiền phạt (nếu có). Số liệu có thể thay đổi khi quản trị chốt phiếu lương.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                )
-            }
-        }
     }
 }
 

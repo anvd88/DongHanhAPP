@@ -173,6 +173,8 @@ data class AppConfig(
     val portraitMinWidthFactor: Double = 1.35,
     // Cấu hình gọi thoại/video điều khiển từ xa (STUN, ép relay, timeout, chất lượng video, công tắc).
     val call: CallRemoteConfig = CallRemoteConfig(),
+    // Lời nhắc/thông báo chạy chữ trên Trang chủ (admin sửa từ xa) — luân phiên cùng lời chào theo buổi.
+    val notices: List<String> = emptyList(),
 )
 
 /**
@@ -363,6 +365,21 @@ data class EmployeeDetail(
     val isAccounting: Boolean = false,
 )
 @Serializable data class SaveEmployeeBody(val employeeCode:String,val username:String,val fullName:String,val dob:String?=null,val gender:String="",val phone:String="",val email:String="",val address:String="",val departmentId:String?=null,val position:String="",val managerId:String?=null,val hireDate:String?=null,val status:String="Active",val avatar:String?=null,val locationId:String?=null,val accessRole:String="staff")
+
+/** Thư tri ân "tròn X năm gắn bó" đã điền sẵn (server tính mốc theo ngày vào làm). show=false → không hiện. */
+@Serializable
+data class AnniversaryGreeting(
+    val show: Boolean = false,
+    /** true chỉ ở bản quản lý chủ động xem thử; đóng bản này không ghi nhận mốc thật là đã xem. */
+    val preview: Boolean = false,
+    val years: Int = 0,
+    val anniversaryDate: String = "",
+    /** Khoá để app nhớ đã xem (mỗi mốc chỉ hiện một lần), vd "anniv-2026". */
+    val key: String = "",
+    val title: String = "",
+    val body: String = "",
+    val signature: String = "",
+)
 @Serializable data class SaveSalaryBody(val baseSalary:Double,val allowance:Double,val overtimeRate:Double,val components:List<PayLine> = emptyList(),val note:String="")
 
 @Serializable
@@ -740,20 +757,20 @@ data class FaceEngineStatus(
 )
 
 // Loạt ảnh gửi lên để chấm công (server tự chọn khung tốt nhất). selfOnly=true: chỉ chấm cho chính mình.
-// previewOnly=true: chỉ nhận diện (chưa ghi log) để hiện form xác nhận; bấm Xác nhận mới gửi lại previewOnly=false.
+// previewOnly=true: chỉ nhận diện (chưa ghi log) để hiện form xác nhận.
+// confirmToken: token do bước xem trước cấp — bấm Xác nhận chỉ gửi token này, KHÔNG gửi lại ảnh, nên
+// server ghi công luôn thay vì chạy lại toàn bộ khâu nhận diện lần thứ hai.
 // occurredAt (ISO UTC) khác null = ĐỒNG BỘ NGOẠI TUYẾN: server không ghi thẳng mà tạo bản chờ duyệt,
 // kèm gpsLat/gpsLng (nếu có) để kiểm tra geofence.
 @Serializable
 data class ChamCongBurstRequest(
-    val images: List<String>,
+    val images: List<String> = emptyList(),
+    val confirmToken: String? = null,
     val selfOnly: Boolean = true,
     val previewOnly: Boolean = false,
     val occurredAt: String? = null,
     val gpsLat: Double? = null,
     val gpsLng: Double? = null,
-    // Active-flash liveness (đã ngừng dùng — giữ để tương thích): challengeId + slotIndices.
-    val challengeId: String? = null,
-    val slotIndices: List<Int>? = null,
     // Liveness QUAY ĐẦU: true = loạt ảnh chụp khi người dùng quay đầu (server kiểm tra biên độ góc quay).
     val motionCheck: Boolean = false,
 )
@@ -762,21 +779,9 @@ data class ChamCongBurstRequest(
 @Serializable
 data class MotionConfig(val enabled: Boolean = false, val enforce: Boolean = false)
 
-// ----- Active-flash liveness (chống giả mạo chủ động bằng ánh sáng màn hình) -----
-// Server phát chuỗi màu ngẫu nhiên; app hiển thị full màn hình từng màu theo slotMs (chờ settleMs cho
-// màn hình + camera ổn định) rồi gắn nhãn slot cho từng khung ảnh gửi lên để server đối chiếu phản xạ.
-@Serializable
-data class FlashChallenge(
-    val challengeId: String = "",
-    val slots: List<FlashSlot> = emptyList(),
-    val slotMs: Int = 420,
-    val settleMs: Int = 150,
-)
-
-@Serializable
-data class FlashSlot(val index: Int = 0, val color: String = "#FFFFFF")
-
-// Một khung đã chụp kèm nhãn slot màu đang chiếu (slot = -1 khi không chạy flash liveness).
+// Một khung đã chụp kèm nhãn PHA quét soi sáng (slot 0/1/2 = ba pha sáng của màn quét 3 giây; -1 = khung
+// tự nhiên ở đuôi). Nhãn này chỉ dùng NỘI BỘ trong app để giới hạn số khung giữ lại mỗi pha — server
+// không còn nhận nó nữa (active-flash liveness đã gỡ hẳn ở cả hai phía).
 data class CapturedFrame(val image: String, val slot: Int)
 
 // ----- Tự đăng ký khuôn mặt (mỗi tài khoản một lần, nhiều góc) -----
@@ -842,7 +847,8 @@ data class AttendancePolicy(
 @Serializable
 data class QrAttendanceBody(val token: String)
 
-// Kết quả chấm công. status: ok | posture | lowquality | noface | spoof | unknown | proxy | error
+// Kết quả chấm công. status: ok | posture | lowquality | noface | spoof | unknown | proxy | expired | error
+// previewToken chỉ có ở phản hồi bước xem trước — gửi lại nó khi bấm Xác nhận (thay cho cả loạt ảnh).
 @Serializable
 data class ChamCongResult(
     val status: String = "",
@@ -855,6 +861,7 @@ data class ChamCongResult(
     val quality: Double = 0.0,
     val message: String = "",
     val guidance: String? = null,
+    val previewToken: String? = null,
 )
 
 // ---------------- Phiếu chi tiền mặt ----------------

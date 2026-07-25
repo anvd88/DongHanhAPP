@@ -6,7 +6,7 @@ import { Modal } from "../components/Modal";
 import { Button, Field, Input, Select } from "../components/ui";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import {
   BANK_BRANDS,
   bankBrand,

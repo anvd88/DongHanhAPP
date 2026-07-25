@@ -23,7 +23,7 @@ import {
   type CoilCalculationResult,
   type StainlessSteelType,
 } from "../lib/stainlessSteelCoil";
-import { useTheme } from "../lib/theme";
+import { useTheme } from "../lib/theme-context";
 import "./tinh-toan.css";
 
 interface FormState {
@@ -486,7 +486,7 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
           <button type="button" className="calc-theme-button" onClick={toggle}>
             {theme === "light" ? "Giao diện tối" : "Giao diện sáng"}
           </button>
-          <Link to="/login" className="calc-login-link">
+          <Link to="/" className="calc-login-link">
             <LogIn className="h-4 w-4" />
             Đăng nhập
           </Link>

@@ -1,22 +1,23 @@
 import { useEffect, lazy, Suspense } from "react";
-import { BrowserRouter, HashRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { startRealtime, subscribeFeedbackResolved } from "./lib/realtime";
 import { initFileTransfers } from "./lib/filetransfer";
 import { initOfflineAttendanceSync } from "./lib/offlineAttendance";
 import { AuthProvider, useAuth } from "./lib/auth";
+import { AccessProvider, useAccess, PERM, type Permission } from "./lib/access";
 import { ThemeProvider } from "./lib/theme";
 import { Layout } from "./components/Layout";
 import { ChatNotificationProvider } from "./components/ChatNotifications";
-import { AppNotificationProvider, useAppNotifications } from "./components/AppNotifications";
+import { AppNotificationProvider } from "./components/AppNotifications";
+import { useAppNotifications } from "./components/app-notifications-context";
 import { NAV } from "./components/nav";
-import { AppUpdatePrompt } from "./components/AppUpdatePrompt";
 import { WaterReminderPopup } from "./components/WaterReminderPopup";
 import { EyeReminderPopup } from "./components/EyeReminderPopup";
 // ─────────────────────────────────────────────────────────────────────────────
 // Lazy-load (code splitting): mỗi trang là một chunk riêng, chỉ tải khi điều hướng
 // tới. Giảm mạnh dung lượng bundle khởi động → mở app / đăng nhập nhanh hơn nhiều,
 // nhất là các trang nặng (Chấm công + nhận diện khuôn mặt, Chat, Cài đặt, HR...).
-// Suspense fallback bên dưới hiển thị loader trong lúc chunk đang tải.
+// Suspense fallback bên dưới hiển thị skeleton trong lúc chunk đang tải.
 // ─────────────────────────────────────────────────────────────────────────────
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 const KioskPage = lazy(() => import("./pages/KioskPage").then((m) => ({ default: m.KioskPage })));
@@ -33,7 +34,6 @@ const ChamCongScannerPage = lazy(() =>
   import("./features/chamcong/ChamCongScannerPage").then((m) => ({ default: m.ChamCongScannerPage })),
 );
 const NhanSuPortal = lazy(() => import("./pages/NhanSuPortal").then((m) => ({ default: m.NhanSuPortal })));
-const NhanSu = lazy(() => import("./pages/NhanSu").then((m) => ({ default: m.NhanSu })));
 const HoSo = lazy(() => import("./pages/HoSo").then((m) => ({ default: m.HoSo })));
 const DonTu = lazy(() => import("./pages/DonTu").then((m) => ({ default: m.DonTu })));
 const PheDuyet = lazy(() => import("./pages/PheDuyet").then((m) => ({ default: m.PheDuyet })));
@@ -42,17 +42,10 @@ const BangCong = lazy(() => import("./pages/BangCong").then((m) => ({ default: m
 const QuanLyBangCong = lazy(() => import("./pages/QuanLyBangCong").then((m) => ({ default: m.QuanLyBangCong })));
 const QuanLyNhanSu = lazy(() => import("./pages/QuanLyNhanSu").then((m) => ({ default: m.QuanLyNhanSu })));
 const TaiKhoanNganHang = lazy(() => import("./pages/TaiKhoanNganHang").then((m) => ({ default: m.TaiKhoanNganHang })));
-const HRAttendanceAdminPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRAttendanceAdminPage })));
-const HRAttendancePage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRAttendancePage })));
-const HRApprovalPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRApprovalPage })));
-const HRHomePage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRHomePage })));
-const HRManagerPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRManagerPage })));
+// Chỉ còn HAI trang HR dùng trên web (/phat và /bang-luong). Chín trang HR* còn lại từng là giao diện
+// riêng cho vỏ APK Capacitor — đã xoá cùng vỏ đó.
 const HRPayrollPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPayrollPage })));
 const HRPenaltyPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPenaltyPage })));
-const HRProfilePage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRProfilePage })));
-const HRRequestsPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRRequestsPage })));
-const HRSystemSettingsPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRSystemSettingsPage })));
-const HRTimesheetPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRTimesheetPage })));
 const BaoCao = lazy(() => import("./pages/BaoCao").then((m) => ({ default: m.BaoCao })));
 const CongCu = lazy(() => import("./pages/CongCu").then((m) => ({ default: m.CongCu })));
 const Chats = lazy(() => import("./pages/Chats").then((m) => ({ default: m.Chats })));
@@ -63,21 +56,20 @@ const StubPage = lazy(() => import("./pages/StubPage").then((m) => ({ default: m
 const SystemSettings = lazy(() => import("./pages/SystemSettings").then((m) => ({ default: m.SystemSettings })));
 const CongThongTin = lazy(() => import("./pages/CongThongTin").then((m) => ({ default: m.CongThongTin })));
 const CongViec = lazy(() => import("./pages/CongViec").then((m) => ({ default: m.CongViec })));
-import { isAdmin } from "./lib/types";
-import { DEFAULT_AUTH_PATH, IS_HR_APK, isHrModulePath } from "./lib/appConfig";
+import { DEFAULT_AUTH_PATH, isHrModulePath } from "./lib/appConfig";
+import { BootSkeleton } from "./components/PageSkeleton";
 import { Loader2 } from "lucide-react";
 
 const APP_TITLE = "KetoanMini";
 
 const EXTRA_PAGE_TITLES: Record<string, string> = {
-  "/": "Bản web",
-  "/login": "Đăng nhập",
+  "/": "Đăng nhập",
   "/kiosk": "Kiosk chấm công",
   "/tam-biet": "Tạm biệt",
   "/tinh-toan": "Tính toán",
   "/tai-apk": "Tải APK",
   "/nhan-su": "Nhân sự",
-  "/nhansu": "Tài khoản",
+  "/nhansu": "Quản lý nhân sự",
   "/hoso": "Hồ sơ",
   "/dontu": "Đơn từ",
   "/pheduyet": "Phê duyệt",
@@ -119,21 +111,29 @@ function DocumentTitle() {
 
 function Protected({
   children,
-  admin,
+  requires,
+  requiresAny,
   publicFallback,
   standalone,
 }: {
   children: React.ReactNode;
-  admin?: boolean;
+  /** Quyền BẮT BUỘC để xem trang. Thiếu quyền → đưa về trang mặc định của tài khoản. */
+  requires?: Permission;
+  /** Có ÍT NHẤT MỘT trong các quyền này là xem được (vd trang dùng chung cho kế toán và nhân sự). */
+  requiresAny?: Permission[];
   standalone?: boolean;
   /** Nếu có: khi chưa đăng nhập (hoặc đang tải) sẽ render nội dung công khai này thay vì
-   *  chuyển hướng về /login — dùng cho trang vừa công khai vừa nằm trong app (vd Tải APK). */
+   *  chuyển hướng về "/" (màn hình đăng nhập) — dùng cho trang vừa công khai vừa nằm trong app (vd Tải APK). */
   publicFallback?: React.ReactNode;
 }) {
   const { user, loading } = useAuth();
+  const access = useAccess();
   const loc = useLocation();
-  const suppressMainWebSystem = IS_HR_APK || isHrModulePath(loc.pathname);
-  if (loading) {
+  const suppressMainWebSystem = isHrModulePath(loc.pathname);
+  // Vẫn đang hỏi backend xem tài khoản này có quyền gì thì PHẢI CHỜ. Đoán bừa lúc chưa biết sẽ đá
+  // người có quyền ra khỏi trang họ vừa mở (nháy một cái rồi văng về trang mặc định).
+  const waiting = loading || (Boolean(user) && access.loading);
+  if (waiting) {
     if (publicFallback !== undefined) return <>{publicFallback}</>;
     return (
       <div className="flex h-screen items-center justify-center">
@@ -143,9 +143,21 @@ function Protected({
   }
   if (!user) {
     if (publicFallback !== undefined) return <>{publicFallback}</>;
-    return <Navigate to="/login" state={{ from: loc }} replace />;
+    // Chưa đăng nhập → về TRANG GỐC "/", nơi màn hình đăng nhập hiển thị thẳng (không đẩy sang "/login").
+    return <Navigate to="/" state={{ from: loc }} replace />;
   }
-  if (admin && !isAdmin(user)) return <Navigate to={DEFAULT_AUTH_PATH} replace />;
+  // Chặn route ở client CHỈ để khỏi hiện ra trang trống kèm lỗi 403 — nó không phải lớp bảo mật.
+  // Người dùng gõ thẳng URL của trang không có quyền vẫn bị backend từ chối ở từng lời gọi API.
+  const allowed =
+    (!requires || access.can(requires)) &&
+    (!requiresAny || access.canAny(...requiresAny));
+  if (!allowed) {
+    const target = access.landingPath || DEFAULT_AUTH_PATH;
+    // Trang mặc định CŨNG không vào được (quyền quá hẹp, hoặc không hỏi được backend) → hiện lời giải
+    // thích. Nếu cứ chuyển hướng thì sẽ chuyển vòng tròn về chính trang này.
+    if (target === loc.pathname) return <NoAccessScreen failed={access.failed} />;
+    return <Navigate to={target} replace />;
+  }
   if (standalone) return <>{children}</>;
   const content = (
     <>
@@ -157,18 +169,70 @@ function Protected({
   );
   // Giữ ChatNotificationProvider mount ổn định cho toàn web chính (kể cả trang module nhân sự)
   // để Layout/Sidebar KHÔNG bị remount khi chuyển giữa trang HR và trang thường (gây "nháy như F5"
-  // + reset khung chọn sidebar). Trên HR chỉ ẩn phần nổi qua prop suppress. APK vẫn không dùng provider.
-  if (IS_HR_APK) return content;
+  // + reset khung chọn sidebar). Trên trang HR chỉ ẩn phần nổi qua prop suppress.
   return <ChatNotificationProvider suppress={suppressMainWebSystem}>{content}</ChatNotificationProvider>;
 }
 
-/** Loader hiển thị trong lúc chunk của trang (lazy) đang được tải về. */
-function RouteFallback() {
+/**
+ * Màn hình "không có quyền" — chỉ hiện khi ngay cả trang mặc định của tài khoản cũng không vào được.
+ * Phân biệt rõ hai tình huống vì cách xử lý khác hẳn nhau: chưa được cấp quyền (đi hỏi quản trị) và
+ * không hỏi được máy chủ (thử lại). Cố ý KHÔNG âm thầm dùng quyền cũ trong trường hợp thứ hai.
+ */
+function NoAccessScreen({ failed }: { failed: boolean }) {
+  const { logout } = useAuth();
+  const { reload } = useAccess();
   return (
-    <div className="flex min-h-[60vh] items-center justify-center">
-      <Loader2 className="h-7 w-7 animate-spin text-[var(--accent)]" />
+    <div className="flex h-screen flex-col items-center justify-center gap-3 px-6 text-center">
+      <h1 className="text-lg font-bold">
+        {failed ? "Chưa xác định được quyền truy cập" : "Tài khoản chưa được cấp quyền"}
+      </h1>
+      <p className="max-w-md text-sm opacity-70">
+        {failed
+          ? "Máy chủ chưa trả về được thông tin phân quyền. Vui lòng thử lại; nếu vẫn lỗi, báo quản trị viên."
+          : "Tài khoản của bạn hiện chưa được cấp quyền vào mục nào. Vui lòng liên hệ quản trị viên."}
+      </p>
+      <div className="flex gap-2">
+        {failed && (
+          <button type="button" className="km-btn" onClick={reload}>
+            Thử lại
+          </button>
+        )}
+        <button type="button" className="km-btn" onClick={logout}>
+          Đăng xuất
+        </button>
+      </div>
     </div>
   );
+}
+
+/** Chuyển về trang mặc định CỦA TÀI KHOẢN (do backend quyết định trong hồ sơ truy cập), không phải
+ *  một hằng số cứng: admin về trang tổng quan, kế toán về khu kế toán, nhân viên về không gian cá nhân. */
+function LandingRedirect() {
+  const { user, loading } = useAuth();
+  const access = useAccess();
+  const { search } = useLocation();
+  if (loading || (user && access.loading)) return <RouteFallback />;
+  // Chưa đăng nhập → về "/" (nơi màn hình đăng nhập hiển thị). GIỮ NGUYÊN query để đường dẫn cũ kiểu
+  // "/login?client_mode=..." (nay khớp catch-all này) vẫn chuyển thành "/?client_mode=..." — không mất
+  // chức năng ép chế độ đăng nhập QR/ứng dụng.
+  if (!user) return <Navigate to={{ pathname: "/", search }} replace />;
+  return <Navigate to={access.landingPath || DEFAULT_AUTH_PATH} replace />;
+}
+
+/** Trang gốc "/": CHƯA đăng nhập thì hiển thị THẲNG màn hình đăng nhập ngay tại "/" (địa chỉ giữ nguyên
+ *  là domain gốc); ĐÃ đăng nhập thì đưa về trang mặc định của tài khoản. */
+function RootGate() {
+  const { user, loading } = useAuth();
+  const access = useAccess();
+  if (loading || (user && access.loading)) return <RouteFallback />;
+  if (!user) return <Login />;
+  return <Navigate to={access.landingPath || DEFAULT_AUTH_PATH} replace />;
+}
+
+/** Skeleton toàn màn hình trong lúc chunk cấp cao (trang đăng nhập / lần tải đầu) đang tải về, và
+ *  trong lúc còn đang hỏi backend xem đã đăng nhập chưa. */
+function RouteFallback() {
+  return <BootSkeleton />;
 }
 
 function FeedbackResolvedToasts() {
@@ -211,72 +275,85 @@ function RealtimeBoot() {
 }
 
 export default function App() {
-  const Router = IS_HR_APK ? HashRouter : BrowserRouter;
-
   return (
     <ThemeProvider>
       <AppNotificationProvider>
-        <div className={`liquid-bg ${IS_HR_APK ? "liquid-bg--plain" : ""}`}><div className="orb" /></div>
-        <Router>
+        <div className="liquid-bg"><div className="orb" /></div>
+        <BrowserRouter>
         <DocumentTitle />
         <RealtimeBoot />
         <AuthProvider>
-          <AppUpdatePrompt />
+          {/* Hồ sơ truy cập phải nằm TRONG AuthProvider (cần biết đã đăng nhập chưa) và BAO NGOÀI
+              Routes (mọi route đều hỏi quyền qua useAccess). */}
+          <AccessProvider>
           <Suspense fallback={<RouteFallback />}>
           <Routes>
-            <Route path="/login" element={<Login />} />
+            <Route path="/" element={<RootGate />} />
             <Route path="/kiosk" element={<KioskPage />} />
             <Route path="/tam-biet" element={<FarewellPage />} />
             <Route path="/tinh-toan" element={<TinhToan />} />
+            {/* ── Trang ai đăng nhập cũng vào được ────────────────────────────────────── */}
             <Route path="/tai-apk" element={<Protected publicFallback={<ApkDownload standalone />}><ApkDownload /></Protected>} />
-            <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
-            <Route path="/ketoan" element={<Protected><KeToan /></Protected>} />
-            {/* Không đặt admin: kế toán (không phải admin) mới là người lập/duyệt chi; server chốt quyền.
-                Nhân viên thường vào đây chỉ thấy phiếu chi của chính mình. */}
-            <Route path="/phieu-chi" element={<Protected><PhieuChi /></Protected>} />
-            <Route path="/khachhang" element={<Protected><KhachHang /></Protected>} />
-            <Route path="/giacong" element={<Protected><GiaCongPage /></Protected>} />
-            <Route path="/baocao" element={<Protected><BaoCao /></Protected>} />
-            {/* Không đặt admin: kế toán cũng vào được, nhưng server chỉ trả phần thu chi tiền mặt
-                (xem AuditEndpoints.ResolveScopeAsync). Người không có quyền nào sẽ nhận 403. */}
-            <Route path="/saoluu" element={<Protected><SaoLuu /></Protected>} />
-            <Route path="/chamcong" element={<Protected>{IS_HR_APK ? <HRAttendancePage /> : <ChamCongScannerPage />}</Protected>} />
-            <Route path="/ql-chamcong" element={<Protected admin>{IS_HR_APK ? <HRAttendanceAdminPage /> : <ChamCongPage />}</Protected>} />
             <Route path="/tinhtoan" element={<Protected><CongCu /></Protected>} />
-            <Route path="/cong-viec" element={<Protected><CongViec /></Protected>} />
-            <Route path="/chats" element={<Protected><Chats /></Protected>} />
-            <Route path="/call" element={<Protected standalone><CallPage /></Protected>} />
             <Route path="/phanhoi" element={<Protected><PhanHoi /></Protected>} />
-            <Route path="/nhan-su" element={<Protected>{IS_HR_APK ? <HRHomePage /> : <NhanSuPortal />}</Protected>} />
-            <Route path="/nhansu" element={<Protected admin><NhanSu /></Protected>} />
-            <Route path="/hoso" element={<Protected>{IS_HR_APK ? <HRProfilePage /> : <HoSo />}</Protected>} />
-            <Route path="/dontu" element={<Protected>{IS_HR_APK ? <HRRequestsPage /> : <DonTu />}</Protected>} />
-            <Route path="/pheduyet" element={<Protected>{IS_HR_APK ? <HRApprovalPage /> : <PheDuyet />}</Protected>} />
-            <Route path="/quanly-dontu" element={<Protected admin><QuanLyDonTu /></Protected>} />
-            <Route path="/bangcong" element={<Protected>{IS_HR_APK ? <HRTimesheetPage /> : <BangCong />}</Protected>} />
-            <Route path="/quanly-bangcong" element={<Protected admin><QuanLyBangCong /></Protected>} />
-            <Route path="/quanly-nhansu" element={<Protected admin>{IS_HR_APK ? <HRManagerPage /> : <QuanLyNhanSu />}</Protected>} />
-            <Route path="/phat" element={<Protected><HRPenaltyPage /></Protected>} />
-            <Route path="/tai-khoan-ngan-hang" element={<Protected><TaiKhoanNganHang /></Protected>} />
-            <Route path="/cong-thong-tin" element={<Protected admin><CongThongTin /></Protected>} />
-            <Route path="/bang-luong" element={<Protected admin><HRPayrollPage /></Protected>} />
+            <Route path="/caidat" element={<Protected><SystemSettings /></Protected>} />
+            <Route path="/call" element={<Protected standalone><CallPage /></Protected>} />
+
+            {/* ── Không gian làm việc cá nhân ─────────────────────────────────────────── */}
+            <Route path="/nhan-su" element={<Protected requires={PERM.hrSelfAccess}><NhanSuPortal /></Protected>} />
+            <Route path="/hoso" element={<Protected requires={PERM.hrSelfAccess}><HoSo /></Protected>} />
+            <Route path="/chats" element={<Protected requires={PERM.chatAccess}><Chats /></Protected>} />
+            <Route path="/cong-viec" element={<Protected requires={PERM.tasksSelf}><CongViec /></Protected>} />
+            <Route path="/chamcong" element={<Protected requires={PERM.attendanceSelf}><ChamCongScannerPage /></Protected>} />
+            <Route path="/bangcong" element={<Protected requires={PERM.attendanceSelf}><BangCong /></Protected>} />
+            <Route path="/dontu" element={<Protected requires={PERM.requestsSelf}><DonTu /></Protected>} />
+            <Route path="/pheduyet" element={<Protected requires={PERM.requestsApprove}><PheDuyet /></Protected>} />
+            <Route path="/phat" element={<Protected requires={PERM.penaltyRead}><HRPenaltyPage /></Protected>} />
+            <Route path="/tai-khoan-ngan-hang" element={<Protected requires={PERM.hrSelfAccess}><TaiKhoanNganHang /></Protected>} />
+
+            {/* ── Nghiệp vụ kế toán ───────────────────────────────────────────────────── */}
+            {/* /api/dashboard nằm trong nhóm đòi accounting.access, nên trang này cũng phải đòi đúng
+                quyền đó — trước đây nhân viên vào được nhưng chỉ nhận về một trang trắng kèm 403. */}
+            <Route path="/dashboard" element={<Protected requires={PERM.accountingAccess}><Dashboard /></Protected>} />
+            <Route path="/ketoan" element={<Protected requires={PERM.accountingAccess}><KeToan /></Protected>} />
+            {/* payout.read chứ không phải "chỉ admin": kế toán mới là người lập/duyệt chi (Admin cố ý
+                không được đụng tiền mặt). Ai lập/duyệt được thì server chốt tiếp theo phòng ban. */}
+            <Route path="/phieu-chi" element={<Protected requires={PERM.payoutRead}><PhieuChi /></Protected>} />
+            <Route path="/khachhang" element={<Protected requires={PERM.accountingAccess}><KhachHang /></Protected>} />
+            <Route path="/giacong" element={<Protected requires={PERM.accountingAccess}><GiaCongPage /></Protected>} />
+            <Route path="/baocao" element={<Protected requires={PERM.reportRead}><BaoCao /></Protected>} />
+            {/* Kế toán cũng vào được, nhưng server chỉ trả phần thu chi tiền mặt (AuditEndpoints). */}
+            <Route path="/saoluu" element={<Protected requires={PERM.auditRead}><SaoLuu /></Protected>} />
+
+            {/* ── Quản trị ────────────────────────────────────────────────────────────── */}
+            {/* Đường dẫn quản lý tài khoản cũ được giữ để bookmark/liên kết không hỏng;
+                toàn bộ chức năng đã gộp vào tab Nhân viên của Quản lý nhân sự. */}
+            <Route path="/nhansu" element={<Navigate to="/quanly-nhansu" replace />} />
+            <Route path="/ql-chamcong" element={<Protected requires={PERM.attendanceManage}><ChamCongPage /></Protected>} />
+            <Route path="/quanly-nhansu" element={<Protected requiresAny={[PERM.hrManage, PERM.usersManage]}><QuanLyNhanSu /></Protected>} />
+            <Route path="/quanly-dontu" element={<Protected requires={PERM.requestsManage}><QuanLyDonTu /></Protected>} />
+            <Route path="/quanly-bangcong" element={<Protected requires={PERM.attendanceRead}><QuanLyBangCong /></Protected>} />
+            <Route path="/cong-thong-tin" element={<Protected requires={PERM.portalManage}><CongThongTin /></Protected>} />
+            <Route path="/bang-luong" element={<Protected requires={PERM.payrollRead}><HRPayrollPage /></Protected>} />
+
             {/* Module chưa hiện thực — hiển thị "đang phát triển" giống bản desktop */}
-            <Route path="/kho" element={<Protected><StubPage title="Hàng tồn kho" /></Protected>} />
-            <Route path="/muahang" element={<Protected><StubPage title="Mua hàng" /></Protected>} />
-            <Route path="/taisan" element={<Protected><StubPage title="Tài sản cố định" /></Protected>} />
-            <Route path="/danhmuc" element={<Protected><StubPage title="Danh mục" /></Protected>} />
-            <Route path="/congno" element={<Protected><StubPage title="Công nợ" /></Protected>} />
-            <Route path="/nganhang" element={<Protected><StubPage title="Ngân hàng" /></Protected>} />
-            <Route path="/chiphi" element={<Protected><StubPage title="Chi phí" /></Protected>} />
-            <Route path="/caidat" element={<Protected>{IS_HR_APK ? <HRSystemSettingsPage /> : <SystemSettings />}</Protected>} />
+            <Route path="/kho" element={<Protected requires={PERM.accountingAccess}><StubPage title="Hàng tồn kho" /></Protected>} />
+            <Route path="/muahang" element={<Protected requires={PERM.accountingAccess}><StubPage title="Mua hàng" /></Protected>} />
+            <Route path="/taisan" element={<Protected requires={PERM.accountingAccess}><StubPage title="Tài sản cố định" /></Protected>} />
+            <Route path="/danhmuc" element={<Protected requires={PERM.accountingAccess}><StubPage title="Danh mục" /></Protected>} />
+            <Route path="/congno" element={<Protected requires={PERM.accountingAccess}><StubPage title="Công nợ" /></Protected>} />
+            <Route path="/nganhang" element={<Protected requires={PERM.accountingAccess}><StubPage title="Ngân hàng" /></Protected>} />
+            <Route path="/chiphi" element={<Protected requires={PERM.accountingAccess}><StubPage title="Chi phí" /></Protected>} />
             <Route path="/lichhen" element={<Protected><StubPage title="Lịch hẹn" /></Protected>} />
             <Route path="/tichhop" element={<Protected><StubPage title="Tích hợp" /></Protected>} />
 
-            <Route path="*" element={<Navigate to={DEFAULT_AUTH_PATH} replace />} />
+            {/* Đường dẫn lạ → về trang mặc định CỦA TÀI KHOẢN, không phải một trang cứng cho mọi người. */}
+            <Route path="*" element={<LandingRedirect />} />
           </Routes>
           </Suspense>
+          </AccessProvider>
         </AuthProvider>
-        </Router>
+        </BrowserRouter>
       </AppNotificationProvider>
     </ThemeProvider>
   );

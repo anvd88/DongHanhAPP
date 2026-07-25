@@ -8,7 +8,7 @@ import { Table } from "../components/Table";
 import { api } from "../lib/api";
 import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import {
   applyServerRequestFields,
   fieldDisplayValue,

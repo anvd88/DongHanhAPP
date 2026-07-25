@@ -87,6 +87,9 @@ public static class PostgresSchema
 
         ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email varchar(256) NOT NULL DEFAULT '';
         ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_deleted boolean NOT NULL DEFAULT FALSE;
+        -- Phiên bản phân quyền: tăng mỗi lần vai trò/quyền của tài khoản thay đổi. Client so sánh để
+        -- biết phải nạp lại hồ sơ truy cập; server dùng để ghi audit "quyền cũ → quyền mới".
+        ALTER TABLE app_users ADD COLUMN IF NOT EXISTS authorization_version integer NOT NULL DEFAULT 1;
         UPDATE app_users SET role = 'Employee' WHERE lower(role) = 'user';
 
         -- Vai trò THỨ HAI cấp thêm cho một tài khoản (ngoài cột role chính). Nhờ đó một người có thể
@@ -99,6 +102,24 @@ public static class PostgresSchema
             PRIMARY KEY (username, role)
         );
         CREATE INDEX IF NOT EXISTS ix_user_roles_username ON user_roles (username);
+        -- Vai trò cấp TẠM THỜI (vd trưởng phòng đi vắng, ủy quyền duyệt đơn 2 tuần). NULL = vĩnh viễn.
+        -- Hết hạn thì AccessProfileService tự bỏ qua — không cần ai nhớ đi thu hồi.
+        ALTER TABLE user_roles ADD COLUMN IF NOT EXISTS expires_at timestamptz NULL;
+
+        -- LỊCH SỬ CẤP/THU HỒI QUYỀN. Tách khỏi audit_logs chung để tra soát phân quyền không bị lẫn
+        -- vào hàng vạn dòng nghiệp vụ, và để giữ được ảnh chụp "trước → sau" của từng lần thay đổi.
+        CREATE TABLE IF NOT EXISTS user_role_history (
+            id bigserial PRIMARY KEY,
+            occurred_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            username varchar(128) NOT NULL,
+            changed_by varchar(128) NOT NULL DEFAULT '',
+            action varchar(64) NOT NULL,
+            roles_before text NOT NULL DEFAULT '',
+            roles_after text NOT NULL DEFAULT '',
+            reason text NOT NULL DEFAULT '',
+            client_ip varchar(64) NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS ix_user_role_history_user ON user_role_history (username, occurred_at DESC);
 
         CREATE TABLE IF NOT EXISTS customers (
             id uuid NOT NULL PRIMARY KEY,

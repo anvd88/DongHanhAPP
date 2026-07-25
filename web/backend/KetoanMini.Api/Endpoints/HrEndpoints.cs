@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
@@ -142,34 +144,89 @@ public static class HrEndpoints
             ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS file_name varchar(260) NOT NULL DEFAULT '';
             ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS mime_type varchar(120) NOT NULL DEFAULT '';
             ALTER TABLE hr_documents ADD COLUMN IF NOT EXISTS file_content bytea NULL;
+
+            -- Thư tri ân "tròn X năm gắn bó": MỘT mẫu dùng chung (bảng một dòng, id=1). App tự tính mốc
+            -- tròn năm theo hire_date và điền các chỗ trống {ten}/{so_nam}/{ngay_vao_lam}.
+            CREATE TABLE IF NOT EXISTS hr_anniversary_letter (
+                id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                enabled boolean NOT NULL DEFAULT true,
+                title text NOT NULL DEFAULT '',
+                body text NOT NULL DEFAULT '',
+                signature text NOT NULL DEFAULT '',
+                updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO hr_anniversary_letter (id, enabled, title, body, signature)
+            VALUES (
+                1,
+                true,
+                'Tri ân {so_nam} năm gắn bó',
+                E'Kính gửi Anh/Chị {ten},\n\nNhân dịp Anh/Chị tròn {so_nam} năm làm việc tại Công ty, Công ty xin gửi lời cảm ơn vì sự đồng hành và những đóng góp của Anh/Chị trong suốt thời gian qua.\n\n{so_nam} năm là một dấu mốc đáng ghi nhận. Trong quá trình làm việc, Anh/Chị đã tích lũy nhiều kinh nghiệm, hoàn thành các nhiệm vụ được giao và góp phần vào hoạt động chung của tập thể.\n\nCông ty trân trọng sự gắn bó của Anh/Chị và mong rằng trong thời gian tới, Anh/Chị sẽ tiếp tục phối hợp tốt cùng đồng nghiệp, duy trì tinh thần trách nhiệm và cùng Công ty hướng tới những mục tiêu mới.\n\nKính chúc Anh/Chị nhiều sức khỏe, thuận lợi trong công việc và cuộc sống.',
+                E'Trân trọng,\nBan Lãnh đạo Công ty'
+            )
+            ON CONFLICT (id) DO NOTHING;
             """).ExecuteNonQueryAsync(ct);
 
+        await EnsureAccountingDepartment(conn, ct);
         await BackfillMissingDepartments(conn, ct);
+        await BackfillSharedEmployeeAccountData(conn, ct);
+    }
+
+    /// <summary>
+    /// Phòng Kế Toán là phòng ban do HỆ THỐNG quản lý: nó mang cờ <c>is_accounting</c> — cửa duy nhất để
+    /// nhân viên trong phòng được lập/duyệt phiếu chi tiền mặt (xem PayoutVoucherEndpoints). Vì là quyền
+    /// nhạy cảm nên KHÔNG để người dùng tự bật/tắt bằng ô tích trong form phòng ban; hệ thống tự bảo đảm
+    /// luôn tồn tại đúng một phòng kế toán. Idempotent, không đụng dữ liệu đã đánh dấu sẵn.
+    /// </summary>
+    private static async Task<Guid> EnsureAccountingDepartment(NpgsqlConnection conn, CancellationToken ct)
+    {
+        const string accountingName = "Phòng Kế Toán";
+
+        // Đã có phòng được đánh dấu kế toán (kể cả dữ liệu cũ) → giữ nguyên, dùng phòng đầu tiên.
+        if (await conn.Cmd("SELECT id FROM hr_departments WHERE is_accounting = true ORDER BY created_at LIMIT 1")
+                .ExecuteScalarAsync(ct) is Guid existing)
+            return existing;
+
+        // Có phòng trùng tên nhưng chưa bật cờ → bật cờ cho nó thay vì tạo phòng mới trùng tên.
+        if (await conn.Cmd("SELECT id FROM hr_departments WHERE name = @n LIMIT 1")
+                .With("@n", accountingName).ExecuteScalarAsync(ct) is Guid byName)
+        {
+            await conn.Cmd("UPDATE hr_departments SET is_accounting = true WHERE id = @id")
+                .With("@id", byName).ExecuteNonQueryAsync(ct);
+            return byName;
+        }
+
+        // Chưa có gì → tạo phòng kế toán chuẩn của hệ thống.
+        var newId = Guid.NewGuid();
+        await conn.Cmd("INSERT INTO hr_departments (id, code, name, is_accounting) VALUES (@id, @c, @n, true)")
+            .With("@id", newId).With("@c", "KT").With("@n", accountingName).ExecuteNonQueryAsync(ct);
+        return newId;
     }
 
     /// <summary>
     /// Mọi nhân viên phải thuộc một phòng ban. Với dữ liệu cũ còn nhân viên chưa gán phòng ban,
-    /// gán tạm về "Phòng Kế Toán" (tạo phòng này nếu chưa tồn tại).
+    /// gán tạm về phòng kế toán của hệ thống (<see cref="EnsureAccountingDepartment"/>).
     /// </summary>
     private static async Task BackfillMissingDepartments(NpgsqlConnection conn, CancellationToken ct)
     {
-        const string accountingName = "Phòng Kế Toán";
         var hasOrphans = await conn.Cmd("SELECT EXISTS(SELECT 1 FROM hr_employees WHERE department_id IS NULL)")
             .ExecuteScalarAsync(ct) is bool b && b;
         if (!hasOrphans) return;
 
-        var deptId = await conn.Cmd("SELECT id FROM hr_departments WHERE name = @n LIMIT 1")
-            .With("@n", accountingName).ExecuteScalarAsync(ct) as Guid?;
-        if (deptId is null)
-        {
-            var newId = Guid.NewGuid();
-            await conn.Cmd("INSERT INTO hr_departments (id, code, name, is_accounting) VALUES (@id, @c, @n, true)")
-                .With("@id", newId).With("@c", "KT").With("@n", accountingName).ExecuteNonQueryAsync(ct);
-            deptId = newId;
-        }
-
+        var deptId = await EnsureAccountingDepartment(conn, ct);
         await conn.Cmd("UPDATE hr_employees SET department_id = @d WHERE department_id IS NULL")
-            .With("@d", deptId.Value).ExecuteNonQueryAsync(ct);
+            .With("@d", deptId).ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// Dữ liệu cũ có thể đã tạo hồ sơ và tài khoản ở hai thời điểm khác nhau. Ghép theo username rồi
+    /// đưa họ tên/email/ngày vào làm về một nguồn thống nhất; hồ sơ HR được ưu tiên khi đã có giá trị.
+    /// </summary>
+    private static async Task BackfillSharedEmployeeAccountData(NpgsqlConnection conn, CancellationToken ct)
+    {
+        var ids = new List<Guid>();
+        await using (var r = await conn.Cmd("SELECT id FROM hr_employees WHERE username <> ''").ExecuteReaderAsync(ct))
+            while (await r.ReadAsync(ct)) ids.Add(r.Guid("id"));
+        foreach (var id in ids) await SyncEmployeeAccountSharedFields(conn, id, ct);
     }
 
     // ---- Cầu nối tài khoản → hồ sơ nhân viên (tự tạo hồ sơ tối thiểu ở lần truy cập đầu) ----
@@ -185,9 +242,10 @@ public static class HrEndpoints
         Guid? userId = null;
         var fullName = username;
         var email = "";
+        DateOnly? hireDate = null;
         await using (var r = await conn.Cmd(
-            "SELECT id, full_name, email FROM app_users WHERE username = @u AND is_deleted = FALSE LIMIT 1")
-            .With("@u", username).ExecuteReaderAsync())
+            "SELECT id, full_name, email, (created_at AT TIME ZONE @tz)::date AS account_date FROM app_users WHERE username = @u AND is_deleted = FALSE LIMIT 1")
+            .With("@u", username).With("@tz", Tz).ExecuteReaderAsync())
         {
             if (await r.ReadAsync())
             {
@@ -195,18 +253,19 @@ public static class HrEndpoints
                 var fn = r.Str("full_name");
                 if (!string.IsNullOrWhiteSpace(fn)) fullName = fn;
                 email = r.Str("email");
+                hireDate = DateOrNull(r, "account_date");
             }
         }
 
         var id = Guid.NewGuid();
         var code = await NextEmployeeCode(conn);
         await conn.Cmd("""
-            INSERT INTO hr_employees (id, employee_code, user_id, username, full_name, email, status)
-            VALUES (@id, @code, @uid, @u, @fn, @em, 'Active')
+            INSERT INTO hr_employees (id, employee_code, user_id, username, full_name, email, hire_date, status)
+            VALUES (@id, @code, @uid, @u, @fn, @em, @hire, 'Active')
             ON CONFLICT (username) WHERE username <> '' DO NOTHING
             """)
             .With("@id", id).With("@code", code).With("@uid", (object?)userId ?? DBNull.Value)
-            .With("@u", username).With("@fn", fullName).With("@em", email)
+            .With("@u", username).With("@fn", fullName).With("@em", email).With("@hire", (object?)hireDate ?? DBNull.Value)
             .ExecuteNonQueryAsync();
 
         var again = await conn.Cmd("SELECT id FROM hr_employees WHERE username = @u LIMIT 1")
@@ -220,9 +279,41 @@ public static class HrEndpoints
         return $"NV{n:D4}";
     }
 
+    /// <summary>
+    /// Sinh tên đăng nhập từ họ tên + mã nhân viên theo quy ước: <b>tên</b> (token cuối) + <b>viết tắt</b>
+    /// các token đầu (họ, đệm) + <b>phần số</b> của mã nhân viên (tối thiểu 2 chữ số). Bỏ dấu tiếng Việt.
+    /// Ví dụ: "Nguyễn Văn An" + NV0001 → <c>annv01</c>.
+    /// </summary>
+    internal static string DeriveLoginUsername(string? fullName, string? employeeCode)
+    {
+        var tokens = (fullName ?? "").Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var given = tokens.Length > 0 ? FoldAscii(tokens[^1]) : "";
+        var initials = tokens.Length > 0
+            ? string.Concat(tokens[..^1].Select(FoldAscii).Where(t => t.Length > 0).Select(t => t[..1]))
+            : "";
+        var baseName = given + initials;
+        if (baseName.Length == 0) baseName = "nv";
+        var digits = new string((employeeCode ?? "").Where(char.IsDigit).ToArray());
+        var num = long.TryParse(digits, out var v) ? v : 0;
+        return baseName + num.ToString("D2");
+    }
+
+    /// <summary>Bỏ dấu tiếng Việt + hạ chữ thường, chỉ giữ [a-z0-9] (đ/Đ → d).</summary>
+    private static string FoldAscii(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var decomposed = s.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(decomposed.Length);
+        foreach (var ch in decomposed)
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+                sb.Append(ch);
+        var folded = sb.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant().Replace('đ', 'd');
+        return new string(folded.Where(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9')).ToArray());
+    }
+
     public static void MapHr(this WebApplication app)
     {
-        var g = app.MapGroup("/api/hr").RequireAuthorization("Workforce");
+        var g = app.MapGroup("/api/hr").RequirePermission(Permissions.HrSelfAccess);
 
         // ---------------- Phòng ban ----------------
         g.MapGet("/departments", async (Database db) =>
@@ -261,14 +352,14 @@ public static class HrEndpoints
             if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { message = "Vui lòng nhập tên phòng ban." });
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
+            // Cờ is_accounting KHÔNG nhận từ form — phòng kế toán do hệ thống quản lý (EnsureAccountingDepartment).
             await conn.Cmd("""
-                INSERT INTO hr_departments (id, code, name, parent_id, manager_employee_id, is_accounting)
-                VALUES (@id, @code, @name, @parent, @mgr, @acc)
+                INSERT INTO hr_departments (id, code, name, parent_id, manager_employee_id)
+                VALUES (@id, @code, @name, @parent, @mgr)
                 """)
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", req.Name.Trim())
                 .With("@parent", (object?)req.ParentId ?? DBNull.Value)
                 .With("@mgr", (object?)req.ManagerEmployeeId ?? DBNull.Value)
-                .With("@acc", req.IsAccounting)
                 .ExecuteNonQueryAsync();
             await Signal(db, u, "Tạo phòng ban", "Department", req.Name);
             return Results.Ok(new { id });
@@ -278,15 +369,14 @@ public static class HrEndpoints
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
+            // Giữ nguyên is_accounting — form không đổi được (phòng kế toán do hệ thống quản lý).
             var n = await conn.Cmd("""
-                UPDATE hr_departments SET code=@code, name=@name, parent_id=@parent, manager_employee_id=@mgr,
-                    is_accounting=@acc
+                UPDATE hr_departments SET code=@code, name=@name, parent_id=@parent, manager_employee_id=@mgr
                 WHERE id=@id
                 """)
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", (req.Name ?? "").Trim())
                 .With("@parent", (object?)req.ParentId ?? DBNull.Value)
                 .With("@mgr", (object?)req.ManagerEmployeeId ?? DBNull.Value)
-                .With("@acc", req.IsAccounting)
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Cập nhật phòng ban", "Department", req.Name ?? "");
@@ -297,6 +387,16 @@ public static class HrEndpoints
         {
             if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
+            // Không cho xóa phòng kế toán CUỐI CÙNG — đó là cửa quyền lập/duyệt phiếu chi tiền mặt.
+            var isAccounting = await conn.Cmd("SELECT is_accounting FROM hr_departments WHERE id=@id")
+                .With("@id", id).ExecuteScalarAsync() is bool acc && acc;
+            if (isAccounting)
+            {
+                var others = await conn.Cmd("SELECT COUNT(*) FROM hr_departments WHERE is_accounting = true AND id <> @id")
+                    .With("@id", id).ExecuteScalarAsync();
+                if (Convert.ToInt64(others) == 0)
+                    return Results.BadRequest(new { message = "Không thể xóa phòng kế toán cuối cùng của hệ thống." });
+            }
             var n = await conn.Cmd("DELETE FROM hr_departments WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Xóa phòng ban", "Department", id.ToString());
@@ -383,7 +483,7 @@ public static class HrEndpoints
             }
 
             var sql = $"""
-                SELECT e.id, e.employee_code, e.username, e.full_name, e.position, e.status,
+                SELECT e.id, e.employee_code, e.username, e.full_name, e.position, e.hire_date, e.status,
                        e.phone, e.email, e.avatar, e.department_id, e.location_id, e.access_role,
                        COALESCE(d.name, '') AS department_name,
                        COALESCE(l.name, '') AS location_name,
@@ -471,6 +571,66 @@ public static class HrEndpoints
             return Results.NoContent();
         });
 
+        // ---------------- Thư tri ân "tròn X năm gắn bó" ----------------
+        // Admin (hr.manage) soạn MỘT mẫu thư dùng chung; app tự tính mốc tròn năm theo ngày vào làm.
+        g.MapGet("/anniversary/template", async (ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.IsHrManager()) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            var row = await ReadAnniversaryTemplateRow(conn);
+            return Results.Ok(new { enabled = row.Enabled, title = row.Title, body = row.Body, signature = row.Signature });
+        });
+
+        g.MapPut("/anniversary/template", async (SaveAnniversaryLetterReq req, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.IsHrManager()) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            await conn.Cmd("""
+                UPDATE hr_anniversary_letter
+                SET enabled=@en, title=@title, body=@body, signature=@sig, updated_at=CURRENT_TIMESTAMP
+                WHERE id=1
+                """)
+                .With("@en", req.Enabled)
+                .With("@title", (req.Title ?? "").Trim())
+                .With("@body", (req.Body ?? "").Trim())
+                .With("@sig", (req.Signature ?? "").Trim())
+                .ExecuteNonQueryAsync();
+            await Signal(db, u, "Cập nhật thư tri ân", "AnniversaryLetter", "");
+            var row = await ReadAnniversaryTemplateRow(conn);
+            return Results.Ok(new { enabled = row.Enabled, title = row.Title, body = row.Body, signature = row.Signature });
+        });
+
+        // App gọi lúc mở: trả thư ĐÃ ĐIỀN sẵn nếu hôm nay rơi vào tuần kỷ niệm tròn năm của chính người
+        // dùng; ngược lại { show:false }. App tự nhớ (cục bộ) đã xem để mỗi mốc chỉ hiện một lần.
+        g.MapGet("/anniversary/my-greeting", async (ClaimsPrincipal u, Database db, bool? preview) =>
+        {
+            // Chế độ xem thử bỏ qua ngày vào làm, nhưng chỉ người có quyền quản trị nhân sự được gọi.
+            if (preview == true && !u.IsHrManager()) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            var emp = await EnsureEmployeeForUser(conn, u.Username());
+            var fullName = u.Username();
+            DateOnly? hire = null;
+            await using (var r = await conn.Cmd("SELECT full_name, hire_date FROM hr_employees WHERE id=@e")
+                .With("@e", emp).ExecuteReaderAsync())
+                if (await r.ReadAsync())
+                {
+                    var fn = r.Str("full_name");
+                    if (!string.IsNullOrWhiteSpace(fn)) fullName = fn;
+                    hire = DateOrNull(r, "hire_date");
+                }
+            var today = await conn.Cmd("SELECT (CURRENT_TIMESTAMP AT TIME ZONE @tz)::date")
+                .With("@tz", Tz).ExecuteScalarAsync() switch
+                {
+                    DateOnly d => d,
+                    DateTime dt => DateOnly.FromDateTime(dt),
+                    _ => DateOnly.FromDateTime(DateTime.UtcNow),
+            };
+            var tpl = await ReadAnniversaryTemplateRow(conn);
+            if (preview == true)
+                return Results.Ok(BuildAnniversaryPreview(tpl, fullName, today));
+            return Results.Ok(BuildAnniversaryGreeting(tpl, fullName, hire, today));
+        });
+
         g.MapGet("/employees/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
@@ -487,6 +647,25 @@ public static class HrEndpoints
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
             var code = string.IsNullOrWhiteSpace(req.EmployeeCode) ? await NextEmployeeCode(conn) : req.EmployeeCode!.Trim();
+
+            // Tên đăng nhập: admin gõ tay thì tôn trọng; để trống → sinh theo họ tên + mã (vd "Nguyễn Văn An"
+            // + NV0001 → annv01), tự thêm hậu tố nếu trùng để luôn duy nhất.
+            async Task<bool> UsernameTaken(string uname) => Convert.ToInt64(await conn.Cmd(
+                    "SELECT (SELECT COUNT(*) FROM app_users WHERE lower(username)=lower(@u) AND is_deleted=FALSE)"
+                    + " + (SELECT COUNT(*) FROM hr_employees WHERE lower(username)=lower(@u))")
+                .With("@u", uname).ExecuteScalarAsync()) > 0;
+
+            string loginUsername;
+            if (!string.IsNullOrWhiteSpace(req.Username))
+                loginUsername = req.Username!.Trim();
+            else
+            {
+                var baseName = DeriveLoginUsername(req.FullName, code);
+                loginUsername = baseName;
+                for (var k = 0; await UsernameTaken(loginUsername); k++)
+                    loginUsername = baseName + (char)('a' + k);
+            }
+
             try
             {
                 await conn.Cmd("""
@@ -496,7 +675,7 @@ public static class HrEndpoints
                     VALUES (@id, @code, @username, @fn, @dob, @gender, @phone, @email, @addr,
                             @dept, @pos, @mgr, @hire, @status, @loc, @arole)
                     """)
-                    .With("@id", id).With("@code", code).With("@username", (req.Username ?? "").Trim())
+                    .With("@id", id).With("@code", code).With("@username", loginUsername)
                     .With("@fn", req.FullName.Trim()).With("@dob", (object?)req.Dob ?? DBNull.Value)
                     .With("@gender", req.Gender ?? "").With("@phone", req.Phone ?? "").With("@email", req.Email ?? "")
                     .With("@addr", req.Address ?? "").With("@dept", (object?)req.DepartmentId ?? DBNull.Value)
@@ -509,8 +688,37 @@ public static class HrEndpoints
             {
                 return Results.Json(new { message = "Mã nhân viên hoặc tài khoản đã tồn tại." }, statusCode: 400);
             }
+
+            // Tự tạo tài khoản đăng nhập cho hồ sơ mới (mật khẩu mặc định "123"), trừ khi đã có sẵn hoặc bị tắt.
+            // Vai trò hệ thống của tài khoản lấy từ "Chức vụ" chọn ở form (Admin/Kế toán/HR/…); mặc định Nhân viên.
+            var accountRole = AppRoles.Normalize(req.Role) ?? AppRoles.Employee;
+            var accountCreated = false;
+            if (req.CreateAccount && !string.IsNullOrWhiteSpace(loginUsername))
+            {
+                var exists = Convert.ToInt64(await conn.Cmd(
+                        "SELECT COUNT(*) FROM app_users WHERE lower(username)=lower(@u) AND is_deleted=FALSE")
+                    .With("@u", loginUsername).ExecuteScalarAsync()) > 0;
+                if (!exists)
+                {
+                    await conn.Cmd("""
+                        INSERT INTO app_users
+                            (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
+                        VALUES (@id, @u, @fn, @em, @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, @by,
+                                COALESCE((SELECT (e.hire_date::timestamp + TIME '09:00') AT TIME ZONE 'Asia/Ho_Chi_Minh'
+                                          FROM hr_employees e WHERE lower(e.username)=lower(@u) AND e.hire_date IS NOT NULL LIMIT 1), CURRENT_TIMESTAMP))
+                        """)
+                        .With("@id", Guid.NewGuid()).With("@u", loginUsername).With("@fn", req.FullName.Trim())
+                        .With("@em", req.Email ?? "").With("@role", accountRole)
+                        .With("@ph", PasswordHasher.Hash("123")).With("@by", u.Username())
+                        .ExecuteNonQueryAsync();
+                    accountCreated = true;
+                    await db.RecordAudit(u.Username(), "Tạo người dùng", "User", loginUsername, $"Tự tạo tài khoản khi lập hồ sơ nhân viên (vai trò {AppRoles.Label(accountRole)}, mật khẩu mặc định 123).");
+                }
+            }
+
             await Signal(db, u, "Tạo hồ sơ nhân viên", "Employee", req.FullName);
-            return Results.Ok(new { id, employeeCode = code });
+            await SyncEmployeeAccountSharedFields(conn, id);
+            return Results.Ok(new { id, employeeCode = code, username = loginUsername, accountCreated, password = accountCreated ? "123" : null });
         });
 
         g.MapPut("/employees/{id:guid}", async (Guid id, SaveEmployeeReq req, ClaimsPrincipal u, Database db) =>
@@ -559,6 +767,7 @@ public static class HrEndpoints
             cmd.With("@id", id);
             var n = await cmd.ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
+            await SyncEmployeeAccountSharedFields(conn, id);
             await Signal(db, u, "Cập nhật hồ sơ nhân viên", "Employee", req.FullName ?? id.ToString());
             return Results.NoContent();
         });
@@ -1653,6 +1862,7 @@ public static class HrEndpoints
         username = r.Str("username"),
         fullName = r.Str("full_name"),
         position = r.Str("position"),
+        hireDate = DateOrNull(r, "hire_date"),
         status = r.Str("status"),
         phone = r.Str("phone"),
         email = r.Str("email"),
@@ -1664,6 +1874,57 @@ public static class HrEndpoints
         accessRole = r.Str("access_role"),
         managerName = r.Str("manager_name"),
     };
+
+    /// <summary>
+    /// Đồng bộ các trường dùng chung giữa hr_employees và app_users. Ngày vào làm là ngày tạo tài
+    /// khoản; nếu hồ sơ đã có ngày vào làm thì giữ ngày nghiệp vụ đó và đưa ngày tạo tài khoản về cùng
+    /// ngày. Nhân viên đã nghỉ bị khóa tài khoản và thu hồi các phiên đang hoạt động.
+    /// </summary>
+    internal static async Task SyncEmployeeAccountSharedFields(
+        NpgsqlConnection conn, Guid employeeId, CancellationToken ct = default)
+    {
+        await conn.Cmd("""
+            UPDATE hr_employees e
+            SET user_id = u.id,
+                full_name = CASE WHEN btrim(e.full_name) = '' THEN u.full_name ELSE e.full_name END,
+                email = CASE WHEN btrim(e.email) = '' THEN u.email ELSE e.email END,
+                hire_date = COALESCE(e.hire_date, (u.created_at AT TIME ZONE @tz)::date),
+                updated_at = CURRENT_TIMESTAMP
+            FROM app_users u
+            WHERE e.id=@id AND u.is_deleted=FALSE AND lower(u.username)=lower(e.username)
+            """).With("@id", employeeId).With("@tz", Tz).ExecuteNonQueryAsync(ct);
+
+        await conn.Cmd("""
+            UPDATE app_users u
+            SET full_name = e.full_name,
+                email = e.email,
+                created_at = CASE
+                    WHEN e.hire_date IS NULL THEN u.created_at
+                    ELSE ((e.hire_date::timestamp + (u.created_at AT TIME ZONE @tz)::time) AT TIME ZONE @tz)
+                END,
+                is_active = CASE
+                    WHEN lower(e.status) <> 'active'
+                         AND (lower(u.role) <> 'admin' OR EXISTS (
+                             SELECT 1 FROM app_users other
+                             WHERE other.role='Admin' AND other.is_active=TRUE AND other.is_deleted=FALSE AND other.id<>u.id
+                         )) THEN FALSE
+                    ELSE u.is_active
+                END
+            FROM hr_employees e
+            WHERE e.id=@id AND u.is_deleted=FALSE
+              AND (u.id=e.user_id OR lower(u.username)=lower(e.username))
+            """).With("@id", employeeId).With("@tz", Tz).ExecuteNonQueryAsync(ct);
+
+        await conn.Cmd("""
+            UPDATE user_sessions s
+            SET revoked=TRUE, revoked_at=CURRENT_TIMESTAMP, revoked_by='employment-status',
+                is_active=FALSE, ended_at=CURRENT_TIMESTAMP, end_reason='Nhân viên đã nghỉ việc'
+            FROM hr_employees e
+            JOIN app_users u ON u.is_deleted=FALSE AND (u.id=e.user_id OR lower(u.username)=lower(e.username))
+            WHERE e.id=@id AND lower(e.status)<>'active' AND u.is_active=FALSE
+              AND s.username=u.username AND (s.is_active=TRUE OR s.revoked=FALSE)
+            """).With("@id", employeeId).ExecuteNonQueryAsync(ct);
+    }
 
     private static async Task<object?> ReadEmployeeDetail(NpgsqlConnection conn, Guid id)
     {
@@ -1747,6 +2008,88 @@ public static class HrEndpoints
     private static DateOnly? DateOrNull(NpgsqlDataReader r, string col)
         => r.IsDBNull(r.GetOrdinal(col)) ? (DateOnly?)null : r.DateOnly(col);
 
+    // ---- Thư tri ân "tròn X năm gắn bó" ----
+    private const int AnniversaryWindowDays = 7; // hiện suốt tuần kỷ niệm: ngày tròn năm + 6 ngày sau
+
+    private static async Task<AnniversaryLetterRow> ReadAnniversaryTemplateRow(NpgsqlConnection conn)
+    {
+        await using var r = await conn.Cmd(
+            "SELECT enabled, title, body, signature FROM hr_anniversary_letter WHERE id=1").ExecuteReaderAsync();
+        if (await r.ReadAsync())
+            return new AnniversaryLetterRow(r.Bool("enabled"), r.Str("title"), r.Str("body"), r.Str("signature"));
+        return new AnniversaryLetterRow(false, "", "", "");
+    }
+
+    /// <summary>
+    /// Tính xem hôm nay có rơi vào tuần kỷ niệm tròn năm của nhân viên không, và điền sẵn thư nếu có.
+    /// Không bật/không có ngày vào làm/chưa tới mốc → { show = false }.
+    /// </summary>
+    internal static AnniversaryGreetingResponse BuildAnniversaryGreeting(
+        AnniversaryLetterRow tpl, string fullName, DateOnly? hire, DateOnly today)
+    {
+        if (!tpl.Enabled || hire is null) return new AnniversaryGreetingResponse();
+        var h = hire.Value;
+        // Xét mốc năm nay và năm ngoái để tuần kỷ niệm bắc qua giao thừa (vd vào làm cuối tháng 12) vẫn bắt được.
+        foreach (var year in new[] { today.Year, today.Year - 1 })
+        {
+            var anniv = AnniversaryInYear(h, year);
+            var years = anniv.Year - h.Year;
+            if (years < 1) continue;
+            var end = anniv.AddDays(AnniversaryWindowDays - 1);
+            if (today >= anniv && today <= end)
+            {
+                var hireVi = $"{h.Day:D2}/{h.Month:D2}/{h.Year:D4}";
+                string Fill(string s) => (s ?? "")
+                    .Replace("{ten}", fullName)
+                    .Replace("{so_nam}", years.ToString())
+                    .Replace("{ngay_vao_lam}", hireVi);
+                return new AnniversaryGreetingResponse(
+                    Show: true,
+                    Years: years,
+                    AnniversaryDate: $"{anniv.Year:D4}-{anniv.Month:D2}-{anniv.Day:D2}",
+                    Key: $"anniv-{anniv.Year}-{years}",
+                    Title: Fill(tpl.Title),
+                    Body: Fill(tpl.Body),
+                    Signature: Fill(tpl.Signature));
+            }
+        }
+        return new AnniversaryGreetingResponse();
+    }
+
+    // Ngày kỷ niệm trong một năm; 29/02 rơi vào năm không nhuận thì lùi về 28/02.
+    internal static DateOnly AnniversaryInYear(DateOnly hire, int year)
+    {
+        var day = (hire.Month == 2 && hire.Day == 29 && !DateTime.IsLeapYear(year)) ? 28 : hire.Day;
+        return new DateOnly(year, hire.Month, day);
+    }
+
+    /// <summary>
+    /// Dựng bản xem thử 5 năm cho quản lý mà không sửa ngày vào làm thật và không phụ thuộc mẫu đang bật/tắt.
+    /// </summary>
+    internal static AnniversaryGreetingResponse BuildAnniversaryPreview(
+        AnniversaryLetterRow tpl, string fullName, DateOnly today, int years = 5)
+    {
+        var safeYears = Math.Max(1, years);
+        var result = BuildAnniversaryGreeting(
+            tpl with { Enabled = true }, fullName, today.AddYears(-safeYears), today);
+        return result with
+        {
+            Preview = true,
+            Key = $"preview-anniv-{today:yyyy-MM-dd}-{safeYears}",
+        };
+    }
+
+    internal record AnniversaryLetterRow(bool Enabled, string Title, string Body, string Signature);
+    internal record AnniversaryGreetingResponse(
+        bool Show = false,
+        bool Preview = false,
+        int Years = 0,
+        string AnniversaryDate = "",
+        string Key = "",
+        string Title = "",
+        string Body = "",
+        string Signature = "");
+
     private static JsonElement ParseJson(string json)
     {
         try { return JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json).RootElement.Clone(); }
@@ -1762,12 +2105,14 @@ public static class HrEndpoints
         => await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
 
     // ---- DTO nhận từ client ----
-    public record SaveDepartmentReq(string? Code, string? Name, Guid? ParentId, Guid? ManagerEmployeeId, bool IsAccounting);
+    public record SaveDepartmentReq(string? Code, string? Name, Guid? ParentId, Guid? ManagerEmployeeId);
     public record SaveLocationReq(string? Code, string? Name, string? Address);
     public record SaveEmployeeReq(string? EmployeeCode, string? Username, string? FullName, DateOnly? Dob, string? Gender,
         string? Phone, string? Email, string? Address, Guid? DepartmentId, string? Position, Guid? ManagerId,
-        DateOnly? HireDate, string? Status, string? Avatar, Guid? LocationId = null, string? AccessRole = null);
+        DateOnly? HireDate, string? Status, string? Avatar, Guid? LocationId = null, string? AccessRole = null,
+        bool CreateAccount = true, string? Role = null);
     public record SaveAvatarReq(string? Avatar);
+    public record SaveAnniversaryLetterReq(bool Enabled, string? Title, string? Body, string? Signature);
     public record SaveContractReq(string? ContractNo, string? ContractType, DateOnly? StartDate, DateOnly? EndDate,
         decimal BaseSalary, decimal Allowance, string? Status, string? Note);
     public record SavePayslipReq(string? Period, decimal WorkDays, decimal OvertimeHours, decimal BaseSalary,

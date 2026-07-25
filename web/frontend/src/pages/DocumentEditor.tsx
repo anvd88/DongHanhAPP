@@ -162,22 +162,21 @@ export function DocumentEditor({
     setError("");
   };
 
+  // CHỈ còn việc TẢI chứng từ đang sửa. Trường hợp "lập mới" không cần làm gì: trang cha gắn key theo
+  // chứng từ + loại chứng từ (xem KeToan.tsx), nên mỗi lần mở là một component mới đã có sẵn giá trị
+  // khởi tạo đúng. (resetCreateForm vẫn dùng cho luồng "lưu xong giữ form mở để nhập tiếp".)
   useEffect(() => {
-    if (id && id !== "new") {
-      api.get<DocumentDetail>(`/api/documents/${id}`).then((d) => {
-        setDocKind(inferDocumentKind(d));
-        setVoucherNo(d.voucherNo);
-        setDocDate(d.date);
-        setCustomerName(d.customerName);
-        setContent(d.content);
-        setNote(d.note);
-        setLines(d.lines.length ? d.lines : [emptyLine()]);
-      });
-    } else if (id === "new") {
-      resetCreateForm(initialKind);
-      setSuccess("");
-    }
-  }, [id, initialKind]);
+    if (!id || id === "new") return;
+    api.get<DocumentDetail>(`/api/documents/${id}`).then((d) => {
+      setDocKind(inferDocumentKind(d));
+      setVoucherNo(d.voucherNo);
+      setDocDate(d.date);
+      setCustomerName(d.customerName);
+      setContent(d.content);
+      setNote(d.note);
+      setLines(d.lines.length ? d.lines : [emptyLine()]);
+    });
+  }, [id]);
 
   const isWarehouseSale = docKind === "document";
   const total = lines.reduce((s, l) => s + (l.quantity || 0) * (l.unitPrice || 0), 0);
@@ -380,9 +379,15 @@ function FormulaNumberInput({
   const [focused, setFocused] = useState(false);
   const [invalid, setInvalid] = useState(false);
 
-  useEffect(() => {
-    if (!focused) setDraft(formatEditableNumber(value));
-  }, [focused, value]);
+  // Ô số bám theo `value` do bên ngoài đổi (vd đổi loại chứng từ, nạp lại phiếu) — nhưng TUYỆT ĐỐI
+  // không đè lên khi người dùng đang gõ dở. Làm lúc render thay vì trong effect nên con số mới hiện
+  // ngay trong cùng một khung hình, không nhấp nháy giá trị cũ.
+  // (Chuẩn hoá lúc rời ô đã do onBlur → commitDraft lo, nên ở đây chỉ cần theo dõi `value`.)
+  const [syncedValue, setSyncedValue] = useState(value);
+  if (!focused && value !== syncedValue) {
+    setSyncedValue(value);
+    setDraft(formatEditableNumber(value));
+  }
 
   const commitDraft = () => {
     const result = evaluateArithmeticInput(draft);

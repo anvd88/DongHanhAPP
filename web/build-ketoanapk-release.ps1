@@ -65,45 +65,6 @@ function Replace-First($text, $pattern, [System.Text.RegularExpressions.MatchEva
     return $regex.Replace($text, $evaluator, 1)
 }
 
-function Replace-JsonVersion($path, $version, $count) {
-    if (-not (Test-Path -LiteralPath $path)) {
-        return
-    }
-
-    $text = Read-FileText $path
-    $regex = [regex]'("version"\s*:\s*")[^"]+(")'
-    $updated = $regex.Replace(
-        $text,
-        [System.Text.RegularExpressions.MatchEvaluator]{
-            param($m)
-            return $m.Groups[1].Value + $version + $m.Groups[2].Value
-        },
-        $count
-    )
-    Write-Utf8NoBom $path $updated
-}
-
-function Set-EnvLine($text, $key, $value) {
-    $pattern = '(?m)^' + [regex]::Escape($key) + '=.*$'
-    $regex = [regex]$pattern
-    if ($regex.IsMatch($text)) {
-        return $regex.Replace(
-            $text,
-            [System.Text.RegularExpressions.MatchEvaluator]{
-                param($m)
-                return "$key=$value"
-            },
-            1
-        )
-    }
-
-    if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) {
-        $text += "`r`n"
-    }
-    return $text + "$key=$value`r`n"
-}
-
-
 # local.properties là định dạng Java Properties: dấu \ dùng để THOÁT ký tự đứng ngay sau nó, nên
 # Android Studio ghi ổ đĩa thành "C\:/Users/..." (hoặc "C\:\\Users\\..."). Bê nguyên chuỗi đó vào
 # Join-Path là PowerShell đọc "C\:" thành tên ổ đĩa "C\" rồi ném DriveNotFound.
@@ -153,9 +114,9 @@ if ([string]::IsNullOrWhiteSpace($root)) {
 $app = Join-Path $root "Ketoanapk"
 $android = Join-Path $app "android"
 $gradleFile = Join-Path $android "app\build.gradle"
-$envFile = Join-Path $app ".env.android"
-$packageFile = Join-Path $app "package.json"
-$lockFile = Join-Path $app "package-lock.json"
+# Ghi chú: từ khi APK thành native Kotlin (bỏ vỏ Capacitor), build.gradle là NGUỒN DUY NHẤT của
+# versionCode/versionName/API_BASE_URL. Trước đây script còn ghi kèm Ketoanapk/.env.android và
+# package.json/package-lock.json — cả ba đều không còn tồn tại hoặc không ai đọc, đã bỏ.
 $artifacts = Join-Path $root "artifacts"
 
 if (-not (Test-Path -LiteralPath $gradleFile)) {
@@ -193,10 +154,6 @@ if ($versionCode -le $currentCode) {
     Fail "versionCode phải lớn hơn mã hiện tại $currentCode."
 }
 
-if ([string]::IsNullOrWhiteSpace($currentApi) -and (Test-Path -LiteralPath $envFile)) {
-    $envTextForApi = Read-FileText $envFile
-    $currentApi = Regex-Value $envTextForApi '(?m)^VITE_API_BASE_URL=(.+)$'
-}
 $apiBaseUrl = Read-ChoiceValue "API_BASE_URL" $currentApi
 
 $defaultArtifactName = "ketoanapk-hr-$versionName-code$versionCode-release.apk"
@@ -244,19 +201,6 @@ if ($apiRegex.IsMatch($gradleText)) {
     Write-Host "CẢNH BÁO: Không tìm thấy dòng API_BASE_URL trong build.gradle; giữ nguyên dòng này." -ForegroundColor Yellow
 }
 Write-Utf8NoBom $gradleFile $gradleText
-
-$envText = ""
-if (Test-Path -LiteralPath $envFile) {
-    $envText = Read-FileText $envFile
-}
-$envText = Set-EnvLine $envText "VITE_APP_TARGET" "hr-apk"
-$envText = Set-EnvLine $envText "VITE_API_BASE_URL" $apiBaseUrl
-$envText = Set-EnvLine $envText "VITE_ANDROID_VERSION_CODE" $versionCode
-$envText = Set-EnvLine $envText "VITE_ANDROID_VERSION_NAME" $versionName
-Write-Utf8NoBom $envFile $envText
-
-Replace-JsonVersion $packageFile $versionName 1
-Replace-JsonVersion $lockFile $versionName 2
 
 Step "Đang build APK release"
 $defaultJdk = "C:\Program Files\Android\Android Studio\jbr"

@@ -10,14 +10,29 @@ public static class ApiHelpers
     public static string Username(this ClaimsPrincipal user)
         => user.FindFirstValue(ClaimTypes.Name) ?? "";
 
+    /// <summary>
+    /// Có QUYỀN cụ thể hay không, theo claim quyền mà middleware dựng lại từ CSDL ở mỗi request
+    /// (xem Security/AccessProfileService.cs). Dùng cái này khi handler cần RẼ NHÁNH; còn chốt cửa
+    /// endpoint thì dùng <c>.RequirePermission(Permissions.X)</c> để 403 xảy ra trước cả handler.
+    /// </summary>
+    public static bool Can(this ClaimsPrincipal user, string permission)
+        => user.HasClaim(Permissions.ClaimType, permission);
+
+    /// <summary>
+    /// Giữ vai trò Admin. CHỈ dùng cho PHẠM VI DỮ LIỆU ("thấy mọi dòng" thay vì "chỉ dòng của mình")
+    /// và cho hiển thị. KHÔNG dùng để chốt cửa endpoint — cửa phải chốt bằng quyền
+    /// (<c>.RequirePermission</c>) để thêm vai trò mới không phải đi sửa từng handler.
+    /// </summary>
     public static bool IsAdmin(this ClaimsPrincipal user)
-        => user.IsInRole("Admin");
+        => user.IsInRole(AppRoles.Admin);
 
+    /// <summary>Quản trị dữ liệu nhân sự (Admin hoặc Nhân sự) — nay chốt bằng QUYỀN hr.manage.</summary>
     public static bool IsHrManager(this ClaimsPrincipal user)
-        => user.IsInRole(AppRoles.Admin) || user.IsInRole(AppRoles.Hr);
+        => user.Can(Permissions.HrManage);
 
+    /// <summary>Vào được khu kế toán — nay chốt bằng QUYỀN accounting.access (Admin, Kế toán, Kế toán trưởng).</summary>
     public static bool IsAccounting(this ClaimsPrincipal user)
-        => user.IsInRole(AppRoles.Admin) || user.IsInRole(AppRoles.Accounting);
+        => user.Can(Permissions.AccountingAccess);
 
     /// <summary>Danh sách vai trò THỨ HAI (đã chuẩn hóa) của một tài khoản, đọc từ bảng user_roles.</summary>
     public static async Task<List<string>> LoadSecondaryRolesAsync(NpgsqlConnection conn, string username)
@@ -26,7 +41,9 @@ public static class ApiHelpers
         if (string.IsNullOrWhiteSpace(username)) return roles;
         try
         {
-            await using var r = await conn.Cmd("SELECT role FROM user_roles WHERE username = @u")
+            await using var r = await conn.Cmd(
+                @"SELECT role FROM user_roles
+                  WHERE username = @u AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)")
                 .With("@u", username).ExecuteReaderAsync();
             while (await r.ReadAsync())
             {
@@ -49,13 +66,13 @@ public static class ApiHelpers
         return all;
     }
 
-    /// <summary>Người có thẩm quyền GIAO VIỆC &amp; NGHIỆM THU: Admin, hoặc bất kỳ tài khoản nào giữ vai trò Thủ kho
-    /// (vai trò chính hoặc vai trò phụ). Chốt bằng dữ liệu DB nên cấp/thu quyền có hiệu lực ngay, không chờ đăng nhập lại.</summary>
+    /// <summary>Người có thẩm quyền GIAO VIỆC &amp; NGHIỆM THU = có quyền tasks.assign (Admin, Thủ kho,
+    /// Trưởng phòng — xem Permissions.RolePermissions). Tính lại từ vai trò trong DB nên cấp/thu quyền
+    /// có hiệu lực ngay, không chờ đăng nhập lại.</summary>
     public static async Task<bool> IsTaskAssignerAsync(NpgsqlConnection conn, string username, string primaryRole)
     {
-        if (string.Equals(AppRoles.Normalize(primaryRole), AppRoles.Admin, StringComparison.Ordinal)) return true;
         var roles = await LoadAllRolesAsync(conn, username, primaryRole);
-        return roles.Contains(AppRoles.Admin) || roles.Contains(AppRoles.Warehouse);
+        return Permissions.For(roles).Contains(Permissions.TasksAssign);
     }
 
     /// <summary>Ghi nhật ký hoạt động — giống RecordAudit của app desktop.</summary>

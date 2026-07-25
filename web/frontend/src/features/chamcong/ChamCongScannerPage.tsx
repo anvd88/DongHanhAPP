@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, CloudOff, RefreshCw, Send, WifiOff } from "lucide-react";
 import { Modal } from "../../components/Modal";
 import { Button, Field, Input } from "../../components/ui";
-import { useAppNotifications } from "../../components/AppNotifications";
+import { useAppNotifications } from "../../components/app-notifications-context";
 import { api } from "../../lib/api";
 import {
   getOfflineCount,

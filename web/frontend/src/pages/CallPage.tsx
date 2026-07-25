@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Mic, MicOff, Phone, PhoneOff, Video, VideoOff, X } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { useAuth } from "../lib/auth";
 import { initials } from "../lib/format";
 import {

@@ -23,7 +23,7 @@ import kotlinx.coroutines.runBlocking
  */
 class RealtimeClient(private val tokenStore: TokenStore) {
     private companion object {
-        val RefreshScopes = setOf("hr", "data", "chat", "tasks", "portal", "config", "audit", "talent", "all")
+        val RefreshScopes = setOf("hr", "data", "chat", "tasks", "portal", "config", "audit", "talent", "attendance", "all")
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

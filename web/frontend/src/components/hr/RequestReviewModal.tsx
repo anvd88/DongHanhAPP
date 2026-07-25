@@ -5,7 +5,7 @@ import { Badge, Button, Field, Input } from "../ui";
 import { api } from "../../lib/api";
 import { dateTime } from "../../lib/format";
 import { useApi } from "../../lib/useApi";
-import { useAppNotifications } from "../AppNotifications";
+import { useAppNotifications } from "../app-notifications-context";
 import { useAuth } from "../../lib/auth";
 import { isAdmin } from "../../lib/types";
 import {
@@ -184,9 +184,14 @@ export function RequestReviewModal({
 
   // Điền sẵn quyết định theo ĐÚNG đề nghị của nhân viên (đơn ghi trong payload): bỏ phạt / giảm / trả góp.
   // Người duyệt vẫn có thể đổi lại trước khi duyệt.
-  useEffect(() => {
-    if (!isPenaltyAppeal) return;
-    const p = data?.request.payload ?? {};
+  //
+  // Điền ngay lúc render (không qua useEffect) và chỉ MỘT LẦN cho mỗi đơn: nếu điền trong effect thì
+  // có một khung hình hiện mặc định "bỏ phạt" trước khi nhảy sang đề nghị thật — người duyệt liếc
+  // nhanh có thể đọc nhầm. Mốc `seededFor` bảo đảm không đè lên lựa chọn người duyệt vừa đổi tay.
+  const [seededFor, setSeededFor] = useState<string | null>(null);
+  if (isPenaltyAppeal && data && seededFor !== id) {
+    setSeededFor(id);
+    const p = data.request.payload ?? {};
     if (appealKind === "reduce") {
       setPenaltyOutcome("reduce");
       setNewAmount(String(Number(p.requestedAmount ?? "") || ""));
@@ -196,9 +201,7 @@ export function RequestReviewModal({
     } else {
       setPenaltyOutcome("waive");
     }
-    // Chỉ chạy khi tải xong một đơn khác.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, isPenaltyAppeal, appealKind]);
+  }
 
   const fieldTypeOf = (k: string) => (data ? requestFields[data.request.type]?.find((f) => f.key === k)?.type : undefined);
   const displayVal = (k: string, v: unknown) =>

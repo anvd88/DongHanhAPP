@@ -6,7 +6,7 @@ import { Table } from "../components/Table";
 import { Badge, Button, Input, Select } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
-import { useAppNotifications } from "../components/AppNotifications";
+import { useAppNotifications } from "../components/app-notifications-context";
 import { dateTime } from "../lib/format";
 
 interface AuditItem {

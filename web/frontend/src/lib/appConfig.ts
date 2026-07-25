@@ -1,16 +1,10 @@
-export const IS_HR_APK = import.meta.env.VITE_APP_TARGET === "hr-apk";
+// ĐÃ GỠ cờ IS_HR_APK (cùng HR_APK_NAV_KEYS): nó chỉ bật khi build với VITE_APP_TARGET=hr-apk — chế độ
+// build riêng cho vỏ APK Capacitor, đã xoá hẳn 2026-07-19. Cờ luôn false nghĩa là mọi nhánh
+// `IS_HR_APK ? ... : ...` chỉ còn nhánh sau, nên đã rút gọn tại chỗ ở App/Layout/Sidebar/Header/Login.
+export const DEFAULT_AUTH_PATH = "/dashboard";
 
-const configuredAndroidVersionCode = Number(import.meta.env.VITE_ANDROID_VERSION_CODE ?? "1");
-export const ANDROID_VERSION_CODE =
-  Number.isFinite(configuredAndroidVersionCode) && configuredAndroidVersionCode > 0
-    ? configuredAndroidVersionCode
-    : 1;
-export const ANDROID_VERSION_NAME = import.meta.env.VITE_ANDROID_VERSION_NAME ?? "1.0";
-
-export const DEFAULT_AUTH_PATH = IS_HR_APK ? "/nhan-su" : "/dashboard";
-
-export const HR_APK_NAV_KEYS = new Set(["nhan-su-portal", "chamcong", "hoso", "bangcong", "dontu", "pheduyet", "quanly-nhansu", "hethong"]);
-
+// Các đường dẫn thuộc module NHÂN SỰ trên web. Không liên quan gì tới APK: dùng để ẩn bớt phần "web
+// chính" (nhắc nước/mắt, toast phản hồi) cho đỡ nhiễu khi đang làm việc trong khu nhân sự.
 const HR_MODULE_PATHS = [
   "/nhan-su",
   "/nhansu",
@@ -44,9 +38,6 @@ export function appUrl(path: string): string {
 }
 
 export function redirectToLogin() {
-  if (IS_HR_APK) {
-    window.location.hash = "#/login";
-    return;
-  }
-  window.location.href = "/login";
+  // Màn hình đăng nhập nay nằm ở TRANG GỐC "/", không còn ở "/login".
+  window.location.href = "/";
 }

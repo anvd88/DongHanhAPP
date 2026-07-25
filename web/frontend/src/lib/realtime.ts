@@ -1,5 +1,5 @@
 import * as signalR from "@microsoft/signalr";
-import { tokenStore } from "./api";
+import { session } from "./api";
 import { appUrl } from "./appConfig";
 
 /**
@@ -24,6 +24,11 @@ export type RealtimeScope =
   | "talent"
   | "liveness"
   | "release"
+  | "attendance"
+  // "access" — quyền của CHÍNH tài khoản này vừa bị admin thay đổi. Chỉ gửi tới đúng người đó
+  // (Clients.User), không phát ra toàn hệ thống. Frontend nạp lại hồ sơ truy cập → menu/layout/route
+  // cập nhật ngay mà không phải đăng nhập lại. Xem lib/access.tsx.
+  | "access"
   | "all";
 type Listener = (scope: RealtimeScope, payload?: string) => void;
 
@@ -84,16 +89,21 @@ export function subscribeRealtime(cb: Listener, scopes?: RealtimeScope[]): () =>
 
 export function startRealtime() {
   if (connection) return;
-  // Chỉ kết nối hub khi ĐÃ đăng nhập. Trang công khai (đăng nhập, kiosk, tải APK, tính toán) không có
-  // token → tránh spam negotiate 401 mỗi 3 giây (nhất là màn kiosk chạy liên tục). Sau khi đăng nhập,
+  // Chỉ kết nối hub khi ĐÃ đăng nhập. Trang công khai (đăng nhập, kiosk, tải APK, tính toán) chưa có
+  // phiên → tránh spam negotiate 401 mỗi 3 giây (nhất là màn kiosk chạy liên tục). Sau khi đăng nhập,
   // auth.tsx gọi restartRealtime() để kết nối lại.
-  if (!tokenStore.get()) return;
+  if (!session.isSignedIn()) return;
 
   connection = new signalR.HubConnectionBuilder()
-    .withUrl(appUrl("/hubs/changes"), {
-      // Gửi JWT qua query "access_token" để backend định danh kết nối (chat nhắm đúng người).
-      accessTokenFactory: () => tokenStore.get() ?? "",
-    })
+    // KHÔNG còn accessTokenFactory: phiên nằm trong cookie HttpOnly và trình duyệt tự đính cookie
+    // vào cả negotiate lẫn WebSocket handshake (cùng origin). Nhờ vậy token không còn xuất hiện trên
+    // URL — chỗ mà nó sẽ bị ghi lại trong log máy chủ, log proxy và lịch sử trình duyệt.
+    // (Ứng dụng Android vẫn dùng query access_token; backend vẫn chấp nhận đường đó cho app.)
+    //
+    // Đường /hubs được máy chủ chốt bằng kiểm tra ORIGIN chứ không bằng header CSRF — xem Program.cs.
+    // Lý do: WebSocket handshake không gắn được header tuỳ ý, nên CSRF token không bảo vệ nổi nó,
+    // trong khi Origin thì bảo vệ được cả handshake lẫn negotiate.
+    .withUrl(appUrl("/hubs/changes"), { withCredentials: true })
     .withAutomaticReconnect([0, 2000, 5000, 10000])
     .configureLogging(signalR.LogLevel.Warning)
     .build();
@@ -121,14 +131,17 @@ export function startRealtime() {
     setTimeout(startRealtime, 3000);
   });
 
-  // Tự thử lại nếu lần kết nối đầu thất bại (backend chưa sẵn sàng).
-  const connect = () => {
+  // Tự thử lại nếu lần kết nối đầu thất bại (backend chưa sẵn sàng, hoặc phiên chưa kịp có).
+  //
+  // DỰNG LẠI KẾT NỐI MỚI chứ không gọi start() lại trên đối tượng cũ: đối tượng cũ giữ nguyên trạng
+  // thái phiên lúc nó được tạo. Trước đây nó chỉ mang token, nay là cookie/đăng nhập — nên nếu lần
+  // đầu thất bại vì CHƯA đăng nhập, thử lại đối tượng cũ sẽ hỏng mãi mãi kể cả sau khi đã đăng nhập
+  // xong. Dựng lại thì mỗi lần thử là một lần đọc lại trạng thái phiên hiện tại.
+  current.start().catch(() => {
     if (connection !== current) return;
-    current.start().catch(() => {
-      if (connection === current) setTimeout(connect, 3000);
-    });
-  };
-  connect();
+    connection = null;
+    setTimeout(startRealtime, 3000);
+  });
 }
 
 export async function restartRealtime() {

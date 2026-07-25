@@ -24,7 +24,6 @@ import com.ketoanapk.hr.data.QuizResult
 import com.ketoanapk.hr.data.BenefitsSummary
 import com.ketoanapk.hr.data.FaceEngineStatus
 import com.ketoanapk.hr.data.RecoveryResetRequest
-import com.ketoanapk.hr.data.FlashChallenge
 import com.ketoanapk.hr.data.MotionConfig
 import com.ketoanapk.hr.data.OfflineAttendanceRecord
 import com.ketoanapk.hr.data.AttendancePolicy
@@ -108,6 +107,10 @@ interface HrApi {
     @GET("api/hr/employees/{id}") suspend fun employeeDetail(@Path("id") id:String):EmployeeDetail
     @PUT("api/hr/employees/{id}") suspend fun updateEmployee(@Path("id") id:String,@Body body:com.ketoanapk.hr.data.SaveEmployeeBody):retrofit2.Response<Unit>
     @PUT("api/payroll/salaries/{id}") suspend fun updateSalary(@Path("id") id:String,@Body body:com.ketoanapk.hr.data.SaveSalaryBody):retrofit2.Response<Unit>
+
+    // Thư tri ân "tròn X năm gắn bó": server tự tính mốc theo ngày vào làm, trả thư đã điền sẵn.
+    @GET("api/hr/anniversary/my-greeting")
+    suspend fun anniversaryGreeting(@Query("preview") preview: Boolean = false): com.ketoanapk.hr.data.AnniversaryGreeting
 
     @GET("api/hr/me/documents")
     suspend fun myDocuments(): List<EmployeeDocument>
@@ -315,10 +318,6 @@ interface HrApi {
 
     @POST("api/chamcong/cham")
     suspend fun chamCong(@Body body: ChamCongBurstRequest): ChamCongResult
-
-    // Active-flash liveness (ngừng dùng): xin chuỗi màu để chiếu lên mặt lúc quét.
-    @GET("api/chamcong/flash-challenge")
-    suspend fun flashChallenge(): FlashChallenge
 
     // Liveness quay đầu: đọc cấu hình để biết có yêu cầu quay đầu lúc quét không.
     @GET("api/chamcong/motion-config")
