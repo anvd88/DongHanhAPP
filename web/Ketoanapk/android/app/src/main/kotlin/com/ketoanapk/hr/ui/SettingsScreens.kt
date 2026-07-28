@@ -560,7 +560,7 @@ private fun NotificationSettings(vm: HrViewModel, onBack: () -> Unit) {
         }
         item {
             Text(
-                "Khi bật, KetoanAPK sẽ nhận thông báo push cho đơn từ, phê duyệt, phạt/kỷ luật và các thông báo hệ thống. Khi tắt, app hủy đăng ký nhận push trên thiết bị này.",
+                "Khi bật, Đồng Hành sẽ nhận thông báo push cho đơn từ, phê duyệt, phạt/kỷ luật và các thông báo hệ thống. Khi tắt, app hủy đăng ký nhận push trên thiết bị này.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp),
@@ -612,7 +612,7 @@ private fun PermissionCenterScreen(vm: HrViewModel, onBack: () -> Unit) {
             HrCard {
                 Text("Bạn kiểm soát các quyền", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "KetoanAPK không xin camera, micro hoặc vị trí khi khởi động. Các quyền này chỉ được hỏi khi bạn mở đúng tính năng cần dùng.",
+                    "Đồng Hành không xin camera, micro hoặc vị trí khi khởi động. Các quyền này chỉ được hỏi khi bạn mở đúng tính năng cần dùng.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -730,7 +730,7 @@ private fun AppVersionScreen(vm: HrViewModel, onBack: () -> Unit) {
                     ) {
                         Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
                     }
-                    Text("KetoanAPK", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                    Text("Đồng Hành", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                     Text("Phiên bản $versionName", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Ứng dụng thuần native · Kotlin & Compose", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -796,7 +796,7 @@ private fun TermsScreen(onBack: () -> Unit) {
     LegalDocumentScreen(
         title = "Điều khoản sử dụng",
         updatedAt = "Cập nhật: 08/07/2026",
-        lead = "Các điều khoản này áp dụng khi bạn đăng nhập hoặc sử dụng Ketoan - Nhân sự để quản lý hồ sơ nhân sự, chấm công, đơn từ, phê duyệt, thông báo và các chức năng liên quan do đơn vị vận hành cung cấp.",
+        lead = "Các điều khoản này áp dụng khi bạn đăng nhập hoặc sử dụng Đồng Hành để quản lý hồ sơ nhân sự, chấm công, đơn từ, phê duyệt, thông báo và các chức năng liên quan do đơn vị vận hành cung cấp.",
         sections = termsSections(),
         onBack = onBack,
     )
@@ -807,7 +807,7 @@ private fun PrivacyPolicyScreen(onBack: () -> Unit) {
     LegalDocumentScreen(
         title = "Chính sách quyền riêng tư",
         updatedAt = "Cập nhật: 08/07/2026",
-        lead = "Chính sách này giải thích cách Ketoan - Nhân sự thu thập, sử dụng, lưu trữ và bảo vệ dữ liệu khi bạn dùng ứng dụng nội bộ phục vụ quản lý nhân sự và chấm công.",
+        lead = "Chính sách này giải thích cách Đồng Hành thu thập, sử dụng, lưu trữ và bảo vệ dữ liệu khi bạn dùng ứng dụng nội bộ phục vụ quản lý nhân sự và chấm công.",
         sections = privacySections(),
         onBack = onBack,
     )

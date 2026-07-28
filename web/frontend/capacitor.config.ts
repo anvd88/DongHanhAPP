@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.ketoanmini.hr",
-  appName: "Ketoan - Nhân sự",
+  appName: "Đồng Hành",
   webDir: ".android-wwwroot",
   server: {
     androidScheme: "https",

@@ -1,4 +1,4 @@
-# KetoanMini API contract
+# Đồng Hành API contract
 
 The machine-readable contract is served at `/swagger/v1/swagger.json`. Swagger UI is available at `/swagger` in Development only.
 

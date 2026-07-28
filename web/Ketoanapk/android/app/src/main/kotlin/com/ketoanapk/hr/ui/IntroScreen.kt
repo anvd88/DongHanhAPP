@@ -2,6 +2,8 @@ package com.ketoanapk.hr.ui
 
 import android.graphics.Path as AndroidPath
 import android.graphics.PathMeasure as AndroidPathMeasure
+import android.graphics.Paint as AndroidPaint
+import android.graphics.Typeface
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
@@ -36,6 +38,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.PathParser
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -108,7 +111,7 @@ private class Traced(composePath: Path) {
 }
 
 /**
- * Màn intro mở app: logo Inox Cường Phát dựng từ chính path SVG thật.
+ * Màn intro mở app: biểu tượng công ty kết hợp tên thương hiệu Đồng Hành.
  * Bánh răng xoay về đúng chỗ, chữ C / chữ P / khung tam giác được "vẽ dần" từng nét,
  * dải chữ hiện ra, kết bằng vệt sáng kim loại quét ngang. Chạm để bỏ qua.
  */
@@ -141,7 +144,14 @@ fun IntroOverlay(onFinished: () -> Unit) {
     val letterP = remember { parse(IntroLogoPaths.LETTER_P, evenOdd = true) }
     val letterPTraced = remember { Traced(letterP) }
     val banner = remember { parse(IntroLogoPaths.BANNER) }
-    val text = remember { parse(IntroLogoPaths.TEXT, evenOdd = true) }
+    val wordmarkPaint = remember {
+        AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFEC0200.toInt()
+            textAlign = AndroidPaint.Align.CENTER
+            textSize = 70f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+    }
 
     // Đường vẽ khung tam giác: đi qua giữa viền đỏ (giữa tam giác ngoài và trong của SVG).
     val triStroke = remember {
@@ -213,11 +223,11 @@ fun IntroOverlay(onFinished: () -> Unit) {
                 }
             }
 
-            // 7. Chữ "INOX CUONG PHAT" hiện dần từ trái sang phải (như đang viết).
+            // 7. Tên thương hiệu Đồng Hành hiện dần từ trái sang phải.
             val textP = seg(e, T_TEXT_START, T_TEXT_DUR)
             if (textP > 0f) {
                 clipRect(left = 0f, top = 575f, right = DESIGN_W * textP, bottom = DESIGN_H) {
-                    drawPath(text, LogoRed)
+                    drawContext.canvas.nativeCanvas.drawText("ĐỒNG HÀNH", DESIGN_W / 2f, 645f, wordmarkPaint)
                 }
             }
 

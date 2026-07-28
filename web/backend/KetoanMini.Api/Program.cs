@@ -52,7 +52,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
-    o.SwaggerDoc("v1", new() { Title = "KetoanMini API", Version = "v1" });
+    o.SwaggerDoc("v1", new() { Title = "Đồng Hành API", Version = "v1" });
     o.AddSecurityDefinition("Bearer", new()
     {
         Name = "Authorization",
@@ -473,7 +473,7 @@ static bool IsInternalRequest(HttpContext ctx)
     return (b[0] & 0xFE) == 0xFC || (b[0] == 0xFE && (b[1] & 0xC0) == 0x80);
 }
 
-app.MapGet("/api/info", () => Results.Ok(new { app = "KetoanMini Web API", status = "ok" }));
+app.MapGet("/api/info", () => Results.Ok(new { app = "Đồng Hành API", status = "ok" }));
 // Health-check DÀNH CHO GIÁM SÁT NỘI BỘ: chỉ trả từ loopback/LAN (404 với client ngoài), không lộ chi tiết lỗi.
 app.MapGet("/api/health", async (Database db, HttpContext ctx) =>
 {

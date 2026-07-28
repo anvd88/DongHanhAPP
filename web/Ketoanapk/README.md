@@ -1,4 +1,4 @@
-# KetoanAPK Native
+# Đồng Hành Native
 
 Ứng dụng Android native Kotlin/Compose cho nhân sự, chấm công và các luồng tài khoản. Phần React/Vite cũ đã được gỡ khỏi thư mục này; mã ứng dụng nằm trong `android`.
 
@@ -77,6 +77,6 @@ Mỗi bản phát hành mới phải tăng `versionCode` để Android cho phép
 Tên app lấy từ [android/app/src/main/res/values/strings.xml](android/app/src/main/res/values/strings.xml):
 
 ```xml
-<string name="app_name">Ketoan - Nhân sự</string>
-<string name="title_activity_main">Ketoan - Nhân sự</string>
+<string name="app_name">Đồng Hành</string>
+<string name="title_activity_main">Đồng Hành</string>
 ```

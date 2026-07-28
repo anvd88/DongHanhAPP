@@ -233,8 +233,8 @@ export function ApkDownload({ standalone = false }: { standalone?: boolean }) {
     <div className="apk-download-page gc-root" ref={pageRef}>
       <header className="apk-landing-nav">
         <div className="apk-brand">
-          <span className="apk-brand-mark">CP</span>
-          <span>KetoanMini</span>
+          <span className="apk-brand-mark">ĐH</span>
+          <span>Đồng Hành</span>
         </div>
         <nav aria-label="Thông tin tải ứng dụng">
           <a href="#download">Tải ứng dụng</a>
@@ -249,7 +249,7 @@ export function ApkDownload({ standalone = false }: { standalone?: boolean }) {
       </header>
 
       <section className={`apk-hero ${screenClass("download")}`} id="download" data-apk-screen="download">
-        <p className="apk-hero-kicker">KetoanAPK HR</p>
+        <p className="apk-hero-kicker">Đồng Hành Mobile</p>
         <h1>
           Đồng hành cùng đội ngũ
           <span
@@ -264,7 +264,7 @@ export function ApkDownload({ standalone = false }: { standalone?: boolean }) {
           an toàn, luôn đồng bộ với hệ thống công ty.
         </p>
         {release ? (
-          <a className="apk-hero-button" href={downloadUrl} download="KetoanAPK.apk">
+          <a className="apk-hero-button" href={downloadUrl} download="DongHanh.apk">
             <Download className="h-5 w-5" />
             Tải ứng dụng
           </a>
@@ -362,7 +362,7 @@ export function ApkDownload({ standalone = false }: { standalone?: boolean }) {
                       <span>Ngày phát hành</span>
                       <strong>{dateTime(release.publishedAt)}</strong>
                     </div>
-                    <a className="apk-download-button" href={downloadUrl} download="KetoanAPK.apk">
+                    <a className="apk-download-button" href={downloadUrl} download="DongHanh.apk">
                       <Download className="h-5 w-5" />
                       Tải ứng dụng
                     </a>

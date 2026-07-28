@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Ketoan - Nhân sự</string>
-    <string name="title_activity_main">Ketoan - Nhân sự</string>
+    <string name="app_name">Đồng Hành</string>
+    <string name="title_activity_main">Đồng Hành</string>
     <string name="package_name">com.ketoanapk.hr</string>
     <string name="custom_url_scheme">com.ketoanapk.hr</string>
 </resources>

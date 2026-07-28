@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-title KetoanMini - Restart (5173 HR + 5443 Web + BE + Cloudflare Tunnel)
+title Dong Hanh - Restart (5173 HR + 5443 Web + BE + Cloudflare Tunnel)
 
 set "ROOT=C:\Users\Admin\Desktop\KetoanMiniDotNet_Code_20260615_155926\web"
 set "FE=%ROOT%\frontend"
@@ -47,7 +47,7 @@ for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v Jwt__Key 2^>nul') do 
 for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v ConnectionStrings__KetoanMini 2^>nul') do set "ConnectionStrings__KetoanMini=%%b"
 for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v Bootstrap__AdminUsername 2^>nul') do set "Bootstrap__AdminUsername=%%b"
 for /f "tokens=2,*" %%a in ('reg query HKCU\Environment /v Bootstrap__AdminPassword 2^>nul') do set "Bootstrap__AdminPassword=%%b"
-start "KetoanMini Backend (5443)" cmd.exe /k "cd /d ""%API%"" && set ""ASPNETCORE_ENVIRONMENT=Production"" && dotnet run --no-launch-profile --project KetoanMini.Api.csproj"
+start "Dong Hanh Backend (5443)" cmd.exe /k "cd /d ""%API%"" && set ""ASPNETCORE_ENVIRONMENT=Production"" && dotnet run --no-launch-profile --project KetoanMini.Api.csproj"
 
 rem -- Cho backend toi da 45 giay de build/khoi dong, roi xac nhan DB cung san sang.
 for /l %%i in (1,1,45) do (
@@ -63,7 +63,7 @@ echo.
 echo ============================================================
 echo [4/5] Chay dev server HR: http://192.168.1.88:5173
 echo ============================================================
-start "KetoanMini Dev HR (5173)" cmd.exe /k "cd /d ""%FE%"" && npm.cmd run dev"
+start "Dong Hanh Dev HR (5173)" cmd.exe /k "cd /d ""%FE%"" && npm.cmd run dev"
 
 echo.
 echo ============================================================
@@ -114,6 +114,6 @@ exit /b 1
 
 :backend_error
 echo.
-echo *** LOI: backend khong san sang sau 45 giay. Xem cua so "KetoanMini Backend (5443)" de biet loi chi tiet. ***
+echo *** LOI: backend khong san sang sau 45 giay. Xem cua so "Dong Hanh Backend (5443)" de biet loi chi tiet. ***
 pause
 exit /b 1

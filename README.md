@@ -1,6 +1,6 @@
-# KetoanMini Web
+# Đồng Hành
 
-KetoanMini Web là phiên bản chạy trên trình duyệt của phần mềm kế toán KetoanMini, giúp quản lý công việc kế toán, khách hàng, gia công, nhân sự và chấm công trong một giao diện gọn gàng, dễ dùng.
+**Đồng Hành** là siêu ứng dụng doanh nghiệp dành cho web và Android, giúp quản lý kế toán, khách hàng, gia công, nhân sự, chấm công, công việc và giao tiếp nội bộ trong một giao diện thống nhất.
 
 Ứng dụng được xây dựng với backend ASP.NET Core và frontend React, có thể chạy nội bộ trong công ty qua mạng LAN.
 
@@ -70,4 +70,4 @@ http://localhost:5173
 
 ## Mục tiêu
 
-KetoanMini Web hướng tới việc đưa các nghiệp vụ quản lý nội bộ lên nền tảng web, giúp nhiều người cùng truy cập, thao tác nhanh hơn và dễ triển khai trong môi trường doanh nghiệp nhỏ.
+Đồng Hành hướng tới việc đưa các nghiệp vụ quản lý nội bộ lên một nền tảng thống nhất, giúp nhiều người cùng truy cập, phối hợp nhanh hơn và dễ triển khai trong môi trường doanh nghiệp.

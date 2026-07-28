@@ -123,7 +123,7 @@ export function CongThongTin() {
     <div className="gc-root">
       <PageHeader
         title="Cổng thông tin công ty"
-        subtitle="Đăng tin tức nội bộ, sự kiện và giới thiệu công ty — hiển thị trên app KetoanAPK"
+        subtitle="Đăng tin tức nội bộ, sự kiện và giới thiệu công ty — hiển thị trên ứng dụng Đồng Hành"
       />
 
       <div

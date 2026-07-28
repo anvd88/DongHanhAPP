@@ -276,7 +276,7 @@ private fun PermissionOnboardingDialog(onSkip: () -> Unit, onDone: () -> Unit) {
         title = { Text("Quyền riêng tư trên điện thoại") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("KetoanAPK chỉ hỏi quyền khi bạn dùng tính năng liên quan:")
+                Text("Đồng Hành chỉ hỏi quyền khi bạn dùng tính năng liên quan:")
                 Text("• Thông báo: đơn từ, tin nhắn và cuộc gọi đến")
                 Text("• Camera: chấm công, hồ sơ và gọi video")
                 Text("• Micro: cuộc gọi thoại/video")
@@ -357,7 +357,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     onClose = vm::closeSearch,
                 )
                 else TopAppBar(
-                    // Bỏ chữ "KETOANAPK": người dùng đã ở trong app rồi, tên app chiếm gần nửa header mà
+                    // Bỏ tên ứng dụng: người dùng đã ở trong app rồi, tên app chiếm gần nửa header mà
                     // không nói thêm điều gì. Giữ lại đúng tên màn đang xem.
                     title = {
                         Text(

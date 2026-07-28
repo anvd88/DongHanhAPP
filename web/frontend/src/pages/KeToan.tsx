@@ -110,7 +110,7 @@ function buildAccountingPrintSheet(item: PrintableDocument, printedAt: string) {
   return `<section class="sheet accounting-sheet">
   <div class="top">
     <div>
-      <div class="company">KetoanMini</div>
+      <div class="company">Đồng Hành</div>
       <div>Bộ phận kế toán</div>
     </div>
     <div>In lúc: ${htmlEscape(printedAt)}</div>

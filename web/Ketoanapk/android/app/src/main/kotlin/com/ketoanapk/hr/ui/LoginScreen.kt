@@ -110,7 +110,7 @@ fun LoginScreen(
                 Icon(Icons.Filled.Face, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(42.dp))
             }
             Spacer(Modifier.height(14.dp))
-            Text("KetoanAPK", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+            Text("Đồng Hành", style = MaterialTheme.typography.headlineSmall, color = Color.White)
             Text("Nhân sự & chấm công", style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.85f))
             Spacer(Modifier.height(22.dp))
 

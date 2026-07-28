@@ -3,7 +3,7 @@
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 /* =========================================================================
-   KetoanMini Web — Hệ thiết kế "Liquid Glass"
+   Đồng Hành Web — Hệ thiết kế "Liquid Glass"
    Bảng màu lấy từ app desktop (WpfTheme.cs): accent sáng #2563EB, tối #11C5BF.
    ========================================================================= */
 
@@ -1025,7 +1025,7 @@ html[data-theme="dark"] .giacong-liquid-search-input::placeholder {
 }
 
 /* =========================================================================
-   KetoanMini reference shell - iOS Liquid Glass dashboard
+   Đồng Hành reference shell - iOS Liquid Glass dashboard
    ========================================================================= */
 :root {
   --background-start: #dceaff;

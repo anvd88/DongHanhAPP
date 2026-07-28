@@ -67,7 +67,7 @@ import { isAdmin } from "./lib/types";
 import { DEFAULT_AUTH_PATH, IS_HR_APK, isHrModulePath } from "./lib/appConfig";
 import { Loader2 } from "lucide-react";
 
-const APP_TITLE = "KetoanMini";
+const APP_TITLE = "Đồng Hành";
 
 const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/": "Bản web",

@@ -1,5 +1,5 @@
-# Cấu hình gitleaks (quét lộ bí mật) cho KetoanMini. Dùng bộ luật mặc định + bỏ qua file mẫu/placeholder.
-title = "KetoanMini gitleaks"
+# Cấu hình gitleaks (quét lộ bí mật) cho Đồng Hành. Dùng bộ luật mặc định + bỏ qua file mẫu/placeholder.
+title = "Dong Hanh gitleaks"
 
 [extend]
 useDefault = true

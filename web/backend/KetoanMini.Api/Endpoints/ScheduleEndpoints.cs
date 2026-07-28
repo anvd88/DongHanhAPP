@@ -25,7 +25,7 @@ public static class ScheduleEndpoints
 
             await using var conn = await db.OpenAsync();
             var sb = new StringBuilder();
-            sb.Append("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//KetoanMini//Lich lam viec//VI\r\nCALSCALE:GREGORIAN\r\n");
+            sb.Append("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Dong Hanh//Lich lam viec//VI\r\nCALSCALE:GREGORIAN\r\n");
             var stampUtc = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
 
             await using (var r = await conn.Cmd("""

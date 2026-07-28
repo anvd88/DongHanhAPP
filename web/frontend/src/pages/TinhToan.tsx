@@ -476,7 +476,7 @@ export function TinhToan({ embedded = false }: { embedded?: boolean }) {
     <main className={embedded ? "calc-embedded-page" : "calc-public-page scroll-thin"}>
       {!embedded && <header className="calc-public-header">
         <Link to="/dashboard" className="calc-brand" aria-label="Về hệ thống">
-          <span>CP</span>
+          <span>ĐH</span>
           <span>
             <strong>{APP_BRAND_NAME}</strong>
             <small>Tiện ích tính toán</small>

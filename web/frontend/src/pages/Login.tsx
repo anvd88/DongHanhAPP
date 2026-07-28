@@ -84,7 +84,7 @@ export function Login() {
         <aside className="login-intro">
           <div className="login-intro-glow" aria-hidden="true" />
           <div className="login-brand">
-            <span className="login-brand-mark" aria-hidden="true">CP</span>
+            <span className="login-brand-mark" aria-hidden="true">ĐH</span>
             <span>
               <strong>{APP_BRAND_NAME}</strong>
               <small>Nền tảng vận hành doanh nghiệp</small>
