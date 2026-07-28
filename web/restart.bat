@@ -29,6 +29,12 @@ echo ============================================================
 echo [2/5] Build frontend cho web chinh (5443)
 echo ============================================================
 cd /d "%FE%" || goto :error
+rem -- node_modules co the bi thieu mot phan sau khi cap nhat source/package-lock.
+rem    Tu dong khoi phuc dependency truoc khi build de tranh loi TS2307.
+if not exist "node_modules\@capacitor\core\package.json" (
+  echo Thieu dependency frontend ^(@capacitor/core^). Dang khoi phuc bang npm install...
+  call npm.cmd install || goto :dependency_error
+)
 call npm.cmd run build || goto :error
 
 echo.
@@ -97,6 +103,12 @@ goto :eof
 :error
 echo.
 echo *** LOI: build frontend that bai. Kiem tra thong bao ben tren. ***
+pause
+exit /b 1
+
+:dependency_error
+echo.
+echo *** LOI: khong the cai dependency frontend. Kiem tra ket noi mang va package-lock.json. ***
 pause
 exit /b 1
 
