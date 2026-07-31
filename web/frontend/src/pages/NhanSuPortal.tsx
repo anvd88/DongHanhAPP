@@ -127,7 +127,10 @@ export function NhanSuPortal() {
   const role = me?.position || (admin ? "Quản trị nhân sự" : "Nhân viên");
 
   return (
-    <div className="hr-mobile-portal">
+    <div
+      className="hr-mobile-portal"
+      data-login-blocking={timesheetLoading ? "true" : undefined}
+    >
       <header className="hrp-top">
         <div className="hrp-identity">
           <span className="hrp-avatar">

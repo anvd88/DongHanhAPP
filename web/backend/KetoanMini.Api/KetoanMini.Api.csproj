@@ -30,6 +30,10 @@
     <None Include="certs\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Templates\PhieuXuatKho.xlsx" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Face ONNX models: YuNet detection, AdaFace R50 recognition, MiniFASNet anti-spoof. -->
   <ItemGroup>
     <None Include="Models\Face\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

@@ -26,6 +26,9 @@ const TinhToan = lazy(() => import("./pages/TinhToan").then((m) => ({ default: m
 const ApkDownload = lazy(() => import("./pages/ApkDownload").then((m) => ({ default: m.ApkDownload })));
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const KeToan = lazy(() => import("./pages/KeToan").then((m) => ({ default: m.KeToan })));
+const CoreAccounting = lazy(() => import("./pages/CoreAccounting").then((m) => ({ default: m.CoreAccounting })));
+const ThuChi = lazy(() => import("./pages/ThuChi").then((m) => ({ default: m.ThuChi })));
+const CongNo = lazy(() => import("./pages/CongNo").then((m) => ({ default: m.CongNo })));
 const PhieuChi = lazy(() => import("./pages/PhieuChi").then((m) => ({ default: m.PhieuChi })));
 const KhachHang = lazy(() => import("./pages/KhachHang").then((m) => ({ default: m.KhachHang })));
 const GiaCongPage = lazy(() => import("./features/giacong/GiaCongPage").then((m) => ({ default: m.GiaCongPage })));
@@ -182,7 +185,10 @@ function NoAccessScreen({ failed }: { failed: boolean }) {
   const { logout } = useAuth();
   const { reload } = useAccess();
   return (
-    <div className="flex h-screen flex-col items-center justify-center gap-3 px-6 text-center">
+    <div
+      className="flex h-screen flex-col items-center justify-center gap-3 px-6 text-center"
+      data-login-route-ready="true"
+    >
       <h1 className="text-lg font-bold">
         {failed ? "Chưa xác định được quyền truy cập" : "Tài khoản chưa được cấp quyền"}
       </h1>
@@ -274,6 +280,90 @@ function RealtimeBoot() {
   return null;
 }
 
+function LoginTransitionCoordinator() {
+  const { user, loginTransitionPhase, revealLoginTransition } = useAuth();
+  const access = useAccess();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!user || loginTransitionPhase !== "waiting" || access.loading || location.pathname === "/") return;
+
+    let firstFrame = 0;
+    let secondFrame = 0;
+    let scheduled = false;
+    let cancelled = false;
+    const observer = new MutationObserver(() => {
+      scheduleRevealWhenReady();
+    });
+
+    function isVisible(element: HTMLElement) {
+      const style = window.getComputedStyle(element);
+      return style.display !== "none"
+        && style.visibility !== "hidden"
+        && element.getClientRects().length > 0;
+    }
+
+    function routeIsReady() {
+      const routeSurface = Array
+        .from(document.querySelectorAll<HTMLElement>("[data-login-route-ready]"))
+        .find((element) => {
+          const readyFor = element.dataset.loginRouteReady;
+          return readyFor === "true" || readyFor === location.pathname;
+        });
+      if (!routeSurface) return false;
+
+      const scope = routeSurface.closest<HTMLElement>(".km-page") ?? routeSurface;
+      const blockers = scope.querySelectorAll<HTMLElement>(
+        ".km-page-skeleton, .km-skeleton, .gc-skeleton, [data-login-blocking='true']",
+      );
+      return !Array.from(blockers).some(isVisible);
+    }
+
+    function scheduleRevealWhenReady() {
+      if (cancelled) return;
+      if (!routeIsReady()) {
+        if (scheduled) {
+          window.cancelAnimationFrame(firstFrame);
+          window.cancelAnimationFrame(secondFrame);
+          firstFrame = 0;
+          secondFrame = 0;
+          scheduled = false;
+        }
+        return;
+      }
+      if (scheduled) return;
+      scheduled = true;
+      // Hai frame bảo đảm nội dung thật đã qua layout + paint đầu tiên. Kiểm tra lại ở frame cuối
+      // vì một effect của trang có thể vừa bắt đầu thêm trạng thái tải dữ liệu mới.
+      firstFrame = window.requestAnimationFrame(() => {
+        secondFrame = window.requestAnimationFrame(() => {
+          scheduled = false;
+          if (cancelled || !routeIsReady()) return;
+          observer.disconnect();
+          revealLoginTransition();
+        });
+      });
+    }
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "hidden", "data-login-blocking"],
+    });
+    scheduleRevealWhenReady();
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [access.loading, location.pathname, loginTransitionPhase, revealLoginTransition, user]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -286,6 +376,7 @@ export default function App() {
           {/* Hồ sơ truy cập phải nằm TRONG AuthProvider (cần biết đã đăng nhập chưa) và BAO NGOÀI
               Routes (mọi route đều hỏi quyền qua useAccess). */}
           <AccessProvider>
+          <LoginTransitionCoordinator />
           <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<RootGate />} />
@@ -315,7 +406,9 @@ export default function App() {
             {/* /api/dashboard nằm trong nhóm đòi accounting.access, nên trang này cũng phải đòi đúng
                 quyền đó — trước đây nhân viên vào được nhưng chỉ nhận về một trang trắng kèm 403. */}
             <Route path="/dashboard" element={<Protected requires={PERM.accountingAccess}><Dashboard /></Protected>} />
-            <Route path="/ketoan" element={<Protected requires={PERM.accountingAccess}><KeToan /></Protected>} />
+            <Route path="/ketoan" element={<Protected requires={PERM.accountingAccess}><CoreAccounting /></Protected>} />
+            <Route path="/ban-hang" element={<Protected requires={PERM.accountingAccess}><KeToan /></Protected>} />
+            <Route path="/thu-chi" element={<Protected requires={PERM.accountingAccess}><ThuChi /></Protected>} />
             {/* payout.read chứ không phải "chỉ admin": kế toán mới là người lập/duyệt chi (Admin cố ý
                 không được đụng tiền mặt). Ai lập/duyệt được thì server chốt tiếp theo phòng ban. */}
             <Route path="/phieu-chi" element={<Protected requires={PERM.payoutRead}><PhieuChi /></Protected>} />
@@ -341,7 +434,7 @@ export default function App() {
             <Route path="/muahang" element={<Protected requires={PERM.accountingAccess}><StubPage title="Mua hàng" /></Protected>} />
             <Route path="/taisan" element={<Protected requires={PERM.accountingAccess}><StubPage title="Tài sản cố định" /></Protected>} />
             <Route path="/danhmuc" element={<Protected requires={PERM.accountingAccess}><StubPage title="Danh mục" /></Protected>} />
-            <Route path="/congno" element={<Protected requires={PERM.accountingAccess}><StubPage title="Công nợ" /></Protected>} />
+            <Route path="/congno" element={<Protected requires={PERM.accountingAccess}><CongNo /></Protected>} />
             <Route path="/nganhang" element={<Protected requires={PERM.accountingAccess}><StubPage title="Ngân hàng" /></Protected>} />
             <Route path="/chiphi" element={<Protected requires={PERM.accountingAccess}><StubPage title="Chi phí" /></Protected>} />
             <Route path="/lichhen" element={<Protected><StubPage title="Lịch hẹn" /></Protected>} />

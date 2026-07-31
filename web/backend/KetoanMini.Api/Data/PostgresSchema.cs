@@ -132,6 +132,20 @@ public static class PostgresSchema
             updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- Số dư công nợ tại thời điểm bắt đầu theo dõi trên hệ thống.
+        -- Số dương: khách còn nợ; số âm: khách đã trả trước.
+        CREATE TABLE IF NOT EXISTS customer_opening_balances (
+            customer_id uuid NOT NULL PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+            amount numeric(18,2) NOT NULL DEFAULT 0,
+            as_of_date date NOT NULL,
+            note text NOT NULL DEFAULT '',
+            updated_by varchar(128) NOT NULL DEFAULT '',
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_customer_opening_balances_date
+            ON customer_opening_balances (as_of_date);
+
         CREATE TABLE IF NOT EXISTS documents (
             id uuid NOT NULL PRIMARY KEY,
             voucher_no varchar(64) NOT NULL,
@@ -139,11 +153,100 @@ public static class PostgresSchema
             customer_id uuid NULL REFERENCES customers(id) ON DELETE SET NULL,
             customer_name varchar(256) NOT NULL DEFAULT '',
             customer_input_name varchar(256) NOT NULL DEFAULT '',
+            document_type varchar(16) NOT NULL DEFAULT 'document',
             content text NOT NULL DEFAULT '',
             note text NOT NULL DEFAULT '',
+            issued_at timestamptz NULL,
+            cancelled_at timestamptz NULL,
+            cancelled_by varchar(128) NOT NULL DEFAULT '',
+            cancel_reason text NOT NULL DEFAULT '',
             created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS issued_at timestamptz NULL;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS cancelled_at timestamptz NULL;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS cancelled_by varchar(128) NOT NULL DEFAULT '';
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS cancel_reason text NOT NULL DEFAULT '';
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'documents'
+                  AND column_name = 'document_type'
+            ) THEN
+                ALTER TABLE documents ADD COLUMN document_type varchar(16) NOT NULL DEFAULT 'document';
+                UPDATE documents
+                SET document_type = CASE
+                    WHEN UPPER(voucher_no) LIKE 'PT%' OR LOWER(content) LIKE '%phiếu thu%' OR LOWER(content) LIKE '%thu tiền%' THEN 'receipt'
+                    WHEN UPPER(voucher_no) LIKE 'PC%' OR LOWER(content) LIKE '%phiếu chi%' OR LOWER(content) LIKE '%chi tiền%' THEN 'payment'
+                    ELSE 'document'
+                END;
+            END IF;
+        END $$;
+        -- Bất biến phát hành phiếu xuất kho:
+        --   phiếu nháp không có số; phiếu đã phát hành bắt buộc có số.
+        -- Dọn trạng thái do phiên bản cũ từng lưu số trước khi gửi lệnh in.
+        UPDATE documents
+        SET voucher_no = ''
+        WHERE document_type = 'document' AND issued_at IS NULL AND voucher_no <> '';
+        UPDATE documents
+        SET issued_at = NULL
+        WHERE document_type = 'document' AND issued_at IS NOT NULL AND BTRIM(voucher_no) = '';
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_documents_warehouse_issue_number'
+                  AND conrelid = 'documents'::regclass
+            ) THEN
+                ALTER TABLE documents
+                ADD CONSTRAINT ck_documents_warehouse_issue_number
+                CHECK (
+                    document_type <> 'document'
+                    OR (issued_at IS NULL AND voucher_no = '')
+                    OR (issued_at IS NOT NULL AND BTRIM(voucher_no) <> '')
+                );
+            END IF;
+        END $$;
+        -- Số phiếu xuất kho là bất biến sau khi phát hành. Ràng buộc này bảo vệ cả các cập nhật
+        -- ngoài giao diện/API để số trong DB không thể lệch với số đã in trên phiếu thực tế.
+        CREATE OR REPLACE FUNCTION prevent_issued_warehouse_voucher_no_change()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+            IF OLD.document_type = 'document'
+               AND OLD.issued_at IS NOT NULL
+               AND NEW.voucher_no IS DISTINCT FROM OLD.voucher_no THEN
+                RAISE EXCEPTION 'Không thể thay đổi số phiếu xuất kho đã phát hành.'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+        DROP TRIGGER IF EXISTS trg_documents_issued_voucher_no_immutable ON documents;
+        CREATE TRIGGER trg_documents_issued_voucher_no_immutable
+        BEFORE UPDATE OF voucher_no ON documents
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_issued_warehouse_voucher_no_change();
+
+        -- Chứng từ kế toán đã nhập chỉ được chuyển sang trạng thái hủy, tuyệt đối không xóa vật lý.
+        CREATE OR REPLACE FUNCTION prevent_document_physical_delete()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+            RAISE EXCEPTION 'Không thể xóa vật lý phiếu kế toán; hãy chuyển phiếu sang trạng thái hủy.'
+                USING ERRCODE = '23514';
+        END;
+        $$;
+        DROP TRIGGER IF EXISTS trg_documents_no_physical_delete ON documents;
+        CREATE TRIGGER trg_documents_no_physical_delete
+        BEFORE DELETE ON documents
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_document_physical_delete();
 
         CREATE TABLE IF NOT EXISTS document_lines (
             id bigserial NOT NULL PRIMARY KEY,
@@ -293,6 +396,7 @@ public static class PostgresSchema
         CREATE INDEX IF NOT EXISTS ix_customers_name_active ON customers (name) WHERE is_active = TRUE;
         CREATE INDEX IF NOT EXISTS ix_documents_customer ON documents (customer_id, doc_date DESC);
         CREATE INDEX IF NOT EXISTS ix_documents_date ON documents (doc_date DESC, voucher_no DESC);
+        CREATE INDEX IF NOT EXISTS ix_documents_type_date ON documents (document_type, doc_date DESC, voucher_no DESC);
         CREATE INDEX IF NOT EXISTS ix_document_lines_document ON document_lines (document_id, line_no);
         CREATE INDEX IF NOT EXISTS ix_payments_customer ON payments (customer_id, pay_date DESC);
         CREATE INDEX IF NOT EXISTS ix_audit_logs_occurred ON audit_logs (occurred_at DESC);

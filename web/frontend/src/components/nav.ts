@@ -1,5 +1,6 @@
 import {
   Banknote,
+  ArrowRightLeft,
   BookOpen,
   Boxes,
   Building2,
@@ -94,14 +95,16 @@ export const NAV: NavSection[] = [
     area: "admin",
     items: [
       { key: "giacong", label: "Gia công", icon: Building2, path: "/giacong", area: "admin", permission: PERM.accountingAccess, ready: true },
-      { key: "ketoan", label: "Kế toán", icon: FileText, path: "/ketoan", area: "admin", permission: PERM.accountingAccess, ready: true },
-      // "Phiếu chi tiền mặt" chứ không phải "Phiếu chi" — trang Kế toán đã có tab chứng từ tên Phiếu chi.
+      { key: "ketoan", label: "Kế toán lõi", icon: FileText, path: "/ketoan", area: "admin", permission: PERM.accountingAccess, ready: true },
+      { key: "ban-hang", label: "Bán hàng", icon: ShoppingCart, path: "/ban-hang", area: "admin", permission: PERM.accountingAccess, ready: true },
+      { key: "thu-chi", label: "Thu chi", icon: ArrowRightLeft, path: "/thu-chi", area: "admin", permission: PERM.accountingAccess, ready: true },
+      // Phiếu chi tiền mặt là quy trình QR/ký nhận riêng; phiếu thu/chi nghiệp vụ nằm ở trang Thu chi.
       { key: "phieu-chi", label: "Phiếu chi tiền mặt", icon: ReceiptText, path: "/phieu-chi", area: "admin", permission: PERM.payoutRead, ready: true },
       { key: "khachhang", label: "Khách hàng", icon: Users, path: "/khachhang", area: "admin", permission: PERM.accountingAccess, ready: true },
       { key: "muahang", label: "Mua hàng", icon: ShoppingCart, path: "/muahang", area: "admin", permission: PERM.accountingAccess },
       { key: "kho", label: "Kho hàng", icon: ShoppingBag, path: "/kho", area: "admin", permission: PERM.accountingAccess },
       { key: "nganhang", label: "Ngân hàng", icon: Banknote, path: "/nganhang", area: "admin", permission: PERM.accountingAccess },
-      { key: "congno", label: "Công nợ", icon: Wallet, path: "/congno", area: "admin", permission: PERM.accountingAccess },
+      { key: "congno", label: "Công nợ", icon: Wallet, path: "/congno", area: "admin", permission: PERM.accountingAccess, ready: true },
       { key: "taisan", label: "Tài sản cố định", icon: Boxes, path: "/taisan", area: "admin", permission: PERM.accountingAccess },
       { key: "chiphi", label: "Chi phí", icon: CircleDollarSign, path: "/chiphi", area: "admin", permission: PERM.accountingAccess },
     ],

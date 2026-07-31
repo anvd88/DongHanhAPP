@@ -30,7 +30,17 @@ public static class DatabaseChangePublisher
         ("document_lines", ["data"]),
         ("payments", ["data"]),
         ("customers", ["data"]),
+        ("customer_opening_balances", ["data"]),
         ("customer_aliases", ["data"]),
+        // Kế toán lõi: mọi thay đổi tài khoản, bút toán, kỳ, đối chiếu và ngân sách
+        // cùng phát scope nghiệp vụ để các máy đang mở sổ tự làm mới sau khi giao dịch commit.
+        ("core_accounts", ["data"]),
+        ("core_periods", ["data"]),
+        ("core_journal_entries", ["data"]),
+        ("core_journal_lines", ["data"]),
+        ("core_budgets", ["data"]),
+        ("core_reconciliations", ["data"]),
+        ("core_period_events", ["data"]),
         ("gia_cong_phieu", ["data"]),
         ("gia_cong_hang_hoa", ["data"]),
         // Chấm công đứng riêng scope 'attendance' thay vì đi chung 'data'. 'data' là scope BẮT-TẤT của

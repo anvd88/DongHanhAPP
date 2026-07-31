@@ -26,11 +26,9 @@ function accountInitials(account: QrLoginAccount) {
 
 export function QrLoginModal({
   onClose,
-  onSuccess,
   embedded = false,
 }: {
   onClose: () => void;
-  onSuccess: () => void;
   /** Hiển thị gọn trong thẻ đăng nhập (thay cho ô tài khoản/mật khẩu) thay vì bật hộp thoại nổi. */
   embedded?: boolean;
 }) {
@@ -134,7 +132,6 @@ export function QrLoginModal({
           void api.postPublic("/api/auth/qr/ack", { pollToken: session.pollToken }).catch(() => {});
           pollTokenRef.current = null;
           setConfirmed(true);
-          window.setTimeout(onSuccess, 350);
           return;
         }
         if (result.status === "expired") {
@@ -195,7 +192,7 @@ export function QrLoginModal({
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [completeExternalLogin, confirmed, expired, onSuccess, pollQrLogin, rejected, session]);
+  }, [completeExternalLogin, confirmed, expired, pollQrLogin, rejected, session]);
 
   const close = useCallback(() => {
     generationRef.current += 1;

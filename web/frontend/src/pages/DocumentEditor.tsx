@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Printer, Trash2 } from "lucide-react";
+import { Eye, Plus, Trash2 } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { Button, Field, Input, Select } from "../components/ui";
 import { DatePicker } from "../components/DateField";
@@ -16,7 +16,22 @@ import type { Customer, DocumentDetail, DocumentLine } from "../lib/types";
 
 const emptyLine = (): DocumentLine => ({ lineContent: "", spec: "", quantity: 1, unitPrice: 0, note: "" });
 
-const formatEditableNumber = (value: number) => (Number.isFinite(value) ? String(value) : "0");
+const formatNumericToken = (token: string) => {
+  const normalized = token.replace(/,/g, "");
+  const dotIndex = normalized.indexOf(".");
+  const integerPart = (dotIndex >= 0 ? normalized.slice(0, dotIndex) : normalized)
+    .replace(/^0+(?=\d)/, "");
+  const decimalPart = dotIndex >= 0 ? normalized.slice(dotIndex) : "";
+  return integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + decimalPart;
+};
+
+const formatArithmeticDraft = (value: string) =>
+  value.replace(/\d[\d,]*(?:\.\d*)?/g, formatNumericToken);
+
+const formatEditableNumber = (value: number) =>
+  Number.isFinite(value) ? formatArithmeticDraft(String(value)) : "0";
+
+const initialVoucherNo = (kind: DocumentKind) => (kind === "document" ? "" : createVoucherNo(kind));
 
 const evaluateArithmeticInput = (raw: string): number | null => {
   const input = raw
@@ -24,7 +39,7 @@ const evaluateArithmeticInput = (raw: string): number | null => {
     .replace(/^=/, "")
     .replace(/[xX×]/g, "*")
     .replace(/÷/g, "/")
-    .replace(/,/g, ".");
+    .replace(/,/g, "");
 
   if (!input) return 0;
 
@@ -128,6 +143,9 @@ export function DocumentEditor({
   onPrint,
   printLoading,
   keepOpenAfterSave,
+  readOnly = false,
+  apiBasePath = "/api/documents",
+  allowedKinds = ["document"],
   onClose,
   onSaved,
 }: {
@@ -137,11 +155,14 @@ export function DocumentEditor({
   onPrint?: () => void;
   printLoading?: boolean;
   keepOpenAfterSave?: boolean;
+  readOnly?: boolean;
+  apiBasePath?: string;
+  allowedKinds?: DocumentKind[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [docKind, setDocKind] = useState<DocumentKind>(initialKind);
-  const [voucherNo, setVoucherNo] = useState(() => createVoucherNo(initialKind));
+  const [voucherNo, setVoucherNo] = useState(() => initialVoucherNo(initialKind));
   const [docDate, setDocDate] = useState(new Date().toISOString().slice(0, 10));
   const [customerName, setCustomerName] = useState("");
   const [content, setContent] = useState(() => defaultDocumentContent(initialKind));
@@ -150,10 +171,12 @@ export function DocumentEditor({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [cancelledAt, setCancelledAt] = useState<string | null>(readOnly ? "locked" : null);
+  const [cancelReason, setCancelReason] = useState("");
 
   const resetCreateForm = (kind: DocumentKind) => {
     setDocKind(kind);
-    setVoucherNo(createVoucherNo(kind));
+    setVoucherNo(initialVoucherNo(kind));
     setDocDate(new Date().toISOString().slice(0, 10));
     setCustomerName("");
     setContent(defaultDocumentContent(kind));
@@ -167,7 +190,7 @@ export function DocumentEditor({
   // khởi tạo đúng. (resetCreateForm vẫn dùng cho luồng "lưu xong giữ form mở để nhập tiếp".)
   useEffect(() => {
     if (!id || id === "new") return;
-    api.get<DocumentDetail>(`/api/documents/${id}`).then((d) => {
+    api.get<DocumentDetail>(`${apiBasePath}/${id}`).then((d) => {
       setDocKind(inferDocumentKind(d));
       setVoucherNo(d.voucherNo);
       setDocDate(d.date);
@@ -175,10 +198,13 @@ export function DocumentEditor({
       setContent(d.content);
       setNote(d.note);
       setLines(d.lines.length ? d.lines : [emptyLine()]);
+      setCancelledAt(d.cancelledAt ?? null);
+      setCancelReason(d.cancelReason ?? "");
     });
-  }, [id]);
+  }, [apiBasePath, id]);
 
   const isWarehouseSale = docKind === "document";
+  const isLocked = readOnly || !!cancelledAt;
   const total = lines.reduce((s, l) => s + (l.quantity || 0) * (l.unitPrice || 0), 0);
   const setLine = (i: number, patch: Partial<DocumentLine>) =>
     setLines((arr) => arr.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -188,7 +214,7 @@ export function DocumentEditor({
     setDocKind(kind);
     setVoucherNo((current) => {
       const currentKind = inferDocumentKind({ voucherNo: current, content });
-      return !current.trim() || currentKind === previousKind ? createVoucherNo(kind) : current;
+      return !current.trim() || currentKind === previousKind ? initialVoucherNo(kind) : current;
     });
     setContent((current) => {
       const previousDefault = defaultDocumentContent(previousKind);
@@ -197,7 +223,11 @@ export function DocumentEditor({
   };
 
   const save = async () => {
-    if (!voucherNo.trim()) {
+    if (isLocked) {
+      setError("Phiếu đã hủy và được khóa để bảo toàn lịch sử.");
+      return;
+    }
+    if (!isWarehouseSale && !voucherNo.trim()) {
       setError("Vui lòng nhập số phiếu.");
       return;
     }
@@ -206,6 +236,7 @@ export function DocumentEditor({
     setSuccess("");
     const body = {
       voucherNo: voucherNo.trim(),
+      documentType: docKind,
       date: docDate,
       customerName,
       content: content.trim() || defaultDocumentContent(docKind),
@@ -213,8 +244,8 @@ export function DocumentEditor({
       lines,
     };
     try {
-      if (id === "new") await api.post("/api/documents", body);
-      else await api.put(`/api/documents/${id}`, body);
+      if (id === "new") await api.post(apiBasePath, body);
+      else await api.put(`${apiBasePath}/${id}`, body);
 
       if (id === "new" && keepOpenAfterSave) {
         resetCreateForm(docKind);
@@ -237,31 +268,59 @@ export function DocumentEditor({
       onClose={onClose}
       wide
       solid
-      title={id === "new" ? `Tạo ${documentKindLabel(docKind).toLowerCase()}` : "Sửa phiếu"}
+      title={id === "new" ? `Tạo ${documentKindLabel(docKind).toLowerCase()}` : isLocked ? "Xem phiếu đã hủy" : "Sửa phiếu"}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>Hủy</Button>
-          {id !== "new" && onPrint && (
+          <Button variant="ghost" onClick={onClose}>{isLocked ? "Đóng" : "Hủy"}</Button>
+          {!isLocked && id !== "new" && onPrint && (
             <Button variant="soft" onClick={onPrint} loading={printLoading}>
-              <Printer className="h-4 w-4" /> In phiếu
+              <Eye className="h-4 w-4" /> Xem trước &amp; in
             </Button>
           )}
-          <Button onClick={save} loading={saving}>Lưu phiếu</Button>
+          {!isLocked && <Button onClick={save} loading={saving}>Lưu phiếu</Button>}
         </>
       }
     >
-      <div className="space-y-4">
+      <fieldset disabled={isLocked} className="space-y-4">
+        {isLocked && (
+          <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 px-3.5 py-3 text-sm font-semibold text-rose-600 dark:text-rose-300">
+            Phiếu đã hủy và chỉ được phép xem.
+            {cancelReason ? <span className="mt-1 block font-medium">Lý do: {cancelReason}</span> : null}
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Field label="Loại phiếu">
-            <Select value={docKind} onChange={(e) => changeKind(e.target.value as DocumentKind)} className="w-full">
-              <option value="receipt">Phiếu thu</option>
-              <option value="payment">Phiếu chi</option>
-              <option value="document">Phiếu xuất kho bán hàng</option>
-            </Select>
+            {allowedKinds.length === 1 ? (
+              <div className="km-form-control flex min-h-[42px] items-center rounded-xl border px-3.5 py-2.5 text-sm font-semibold text-[var(--text)]">
+                {documentKindLabel(allowedKinds[0])}
+              </div>
+            ) : (
+              <Select value={docKind} onChange={(e) => changeKind(e.target.value as DocumentKind)} className="w-full">
+                {allowedKinds.includes("receipt") && <option value="receipt">Phiếu thu</option>}
+                {allowedKinds.includes("payment") && <option value="payment">Phiếu chi</option>}
+                {allowedKinds.includes("document") && <option value="document">Phiếu xuất kho bán hàng</option>}
+              </Select>
+            )}
           </Field>
-          <Field label="Số phiếu *">
-            <Input value={voucherNo} onChange={(e) => setVoucherNo(e.target.value)} placeholder={isWarehouseSale ? "VD: XK260625-0930" : "VD: PT260625-0930"} />
-          </Field>
+          {isWarehouseSale ? (
+            <Field label="Số phiếu">
+              <div className="km-form-control flex min-h-[42px] items-center rounded-xl border px-3.5 py-2.5 text-sm">
+                {voucherNo ? (
+                  <span className="font-semibold text-[var(--text)]">{voucherNo}</span>
+                ) : (
+                  <span className="text-[var(--text-muted)]">Sẽ nhập khi bấm Xem trước &amp; in</span>
+                )}
+              </div>
+            </Field>
+          ) : (
+            <Field label="Số phiếu *">
+              <Input
+                value={voucherNo}
+                onChange={(e) => setVoucherNo(e.target.value)}
+                placeholder={docKind === "receipt" ? "VD: PT260625-0930" : "VD: PC260625-0930"}
+              />
+            </Field>
+          )}
           <Field label="Ngày lập">
             <DatePicker value={docDate} onChange={setDocDate} ariaLabel="Ngày lập" />
           </Field>
@@ -299,7 +358,7 @@ export function DocumentEditor({
               <thead>
                 <tr className="border-b border-[var(--glass-border)] text-xs text-[var(--text-muted)]">
                   <th className="px-2 py-2 text-left font-semibold">{isWarehouseSale ? "Chủng loại hàng hóa" : "Nội dung"}</th>
-                  <th className="px-2 py-2 text-left font-semibold">{isWarehouseSale ? "Mã hàng" : "Quy cách"}</th>
+                  <th className="px-2 py-2 text-left font-semibold">Quy cách</th>
                   <th className="px-2 py-2 text-right font-semibold">{isWarehouseSale ? "Khối lượng (kg)" : "SL"}</th>
                   <th className="px-2 py-2 text-right font-semibold">Đơn giá</th>
                   <th className="px-2 py-2 text-right font-semibold">Thành tiền</th>
@@ -338,7 +397,7 @@ export function DocumentEditor({
 
         {success && <div className="rounded-xl bg-emerald-500/10 px-3 py-2.5 text-sm font-semibold text-emerald-700 dark:text-emerald-300">{success}</div>}
         {error && <div className="rounded-xl bg-red-500/10 px-3 py-2.5 text-sm font-medium text-[var(--danger)]">{error}</div>}
-      </div>
+      </fieldset>
     </Modal>
   );
 }
@@ -407,12 +466,12 @@ function FormulaNumberInput({
       type="text"
       inputMode="decimal"
       value={draft}
-      title="Có thể nhập phép tính, ví dụ 1+1 hoặc =1+1"
+      title="Dấu phẩy ngăn cách hàng nghìn; có thể nhập phép tính, ví dụ 1,000*2"
       onFocus={() => {
         setFocused(true);
         setInvalid(false);
       }}
-      onChange={(e) => setDraft(e.target.value)}
+      onChange={(e) => setDraft(formatArithmeticDraft(e.target.value))}
       onBlur={() => {
         setFocused(false);
         commitDraft();

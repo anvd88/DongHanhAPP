@@ -1,0 +1,683 @@
+@property --login-transition-hole-x {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 1px;
+}
+
+@property --login-transition-hole-y {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 1px;
+}
+
+.login-route-transition {
+  position: fixed;
+  z-index: 2147483000;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: auto;
+  contain: strict;
+  isolation: isolate;
+}
+
+.login-route-transition-surface {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  clip-path: inset(
+    var(--login-transition-origin-top)
+    var(--login-transition-origin-right)
+    var(--login-transition-origin-bottom)
+    var(--login-transition-origin-left)
+    round var(--login-transition-origin-radius)
+  );
+  background:
+    radial-gradient(
+      circle at var(--login-transition-center-x) var(--login-transition-center-y),
+      rgba(117, 255, 225, 0.78) 0,
+      rgba(27, 185, 190, 0.32) 22rem,
+      transparent 54rem
+    ),
+    radial-gradient(circle at 18% 14%, rgba(103, 140, 255, 0.38), transparent 34rem),
+    radial-gradient(circle at 84% 82%, rgba(68, 233, 196, 0.22), transparent 32rem),
+    linear-gradient(145deg, #08255b 0%, #075b78 50%, #087d70 112%);
+  color: #fff;
+  transform: translateZ(0);
+  transform-origin: 50% 50%;
+  will-change: clip-path, transform;
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-surface {
+  animation: login-route-portal-cover 0.96s both cubic-bezier(0.76, 0, 0.16, 1);
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-surface {
+  clip-path: inset(0 round 0);
+}
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-surface {
+  --login-transition-hole-x: 1px;
+  --login-transition-hole-y: 1px;
+  clip-path: circle(var(--login-transition-radius) at 50% 50%);
+  -webkit-mask-image: radial-gradient(
+    ellipse var(--login-transition-hole-x) var(--login-transition-hole-y) at 50% 50%,
+    transparent 99.4%,
+    #000 100%
+  );
+  mask-image: radial-gradient(
+    ellipse var(--login-transition-hole-x) var(--login-transition-hole-y) at 50% 50%,
+    transparent 99.4%,
+    #000 100%
+  );
+  animation: login-route-portal-reveal 1.08s both cubic-bezier(0.72, 0, 0.18, 1);
+}
+
+.login-route-transition-grid,
+.login-route-transition-glow,
+.login-route-transition-beam,
+.login-route-transition-launcher,
+.login-route-transition-echo,
+.login-route-transition-tunnel,
+.login-route-transition-status {
+  position: absolute;
+  pointer-events: none;
+}
+
+.login-route-transition-grid {
+  inset: -72px;
+  opacity: 0;
+  background-image:
+    linear-gradient(rgba(212, 252, 255, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(212, 252, 255, 0.11) 1px, transparent 1px);
+  background-size: 58px 58px;
+  mask-image: radial-gradient(
+    circle at var(--login-transition-center-x) var(--login-transition-center-y),
+    #000 0,
+    transparent 78%
+  );
+  transform-origin: var(--login-transition-center-x) var(--login-transition-center-y);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-grid {
+  animation: login-route-grid-launch 0.96s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-grid {
+  opacity: 0.2;
+  animation: login-route-grid-drift 18s linear infinite;
+}
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-grid {
+  opacity: 0.2;
+  animation: login-route-grid-dive 1.08s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition-glow {
+  left: var(--login-transition-center-x);
+  top: var(--login-transition-center-y);
+  width: min(88vw, 980px);
+  height: min(88vw, 980px);
+  border-radius: 50%;
+  opacity: 0;
+  background:
+    conic-gradient(
+      from 80deg,
+      transparent,
+      rgba(103, 246, 223, 0.3),
+      transparent 25%,
+      rgba(123, 164, 255, 0.26),
+      transparent 55%,
+      rgba(139, 255, 226, 0.22),
+      transparent 82%
+    );
+  filter: blur(28px);
+  transform: translate(-50%, -50%) scale(0.12) rotate(0deg);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-glow {
+  animation: login-route-glow-launch 1.02s 0.08s both cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-glow {
+  left: 50%;
+  top: 48%;
+  opacity: 0.68;
+  transform: translate(-50%, -50%) scale(1);
+  animation: login-route-glow-breathe 7s ease-in-out infinite alternate;
+}
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-glow {
+  left: 50%;
+  top: 50%;
+  opacity: 0.68;
+  animation: login-route-glow-dive 0.72s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition-beam {
+  top: var(--login-transition-band-top);
+  left: -35%;
+  width: 22%;
+  height: calc(100vh - var(--login-transition-band-top) - var(--login-transition-band-bottom));
+  min-height: 1px;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, rgba(231, 255, 255, 0.5), transparent);
+  filter: blur(7px);
+  transform: skewX(-18deg);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-beam {
+  animation: login-route-beam-pass 0.56s 0.24s both ease-in-out;
+}
+
+.login-route-transition-launcher {
+  left: var(--login-transition-origin-left);
+  top: var(--login-transition-origin-top);
+  display: flex;
+  width: var(--login-transition-origin-width);
+  height: var(--login-transition-origin-height);
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: var(--login-transition-origin-radius);
+  background: linear-gradient(135deg, #0e9f86, #08777d);
+  box-shadow:
+    0 20px 42px -20px rgba(8, 119, 125, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  font-size: 0.87rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.login-route-transition-launcher::after {
+  content: "";
+  position: absolute;
+  top: -80%;
+  left: -45%;
+  width: 28%;
+  height: 260%;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.52), transparent);
+  transform: rotate(18deg);
+}
+
+.login-route-transition-launcher svg {
+  width: 18px;
+  height: 18px;
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-launcher {
+  animation: login-route-launcher-morph 0.72s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-launcher::after {
+  animation: login-route-launcher-shine 0.5s 0.1s both ease-out;
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-launcher,
+.login-route-transition[data-phase="revealing"] .login-route-transition-launcher {
+  opacity: 0;
+}
+
+.login-route-transition-echo {
+  left: var(--login-transition-origin-left);
+  top: var(--login-transition-origin-top);
+  width: var(--login-transition-origin-width);
+  height: var(--login-transition-origin-height);
+}
+
+.login-route-transition-echo i {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(221, 255, 250, 0.58);
+  border-radius: var(--login-transition-origin-radius);
+  opacity: 0;
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-echo i:nth-child(1) {
+  animation: login-route-echo-expand 0.66s 0.08s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-echo i:nth-child(2) {
+  animation: login-route-echo-expand 0.7s 0.16s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-echo i:nth-child(3) {
+  animation: login-route-echo-expand 0.74s 0.24s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition-tunnel {
+  left: 50%;
+  top: 48%;
+  width: min(72vw, 860px);
+  height: min(50vh, 470px);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.62);
+  transform-style: preserve-3d;
+}
+
+.login-route-transition-tunnel i {
+  position: absolute;
+  border: 1px solid rgba(214, 253, 255, 0.16);
+  border-radius: clamp(24px, 4vw, 54px);
+  box-shadow: inset 0 0 48px rgba(121, 238, 228, 0.04);
+}
+
+.login-route-transition-tunnel i:nth-child(1) { inset: 0; }
+.login-route-transition-tunnel i:nth-child(2) { inset: 13%; }
+.login-route-transition-tunnel i:nth-child(3) { inset: 26%; }
+
+.login-route-transition[data-phase="covering"] .login-route-transition-tunnel {
+  animation: login-route-tunnel-lock 0.46s 0.54s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-tunnel {
+  opacity: 0.52;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-tunnel i {
+  animation: login-route-tunnel-breathe 4.8s ease-in-out infinite;
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-tunnel i:nth-child(2) {
+  animation-delay: -1.6s;
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-tunnel i:nth-child(3) {
+  animation-delay: -3.2s;
+}
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-tunnel {
+  opacity: 0.52;
+  animation: login-route-tunnel-dive 0.72s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition-status {
+  z-index: 2;
+  left: 50%;
+  top: 48%;
+  display: grid;
+  width: min(390px, calc(100vw - 40px));
+  justify-items: center;
+  color: #fff;
+  text-align: center;
+  opacity: 0;
+  transform: translate(-50%, -43%) scale(0.9);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-status {
+  animation: login-route-status-lock 0.38s 0.62s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.login-route-transition[data-phase="waiting"] .login-route-transition-status {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-status {
+  animation: login-route-status-dive 0.3s both cubic-bezier(0.5, 0, 1, 1);
+}
+
+.login-route-transition-kicker {
+  margin-bottom: 18px;
+  color: rgba(216, 255, 249, 0.7);
+  font-size: 0.63rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+}
+
+.login-route-transition-check {
+  position: relative;
+  display: grid;
+  width: 76px;
+  height: 76px;
+  place-items: center;
+  border: 1px solid rgba(231, 255, 255, 0.42);
+  border-radius: 26px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.2), rgba(169, 246, 235, 0.08)),
+    rgba(6, 64, 99, 0.26);
+  box-shadow:
+    0 28px 70px -28px rgba(0, 25, 55, 0.86),
+    inset 0 1px 0 rgba(255, 255, 255, 0.46);
+}
+
+.login-route-transition-check::before,
+.login-route-transition-check::after {
+  content: "";
+  position: absolute;
+  inset: -15px;
+  border: 1px solid rgba(210, 255, 249, 0.22);
+  border-radius: 50%;
+  opacity: 0;
+}
+
+.login-route-transition-check::after {
+  inset: -30px;
+  border-color: rgba(210, 255, 249, 0.11);
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-check::before,
+.login-route-transition[data-phase="waiting"] .login-route-transition-check::before {
+  animation: login-route-status-ring 2.2s 0.82s ease-out infinite;
+}
+
+.login-route-transition[data-phase="covering"] .login-route-transition-check::after,
+.login-route-transition[data-phase="waiting"] .login-route-transition-check::after {
+  animation: login-route-status-ring 2.2s 1.2s ease-out infinite;
+}
+
+.login-route-transition-check svg {
+  width: 36px;
+  height: 36px;
+  filter: drop-shadow(0 8px 16px rgba(0, 35, 57, 0.34));
+}
+
+.login-route-transition-copy {
+  display: grid;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.login-route-transition-copy strong {
+  font-size: clamp(1.24rem, 3vw, 1.55rem);
+  font-weight: 850;
+  letter-spacing: -0.03em;
+  text-shadow: 0 10px 30px rgba(0, 31, 59, 0.3);
+}
+
+.login-route-transition-copy small {
+  color: rgba(228, 250, 252, 0.76);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.login-route-transition-synced {
+  display: none;
+}
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-syncing {
+  display: none;
+}
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-synced {
+  display: block;
+}
+
+.login-route-transition-progress {
+  position: relative;
+  display: block;
+  width: 148px;
+  height: 3px;
+  overflow: hidden;
+  margin-top: 25px;
+  border-radius: 999px;
+  background: rgba(225, 254, 255, 0.15);
+}
+
+.login-route-transition-progress i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(222, 255, 250, 0.96), transparent);
+  transform: translateX(-110%);
+  animation: login-route-progress 1.2s 0.66s ease-in-out infinite;
+}
+
+.login-route-transition-screen {
+  position: fixed;
+  z-index: 3;
+  left: 50%;
+  top: 50%;
+  display: block;
+  width: min(76vw, 1040px);
+  height: min(68vh, 680px);
+  border: 1px solid rgba(219, 255, 251, 0.72);
+  border-radius: clamp(24px, 4vw, 48px);
+  opacity: 0;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1px rgba(114, 248, 222, 0.14),
+    0 0 80px rgba(83, 243, 218, 0.18),
+    inset 0 0 54px rgba(208, 255, 248, 0.08);
+  transform: translate(-50%, -50%) scale(0.06);
+}
+
+.login-route-transition-screen i {
+  position: absolute;
+  border: 1px solid rgba(216, 255, 251, 0.28);
+  border-radius: inherit;
+}
+
+.login-route-transition-screen i:nth-child(1) { inset: 10px; }
+.login-route-transition-screen i:nth-child(2) { inset: 20px; opacity: 0.62; }
+.login-route-transition-screen i:nth-child(3) { inset: 30px; opacity: 0.34; }
+
+.login-route-transition[data-phase="revealing"] .login-route-transition-screen {
+  animation: login-route-screen-enter 1.08s both cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html[data-theme="dark"] .login-route-transition-surface {
+  background:
+    radial-gradient(
+      circle at var(--login-transition-center-x) var(--login-transition-center-y),
+      rgba(91, 232, 210, 0.62) 0,
+      rgba(31, 145, 171, 0.28) 22rem,
+      transparent 54rem
+    ),
+    radial-gradient(circle at 18% 14%, rgba(90, 112, 218, 0.3), transparent 34rem),
+    radial-gradient(circle at 84% 82%, rgba(42, 188, 161, 0.18), transparent 32rem),
+    linear-gradient(145deg, #051834 0%, #073f55 50%, #07574e 112%);
+}
+
+html[data-login-transition-phase="revealing"] .km-app-shell {
+  animation: login-route-app-arrive 1.08s both cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: 50% 50%;
+}
+
+/*
+ * Cố ý không tạo override cho `prefers-reduced-motion` hoặc `html.perf-lite`:
+ * chế độ nhẹ vẫn tối ưu toàn bộ web trong index.css, riêng chuyển cảnh đăng nhập
+ * luôn giữ trọn choreography nút -> portal -> ứng dụng trên mọi thiết bị.
+ */
+
+@keyframes login-route-portal-cover {
+  0%,
+  15% {
+    clip-path: inset(
+      var(--login-transition-origin-top)
+      var(--login-transition-origin-right)
+      var(--login-transition-origin-bottom)
+      var(--login-transition-origin-left)
+      round var(--login-transition-origin-radius)
+    );
+  }
+  46% {
+    clip-path: inset(
+      var(--login-transition-band-top)
+      0
+      var(--login-transition-band-bottom)
+      0
+      round 22px
+    );
+  }
+  100% {
+    clip-path: inset(0 round 0);
+  }
+}
+
+@keyframes login-route-portal-reveal {
+  0%,
+  18% {
+    --login-transition-hole-x: 1px;
+    --login-transition-hole-y: 1px;
+    opacity: 1;
+    transform: scale(1);
+  }
+  58%,
+  72% {
+    --login-transition-hole-x: 38vw;
+    --login-transition-hole-y: 30vh;
+    opacity: 1;
+    transform: scale(1.012);
+  }
+  100% {
+    --login-transition-hole-x: 150vmax;
+    --login-transition-hole-y: 150vmax;
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes login-route-launcher-morph {
+  0% { opacity: 1; transform: scale(1); }
+  18% { opacity: 1; transform: scale(0.975); }
+  42% { opacity: 1; transform: scale(1.025); }
+  72%, 100% { opacity: 0; transform: scale(1.22); }
+}
+
+@keyframes login-route-launcher-shine {
+  0% { left: -45%; opacity: 0; }
+  25% { opacity: 0.9; }
+  100% { left: 122%; opacity: 0; }
+}
+
+@keyframes login-route-echo-expand {
+  0% { opacity: 0; transform: scale(0.98); }
+  22% { opacity: 0.7; }
+  100% { opacity: 0; transform: scale(1.18, 2.15); }
+}
+
+@keyframes login-route-grid-launch {
+  0%, 20% { opacity: 0; transform: scale(0.3); }
+  100% { opacity: 0.2; transform: scale(1); }
+}
+
+@keyframes login-route-grid-drift {
+  to { transform: translate3d(58px, 58px, 0); }
+}
+
+@keyframes login-route-grid-dive {
+  from { transform: scale(1); }
+  to { opacity: 0; transform: scale(1.35); }
+}
+
+@keyframes login-route-glow-launch {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.12) rotate(0deg); }
+  28% { opacity: 0.82; }
+  100% { opacity: 0.68; transform: translate(-50%, -50%) scale(1) rotate(42deg); }
+}
+
+@keyframes login-route-glow-breathe {
+  from { transform: translate(-50%, -50%) scale(0.96) rotate(42deg); }
+  to { transform: translate(-50%, -50%) scale(1.08) rotate(68deg); }
+}
+
+@keyframes login-route-glow-dive {
+  from { transform: translate(-50%, -50%) scale(1) rotate(42deg); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(1.55) rotate(84deg); }
+}
+
+@keyframes login-route-beam-pass {
+  0% { left: -35%; opacity: 0; }
+  28% { opacity: 0.72; }
+  100% { left: 118%; opacity: 0; }
+}
+
+@keyframes login-route-tunnel-lock {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.62); }
+  to { opacity: 0.52; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes login-route-tunnel-breathe {
+  0%, 100% { opacity: 0.5; transform: scale(0.98); }
+  50% { opacity: 0.92; transform: scale(1.035); }
+}
+
+@keyframes login-route-tunnel-dive {
+  from { opacity: 0.52; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(2.15); }
+}
+
+@keyframes login-route-status-lock {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -43%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes login-route-status-dive {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.72); }
+}
+
+@keyframes login-route-status-ring {
+  0% { opacity: 0; transform: scale(0.82); }
+  22% { opacity: 0.72; }
+  78%, 100% { opacity: 0; transform: scale(1.22); }
+}
+
+@keyframes login-route-progress {
+  0% { transform: translateX(-110%); }
+  58%, 100% { transform: translateX(110%); }
+}
+
+@keyframes login-route-screen-enter {
+  0%, 16% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.06);
+  }
+  32% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(0.18);
+  }
+  68% {
+    opacity: 0.84;
+    transform: translate(-50%, -50%) scale(0.88);
+  }
+  86% {
+    opacity: 0.42;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.34);
+  }
+}
+
+@keyframes login-route-app-arrive {
+  0%,
+  18% {
+    transform: scale(0.72);
+  }
+  58%,
+  72% {
+    transform: scale(0.9);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 600px) {
+  .login-route-transition-status { top: 46%; }
+  .login-route-transition-kicker { margin-bottom: 15px; font-size: 0.58rem; }
+  .login-route-transition-check {
+    width: 66px;
+    height: 66px;
+    border-radius: 22px;
+  }
+  .login-route-transition-check svg { width: 31px; height: 31px; }
+  .login-route-transition-copy { margin-top: 24px; }
+  .login-route-transition-tunnel {
+    width: 86vw;
+    height: min(42vh, 400px);
+  }
+}

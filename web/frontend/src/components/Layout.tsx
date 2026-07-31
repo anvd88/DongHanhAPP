@@ -5,6 +5,7 @@ import { Header } from "./Header";
 import { PageSkeleton } from "./PageSkeleton";
 import { QuickToolsDrawer } from "./QuickToolsDrawer";
 import { NAV } from "./nav";
+import { useAuth } from "../lib/auth";
 import { useWorkArea } from "../lib/workArea";
 import { useChatNotifications } from "./chat-notifications-context";
 
@@ -70,6 +71,7 @@ function ClassicLayout({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
   const { unreadCount } = useChatNotifications();
+  const { loginTransitionPhase } = useAuth();
   const { area, can } = useWorkArea();
   const wanted = MOBILE_NAV_KEYS[area];
   const mobileNavItems = NAV.flatMap((section) => section.items)
@@ -83,7 +85,12 @@ function ClassicLayout({
   return (
     // data-area cho phép CSS phân biệt khu quản trị và không gian làm việc mà không cần dựng hai cây
     // component riêng (mọi khác biệt thật đã nằm ở menu + route, đều chốt bằng quyền).
-    <div className="km-app-shell" data-area={area}>
+    <div
+      className="km-app-shell"
+      data-area={area}
+      inert={loginTransitionPhase ? true : undefined}
+      aria-hidden={loginTransitionPhase ? true : undefined}
+    >
       {/* Sidebar desktop */}
       <div ref={railRef} className="km-sidebar-rail hidden lg:block">
         <Sidebar />
@@ -106,6 +113,7 @@ function ClassicLayout({
               hiện skeleton, còn sidebar + header đứng yên (không nháy cả màn hình như trước). */}
           <Suspense fallback={<PageSkeleton />}>
             {children}
+            <span hidden data-login-route-ready={location.pathname} />
           </Suspense>
         </main>
       </div>

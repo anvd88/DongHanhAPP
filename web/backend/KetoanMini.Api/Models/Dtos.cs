@@ -107,13 +107,19 @@ public record RecentDocDto(Guid Id, string VoucherNo, DateOnly Date, string Cust
 
 // ----- Documents -----
 public record DocumentListItemDto(Guid Id, string VoucherNo, DateOnly Date, string DocumentType,
-    string CustomerName, string Content, decimal Total, string CreatedBy);
+    string CustomerName, string Content, decimal Total, string CreatedBy, DateTime? IssuedAt,
+    DateTime? CancelledAt, string CancelledBy, string CancelReason);
 public record DocumentLineDto(string LineContent, string Spec, decimal Quantity, decimal UnitPrice, string Note)
 {
     public decimal Amount => Quantity * UnitPrice;
 }
-public record DocumentDetailDto(Guid Id, string VoucherNo, DateOnly Date, string CustomerName, string Content, string Note, List<DocumentLineDto> Lines);
-public record SaveDocumentRequest(string VoucherNo, DateOnly Date, string CustomerName, string Content, string Note, List<DocumentLineDto> Lines);
+public record DocumentDetailDto(Guid Id, string VoucherNo, DateOnly Date, string CustomerName, string Content,
+    string Note, List<DocumentLineDto> Lines, DateTime? IssuedAt, DateTime? CancelledAt,
+    string CancelledBy, string CancelReason);
+public record SaveDocumentRequest(string VoucherNo, DateOnly Date, string CustomerName, string Content, string Note,
+    List<DocumentLineDto> Lines, string? DocumentType = null);
+public record WarehousePrintRequest(string VoucherNo);
+public record CancelDocumentRequest(string? Reason);
 
 // ----- Reports -----
 public record ReportsDto(decimal TotalPayments, decimal MonthRevenue, int TotalDocuments, int ActiveCustomers, List<MonthlyRowDto> Monthly);
@@ -127,6 +133,18 @@ public record CustomerDto(Guid Id, string Name, string TaxCode, string Phone, st
 public record SaveCustomerRequest(string Name, string TaxCode, string Phone, string Address);
 public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal Total, decimal ReceiptTotal,
     decimal PaymentTotal, decimal SalesTotal, List<DocumentListItemDto> Documents);
+
+// ----- Customer debts -----
+public record DebtSummaryDto(CustomerDto Customer, decimal OpeningBalance, DateOnly? OpeningDate,
+    string OpeningNote, decimal SalesTotal, decimal CollectedTotal, decimal Balance,
+    int InvoiceCount, DateOnly? LastActivityDate);
+public record DebtOverviewDto(decimal TotalOpeningBalance, decimal TotalSales, decimal TotalCollected,
+    decimal TotalReceivable, int DebtorCount, List<DebtSummaryDto> Customers);
+public record DebtTransactionDto(Guid Id, DateOnly Date, string Reference, string Kind, string Description,
+    decimal Debit, decimal Credit, decimal RunningBalance, bool Cancelled);
+public record DebtDetailDto(CustomerDto Customer, DebtSummaryDto Summary, List<DebtTransactionDto> Transactions);
+public record SaveDebtPaymentRequest(decimal Amount, DateOnly Date, string? Note);
+public record SaveOpeningBalanceRequest(decimal Amount, DateOnly AsOfDate, string? Note);
 
 // ----- Users (Nhân sự) -----
 public record UserAdminDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,

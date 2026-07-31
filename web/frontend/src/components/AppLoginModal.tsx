@@ -22,7 +22,7 @@ type AppLoginPollResult =
 
 type Phase = "starting" | "waiting" | "opened" | "authenticated" | "rejected" | "expired" | "error";
 
-export function AppLoginModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+export function AppLoginModal({ onClose }: { onClose: () => void }) {
   const { completeExternalLogin } = useAuth();
   const [session, setSession] = useState<AppLoginSession | null>(null);
   const [phase, setPhase] = useState<Phase>("starting");
@@ -95,7 +95,6 @@ export function AppLoginModal({ onClose, onSuccess }: { onClose: () => void; onS
           }).catch(() => {});
           pollTokenRef.current = null;
           setPhase("authenticated");
-          window.setTimeout(onSuccess, 300);
           return;
         }
         if (result.status === "opened") setPhase("opened");
@@ -114,7 +113,7 @@ export function AppLoginModal({ onClose, onSuccess }: { onClose: () => void; onS
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [completeExternalLogin, onSuccess, phase, session]);
+  }, [completeExternalLogin, phase, session]);
 
   const close = useCallback(() => {
     const token = pollTokenRef.current;

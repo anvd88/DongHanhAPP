@@ -78,6 +78,8 @@ builder.Services.Configure<FormOptions>(o =>
 
 builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<TokenService>();
+// Phiếu xuất kho được điền vào workbook mẫu rồi Microsoft Excel gửi thẳng tới máy in mặc định của máy chủ.
+builder.Services.AddSingleton<WarehouseVoucherPrintService>();
 // Phiên đăng nhập QR chỉ sống 5 phút trong RAM: poll trạng thái không tạo tải lên PostgreSQL.
 // Đăng ký cùng một instance vừa làm service nghiệp vụ vừa tự dọn phiên hết hạn ở nền.
 builder.Services.AddSingleton<QrLoginService>();
@@ -320,7 +322,7 @@ if (app.Configuration.GetValue("Security:SecurityHeaders", true))
         csp = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; " +
               "img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; " +
               "style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; " +
-              "worker-src 'self' blob:; connect-src 'self' https: wss:; form-action 'self'";
+              "worker-src 'self' blob:; frame-src 'self' blob:; connect-src 'self' https: wss:; form-action 'self'";
     app.Use(async (ctx, next) =>
     {
         var h = ctx.Response.Headers;
@@ -641,6 +643,7 @@ catch (Exception ex) { app.Logger.LogWarning("Khong chuyen duoc APK tu DB ra dia
 app.MapAuth();
 app.MapQrActions();
 app.MapAccounting();
+app.MapCoreAccounting();
 app.MapAudit();
 app.MapGiaCong();
 app.MapChamCong();
@@ -740,6 +743,9 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang cau hinh ung d
 
 try { await AuditEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong nang cap duoc bang nhat ky luc khoi dong: {Msg}", ex.Message); }
+
+try { await CoreAccountingEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang ke toan loi luc khoi dong: {Msg}", ex.Message); }
 
 try { await PortalEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang cong thong tin luc khoi dong: {Msg}", ex.Message); }

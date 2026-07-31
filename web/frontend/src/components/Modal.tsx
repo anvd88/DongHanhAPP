@@ -14,6 +14,7 @@ export function Modal({
   solid,
   panel,
   className,
+  fullScreen,
 }: {
   open: boolean;
   onClose: () => void;
@@ -26,14 +27,27 @@ export function Modal({
   panel?: boolean;
   /** Lớp CSS bổ sung cho bề mặt kính (tùy chỉnh nền/độ đục theo từng dialog). */
   className?: string;
+  /** Dùng gần toàn bộ viewport, phù hợp cho xem trước tài liệu dài. */
+  fullScreen?: boolean;
 }) {
   if (!open) return null;
 
-  const sizeClass = wide ? "max-w-4xl" : "max-w-lg";
+  const sizeClass = fullScreen
+    ? "h-[calc(100vh-1rem)] max-w-none"
+    : wide
+      ? "max-w-4xl"
+      : "max-w-lg";
 
   const inner = (
-    <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--glass-border)] px-6 py-4">
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className={`flex min-h-0 flex-col ${fullScreen ? "h-full" : "max-h-[90vh]"}`}
+    >
+      <div
+        className={`flex items-center justify-between border-b border-[var(--glass-border)] ${
+          fullScreen ? "px-4 py-3" : "px-6 py-4"
+        }`}
+      >
         <h2 className="text-lg font-bold text-[var(--text)]">{title}</h2>
         <button
           onClick={onClose}
@@ -42,23 +56,39 @@ export function Modal({
           <X className="h-5 w-5" />
         </button>
       </div>
-      <div className="scroll-thin overflow-y-auto px-6 py-5">{children}</div>
+      <div
+        className={
+          fullScreen
+            ? "min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-4"
+            : "scroll-thin overflow-y-auto px-6 py-5"
+        }
+      >
+        {children}
+      </div>
       {footer && (
-        <div className="flex justify-end gap-2 border-t border-[var(--glass-border)] px-6 py-4">{footer}</div>
+        <div
+          className={`flex justify-end gap-2 border-t border-[var(--glass-border)] ${
+            fullScreen ? "px-4 py-3" : "px-6 py-4"
+          }`}
+        >
+          {footer}
+        </div>
       )}
     </div>
   );
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className={`fixed inset-0 z-50 flex items-center justify-center ${fullScreen ? "p-2" : "p-4"}`}
       style={{ background: "rgba(8,12,20,0.45)", backdropFilter: "blur(4px)" }}
       onClick={onClose}
     >
       {panel ? (
         <GlassPanel
           strong
-          className={`gc-root fade-in flex max-h-[90vh] w-full flex-col overflow-hidden ${sizeClass} ${className ?? ""}`}
+          className={`gc-root fade-in flex w-full flex-col overflow-hidden ${
+            fullScreen ? "max-h-none" : "max-h-[90vh]"
+          } ${sizeClass} ${className ?? ""}`}
         >
           {inner}
         </GlassPanel>
@@ -66,9 +96,11 @@ export function Modal({
         <GlassCard
           strong
           glow={false}
-          className={`fade-in flex max-h-[90vh] w-full flex-col overflow-hidden ${
+          className={`fade-in flex w-full flex-col overflow-hidden ${
+            fullScreen ? "max-h-none" : "max-h-[90vh]"
+          } ${
             solid ? "modal-solid-surface" : ""
-          } ${sizeClass}`}
+          } ${sizeClass} ${className ?? ""}`}
         >
           {inner}
         </GlassCard>

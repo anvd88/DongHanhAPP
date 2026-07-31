@@ -1,5 +1,20 @@
 /* eslint-disable react-refresh/only-export-components -- Context provider và hook dùng chung cần ở cùng module. */
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  LoginTransitionLayer,
+  type LoginTransitionOrigin,
+  type LoginTransitionPhase,
+  type LoginTransitionState,
+} from "../components/LoginTransitionLayer";
 import { api, session } from "./api";
 import type { User } from "./types";
 import { ensureWaterDailyLogin } from "./waterReminderClock";
@@ -10,9 +25,12 @@ import { restartRealtime, stopRealtime } from "./realtime";
 interface AuthCtx {
   user: User | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<{ user: User }>;
   pollQrLogin: (pollToken: string, signal?: AbortSignal) => Promise<QrLoginPollResult>;
   completeExternalLogin: (login: { user: User }) => void;
+  completeLoginWithTransition: (login: { user: User }, origin: LoginTransitionOrigin) => void;
+  loginTransitionPhase: LoginTransitionPhase | null;
+  revealLoginTransition: () => void;
   logout: () => void;
   updateUser: (u: User) => void;
 }
@@ -31,6 +49,9 @@ export type QrLoginPollResult =
 
 const Ctx = createContext<AuthCtx>(null!);
 export const useAuth = () => useContext(Ctx);
+const LOGIN_TRANSITION_MIN_COVERED_MS = 600;
+const LOGIN_TRANSITION_COVER_FALLBACK_MS = 1_350;
+const LOGIN_TRANSITION_REMOVE_FALLBACK_MS = 1_500;
 
 // Tự động đăng xuất khi không hoạt động (bảo vệ tài khoản trên thiết bị dùng chung).
 // Ngưỡng lấy từ VITE_IDLE_LOGOUT_MINUTES (mặc định 15 phút; đặt 0 để tắt).
@@ -62,6 +83,15 @@ export function webSessionId(): string {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(() => session.isSignedIn());
+  const [loginTransition, setLoginTransition] = useState<LoginTransitionState | null>(null);
+  const loginTransitionId = useRef(0);
+  const pendingTransitionLogin = useRef<{ user: User } | null>(null);
+  const loginCoverTimer = useRef<number | null>(null);
+  const loginReadyRevealTimer = useRef<number | null>(null);
+  const loginRevealSafetyTimer = useRef<number | null>(null);
+  const loginTransitionRemoveTimer = useRef<number | null>(null);
+  const loginTransitionCoveredAt = useRef<number | null>(null);
+  const loginRevealStarted = useRef(false);
 
   useEffect(() => {
     // Token cũ trong localStorage (phiên bản trước khi chuyển sang cookie) không còn giá trị gì —
@@ -86,20 +116,133 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Phiên đã nằm sẵn trong cookie do máy chủ đặt ở chính phản hồi đăng nhập — không có token nào để
   // lưu, và đó là điểm mấu chốt của đợt này. Ở đây chỉ còn dựng trạng thái trong ứng dụng.
   const finishLogin = useCallback((res: { user: User }) => {
-    ensureWaterDailyLogin(res.user.id);
-    ensureEyeDailyLogin(res.user.id);
-    loadUserPreferences(res.user.id).catch(() => {});
-    void restartRealtime(); // kết nối hub cũng chính là tín hiệu "đang online"
+    // Dựng user trước; các tiện ích phụ không được phép chặn một phiên đã xác thực thành công
+    // (một số trình duyệt có thể chặn storage hoặc ném lỗi quota).
     setUser(res.user);
+    try { ensureWaterDailyLogin(res.user.id); } catch { /* Không chặn đăng nhập vì đồng hồ nhắc nước. */ }
+    try { ensureEyeDailyLogin(res.user.id); } catch { /* Không chặn đăng nhập vì đồng hồ nhắc mắt. */ }
+    try { loadUserPreferences(res.user.id).catch(() => {}); } catch { /* Storage có thể bị chặn. */ }
+    void restartRealtime().catch(() => { /* Kết nối hub sẽ tự thử lại ở luồng realtime. */ });
+  }, []);
+
+  const startLoginTransitionReveal = useCallback(() => {
+    if (loginRevealStarted.current) return;
+    loginRevealStarted.current = true;
+    if (loginReadyRevealTimer.current !== null) {
+      window.clearTimeout(loginReadyRevealTimer.current);
+      loginReadyRevealTimer.current = null;
+    }
+    if (loginRevealSafetyTimer.current !== null) {
+      window.clearTimeout(loginRevealSafetyTimer.current);
+      loginRevealSafetyTimer.current = null;
+    }
+    if (loginTransitionRemoveTimer.current !== null) {
+      window.clearTimeout(loginTransitionRemoveTimer.current);
+    }
+
+    setLoginTransition((current) => current ? { ...current, phase: "revealing" } : current);
+    loginTransitionRemoveTimer.current = window.setTimeout(() => {
+      setLoginTransition(null);
+      loginTransitionRemoveTimer.current = null;
+    }, LOGIN_TRANSITION_REMOVE_FALLBACK_MS);
+  }, []);
+
+  const revealLoginTransition = useCallback(() => {
+    if (loginRevealStarted.current) return;
+    const coveredAt = loginTransitionCoveredAt.current;
+    const coveredFor = coveredAt === null ? LOGIN_TRANSITION_MIN_COVERED_MS : Date.now() - coveredAt;
+    const remaining = Math.max(0, LOGIN_TRANSITION_MIN_COVERED_MS - coveredFor);
+
+    if (remaining > 0) {
+      if (loginReadyRevealTimer.current !== null) {
+        window.clearTimeout(loginReadyRevealTimer.current);
+      }
+      loginReadyRevealTimer.current = window.setTimeout(startLoginTransitionReveal, remaining);
+      return;
+    }
+
+    startLoginTransitionReveal();
+  }, [startLoginTransitionReveal]);
+
+  const completeLoginTransitionCover = useCallback(() => {
+    if (loginCoverTimer.current !== null) {
+      window.clearTimeout(loginCoverTimer.current);
+      loginCoverTimer.current = null;
+    }
+
+    const loginResult = pendingTransitionLogin.current;
+    if (!loginResult) return;
+    pendingTransitionLogin.current = null;
+    try {
+      finishLogin(loginResult);
+    } finally {
+      loginTransitionCoveredAt.current = Date.now();
+      setLoginTransition((current) =>
+        current?.phase === "covering" ? { ...current, phase: "waiting" } : current,
+      );
+
+      // Chỉ mở màn sau khi route đích báo đã render. Đây là lối thoát an toàn cho
+      // một route bất thường không dựng được shell, không phải timing chính của hiệu ứng.
+      loginRevealSafetyTimer.current = window.setTimeout(revealLoginTransition, 8_000);
+    }
+  }, [finishLogin, revealLoginTransition]);
+
+  const completeLoginWithTransition = useCallback((res: { user: User }, origin: LoginTransitionOrigin) => {
+    if (loginCoverTimer.current !== null) window.clearTimeout(loginCoverTimer.current);
+    if (loginReadyRevealTimer.current !== null) window.clearTimeout(loginReadyRevealTimer.current);
+    if (loginRevealSafetyTimer.current !== null) window.clearTimeout(loginRevealSafetyTimer.current);
+    if (loginTransitionRemoveTimer.current !== null) window.clearTimeout(loginTransitionRemoveTimer.current);
+
+    pendingTransitionLogin.current = res;
+    loginTransitionCoveredAt.current = null;
+    loginRevealStarted.current = false;
+    loginTransitionId.current += 1;
+    setLoginTransition({
+      id: loginTransitionId.current,
+      phase: "covering",
+      origin,
+    });
+
+    // animationend là mốc chính; timer chỉ dự phòng khi tab nền làm trình duyệt
+    // không phát sự kiện kết thúc animation đúng lúc.
+    loginCoverTimer.current = window.setTimeout(
+      completeLoginTransitionCover,
+      LOGIN_TRANSITION_COVER_FALLBACK_MS,
+    );
+  }, [completeLoginTransitionCover]);
+
+  const completeExternalLogin = useCallback((res: { user: User }) => {
+    completeLoginWithTransition(res, {
+      left: window.innerWidth / 2,
+      top: window.innerHeight / 2,
+      width: 0,
+      height: 0,
+    });
+  }, [completeLoginWithTransition]);
+
+  useLayoutEffect(() => {
+    const phase = loginTransition?.phase;
+    if (phase) document.documentElement.dataset.loginTransitionPhase = phase;
+    else delete document.documentElement.dataset.loginTransitionPhase;
+    return () => {
+      delete document.documentElement.dataset.loginTransitionPhase;
+    };
+  }, [loginTransition?.phase]);
+
+  useEffect(() => () => {
+    if (loginCoverTimer.current !== null) window.clearTimeout(loginCoverTimer.current);
+    if (loginReadyRevealTimer.current !== null) window.clearTimeout(loginReadyRevealTimer.current);
+    if (loginRevealSafetyTimer.current !== null) window.clearTimeout(loginRevealSafetyTimer.current);
+    if (loginTransitionRemoveTimer.current !== null) window.clearTimeout(loginTransitionRemoveTimer.current);
+    pendingTransitionLogin.current = null;
   }, []);
 
   const login = async (username: string, password: string) => {
-    const res = await api.post<{ user: User }>("/api/auth/login", { username, password, sid: webSessionId() });
-    finishLogin(res);
+    return api.post<{ user: User }>("/api/auth/login", { username, password, sid: webSessionId() });
   };
 
   // Poll QR: máy chủ đặt cookie phiên ngay trong phản hồi "authenticated" (không trả token ra).
-  // Dùng chung finishLogin để mọi kiểu đăng nhập đều khởi động realtime và nhắc sức khỏe theo cùng một cách.
+  // Kết quả QR/App cũng đi qua cùng transition; finishLogin vẫn là điểm duy nhất dựng phiên trong app.
   const pollQrLogin = useCallback((pollToken: string, signal?: AbortSignal) =>
     api.postPublic<QrLoginPollResult>("/api/auth/qr/poll", { pollToken }, signal), []);
 
@@ -110,6 +253,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api.post("/api/auth/logout", { sid: webSessionId() }).catch(() => {});
     session.clearLocal();
     void stopRealtime();
+    if (loginCoverTimer.current !== null) window.clearTimeout(loginCoverTimer.current);
+    if (loginReadyRevealTimer.current !== null) window.clearTimeout(loginReadyRevealTimer.current);
+    if (loginRevealSafetyTimer.current !== null) window.clearTimeout(loginRevealSafetyTimer.current);
+    if (loginTransitionRemoveTimer.current !== null) window.clearTimeout(loginTransitionRemoveTimer.current);
+    loginCoverTimer.current = null;
+    loginReadyRevealTimer.current = null;
+    loginRevealSafetyTimer.current = null;
+    loginTransitionRemoveTimer.current = null;
+    pendingTransitionLogin.current = null;
+    loginTransitionCoveredAt.current = null;
+    loginRevealStarted.current = false;
+    setLoginTransition(null);
     setUser(null);
   };
 
@@ -137,9 +292,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider
-      value={{ user, loading, login, pollQrLogin, completeExternalLogin: finishLogin, logout, updateUser: setUser }}
+      value={{
+        user,
+        loading,
+        login,
+        pollQrLogin,
+        completeExternalLogin,
+        completeLoginWithTransition,
+        loginTransitionPhase: loginTransition?.phase ?? null,
+        revealLoginTransition,
+        logout,
+        updateUser: setUser,
+      }}
     >
       {children}
+      <LoginTransitionLayer
+        transition={loginTransition}
+        onCoverComplete={completeLoginTransitionCover}
+        onRevealComplete={() => {
+          if (loginTransitionRemoveTimer.current !== null) {
+            window.clearTimeout(loginTransitionRemoveTimer.current);
+            loginTransitionRemoveTimer.current = null;
+          }
+          loginTransitionCoveredAt.current = null;
+          setLoginTransition(null);
+        }}
+      />
     </Ctx.Provider>
   );
 }

@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   ArrowRight,
   Calculator,
@@ -21,18 +21,42 @@ import { RecoveryResetModal } from "../components/RecoveryResetModal";
 import { AppLoginModal } from "../components/AppLoginModal";
 import { QrLoginModal } from "../components/QrLoginModal";
 import { useAuth, IDLE_LOGOUT_FLAG } from "../lib/auth";
-import { DEFAULT_AUTH_PATH } from "../lib/appConfig";
 import { APP_BRAND_NAME } from "../lib/branding";
 import { useTheme } from "../lib/theme-context";
 import "./login.css";
 
+const INTRO_SCENES = [
+  {
+    id: "focus",
+    eyebrow: "Không gian làm việc tập trung",
+    title: "Mọi công việc quan trọng, trong một hệ thống.",
+    description: "Theo dõi vận hành, xử lý nghiệp vụ và truy cập công cụ hằng ngày nhanh chóng, an toàn.",
+    benefits: ["Dữ liệu đồng bộ theo thời gian thực", "Phiên đăng nhập được bảo vệ"],
+  },
+  {
+    id: "realtime",
+    eyebrow: "Nhịp vận hành trực tiếp",
+    title: "Mọi thay đổi được nhìn thấy ngay khi xảy ra.",
+    description: "Theo dõi tiến độ, nhận cập nhật và phối hợp công việc trên cùng một luồng dữ liệu.",
+    benefits: ["Cập nhật trạng thái tức thời", "Không bỏ sót việc cần xử lý"],
+  },
+  {
+    id: "secure",
+    eyebrow: "Bảo mật theo từng lớp",
+    title: "Đúng người truy cập, đúng dữ liệu cần thiết.",
+    description: "Kiểm soát phiên đăng nhập và quyền truy cập để mỗi thao tác luôn rõ ràng, an toàn.",
+    benefits: ["Quyền truy cập được kiểm soát", "Phiên làm việc được bảo vệ"],
+  },
+] as const;
+
 export function Login() {
-  const { login } = useAuth();
+  const { login, completeLoginWithTransition, loginTransitionPhase } = useAuth();
   const { theme, toggle } = useTheme();
-  const nav = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const passwordRef = useRef<HTMLInputElement>(null);
+  const submitButtonRef = useRef<HTMLButtonElement>(null);
+  const [introScene, setIntroScene] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(() => {
     try {
@@ -44,6 +68,7 @@ export function Login() {
     return "";
   });
   const [loading, setLoading] = useState(false);
+  const [loginSuccess, setLoginSuccess] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [appLoginOpen, setAppLoginOpen] = useState(false);
   const [recoverOpen, setRecoverOpen] = useState(false);
@@ -53,23 +78,44 @@ export function Login() {
   const isAndroidMobile = requestedClientMode === "mobile_app"
     || (requestedClientMode !== "desktop_qr" && typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent));
   const clientMode = isAndroidMobile ? "mobile_app" : "desktop_qr";
+  const activeIntro = INTRO_SCENES[introScene];
+  const transitionActive = loginSuccess || loginTransitionPhase !== null;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
     setLoading(true);
+    let authenticated = false;
     try {
-      await login(username.trim(), password);
-      nav(DEFAULT_AUTH_PATH);
+      const loginResult = await login(username.trim(), password);
+      authenticated = true;
+      const rect = submitButtonRef.current?.getBoundingClientRect();
+      const width = rect?.width ?? Math.min(460, window.innerWidth - 36);
+      const height = rect?.height ?? 50;
+      const left = rect?.left ?? (window.innerWidth - width) / 2;
+      const top = rect?.top ?? (window.innerHeight - height) / 2;
+      setLoginSuccess(true);
+      completeLoginWithTransition(loginResult, {
+        left,
+        top,
+        width,
+        height,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Đăng nhập thất bại.");
     } finally {
-      setLoading(false);
+      if (!authenticated) setLoading(false);
     }
   };
 
   return (
-    <main className="login-page" data-client-mode={clientMode}>
+    <main
+      className="login-page"
+      data-client-mode={clientMode}
+      data-login-success={transitionActive ? "true" : undefined}
+      inert={transitionActive ? true : undefined}
+      aria-busy={transitionActive}
+    >
       <button
         type="button"
         className="login-theme-toggle"
@@ -81,8 +127,52 @@ export function Login() {
       </button>
 
       <section className="login-shell" aria-label="Đăng nhập hệ thống">
-        <aside className="login-intro">
+        <aside
+          className="login-intro"
+          data-scene={activeIntro.id}
+          data-active={introScene === 0 ? undefined : "true"}
+        >
+          <div className="login-intro-palette" aria-hidden="true">
+            <span className="login-intro-palette-focus" />
+            <span className="login-intro-palette-realtime" />
+            <span className="login-intro-palette-secure" />
+          </div>
           <div className="login-intro-glow" aria-hidden="true" />
+          <div className="login-motion-field" aria-hidden="true">
+            <span className="login-motion-shine" />
+            <span className="login-motion-orbit login-motion-orbit-primary">
+              <i />
+            </span>
+            <span className="login-motion-orbit login-motion-orbit-secondary">
+              <i />
+            </span>
+            <span className="login-motion-particle login-motion-particle-one" />
+            <span className="login-motion-particle login-motion-particle-two" />
+            <span className="login-motion-particle login-motion-particle-three" />
+          </div>
+          <div className="login-orbit-hotspots">
+            <button
+              type="button"
+              aria-label="Khám phá vận hành thời gian thực"
+              className="login-orbit-hotspot login-orbit-hotspot-realtime"
+              onPointerEnter={() => setIntroScene(1)}
+              onPointerLeave={() => setIntroScene(0)}
+              onFocus={() => setIntroScene(1)}
+              onBlur={() => setIntroScene(0)}
+              onClick={() => setIntroScene(1)}
+            />
+            <button
+              type="button"
+              aria-label="Khám phá bảo mật dữ liệu"
+              className="login-orbit-hotspot login-orbit-hotspot-secure"
+              onPointerEnter={() => setIntroScene(2)}
+              onPointerLeave={() => setIntroScene(0)}
+              onFocus={() => setIntroScene(2)}
+              onBlur={() => setIntroScene(0)}
+              onClick={() => setIntroScene(2)}
+            />
+          </div>
+          <div className="login-intro-content">
           <div className="login-brand">
             <span className="login-brand-mark" aria-hidden="true">CP</span>
             <span>
@@ -91,15 +181,16 @@ export function Login() {
             </span>
           </div>
 
-          <div className="login-intro-copy">
-            <span className="login-eyebrow"><Sparkles aria-hidden="true" /> Không gian làm việc tập trung</span>
-            <h1>Mọi công việc quan trọng, trong một hệ thống.</h1>
-            <p>Theo dõi vận hành, xử lý nghiệp vụ và truy cập công cụ hằng ngày nhanh chóng, an toàn.</p>
+          <div key={activeIntro.id} className="login-intro-copy">
+            <span className="login-eyebrow"><Sparkles aria-hidden="true" /> {activeIntro.eyebrow}</span>
+            <h1>{activeIntro.title}</h1>
+            <p>{activeIntro.description}</p>
           </div>
 
-          <div className="login-benefits" aria-label="Lợi ích hệ thống">
-            <span><CheckCircle2 aria-hidden="true" /> Dữ liệu đồng bộ theo thời gian thực</span>
-            <span><ShieldCheck aria-hidden="true" /> Phiên đăng nhập được bảo vệ</span>
+          <div key={`${activeIntro.id}-benefits`} className="login-benefits" aria-label="Lợi ích hệ thống">
+            <span><CheckCircle2 aria-hidden="true" /> {activeIntro.benefits[0]}</span>
+            <span><ShieldCheck aria-hidden="true" /> {activeIntro.benefits[1]}</span>
+          </div>
           </div>
         </aside>
 
@@ -117,7 +208,6 @@ export function Login() {
               <QrLoginModal
                 embedded
                 onClose={() => setQrOpen(false)}
-                onSuccess={() => nav(DEFAULT_AUTH_PATH)}
               />
             </>
           ) : (
@@ -188,9 +278,14 @@ export function Login() {
 
             {error && <div className="login-error" role="alert">{error}</div>}
 
-            <button type="submit" className="login-submit" disabled={loading}>
-              <span>{loading ? "Đang đăng nhập…" : "Đăng nhập"}</span>
-              <ArrowRight aria-hidden="true" />
+            <button
+              ref={submitButtonRef}
+              type="submit"
+              className="login-submit"
+              disabled={loading || Boolean(loginSuccess)}
+            >
+              <span>{loginSuccess ? "Đăng nhập thành công" : loading ? "Đang đăng nhập…" : "Đăng nhập"}</span>
+              {loginSuccess ? <CheckCircle2 aria-hidden="true" /> : <ArrowRight aria-hidden="true" />}
             </button>
           </form>
 
@@ -236,7 +331,6 @@ export function Login() {
       {appLoginOpen && (
         <AppLoginModal
           onClose={() => setAppLoginOpen(false)}
-          onSuccess={() => nav(DEFAULT_AUTH_PATH)}
         />
       )}
       {recoverOpen && <RecoveryResetModal onClose={() => setRecoverOpen(false)} />}

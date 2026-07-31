@@ -42,6 +42,50 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task AccountingDocuments_CanBeCancelledButNotPhysicallyDeleted()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Database>();
+        await using var connection = await db.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var id = Guid.NewGuid();
+
+        await new Npgsql.NpgsqlCommand(
+                @"INSERT INTO documents
+                    (id, voucher_no, doc_date, document_type, content, note)
+                  VALUES (@id, @voucherNo, CURRENT_DATE, 'payment', 'Test cancel', '')",
+                connection, transaction)
+            .With("@id", id)
+            .With("@voucherNo", $"PC-TEST-{id:N}")
+            .ExecuteNonQueryAsync();
+
+        await new Npgsql.NpgsqlCommand(
+                @"UPDATE documents
+                  SET cancelled_at = CURRENT_TIMESTAMP,
+                      cancelled_by = 'integration-test',
+                      cancel_reason = 'Kiểm tra lưu vết'
+                  WHERE id = @id",
+                connection, transaction)
+            .With("@id", id)
+            .ExecuteNonQueryAsync();
+
+        var cancelled = Convert.ToBoolean(await new Npgsql.NpgsqlCommand(
+                "SELECT cancelled_at IS NOT NULL FROM documents WHERE id = @id",
+                connection, transaction)
+            .With("@id", id)
+            .ExecuteScalarAsync());
+        Assert.True(cancelled);
+
+        var error = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+            new Npgsql.NpgsqlCommand("DELETE FROM documents WHERE id = @id", connection, transaction)
+                .With("@id", id)
+                .ExecuteNonQueryAsync());
+        Assert.Equal("23514", error.SqlState);
+
+        await transaction.RollbackAsync();
+    }
+
+    [Fact]
     public void EveryNonPublicApiEndpoint_DeclaresAuthorization()
     {
         var endpoints = _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints

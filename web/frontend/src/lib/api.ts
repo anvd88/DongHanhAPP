@@ -147,8 +147,11 @@ async function request<T>(method: string, path: string, body?: unknown, options:
 }
 
 /** Tải tài nguyên nhị phân (vd. ảnh snapshot camera) kèm Bearer token; trả Blob để tạo object URL. */
-async function requestBlob(path: string): Promise<Blob> {
-  const res = await fetch(appUrl(path), {
+async function requestBlob(path: string, sameOrigin = false): Promise<Blob> {
+  const target = sameOrigin
+    ? (path.startsWith("/") ? path : `/${path}`)
+    : appUrl(path);
+  const res = await fetch(target, {
     method: "GET",
     headers: authHeaders("GET"),
     credentials: "same-origin",
@@ -158,7 +161,14 @@ async function requestBlob(path: string): Promise<Blob> {
     handleUnauthorized();
   }
 
-  if (!res.ok) throw new ApiError(res.status, `Lỗi ${res.status}`);
+  if (!res.ok) {
+    let message = `Lỗi ${res.status}`;
+    try {
+      const data = await res.json();
+      message = data.message || data.detail || message;
+    } catch { /* body rỗng hoặc không phải JSON */ }
+    throw new ApiError(res.status, message);
+  }
   return res.blob();
 }
 
@@ -217,6 +227,7 @@ export const api = {
   put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body ?? {}),
   del: <T>(p: string) => request<T>("DELETE", p),
   getBlob: (p: string) => requestBlob(p),
+  getSameOriginBlob: (p: string) => requestBlob(p, true),
   postBlob: <T>(p: string, blob: Blob) => postBlob<T>(p, blob),
   postForm: <T>(p: string, form: FormData) => requestForm<T>("POST", p, form),
 };

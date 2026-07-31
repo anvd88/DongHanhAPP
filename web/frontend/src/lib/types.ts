@@ -46,6 +46,29 @@ export interface DocumentListItem {
   content: string;
   total: number;
   createdBy?: string;
+  issuedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelledBy?: string;
+  cancelReason?: string;
+}
+
+export interface AccountingSystemStatus {
+  server: {
+    online: boolean;
+    name: string;
+    printServiceReady: boolean;
+    message: string;
+    uptimeSeconds: number;
+  };
+  printer: {
+    available: boolean;
+    ready: boolean;
+    name?: string | null;
+    message: string;
+    queuedJobs: number;
+    statusCode: number;
+  };
+  checkedAt: string;
 }
 
 export interface DocumentLine {
@@ -63,6 +86,10 @@ export interface DocumentDetail {
   content: string;
   note: string;
   lines: DocumentLine[];
+  issuedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelledBy?: string;
+  cancelReason?: string;
 }
 
 export interface Customer {
@@ -82,6 +109,47 @@ export interface CustomerReport {
   paymentTotal: number;
   salesTotal: number;
   documents: DocumentListItem[];
+}
+
+export interface DebtSummary {
+  customer: Customer;
+  openingBalance: number;
+  openingDate?: string | null;
+  openingNote: string;
+  salesTotal: number;
+  collectedTotal: number;
+  balance: number;
+  invoiceCount: number;
+  lastActivityDate?: string | null;
+}
+
+export interface DebtOverview {
+  totalOpeningBalance: number;
+  totalSales: number;
+  totalCollected: number;
+  totalReceivable: number;
+  debtorCount: number;
+  customers: DebtSummary[];
+}
+
+export type DebtTransactionKind = "opening" | "sale" | "receipt" | "payment";
+
+export interface DebtTransaction {
+  id: string;
+  date: string;
+  reference: string;
+  kind: DebtTransactionKind;
+  description: string;
+  debit: number;
+  credit: number;
+  runningBalance: number;
+  cancelled: boolean;
+}
+
+export interface DebtDetail {
+  customer: Customer;
+  summary: DebtSummary;
+  transactions: DebtTransaction[];
 }
 
 export interface Reports {

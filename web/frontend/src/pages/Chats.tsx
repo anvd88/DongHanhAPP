@@ -2195,6 +2195,7 @@ export function Chats() {
       className={`gc-root chat-mobile-shell flex h-full min-h-0 gap-3 ${activeId ? "is-chat-open" : ""} ${
         composerFocused ? "is-composer-focused" : ""
       }`}
+      data-login-blocking={loading || (Boolean(activeId) && msgLoading) ? "true" : undefined}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       // Chặn trình duyệt mở tệp khi vô tình thả ra ngoài vùng nhận (header, danh sách…).

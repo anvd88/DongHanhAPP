@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { MotionConfig, motion } from "motion/react";
-import { ArrowDown, ArrowUp, ArrowUpDown, CalendarDays, CircleDollarSign, Download, FileText, FilterX, Loader2, Pencil, Printer, Search, Trash2, TriangleAlert, Wallet, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CalendarDays, Download, FileText, FilterX, Loader2, Pencil, Printer, Search, Server, TriangleAlert, X } from "lucide-react";
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
-import { LiquidTabs, type LiquidTab } from "../components/glass/LiquidTabs";
 import { Button as GlassButton } from "../shadcn/button";
 import { Modal } from "../components/Modal";
+import { PrintPreviewModal } from "../components/PrintPreviewModal";
 import { useAppNotifications } from "../components/app-notifications-context";
-import { MonthPicker } from "../components/DateField";
+import { DateRangePicker } from "../components/DateField";
+import { Field, Input } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { APP_BRAND_NAME } from "../lib/branding";
 import { isKeepCreateVoucherOpenEnabled, subscribeKeepCreateVoucherOpenEnabled } from "../lib/accountingPreferences";
 import { money, date } from "../lib/format";
-import { documentTypeText, inferDocumentKind, type DocumentKind } from "../lib/documents";
-import type { Customer, DocumentDetail, DocumentListItem } from "../lib/types";
+import { documentTypeText, inferDocumentKind } from "../lib/documents";
+import type { AccountingSystemStatus, Customer, DocumentDetail, DocumentListItem } from "../lib/types";
 import { StatCard } from "../features/giacong/StatCard";
 import { DocumentEditor } from "./DocumentEditor";
 import "../features/giacong/giacong.css";
@@ -27,22 +29,27 @@ const FORCE_FULL_MOTION =
   typeof localStorage !== "undefined" &&
   localStorage.getItem("force-full-motion") === "true";
 
-const ACCOUNTING_TABS: LiquidTab[] = [
-  { key: "all", label: "Tất cả" },
-  { key: "receipt", label: "Phiếu thu" },
-  { key: "payment", label: "Phiếu chi" },
-  { key: "document", label: "Phiếu xuất kho bán hàng" },
-];
-
-const currentMonth = () => new Date().toISOString().slice(0, 7);
-
-const monthLabel = (value: string) => {
-  if (!value) return "Tất cả";
-  const [year, month] = value.split("-");
-  return `${month}/${year}`;
+const localIsoDate = (value: Date) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 };
-
-const isInMonth = (value: string, month: string) => !month || value.startsWith(month);
+const currentDateRange = () => {
+  const today = new Date();
+  return {
+    from: localIsoDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+    to: localIsoDate(today),
+  };
+};
+const isInDateRange = (value: string, from: string, to: string) =>
+  (!from || value >= from) && (!to || value <= to);
+const displayIsoDate = (value: string) => {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+};
+const dateRangeLabel = (from: string, to: string) =>
+  `Từ ngày ${displayIsoDate(from)} đến ngày ${displayIsoDate(to)}`;
 
 const htmlEscape = (value: unknown) =>
   String(value ?? "")
@@ -51,9 +58,6 @@ const htmlEscape = (value: unknown) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-
-const qty = (value: number) =>
-  new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(value || 0);
 
 const badgeTone = (row: DocumentListItem) => {
   const kind = inferDocumentKind(row);
@@ -77,9 +81,9 @@ function SkeletonRows() {
     <>
       {Array.from({ length: 6 }).map((_, i) => (
         <tr key={i}>
-          {Array.from({ length: 8 }).map((_, j) => (
+          {Array.from({ length: 9 }).map((_, j) => (
             <td key={j} className="px-3.5 py-3">
-              <div className="gc-skeleton h-4" style={{ width: j === 7 ? "38%" : "86%" }} />
+              <div className="gc-skeleton h-4" style={{ width: j === 8 ? "38%" : "86%" }} />
             </td>
           ))}
         </tr>
@@ -88,238 +92,8 @@ function SkeletonRows() {
   );
 }
 
-const printableLines = ({ row, detail }: PrintableDocument) =>
-  detail?.lines.length
-    ? detail.lines
-    : [{ lineContent: row.content, spec: "", quantity: 1, unitPrice: row.total, note: "" }];
-
-const printableTotal = (item: PrintableDocument) =>
-  printableLines(item).reduce((sum, line) => sum + (line.quantity || 0) * (line.unitPrice || 0), 0);
-
-const printDateParts = (value: string) => {
-  const d = new Date(value.length <= 10 ? value + "T00:00:00" : value);
-  if (isNaN(d.getTime())) return { day: "", month: "", year: "" };
-  return { day: String(d.getDate()), month: String(d.getMonth() + 1), year: String(d.getFullYear()) };
-};
-
-function buildAccountingPrintSheet(item: PrintableDocument, printedAt: string) {
-  const { row } = item;
-  const lines = printableLines(item);
-  const total = printableTotal(item);
-
-  return `<section class="sheet accounting-sheet">
-  <div class="top">
-    <div>
-      <div class="company">KetoanMini</div>
-      <div>Bộ phận kế toán</div>
-    </div>
-    <div>In lúc: ${htmlEscape(printedAt)}</div>
-  </div>
-  <h1>${htmlEscape(documentTypeText(row))}</h1>
-  <div class="date-line">Ngày ${htmlEscape(date(row.date))}</div>
-  <div class="info">
-    <div class="label">Số phiếu</div><div><strong>${htmlEscape(row.voucherNo)}</strong></div>
-    <div class="label">Người lập</div><div>${htmlEscape(row.createdBy || "Chưa rõ")}</div>
-    <div class="label">Khách hàng</div><div>${htmlEscape(row.customerName || "Khách lẻ")}</div>
-    <div class="label">Tổng tiền</div><div><strong>${htmlEscape(money(total))} đ</strong></div>
-    <div class="label">Nội dung</div><div style="grid-column: span 3;">${htmlEscape(row.content)}</div>
-  </div>
-  <table class="accounting-table">
-    <thead>
-      <tr>
-        <th style="width: 42px;">STT</th>
-        <th>Nội dung</th>
-        <th style="width: 95px;">Quy cách</th>
-        <th style="width: 70px;">SL</th>
-        <th style="width: 105px;">Đơn giá</th>
-        <th style="width: 115px;">Thành tiền</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${lines
-        .map(
-          (line, index) => `<tr>
-        <td class="center">${index + 1}</td>
-        <td>${htmlEscape(line.lineContent || row.content)}</td>
-        <td>${htmlEscape(line.spec)}</td>
-        <td class="right">${htmlEscape(qty(line.quantity))}</td>
-        <td class="right">${htmlEscape(money(line.unitPrice))}</td>
-        <td class="right">${htmlEscape(money(line.quantity * line.unitPrice))}</td>
-      </tr>`,
-        )
-        .join("")}
-    </tbody>
-    <tfoot>
-      <tr class="total"><td colspan="5" class="right">Tổng cộng</td><td class="right">${htmlEscape(money(total))} đ</td></tr>
-    </tfoot>
-  </table>
-  <div class="signatures">
-    <div><div class="signature-title">Người lập</div><div class="signature-note">(Ký, ghi rõ họ tên)</div><div class="signature-space"></div></div>
-    <div><div class="signature-title">Kế toán trưởng</div><div class="signature-note">(Ký, ghi rõ họ tên)</div><div class="signature-space"></div></div>
-    <div><div class="signature-title">Người nhận/nộp</div><div class="signature-note">(Ký, ghi rõ họ tên)</div><div class="signature-space"></div></div>
-    <div><div class="signature-title">Thủ quỹ</div><div class="signature-note">(Ký, ghi rõ họ tên)</div><div class="signature-space"></div></div>
-  </div>
-</section>`;
-}
-
-function buildWarehouseDeliverySheet(item: PrintableDocument) {
-  const { row, detail } = item;
-  const lines = printableLines(item);
-  const total = printableTotal(item);
-  const { day, month, year } = printDateParts(row.date);
-  const tableRows = Array.from({ length: 14 }, (_, index) => {
-    const line = lines[index];
-    return `<tr>
-      <td class="xk-center">${index + 1}</td>
-      <td>${line ? htmlEscape(line.lineContent || row.content) : ""}</td>
-      <td>${line ? htmlEscape(line.spec) : ""}</td>
-      <td class="xk-right">${line ? htmlEscape(qty(line.quantity)) : ""}</td>
-      <td class="xk-right">${line ? htmlEscape(money(line.unitPrice)) : ""}</td>
-      <td class="xk-right">${line ? htmlEscape(money((line.quantity || 0) * (line.unitPrice || 0))) : ""}</td>
-    </tr>`;
-  }).join("");
-
-  return `<section class="sheet xk-sheet">
-    <div class="xk-header">
-      <div class="xk-company">
-        <div class="xk-national">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
-        <div class="xk-slogan">ĐỘC LẬP - TỰ DO - HẠNH PHÚC</div>
-        <div class="xk-name">CÔNG TY TNHH INOX CƯỜNG PHÁT</div>
-        <div>Đ/C: Số 12, Đường Ganuda Garden 3-7/1B, Khu đô thị Gamuda Gardens, Phường Hoàng Mai, Thành phố Hà Nội</div>
-        <div>MST: 0105844593 - ĐT: 0919.304.316 / 0834.304.316</div>
-        <div>ĐC/VPGD - Kho: Xóm 3 - Thôn Văn Giáp - Xã Thường Tín - Thành phố Hà Nội</div>
-        <div>TK1: 020017028686 tại Ngân hàng Sacombank - PGD Tân Mai - CN Thanh Trì - Hà Nội</div>
-        <div>TK2: 1037526789 tại Ngân hàng Vietcombank - CN Tây Hồ - Hà Nội</div>
-      </div>
-    </div>
-
-    <h1 class="xk-title">BIÊN BẢN GIAO NHẬN HÀNG KIÊM GIẤY XÁC NHẬN NỢ</h1>
-    <div class="xk-form-lines">
-      <div><span>Bên mua hàng:</span><strong>${htmlEscape(row.customerName || "Khách lẻ")}</strong></div>
-      <div><span>Địa chỉ:</span><strong>${htmlEscape(detail?.note || "")}</strong></div>
-    </div>
-    <div class="xk-date-row">
-      <div>Hà Nội, ngày <strong>${htmlEscape(day)}</strong> tháng <strong>${htmlEscape(month)}</strong> năm <strong>${htmlEscape(year)}</strong></div>
-      <div>Số: <strong>${htmlEscape(row.voucherNo)}</strong></div>
-    </div>
-
-    <div class="xk-watermark">CP</div>
-    <table class="xk-table">
-      <thead>
-        <tr>
-          <th style="width: 46px;">STT</th>
-          <th>Chủng loại hàng hóa</th>
-          <th style="width: 84px;">Mã hàng</th>
-          <th style="width: 110px;">Khối lượng<br />(kg)</th>
-          <th style="width: 130px;">Đơn giá</th>
-          <th style="width: 155px;">Thành tiền</th>
-        </tr>
-      </thead>
-      <tbody>${tableRows}</tbody>
-      <tfoot>
-        <tr>
-          <td></td>
-          <td class="xk-total-label">TỔNG CỘNG</td>
-          <td></td>
-          <td></td>
-          <td></td>
-          <td class="xk-right">${htmlEscape(money(total))}</td>
-        </tr>
-      </tfoot>
-    </table>
-
-    <div class="xk-payment">
-      <div><span>Thanh toán tiền:</span><strong>${htmlEscape(row.content || documentTypeText(row))}</strong></div>
-      <div><span>Số tiền đã thanh toán:</span><strong></strong></div>
-      <div><span>Số tiền còn phải thanh toán:</span><strong>${htmlEscape(money(total))} đ</strong></div>
-    </div>
-
-    <div class="xk-terms">
-      <strong>Điều khoản thanh toán:</strong>
-      <p>- Bên mua hàng thanh toán tiền trong vòng ........ ngày kể từ ngày nhận hàng. Nếu bên mua hàng thanh toán không đúng hạn sẽ chịu lãi suất quá hạn theo lãi suất vay ngân hàng ngắn hạn tại thời điểm quá hạn.</p>
-      <p>- Quý khách hàng vui lòng kiểm tra đúng số lượng, chủng loại, chất lượng hàng hóa khi nhận hàng.</p>
-      <p>- Các chi phí gia công như: phủ No4 PVC, HL, nhám, cắt,... chưa có trong đơn giá hàng hóa. Quý khách hàng có nhu cầu xuất hóa đơn gia công vui lòng thông báo lại cho Công ty chúng tôi.</p>
-      <p>- Mọi khiếu nại về hàng hóa có hiệu lực trong vòng 5 ngày kể từ ngày bên mua nhận hàng.</p>
-    </div>
-
-    <div class="xk-signatures">
-      <div><strong>Xác nhận của thủ kho</strong><em>(Ký, ghi rõ họ tên)</em></div>
-      <div><strong>Nhân viên bán hàng</strong><em>(Ký, ghi rõ họ tên)</em></div>
-      <div><strong>Đại diện bên mua hàng</strong><em>(Ký, ghi rõ họ tên)</em></div>
-    </div>
-  </section>`;
-}
-
-function buildPrintHtml(items: PrintableDocument[]) {
-  const printedAt = new Date().toLocaleString("vi-VN");
-
-  return `<!doctype html>
-<html lang="vi">
-<head>
-  <meta charset="utf-8" />
-  <title>In phiếu</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; color: #111827; font-family: "Times New Roman", serif; background: #f3f4f6; }
-    .sheet { width: 210mm; min-height: 297mm; margin: 0 auto 12px; padding: 18mm 16mm; background: white; page-break-after: always; }
-    .top { display: flex; justify-content: space-between; gap: 24px; font-size: 12px; }
-    .company { font-weight: 700; text-transform: uppercase; }
-    .accounting-sheet h1 { margin: 24px 0 4px; text-align: center; font-size: 24px; text-transform: uppercase; letter-spacing: 0; }
-    .date-line { text-align: center; font-style: italic; margin-bottom: 20px; }
-    .info { display: grid; grid-template-columns: 34mm 1fr 28mm 1fr; gap: 8px 12px; margin-bottom: 16px; font-size: 14px; }
-    .label { color: #4b5563; }
-    .accounting-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .accounting-table th, .accounting-table td { border: 1px solid #1f2937; padding: 6px 7px; vertical-align: top; }
-    .accounting-table th { background: #f3f4f6; text-align: center; font-weight: 700; }
-    .right { text-align: right; }
-    .center { text-align: center; }
-    .total td { font-weight: 700; }
-    .signatures { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 28px; text-align: center; font-size: 13px; }
-    .signature-title { font-weight: 700; }
-    .signature-note { margin-top: 4px; font-style: italic; color: #4b5563; }
-    .signature-space { height: 68px; }
-    .xk-sheet { --xk-blue: #0b6fae; --xk-blue-rgb: 11, 111, 174; position: relative; overflow: hidden; padding: 6mm 9mm 7mm; color: var(--xk-blue); page-break-after: auto; }
-    .xk-header { display: block; align-items: start; }
-    .xk-company { max-width: 178mm; margin: 0 auto; text-align: center; font-size: 9.4pt; font-weight: 700; line-height: 1.14; }
-    .xk-national, .xk-slogan, .xk-name { font-size: 13.2pt; font-weight: 900; }
-    .xk-slogan { display: inline-block; margin-bottom: 1mm; border-bottom: 1.5px solid var(--xk-blue); padding: 0 10mm .5mm; }
-    .xk-name { margin-bottom: .5mm; font-size: 15pt; }
-    .xk-title { margin: 5mm 0 2.5mm; text-align: center; font-size: 16.5pt; font-weight: 900; letter-spacing: .2px; }
-    .xk-form-lines { display: grid; gap: 2mm; font-size: 11.6pt; font-weight: 700; }
-    .xk-form-lines div, .xk-payment div { display: grid; grid-template-columns: 34mm 1fr; gap: 2mm; align-items: end; }
-    .xk-form-lines strong, .xk-payment strong { min-height: 4.6mm; border-bottom: 1px dotted rgba(var(--xk-blue-rgb), .55); color: #111827; font-weight: 700; }
-    .xk-date-row { display: flex; justify-content: space-between; gap: 12mm; margin: 2.5mm 0 1.5mm; font-size: 11.8pt; font-weight: 700; }
-    .xk-date-row strong { min-width: 12mm; display: inline-block; border-bottom: 1px dotted rgba(var(--xk-blue-rgb), .55); color: #111827; text-align: center; }
-    .xk-watermark { position: absolute; left: 50%; top: 50%; z-index: 0; transform: translate(-50%, -50%); border: 7px solid rgba(var(--xk-blue-rgb), .09); color: rgba(var(--xk-blue-rgb), .09); font-size: 70pt; font-weight: 900; width: 72mm; height: 72mm; display: grid; place-items: center; clip-path: polygon(50% 0, 100% 96%, 0 96%); pointer-events: none; }
-    .xk-table { position: relative; z-index: 1; width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 10.8pt; }
-    .xk-table th, .xk-table td { border: 1.4px solid var(--xk-blue); height: 6.75mm; padding: 1mm 1.2mm; vertical-align: middle; }
-    .xk-table th { text-align: center; font-size: 10.8pt; font-weight: 900; }
-    .xk-center { text-align: center; }
-    .xk-right { text-align: right; color: #111827; }
-    .xk-total-label { text-align: center; font-weight: 900; }
-    .xk-payment { margin-top: 3mm; display: grid; gap: 1.4mm; font-size: 11.4pt; font-weight: 700; }
-    .xk-terms { margin-top: 2.4mm; font-size: 8.7pt; font-style: italic; font-weight: 700; line-height: 1.08; }
-    .xk-terms p { margin: .6mm 0 0; }
-    .xk-signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10mm; margin-top: 4.5mm; min-height: 18mm; text-align: center; font-size: 10.8pt; }
-    .xk-signatures strong, .xk-signatures em { display: block; }
-    .xk-signatures em { margin-top: 1mm; font-style: italic; }
-    @page { size: A4; margin: 0; }
-    @media print {
-      body { background: white; }
-      .sheet { margin: 0; box-shadow: none; }
-    }
-  </style>
-</head>
-<body>
-${items
-  .map((item) => (inferDocumentKind(item.row) === "document" ? buildWarehouseDeliverySheet(item) : buildAccountingPrintSheet(item, printedAt)))
-  .join("")}
-</body>
-</html>`;
-}
-
-function buildExcelHtml(items: PrintableDocument[], month: string) {
-  const total = items.reduce((sum, item) => sum + item.row.total, 0);
+function buildExcelHtml(items: PrintableDocument[], companyName: string, dateFrom: string, dateTo: string) {
+  const total = items.reduce((sum, item) => sum + (item.row.cancelledAt ? 0 : item.row.total), 0);
   const blankRows = Array.from({ length: 12 }, () => "<tr>" + "<td></td>".repeat(14) + "</tr>").join("");
 
   return `\uFEFF<!doctype html>
@@ -375,6 +149,14 @@ function buildExcelHtml(items: PrintableDocument[], month: string) {
       font-weight: 700;
       text-align: center;
     }
+    .company {
+      height: 24px;
+      border: 0;
+      background: #ffffff;
+      font-size: 11pt;
+      font-weight: 500;
+      text-align: left;
+    }
     .subtitle {
       background: #f8fafc;
       color: #475569;
@@ -406,8 +188,9 @@ function buildExcelHtml(items: PrintableDocument[], month: string) {
       <col class="c-user" />
     </colgroup>
     <thead>
-      <tr><th class="title" colspan="14">Chi tiết phiếu kế toán tháng ${htmlEscape(monthLabel(month))}</th></tr>
-      <tr><td class="subtitle" colspan="14">Mỗi dòng trong file là một dòng hàng của phiếu; các ô có viền lưới như bảng Excel.</td></tr>
+      <tr><td class="company" colspan="14">Tên đơn vị: ${htmlEscape(companyName)}</td></tr>
+      <tr><th class="title" colspan="14">BÁO CÁO CHI TIẾT PHIẾU XUẤT HÀNG HÓA</th></tr>
+      <tr><td class="subtitle" colspan="14">${htmlEscape(dateRangeLabel(dateFrom, dateTo))}</td></tr>
       <tr>
         <th>Số phiếu</th>
         <th>Ngày</th>
@@ -435,7 +218,7 @@ function buildExcelHtml(items: PrintableDocument[], month: string) {
           return lines.map((line, index) => `<tr>
         <td>${htmlEscape(row.voucherNo)}</td>
         <td>${htmlEscape(date(row.date))}</td>
-        <td>${htmlEscape(documentTypeText(row))}</td>
+        <td>${htmlEscape(`${documentTypeText(row)}${row.cancelledAt ? " · Đã hủy" : ""}`)}</td>
         <td>${htmlEscape(row.customerName || "Khách lẻ")}</td>
         <td>${htmlEscape(row.content)}</td>
         <td class="center">${index + 1}</td>
@@ -472,42 +255,50 @@ export function KeToan() {
   const { data, loading, error, reload } = useApi<DocumentListItem[]>("/api/documents");
   const { data: customers } = useApi<Customer[]>("/api/customers");
   const [search, setSearch] = useState("");
-  const [kindFilter, setKindFilter] = useState("all");
-  const [month, setMonth] = useState(currentMonth);
+  const [dateFrom, setDateFrom] = useState(() => currentDateRange().from);
+  const [dateTo, setDateTo] = useState(() => currentDateRange().to);
   const [sort, setSort] = useState<SortState>({ key: "date", dir: "desc" });
-  const [initialKind, setInitialKind] = useState<DocumentKind>("document");
   const [editing, setEditing] = useState<string | null | "new">(null);
   const [deleting, setDeleting] = useState<DocumentListItem | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [numberingForPrint, setNumberingForPrint] = useState<DocumentListItem | null>(null);
+  const [printVoucherNo, setPrintVoucherNo] = useState("");
+  const [printVoucherNoError, setPrintVoucherNoError] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [printPreview, setPrintPreview] = useState<{
+    originalRow: DocumentListItem;
+    voucherNo: string;
+    previewUrl: string;
+  } | null>(null);
   const [printingId, setPrintingId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [systemStatus, setSystemStatus] = useState<AccountingSystemStatus | null>(null);
+  const [systemStatusError, setSystemStatusError] = useState("");
+  const [checkingSystemStatus, setCheckingSystemStatus] = useState(true);
+  const systemStatusRequest = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const monthRows = useMemo(
-    () => (data ?? []).filter((d) => isInMonth(d.date, month)),
-    [data, month]
+  const rangeRows = useMemo(
+    () => (data ?? []).filter((document) => isInDateRange(document.date, dateFrom, dateTo)),
+    [data, dateFrom, dateTo],
   );
 
-  // Thống kê bám theo tháng đang chọn để 4 thẻ luôn nhất quán với bảng.
+  // Trang Kế toán chỉ còn phiếu xuất kho; phiếu thu/chi đã chuyển sang mô-đun Thu chi.
   const stats = useMemo(() => {
-    const receipts = monthRows.filter((row) => inferDocumentKind(row) === "receipt");
-    const payments = monthRows.filter((row) => inferDocumentKind(row) === "payment");
-    const documents = monthRows.filter((row) => inferDocumentKind(row) === "document");
-    const monthTotal = monthRows.reduce((sum, row) => sum + (row.total || 0), 0);
+    const activeRows = rangeRows.filter((row) => !row.cancelledAt);
+    const monthTotal = activeRows.reduce((sum, row) => sum + (row.total || 0), 0);
     return {
-      receiptCount: receipts.length,
-      receiptTotal: receipts.reduce((sum, row) => sum + (row.total || 0), 0),
-      paymentCount: payments.length,
-      paymentTotal: payments.reduce((sum, row) => sum + (row.total || 0), 0),
-      documentCount: documents.length,
+      documentCount: rangeRows.length,
       monthTotal,
+      issuedCount: activeRows.filter((row) => !!row.issuedAt).length,
+      draftCount: activeRows.filter((row) => !row.issuedAt).length,
     };
-  }, [monthRows]);
+  }, [rangeRows]);
 
   const rows = useMemo(() => {
-    const filtered = monthRows.filter((d) => {
+    const filtered = rangeRows.filter((d) => {
       const q = search.trim().toLowerCase();
-      if (kindFilter !== "all" && inferDocumentKind(d) !== kindFilter) return false;
       return (
         !q ||
         d.voucherNo.toLowerCase().includes(q) ||
@@ -519,16 +310,18 @@ export function KeToan() {
     });
     const dir = sort.dir === "asc" ? 1 : -1;
     return filtered.sort((a, b) => compareRows(a, b, sort.key) * dir);
-  }, [kindFilter, monthRows, search, sort]);
+  }, [rangeRows, search, sort]);
 
-  const visibleTotal = useMemo(() => rows.reduce((sum, row) => sum + (row.total || 0), 0), [rows]);
-  const hasActiveFilters = search.trim() !== "" || kindFilter !== "all";
+  const visibleTotal = useMemo(
+    () => rows.reduce((sum, row) => sum + (row.cancelledAt ? 0 : row.total || 0), 0),
+    [rows],
+  );
+  const hasActiveFilters = search.trim() !== "";
   const hasAnyData = (data?.length ?? 0) > 0;
-  const periodLabel = month ? `Tháng ${monthLabel(month)}` : "Tất cả các tháng";
+  const periodLabel = dateRangeLabel(dateFrom, dateTo);
 
   const clearFilters = () => {
     setSearch("");
-    setKindFilter("all");
   };
 
   const toggleSort = (key: SortKey) =>
@@ -561,20 +354,62 @@ export function KeToan() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const startCreate = (kind: DocumentKind) => {
-    setInitialKind(kind);
-    setEditing("new");
-  };
+  useEffect(() => {
+    const previewUrl = printPreview?.previewUrl;
+    return () => {
+      if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+    };
+  }, [printPreview?.previewUrl]);
 
-  const confirmDelete = async () => {
+  const refreshSystemStatus = useCallback(async () => {
+    const requestId = ++systemStatusRequest.current;
+    setCheckingSystemStatus(true);
+    try {
+      const nextStatus = await api.get<AccountingSystemStatus>("/api/accounting/system-status");
+      if (requestId !== systemStatusRequest.current) return;
+      setSystemStatus(nextStatus);
+      setSystemStatusError("");
+    } catch (statusError) {
+      if (requestId !== systemStatusRequest.current) return;
+      setSystemStatusError(
+        statusError instanceof SyntaxError
+          ? "Máy chủ chưa được cập nhật chức năng trạng thái."
+          : statusError instanceof Error
+            ? statusError.message
+            : "Không kết nối được máy chủ.",
+      );
+    } finally {
+      if (requestId === systemStatusRequest.current) setCheckingSystemStatus(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSystemStatus();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshSystemStatus();
+    }, 15_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshSystemStatus();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      systemStatusRequest.current += 1;
+    };
+  }, [refreshSystemStatus]);
+
+  const confirmCancel = async () => {
     if (!deleting) return;
     setDeletingBusy(true);
     try {
-      await api.del(`/api/documents/${deleting.id}`);
+      await api.put(`/api/documents/${deleting.id}/cancel`, { reason: cancelReason.trim() });
       setDeleting(null);
+      setCancelReason("");
       reload({ silent: true });
+      notify.success("Đã chuyển phiếu sang trạng thái hủy; dữ liệu vẫn được lưu trong hệ thống.");
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : "Lỗi xóa phiếu.");
+      notify.error(e instanceof Error ? e.message : "Không hủy được phiếu.");
     } finally {
       setDeletingBusy(false);
     }
@@ -590,46 +425,98 @@ export function KeToan() {
     return { row, detail };
   };
 
-  const printVoucher = async (row: DocumentListItem) => {
-    const printWindow = window.open("", "_blank", "width=1024,height=768");
-    if (!printWindow) {
-      notify.warning("Trình duyệt đang chặn cửa sổ in. Vui lòng cho phép popup rồi thử lại.");
-      return;
-    }
-
-    printWindow.document.write("<p style='font-family: sans-serif; padding: 24px;'>Đang chuẩn bị phiếu in...</p>");
+  const printVoucher = async (row: DocumentListItem, voucherNoOverride: string) => {
+    const voucherNo = voucherNoOverride.trim();
     setPrintingId(row.id);
     try {
-      const item = await loadPrintableDocument(row);
-      printWindow.document.open();
-      printWindow.document.write(buildPrintHtml([item]));
-      printWindow.document.close();
-      printWindow.focus();
-      setTimeout(() => printWindow.print(), 250);
+      const result = await api.post<{ voucherNo: string; printerName: string }>(
+        `/api/documents/${row.id}/warehouse-print`,
+        { voucherNo },
+      );
+      setNumberingForPrint(null);
+      setPrintPreview(null);
+      setPrintVoucherNoError("");
+      reload({ silent: true });
+      notify.success(`Đã phát hành ${result.voucherNo} và gửi tới máy in ${result.printerName}.`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Máy chủ không in được phiếu.";
+      setPrintVoucherNoError(message);
+      notify.error(message);
     } finally {
       setPrintingId(null);
+      void refreshSystemStatus();
     }
   };
 
-  const exportMonthExcel = async () => {
-    if (!monthRows.length) {
-      notify.info(`Không có phiếu trong tháng ${monthLabel(month)} để xuất Excel.`);
+  const requestPrint = (row: DocumentListItem) => {
+    if (row.cancelledAt) {
+      notify.error("Phiếu đã hủy, không thể xem trước hoặc in.");
+      return;
+    }
+    setNumberingForPrint(row);
+    setPrintVoucherNo(row.voucherNo);
+    setPrintVoucherNoError("");
+  };
+
+  const confirmWarehousePreview = async () => {
+    if (!numberingForPrint) return;
+    const voucherNo = printVoucherNo.trim();
+    if (!voucherNo) {
+      setPrintVoucherNoError("Vui lòng nhập số phiếu trước khi in.");
+      return;
+    }
+
+    setPreviewLoading(true);
+    try {
+      const previewPath =
+        `/api/documents/${numberingForPrint.id}/warehouse-preview?voucherNo=${encodeURIComponent(voucherNo)}`;
+      const previewPdf = await api.getSameOriginBlob(previewPath);
+      if (previewPdf.type && previewPdf.type !== "application/pdf") {
+        throw new Error("Máy chủ trả về nội dung xem trước không đúng định dạng PDF.");
+      }
+      const previewUrl = URL.createObjectURL(
+        previewPdf.type === "application/pdf"
+          ? previewPdf
+          : new Blob([previewPdf], { type: "application/pdf" }),
+      );
+      setPrintPreview({
+        originalRow: numberingForPrint,
+        voucherNo,
+        previewUrl,
+      });
+      setNumberingForPrint(null);
+    } catch (previewError) {
+      setPrintVoucherNoError(
+        previewError instanceof TypeError
+          ? "Không kết nối được máy chủ để tạo bản xem trước. Hãy kiểm tra lại dịch vụ web."
+          : previewError instanceof Error
+            ? previewError.message
+            : "Không tạo được bản xem trước.",
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const exportRangeExcel = async () => {
+    if (!rangeRows.length) {
+      notify.info(`Không có phiếu trong khoảng ${displayIsoDate(dateFrom)} – ${displayIsoDate(dateTo)} để xuất Excel.`);
       return;
     }
 
     setExporting(true);
     try {
       const items = await Promise.all(
-        monthRows.map((row) => loadPrintableDocument(row)),
+        rangeRows.map((row) => loadPrintableDocument(row)),
       );
 
-      const blob = new Blob([buildExcelHtml(items, month)], {
+      const blob = new Blob([buildExcelHtml(items, APP_BRAND_NAME, dateFrom, dateTo)], {
         type: "application/vnd.ms-excel;charset=utf-8",
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `chi-tiet-phieu-ke-toan-${month || "tat-ca"}.xls`;
+      a.download = `bao-cao-phieu-xuat-${dateFrom}-den-${dateTo}.xls`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -658,7 +545,7 @@ export function KeToan() {
               transition={{ duration: 0.44, delay: 0.08, ease: EASE_IOS }}
               className="mt-1 text-sm font-semibold text-[var(--gc-text-soft)]"
             >
-              Sổ phiếu rõ ràng cho nghiệp vụ thu, chi và xuất kho bán hàng
+              Quản lý phiếu xuất kho bán hàng
             </motion.p>
           </div>
           <motion.div
@@ -667,16 +554,16 @@ export function KeToan() {
             transition={{ duration: 0.4, delay: 0.14, ease: EASE_IOS }}
             className="flex flex-wrap items-center gap-2.5"
           >
-            <GlassButton onClick={() => startCreate("receipt")}>
-              <CircleDollarSign className="h-4 w-4" /> Tạo phiếu thu
-            </GlassButton>
-            <GlassButton variant="soft" onClick={() => startCreate("payment")}>
-              <Wallet className="h-4 w-4" /> Tạo phiếu chi
-            </GlassButton>
-            <GlassButton variant="soft" onClick={() => startCreate("document")}>
+            <CompactSystemStatus
+              status={systemStatus}
+              error={systemStatusError}
+              loading={checkingSystemStatus}
+              onRefresh={() => void refreshSystemStatus()}
+            />
+            <GlassButton variant="soft" onClick={() => setEditing("new")}>
               <FileText className="h-4 w-4" /> Tạo phiếu xuất kho
             </GlassButton>
-            <GlassButton variant="ghost" onClick={exportMonthExcel} disabled={exporting}>
+            <GlassButton variant="ghost" onClick={exportRangeExcel} disabled={exporting}>
               {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Xuất Excel
             </GlassButton>
@@ -686,22 +573,6 @@ export function KeToan() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             index={0}
-            icon={CircleDollarSign}
-            label="Phiếu thu"
-            value={`${money(stats.receiptTotal)} ₫`}
-            sub={`${money(stats.receiptCount)} phiếu · ${periodLabel}`}
-            tone="0, 184, 148"
-          />
-          <StatCard
-            index={1}
-            icon={Wallet}
-            label="Phiếu chi"
-            value={`${money(stats.paymentTotal)} ₫`}
-            sub={`${money(stats.paymentCount)} phiếu · ${periodLabel}`}
-            tone="217, 119, 6"
-          />
-          <StatCard
-            index={2}
             icon={FileText}
             label="Phiếu xuất kho"
             value={money(stats.documentCount)}
@@ -709,19 +580,33 @@ export function KeToan() {
             tone="31, 107, 255"
           />
           <StatCard
-            index={3}
+            index={1}
             icon={CalendarDays}
-            label="Tổng cộng"
+            label="Tổng giá trị"
             value={`${money(stats.monthTotal)} ₫`}
             sub={periodLabel}
             tone="124, 70, 255"
           />
+          <StatCard
+            index={2}
+            icon={Printer}
+            label="Đã phát hành"
+            value={money(stats.issuedCount)}
+            sub={`${stats.documentCount ? Math.round((stats.issuedCount / stats.documentCount) * 100) : 0}% số phiếu`}
+            tone="0, 150, 110"
+          />
+          <StatCard
+            index={3}
+            icon={FileText}
+            label="Phiếu nháp"
+            value={money(stats.draftCount)}
+            sub="Chưa in/phát hành"
+            tone="217, 119, 6"
+          />
         </div>
 
         <GlassPanel className="flex flex-wrap items-center gap-3 rounded-[20px] p-3">
-          <LiquidTabs tabs={ACCOUNTING_TABS} value={kindFilter} onChange={setKindFilter} />
-
-          <div className="ml-auto grid flex-1 grid-cols-1 items-center gap-2.5 md:grid-cols-[minmax(220px,1fr)_180px_auto]">
+          <div className="ml-auto grid flex-1 grid-cols-1 items-center gap-2.5 md:grid-cols-[minmax(220px,1fr)_minmax(280px,330px)_auto]">
             <GlassCapsule className="gc-search min-w-[200px] px-4">
               <Search className="mr-2.5 h-[18px] w-[18px] shrink-0 text-[var(--gc-text-muted)]" aria-hidden="true" />
               <input
@@ -751,16 +636,25 @@ export function KeToan() {
               )}
             </GlassCapsule>
 
-            <MonthPicker value={month} onChange={setMonth} ariaLabel="Lọc theo tháng" placeholder="Tất cả các tháng" />
+            <DateRangePicker
+              from={dateFrom}
+              to={dateTo}
+              maxDays={60}
+              ariaLabel="Lọc phiếu theo khoảng ngày"
+              onChange={(nextFrom, nextTo) => {
+                setDateFrom(nextFrom);
+                setDateTo(nextTo);
+              }}
+            />
 
             <div className="flex items-center gap-2">
               <div className="whitespace-nowrap rounded-xl border border-[var(--gc-border)] bg-white/20 px-3 py-2 text-sm font-bold text-[var(--gc-text-soft)] dark:bg-white/5">
                 {hasActiveFilters ? (
                   <>
-                    {rows.length}<span className="text-[var(--gc-text-muted)]">/{monthRows.length}</span> phiếu
+                    {rows.length}<span className="text-[var(--gc-text-muted)]">/{rangeRows.length}</span> phiếu
                   </>
                 ) : (
-                  <>{monthRows.length} phiếu · {periodLabel}</>
+                  <>{rangeRows.length} phiếu · {periodLabel}</>
                 )}
               </div>
               {hasActiveFilters && (
@@ -768,7 +662,7 @@ export function KeToan() {
                   type="button"
                   onClick={clearFilters}
                   className="gc-icon-btn inline-flex h-[38px] items-center gap-1.5 whitespace-nowrap px-3 text-sm font-bold text-[var(--gc-text-soft)]"
-                  aria-label="Xóa bộ lọc tìm kiếm và loại phiếu"
+                  aria-label="Xóa bộ lọc tìm kiếm"
                 >
                   <FilterX className="h-4 w-4" /> Xóa lọc
                 </button>
@@ -789,6 +683,7 @@ export function KeToan() {
                   <th>Nội dung</th>
                   <SortHeader label="Tổng tiền" sortKey="total" sort={sort} onSort={toggleSort} align="right" />
                   <th>Người lập</th>
+                  <th>Trạng thái</th>
                   <th className="w-28 text-right">Thao tác</th>
                 </tr>
               </thead>
@@ -797,24 +692,26 @@ export function KeToan() {
                   <SkeletonRows />
                 ) : error ? (
                   <tr>
-                    <td colSpan={8} className="py-14 text-center text-sm font-semibold text-rose-500">
+                    <td colSpan={9} className="py-14 text-center text-sm font-semibold text-rose-500">
                       {error}
                     </td>
                   </tr>
                 ) : rows.length === 0 ? (
                   <tr>
-                    <td colSpan={8}>
+                    <td colSpan={9}>
                       <div className="flex flex-col items-center justify-center gap-2.5 py-16 text-center">
                         {hasActiveFilters || hasAnyData ? (
                           <>
                             <Search className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
                             <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Không tìm thấy phiếu phù hợp</p>
-                            <p className="text-xs text-[var(--gc-text-muted)]">Thử đổi từ khóa, loại phiếu hoặc tháng đang lọc.</p>
+                            <p className="text-xs text-[var(--gc-text-muted)]">Thử đổi từ khóa hoặc khoảng ngày đang lọc.</p>
                             <button
                               type="button"
                               onClick={() => {
                                 clearFilters();
-                                setMonth("");
+                                const initialRange = currentDateRange();
+                                setDateFrom(initialRange.from);
+                                setDateTo(initialRange.to);
                               }}
                               className="gc-icon-btn mt-1 inline-flex h-9 items-center gap-1.5 px-3.5 text-sm font-bold text-[var(--gc-text-soft)]"
                             >
@@ -824,8 +721,8 @@ export function KeToan() {
                         ) : (
                           <>
                             <FileText className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
-                            <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Chưa có phiếu kế toán</p>
-                            <p className="text-xs text-[var(--gc-text-muted)]">Tạo phiếu thu, phiếu chi hoặc phiếu xuất kho bán hàng.</p>
+                            <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Chưa có phiếu xuất kho</p>
+                            <p className="text-xs text-[var(--gc-text-muted)]">Bấm “Tạo phiếu xuất kho” để bắt đầu.</p>
                           </>
                         )}
                       </div>
@@ -833,8 +730,10 @@ export function KeToan() {
                   </tr>
                 ) : (
                   rows.map((row) => (
-                    <tr key={row.id} onClick={() => setEditing(row.id)}>
-                      <td className="whitespace-nowrap font-bold text-[var(--gc-text)]">{row.voucherNo}</td>
+                    <tr key={row.id} onClick={() => setEditing(row.id)} className={row.cancelledAt ? "opacity-60" : ""}>
+                      <td className="whitespace-nowrap font-bold text-[var(--gc-text)]">
+                        {row.voucherNo || <span className="font-semibold text-[var(--gc-text-muted)]">Chưa nhập</span>}
+                      </td>
                       <td className="whitespace-nowrap text-[var(--gc-text-soft)]">{date(row.date)}</td>
                       <td>
                         <span
@@ -849,36 +748,55 @@ export function KeToan() {
                       <td className="min-w-[220px] text-[var(--gc-text-soft)]">{row.content}</td>
                       <td className="whitespace-nowrap text-right font-bold tabular-nums">{money(row.total)} ₫</td>
                       <td className="whitespace-nowrap">{row.createdBy || "Chưa rõ"}</td>
+                      <td className="whitespace-nowrap">
+                        <span
+                          className="gc-badge"
+                          style={{ "--gc-badge": row.cancelledAt ? "225, 29, 72" : row.issuedAt ? "0, 150, 110" : "217, 119, 6" } as CSSProperties}
+                          title={row.cancelledAt
+                            ? `Hủy bởi ${row.cancelledBy || "không rõ"}${row.cancelReason ? `: ${row.cancelReason}` : ""}`
+                            : row.issuedAt
+                              ? `Phát hành lúc ${new Date(row.issuedAt).toLocaleString("vi-VN")}`
+                              : "Phiếu chưa được in"}
+                        >
+                          <span className="gc-dot" />
+                          {row.cancelledAt ? "Đã hủy" : row.issuedAt ? "Đã phát hành" : "Phiếu nháp"}
+                        </span>
+                      </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex justify-end gap-1.5">
                           <button
                             type="button"
-                            title="In phiếu"
-                            aria-label={`In phiếu ${row.voucherNo}`}
-                            disabled={printingId === row.id}
-                            onClick={() => void printVoucher(row)}
+                            title={row.cancelledAt ? "Phiếu đã hủy, không thể in" : "Xem trước và in"}
+                            aria-label={`Xem trước và in phiếu ${row.voucherNo || row.customerName || row.id}`}
+                            disabled={!!row.cancelledAt || printingId === row.id}
+                            onClick={() => requestPrint(row)}
                             className="gc-icon-btn h-8 w-8 disabled:pointer-events-none disabled:opacity-50"
                           >
                             {printingId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
                           </button>
                           <button
                             type="button"
-                            title="Sửa phiếu"
-                            aria-label={`Sửa phiếu ${row.voucherNo}`}
+                            title={row.cancelledAt ? "Xem phiếu đã hủy" : "Sửa phiếu"}
+                            aria-label={`${row.cancelledAt ? "Xem" : "Sửa"} phiếu ${row.voucherNo || row.customerName || row.id}`}
                             onClick={() => setEditing(row.id)}
                             className="gc-icon-btn h-8 w-8"
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
-                          <button
-                            type="button"
-                            title="Xóa phiếu"
-                            aria-label={`Xóa phiếu ${row.voucherNo}`}
-                            onClick={() => setDeleting(row)}
-                            className="gc-icon-btn h-8 w-8 text-rose-500 hover:text-rose-600"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          {!row.cancelledAt && (
+                            <button
+                              type="button"
+                              title="Hủy phiếu"
+                              aria-label={`Hủy phiếu ${row.voucherNo || row.customerName || row.id}`}
+                              onClick={() => {
+                                setCancelReason("");
+                                setDeleting(row);
+                              }}
+                              className="gc-icon-btn h-8 w-8 text-rose-500 hover:text-rose-600"
+                            >
+                              <Ban className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -894,7 +812,7 @@ export function KeToan() {
                     <td className="whitespace-nowrap text-right font-black tabular-nums text-[var(--gc-text)]">
                       {money(visibleTotal)} ₫
                     </td>
-                    <td colSpan={2} />
+                    <td colSpan={3} />
                   </tr>
                 </tfoot>
               )}
@@ -906,20 +824,22 @@ export function KeToan() {
           <DocumentEditor
             // Mỗi chứng từ (và mỗi loại chứng từ mới) là một form riêng: đổi key ⇒ React dựng lại
             // component với giá trị khởi tạo đúng, thay cho việc dọn/nạp lại từng ô bằng useEffect.
-            key={`${editing}:${initialKind}`}
+            key={`${editing}:document`}
             id={editing}
-            initialKind={initialKind}
+            initialKind="document"
+            allowedKinds={["document"]}
             customers={customers ?? []}
             onPrint={
               editing !== "new"
                 ? () => {
                     const row = data?.find((item) => item.id === editing);
-                    if (row) void printVoucher(row);
+                    if (row) requestPrint(row);
                   }
                 : undefined
             }
             printLoading={editing !== "new" && printingId === editing}
             keepOpenAfterSave={editing === "new" && keepCreateOpen}
+            readOnly={editing !== "new" && !!data?.find((item) => item.id === editing)?.cancelledAt}
             onClose={() => setEditing(null)}
             onSaved={() => {
               if (!(editing === "new" && keepCreateOpen)) setEditing(null);
@@ -928,22 +848,93 @@ export function KeToan() {
           />
         )}
 
+        {numberingForPrint && (
+          <Modal
+            open
+            solid
+            title={numberingForPrint.issuedAt ? "Xem lại phiếu đã phát hành" : "Nhập số phiếu trước khi xem"}
+            onClose={() => {
+              if (!previewLoading) setNumberingForPrint(null);
+            }}
+            footer={
+              <>
+                <GlassButton
+                  variant="ghost"
+                  onClick={() => setNumberingForPrint(null)}
+                  disabled={previewLoading}
+                >
+                  Hủy
+                </GlassButton>
+                <GlassButton onClick={() => void confirmWarehousePreview()} disabled={previewLoading}>
+                  {previewLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="h-4 w-4" />
+                  )}
+                  Xem trước
+                </GlassButton>
+              </>
+            }
+          >
+            <div className="space-y-3">
+              <p className="text-sm text-[var(--text-secondary)]">
+                {numberingForPrint.issuedAt
+                  ? "Số phiếu đã được khóa theo lần phát hành đầu tiên. Bạn có thể xem trước hoặc in lại bằng đúng số này."
+                  : "Kiểm tra số phiếu và nội dung bản xem trước trước khi gửi lệnh tới máy in mặc định của máy chủ."}
+              </p>
+              <Field label={numberingForPrint.issuedAt ? "Số phiếu đã phát hành" : "Số phiếu *"}>
+                <Input
+                  autoFocus
+                  maxLength={64}
+                  value={printVoucherNo}
+                  readOnly={!!numberingForPrint.issuedAt}
+                  onChange={(e) => {
+                    if (numberingForPrint.issuedAt) return;
+                    setPrintVoucherNo(e.target.value);
+                    if (printVoucherNoError) setPrintVoucherNoError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void confirmWarehousePreview();
+                  }}
+                  placeholder="Nhập số phiếu"
+                />
+              </Field>
+              {printVoucherNoError && (
+                <p className="text-sm font-semibold text-rose-500">{printVoucherNoError}</p>
+              )}
+            </div>
+          </Modal>
+        )}
+
+        {printPreview && (
+          <PrintPreviewModal
+            title={`Xem trước phiếu xuất kho ${printPreview.voucherNo}`}
+            src={printPreview.previewUrl}
+            printing={printingId === printPreview.originalRow.id}
+            printLabel="In tại máy chủ"
+            onClose={() => {
+              if (printingId !== printPreview.originalRow.id) setPrintPreview(null);
+            }}
+            onPrint={() => void printVoucher(printPreview.originalRow, printPreview.voucherNo)}
+          />
+        )}
+
         {deleting && (
           <Modal
             open
             solid
-            title="Xóa phiếu kế toán"
+            title="Hủy phiếu xuất kho"
             onClose={() => {
               if (!deletingBusy) setDeleting(null);
             }}
             footer={
               <>
                 <GlassButton variant="ghost" onClick={() => setDeleting(null)} disabled={deletingBusy}>
-                  Hủy
+                  Đóng
                 </GlassButton>
-                <GlassButton variant="danger" onClick={confirmDelete} disabled={deletingBusy}>
-                  {deletingBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                  Xóa phiếu
+                <GlassButton variant="danger" onClick={confirmCancel} disabled={deletingBusy}>
+                  {deletingBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                  Hủy phiếu
                 </GlassButton>
               </>
             }
@@ -954,22 +945,99 @@ export function KeToan() {
               </div>
               <div className="space-y-2 text-sm">
                 <p className="text-[var(--text)]">
-                  Bạn có chắc muốn xóa phiếu{" "}
+                  Phiếu{" "}
                   <span className="font-bold">{documentTypeText(deleting).toLowerCase()}</span>{" "}
-                  <span className="font-bold">{deleting.voucherNo}</span>?
+                  <span className="font-bold">{deleting.voucherNo || "chưa có số"}</span>{" "}
+                  sẽ chuyển sang trạng thái <span className="font-bold text-rose-500">Đã hủy</span>.
                 </p>
                 <div className="rounded-xl border border-[var(--glass-border)] bg-white/30 px-3 py-2.5 text-[var(--text-secondary)] dark:bg-white/5">
                   <div>Khách hàng: <span className="font-semibold text-[var(--text)]">{deleting.customerName || "Khách lẻ"}</span></div>
                   <div>Ngày: <span className="font-semibold text-[var(--text)]">{date(deleting.date)}</span></div>
                   <div>Tổng tiền: <span className="font-semibold text-[var(--text)]">{money(deleting.total)} ₫</span></div>
                 </div>
-                <p className="text-xs font-semibold text-rose-500">Hành động này không thể hoàn tác.</p>
+                <Field label="Lý do hủy (không bắt buộc)">
+                  <Input
+                    value={cancelReason}
+                    maxLength={500}
+                    onChange={(event) => setCancelReason(event.target.value)}
+                    placeholder="Nhập lý do hủy phiếu"
+                  />
+                </Field>
+                <p className="text-xs font-semibold text-[var(--text-secondary)]">
+                  Phiếu và toàn bộ nội dung vẫn được lưu trong hệ thống để tra cứu.
+                </p>
               </div>
             </div>
           </Modal>
         )}
       </div>
     </MotionConfig>
+  );
+}
+
+function CompactSystemStatus({
+  status,
+  error,
+  loading,
+  onRefresh,
+}: {
+  status: AccountingSystemStatus | null;
+  error: string;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const serverReady = !!status?.server.printServiceReady && !error;
+  const printerReady = !!status?.printer.ready && !error;
+  const printerProblem = !!status && !status.printer.ready && !error;
+  const healthy = serverReady && printerReady;
+  const stateLabel = loading && !status
+    ? "Đang kiểm tra"
+    : error
+      ? "Mất kết nối"
+      : printerProblem
+        ? "Máy in lỗi"
+      : healthy
+        ? "Sẵn sàng"
+        : "Cần kiểm tra";
+  const title = error
+    ? `${error}\nBấm để kiểm tra lại.`
+    : [
+        `Hệ thống in: ${stateLabel}`,
+        status?.server.message ?? "Đang kiểm tra máy chủ...",
+        status?.printer.name
+          ? `${status.printer.name}: ${status.printer.message}`
+          : status?.printer.message ?? "Đang kiểm tra máy in...",
+        "Bấm để kiểm tra lại.",
+      ].join("\n");
+
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={loading}
+      title={title}
+      className="gc-icon-btn relative grid h-10 w-10 shrink-0 place-items-center overflow-visible rounded-xl p-0 disabled:opacity-70"
+      aria-label={`Trạng thái máy chủ và máy in: ${stateLabel}. Bấm để kiểm tra lại`}
+    >
+      <span className="relative grid h-7 w-7 place-items-center text-[var(--gc-text-soft)]">
+        <Server className={`h-[18px] w-[18px] ${loading ? "animate-pulse" : ""}`} aria-hidden="true" />
+        <span className="absolute -bottom-1 -right-1 grid h-4 w-4 place-items-center rounded-full bg-white text-[var(--gc-text-soft)] shadow-sm dark:bg-slate-800">
+          <Printer className="h-2.5 w-2.5" aria-hidden="true" />
+        </span>
+      </span>
+      <span
+        className={`absolute right-0.5 top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white shadow-sm dark:border-slate-900 ${
+          loading && !status
+            ? "animate-pulse bg-sky-500"
+            : error || printerProblem
+              ? "bg-rose-500"
+              : healthy
+                ? "bg-emerald-500"
+                : "bg-amber-500"
+        }`}
+        aria-hidden="true"
+      />
+    </button>
   );
 }
 
