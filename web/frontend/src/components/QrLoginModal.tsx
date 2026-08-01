@@ -5,11 +5,16 @@ import { ApiError, api } from "../lib/api";
 import { useAuth, webSessionId, type QrLoginAccount } from "../lib/auth";
 import { Button } from "./ui";
 
-type QrSession = {
+type QrSessionResponse = {
   qrCode: string;
   pollToken: string;
   expiresAt: string;
   clientMode: "desktop_qr";
+};
+
+type QrSession = QrSessionResponse & {
+  /** Mốc hết hạn tính theo đồng hồ của chính máy này (đã chặn trường hợp lệch giờ với máy chủ). */
+  deadline: number;
 };
 
 const QR_LIFETIME_SECONDS = 5 * 60;
@@ -44,6 +49,9 @@ export function QrLoginModal({
   const pollTokenRef = useRef<string | null>(null);
   const avatarLookupTokenRef = useRef<string | null>(null);
   const generationRef = useRef(0);
+  // Khung hiển thị mã QR/ảnh đại diện: chuyển cảnh đăng nhập lấy đúng ô này làm điểm khởi phát,
+  // để các khối bung ra từ chỗ người dùng đang nhìn thay vì từ giữa màn hình trống.
+  const stageRef = useRef<HTMLDivElement>(null);
 
   const cancelToken = useCallback(async (token: string | null) => {
     if (!token) return;
@@ -70,7 +78,7 @@ export function QrLoginModal({
       await cancelToken(oldToken);
       if (generation !== generationRef.current) return;
 
-      const created = await api.postPublic<QrSession>("/api/auth/qr/start", {
+      const created = await api.postPublic<QrSessionResponse>("/api/auth/qr/start", {
         sid: webSessionId(),
         clientMode: "desktop_qr",
       });
@@ -79,7 +87,15 @@ export function QrLoginModal({
         return;
       }
       pollTokenRef.current = created.pollToken;
-      setSession(created);
+      // Đồng hồ đếm ngược chạy theo mốc của máy chủ, nhưng chỉ khi mốc đó hợp lý so với đồng hồ máy
+      // này. Máy lệch giờ thì lấy trọn vòng đời tính từ lúc nhận mã, để không có chuyện mã vừa hiện
+      // ra đã bị coi là hết hạn. Phán quyết cuối cùng vẫn của máy chủ qua vòng poll.
+      const serverDeadline = new Date(created.expiresAt).getTime();
+      const localDeadline = Date.now() + QR_LIFETIME_SECONDS * 1_000;
+      const trustServer = Number.isFinite(serverDeadline)
+        && serverDeadline > Date.now()
+        && serverDeadline <= localDeadline;
+      setSession({ ...created, deadline: trustServer ? serverDeadline : localDeadline });
     } catch (err) {
       if (generation === generationRef.current)
         setError(err instanceof Error ? err.message : "Không tạo được mã QR.");
@@ -99,16 +115,19 @@ export function QrLoginModal({
   }, [cancelToken, refresh]);
 
   useEffect(() => {
-    if (!session || confirmed || rejected) return;
-    const expiresAt = new Date(session.expiresAt).getTime();
+    if (!session || confirmed || rejected || expired) return;
     const tick = () => {
-      const left = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1_000));
+      const left = Math.max(0, Math.ceil((session.deadline - Date.now()) / 1_000));
       setSecondsLeft(left);
+      // Đồng hồ chạy hết là hết hạn — không chờ máy chủ trả "expired" mới biết. Trước đây trạng thái
+      // hết hạn chỉ đến từ vòng poll, nên mất mạng (hoặc phiên đã bị dọn) là đồng hồ đứng ở 00:00
+      // mà không có đường nào tạo lại mã.
+      if (left === 0) setExpired(true);
     };
     tick();
     const timer = window.setInterval(tick, 250);
     return () => window.clearInterval(timer);
-  }, [confirmed, rejected, session]);
+  }, [confirmed, expired, rejected, session]);
 
   useEffect(() => {
     if (!session || expired || confirmed || rejected) return;
@@ -125,7 +144,13 @@ export function QrLoginModal({
         if (stopped || generation !== generationRef.current) return;
         if (result.status === "authenticated") {
           terminal = true;
-          completeExternalLogin({ user: result.user });
+          const stage = stageRef.current?.getBoundingClientRect();
+          completeExternalLogin(
+            { user: result.user },
+            stage && stage.width > 0 && stage.height > 0
+              ? { left: stage.left, top: stage.top, width: stage.width, height: stage.height }
+              : undefined,
+          );
           // Chỉ xóa phiên server sau khi trình duyệt đã nhận phản hồi (và cùng với nó là cookie phiên).
           // Nếu response trước đó bị thất lạc, poll kế tiếp vẫn có thể nhận lại kết quả thay vì buộc
           // người dùng quét QR mới.
@@ -136,7 +161,9 @@ export function QrLoginModal({
         }
         if (result.status === "expired") {
           terminal = true;
+          setScannedAccount(null);
           setExpired(true);
+          setError("");
           return;
         }
         if (result.status === "rejected") {
@@ -213,10 +240,17 @@ export function QrLoginModal({
   const seconds = (secondsLeft % 60).toString().padStart(2, "0");
   const progress = Math.max(0, Math.min(100, (secondsLeft / QR_LIFETIME_SECONDS) * 100));
   const scannedName = scannedAccount?.fullName.trim() || scannedAccount?.username || "";
+  // Nút tạo lại mã chỉ xuất hiện khi mã không còn dùng được nữa: hết hạn, bị từ chối, hoặc không tạo
+  // được mã. Mã đang còn hiệu lực thì ẩn nút đi để không ai bấm nhầm mà mất mã đang chờ quét.
+  const canRenew = !confirmed && (expired || rejected || (!loading && !session));
 
   const body = (
     <>
-          <div className="mx-auto flex min-h-[248px] w-full max-w-[280px] items-center justify-center" aria-live="polite">
+          <div
+            ref={stageRef}
+            className="mx-auto flex min-h-[248px] w-full max-w-[280px] items-center justify-center"
+            aria-live="polite"
+          >
             {confirmed ? (
               <div className="flex flex-col items-center px-4 text-center">
                 <CheckCircle2 className="h-14 w-14 text-emerald-500" />
@@ -234,6 +268,9 @@ export function QrLoginModal({
               <div className="flex flex-col items-center px-4 text-center">
                 <Timer className="h-12 w-12 text-slate-500" />
                 <p className="mt-4 font-semibold text-slate-700 dark:text-slate-200">Mã QR đã hết hạn</p>
+                <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  Hãy tạo mã QR mới rồi quét lại bằng ứng dụng Nhân sự.
+                </p>
               </div>
             ) : scannedAccount ? (
               <div className="flex flex-col items-center px-2 text-center">
@@ -270,7 +307,7 @@ export function QrLoginModal({
             )}
           </div>
 
-          {!confirmed && !rejected && (
+          {!confirmed && !rejected && !expired && (
             <div className="mt-4">
               <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
                 <span className="flex items-center gap-1.5"><Timer className="h-3.5 w-3.5" /> Hiệu lực còn lại</span>
@@ -291,7 +328,7 @@ export function QrLoginModal({
 
           {error && <div className="mt-3 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-[var(--danger)] dark:bg-red-950">{error}</div>}
 
-          {!confirmed && !scannedAccount && (
+          {canRenew && (
             <Button
               type="button"
               variant="soft"
@@ -299,7 +336,7 @@ export function QrLoginModal({
               onClick={() => void refresh()}
               loading={loading}
             >
-              <RefreshCw className="h-4 w-4" /> {expired || rejected ? "Tạo mã QR mới" : "Tải lại mã QR"}
+              <RefreshCw className="h-4 w-4" /> Tạo mã QR mới
             </Button>
           )}
           {!expired && !confirmed && !rejected && session && (

@@ -27,7 +27,7 @@ interface AuthCtx {
   loading: boolean;
   login: (username: string, password: string) => Promise<{ user: User }>;
   pollQrLogin: (pollToken: string, signal?: AbortSignal) => Promise<QrLoginPollResult>;
-  completeExternalLogin: (login: { user: User }) => void;
+  completeExternalLogin: (login: { user: User }, origin?: LoginTransitionOrigin) => void;
   completeLoginWithTransition: (login: { user: User }, origin: LoginTransitionOrigin) => void;
   loginTransitionPhase: LoginTransitionPhase | null;
   revealLoginTransition: () => void;
@@ -211,8 +211,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
   }, [completeLoginTransitionCover]);
 
-  const completeExternalLogin = useCallback((res: { user: User }) => {
-    completeLoginWithTransition(res, {
+  // Đăng nhập từ nguồn ngoài (QR/ứng dụng): nếu bên gọi biết vùng người dùng đang nhìn (khung mã QR)
+  // thì chuyển cảnh khởi phát từ đúng đó; không thì lấy giữa màn hình.
+  const completeExternalLogin = useCallback((res: { user: User }, origin?: LoginTransitionOrigin) => {
+    completeLoginWithTransition(res, origin ?? {
       left: window.innerWidth / 2,
       top: window.innerHeight / 2,
       width: 0,
