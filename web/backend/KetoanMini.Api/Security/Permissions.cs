@@ -18,6 +18,8 @@ public static class Permissions
     // ── Hệ thống ──────────────────────────────────────────────────────────────
     public const string SystemSettingsManage = "system.settings.manage";
     public const string SystemReleasesManage = "system.releases.manage";
+    /// <summary>Xem dữ liệu toàn công ty nhưng không đồng nghĩa với quyền quản trị/cập nhật.</summary>
+    public const string CompanyScopeAll = "scope.company.all";
 
     // ── Nhật ký hoạt động ─────────────────────────────────────────────────────
     /// <summary>Xem nhật ký hoạt động. Phạm vi (toàn bộ hay chỉ phần tiền) do server chốt riêng.</summary>
@@ -30,8 +32,11 @@ public static class Permissions
     public const string VouchersUpdate = "vouchers.update";
     public const string VouchersApprove = "vouchers.approve";
     public const string VouchersCancel = "vouchers.cancel";
-    /// <summary>Phiếu chi tiền mặt: xem sổ. Lập/duyệt còn đòi thuộc phòng ban is_accounting (server chốt).</summary>
+    /// <summary>Phiếu chi tiền mặt: xem sổ. Các quyền thay đổi trạng thái còn chịu kiểm tra phòng ban/quy trình.</summary>
     public const string PayoutRead = "payout.read";
+    public const string PayoutCreate = "payout.create";
+    public const string PayoutApprove = "payout.approve";
+    public const string PayoutPay = "payout.pay";
 
     // ── Báo cáo ───────────────────────────────────────────────────────────────
     public const string ReportRead = "report.read";
@@ -82,9 +87,10 @@ public static class Permissions
     public static readonly string[] All =
     [
         UsersRead, UsersManage, RolesManage,
-        SystemSettingsManage, SystemReleasesManage,
+        SystemSettingsManage, SystemReleasesManage, CompanyScopeAll,
         AuditRead,
-        AccountingAccess, VouchersRead, VouchersCreate, VouchersUpdate, VouchersApprove, VouchersCancel, PayoutRead,
+        AccountingAccess, VouchersRead, VouchersCreate, VouchersUpdate, VouchersApprove, VouchersCancel,
+        PayoutRead, PayoutCreate, PayoutApprove, PayoutPay,
         ReportRead, ReportExport,
         AttendanceSelf, AttendanceRead, AttendanceManage, AttendanceKiosk,
         PayrollRead, PayrollManage,
@@ -102,6 +108,15 @@ public static class Permissions
         HrSelfAccess, AttendanceSelf, RequestsSelf, TasksSelf, ChatAccess, PortalRead, PenaltyRead,
     ];
 
+    /// <summary>Quyền nền của Kế toán. Kế toán trưởng mở rộng chính mảng này để không thể bị thiếu
+    /// quyền khi sau này bổ sung nghiệp vụ mới cho Kế toán.</summary>
+    private static readonly string[] AccountingPermissions =
+    [
+        .. BaseEmployee,
+        AccountingAccess, VouchersRead, VouchersCreate, VouchersUpdate, VouchersCancel,
+        PayoutRead, PayoutCreate, ReportRead, ReportExport, AuditRead,
+    ];
+
     /// <summary>
     /// VAI TRÒ → QUYỀN. Đây là chỗ DUY NHẤT quyết định một vai trò làm được gì. Thêm vai trò mới =
     /// thêm một dòng ở đây (và một nhánh trong <see cref="AppRoles.Normalize"/>).
@@ -109,32 +124,50 @@ public static class Permissions
     public static readonly IReadOnlyDictionary<string, string[]> RolePermissions =
         new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
-            // Admin có mọi quyền TRỪ lập/duyệt phiếu chi tiền mặt: theo quy trình nội bộ chỉ thủ quỹ
-            // (Kế toán thuộc phòng ban is_accounting) được đụng tiền mặt — xem PayoutVoucherEndpoints.
+            // Admin có toàn bộ permission kỹ thuật. Các endpoint tiền mặt vẫn áp thêm điều kiện nghiệp vụ
+            // (phòng kế toán, đúng trạng thái quy trình, chữ ký người nhận) — xem PayoutVoucherEndpoints.
             [AppRoles.Admin] = All,
 
             [AppRoles.Employee] = BaseEmployee,
 
-            [AppRoles.Accounting] =
+            // Ban giám đốc chỉ đọc trên phạm vi toàn công ty; không quản trị tài khoản, không lập/duyệt
+            // chứng từ và không thực hiện chi tiền.
+            [AppRoles.Executive] =
             [
                 .. BaseEmployee,
-                AccountingAccess, VouchersRead, VouchersCreate, VouchersUpdate, VouchersCancel,
-                PayoutRead, ReportRead, ReportExport, AuditRead,
+                CompanyScopeAll, AccountingAccess, VouchersRead, PayoutRead,
+                ReportRead, ReportExport, PayrollRead, HrRead, AttendanceRead, AuditRead,
             ],
 
-            // Kế toán trưởng = kế toán + được DUYỆT chứng từ và xem bảng lương.
-            [AppRoles.ChiefAccountant] =
+            [AppRoles.Accounting] = AccountingPermissions,
+
+            // Tách riêng người lập lương: không mở rộng quyền này cho toàn bộ Kế toán.
+            [AppRoles.Payroll] =
             [
                 .. BaseEmployee,
-                AccountingAccess, VouchersRead, VouchersCreate, VouchersUpdate, VouchersApprove, VouchersCancel,
-                PayoutRead, ReportRead, ReportExport, AuditRead, PayrollRead,
+                PayrollRead, PayrollManage, ReportRead,
+            ],
+
+            // Kế toán trưởng = TOÀN BỘ quyền Kế toán + quyền duyệt. Không nhân bản danh sách để
+            // mọi quyền Kế toán bổ sung trong tương lai tự động có ở Kế toán trưởng.
+            [AppRoles.ChiefAccountant] =
+            [
+                .. AccountingPermissions,
+                VouchersApprove, PayoutApprove, PayrollRead,
+            ],
+
+            // Thủ quỹ chỉ thực chi phiếu đã được duyệt; không được tự lập hoặc tự duyệt phiếu.
+            [AppRoles.Cashier] =
+            [
+                .. BaseEmployee,
+                AccountingAccess, PayoutRead, PayoutPay, ReportRead, AuditRead,
             ],
 
             [AppRoles.Hr] =
             [
                 .. BaseEmployee,
                 HrRead, HrManage, AttendanceRead, AttendanceManage,
-                RequestsApprove, RequestsManage, PayrollRead, PenaltyManage, ReportRead,
+                RequestsApprove, RequestsManage, PayrollRead, PenaltyManage, ReportRead, PortalManage,
             ],
 
             // Trưởng phòng: duyệt đơn của phòng mình + giao việc. Phạm vi dữ liệu (phòng ban) do
@@ -182,6 +215,7 @@ public static class Permissions
         RolesManage => "Quản lý vai trò",
         SystemSettingsManage => "Cấu hình hệ thống",
         SystemReleasesManage => "Quản lý bản cập nhật APK",
+        CompanyScopeAll => "Xem dữ liệu toàn công ty",
         AuditRead => "Xem nhật ký hoạt động",
         AccountingAccess => "Vào khu kế toán",
         VouchersRead => "Xem chứng từ",
@@ -190,6 +224,9 @@ public static class Permissions
         VouchersApprove => "Duyệt chứng từ",
         VouchersCancel => "Hủy chứng từ",
         PayoutRead => "Xem sổ phiếu chi tiền mặt",
+        PayoutCreate => "Lập phiếu chi tiền mặt",
+        PayoutApprove => "Duyệt phiếu chi tiền mặt",
+        PayoutPay => "Thực hiện chi tiền mặt",
         ReportRead => "Xem báo cáo",
         ReportExport => "Xuất báo cáo",
         AttendanceSelf => "Tự chấm công & xem bảng công của mình",

@@ -97,14 +97,14 @@ public sealed class AttendanceConfirmEndpointTests(ApiFactory factory)
         await conn.Cmd("""
             INSERT INTO app_users (id, username, full_name, email, role, password_hash, is_active,
                 approval_status, approved_at, approved_by, created_at, is_deleted)
-            VALUES (@id, @u, @n, '', 'User', @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test',
+            VALUES (@id, @u, @n, '', 'Employee', @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test',
                 CURRENT_TIMESTAMP, FALSE)
             """)
             .With("@id", userId).With("@u", username).With("@n", "Người Thử Nghiệm")
             .With("@ph", PasswordHasher.Hash("test-pass")).ExecuteNonQueryAsync();
 
         return tokens.CreateToken(
-            new UserDto(userId, username, "Người Thử Nghiệm", "", "User", true, "Approved", DateTime.UtcNow),
+            new UserDto(userId, username, "Người Thử Nghiệm", "", AppRoles.Employee, true, "Approved", DateTime.UtcNow),
             "app:cc:" + Guid.NewGuid().ToString("N")[..16]);
     }
 

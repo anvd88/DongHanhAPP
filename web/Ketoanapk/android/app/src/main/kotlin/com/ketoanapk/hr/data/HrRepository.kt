@@ -301,7 +301,9 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun payoutRecipients(): List<PayoutRecipient> = call { api.payoutRecipients() }
     suspend fun createPayoutVoucher(body: CreatePayoutBody): CreatedPayoutVoucher = call { api.createPayoutVoucher(body) }
     suspend fun refreshPayoutQr(id: String): PayoutQrResponse = call { api.refreshPayoutQr(id) }
-    suspend fun approvePayoutVoucher(id: String) = callUnit { api.approvePayoutVoucher(id) }
+    suspend fun approvePayoutVoucher(id: String, note: String = "") = callUnit { api.approvePayoutVoucher(id, TransitionPayoutBody(note)) }
+    suspend fun completePayoutVoucher(id: String, note: String = "") = callUnit { api.completePayoutVoucher(id, TransitionPayoutBody(note)) }
+    suspend fun rejectPayoutVoucher(id: String, reason: String) = callUnit { api.rejectPayoutVoucher(id, CancelPayoutBody(reason)) }
     suspend fun cancelPayoutVoucher(id: String, reason: String) = callUnit { api.cancelPayoutVoucher(id, CancelPayoutBody(reason)) }
 
     suspend fun myPayslips(): List<PayslipItem> = call { api.myPayslips() }
@@ -313,6 +315,7 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun managerAttendance(date:String,status:String?,departmentId:String?)=call{api.managerAttendance(date,status,departmentId)}
     suspend fun employees(): List<EmployeeCard> = call { api.employees() }
     suspend fun departments(): List<Department> = call { api.departments() }
+    suspend fun jobPositions(): List<JobPosition> = call { api.jobPositions() }
     suspend fun openSurveys()=call{api.openSurveys()};suspend fun answerSurvey(id:String,a:kotlinx.serialization.json.JsonObject)=callUnit{api.answerSurvey(id,SurveyResponseBody(a))};suspend fun sendGeneralFeedback(m:String,a:Boolean)=callUnit{api.sendGeneralFeedback(GeneralFeedbackBody(m,a))};suspend fun myGeneralFeedback()=call{api.myGeneralFeedback()}
     suspend fun createSupportTicket(message:String)=callUnit{api.createSupportTicket(SupportTicketBody(message,com.ketoanapk.hr.BuildConfig.VERSION_NAME,"${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))};suspend fun mySupportTickets()=call{api.mySupportTickets()}
     suspend fun audit(take: Int, skip: Int, search: String?, entity: String?): List<AuditEntry> =

@@ -2,6 +2,7 @@ using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Realtime;
+using KetoanMini.Api.Security;
 using Microsoft.AspNetCore.SignalR;
 
 namespace KetoanMini.Api.Endpoints;
@@ -10,12 +11,12 @@ public static class FeedbackEndpoints
 {
     public static void MapFeedback(this WebApplication app)
     {
-        var g = app.MapGroup("/api/feedback").RequireAuthorization();
+        var g = app.MapGroup("/api/feedback").RequirePermission(Permissions.ChatAccess);
 
         g.MapGet("/", async (ClaimsPrincipal principal, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             var me = principal.Username();
             var rows = new List<FeedbackDto>();
 
@@ -107,7 +108,7 @@ public static class FeedbackEndpoints
 
         g.MapPost("/{id:long}/resolve", async (long id, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.UsersManage)) return Results.Forbid();
 
             await using var conn = await db.OpenAsync();
             string reporter;

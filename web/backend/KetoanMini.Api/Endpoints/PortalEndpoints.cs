@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -14,7 +15,7 @@ public static class PortalEndpoints
 
     public static void MapPortal(this WebApplication app)
     {
-        var g = app.MapGroup("/api/portal").RequireAuthorization();
+        var g = app.MapGroup("/api/portal").RequirePermission(Permissions.PortalRead);
 
         // ---- Feed công khai cho app: giới thiệu + tin tức + sự kiện (chỉ mục đã đăng) ----
         g.MapGet("/feed", async (Database db) =>
@@ -31,7 +32,7 @@ public static class PortalEndpoints
         // ---- Danh sách bài (admin, gồm cả bài chưa đăng) ----
         g.MapGet("/posts", async (string? kind, ClaimsPrincipal principal, Database db) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var k = NormalizeKind(kind);
             var posts = await ReadPosts(conn, kind: k, publishedOnly: false, limit: 500);
@@ -40,7 +41,7 @@ public static class PortalEndpoints
 
         g.MapPost("/posts", async (PortalPostRequest req, ClaimsPrincipal principal, Database db) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.PortalManage)) return Results.Forbid();
             var (kind, title, summary, body, cover, location, eventAt, error) = ValidatePost(req);
             if (error is not null) return Results.BadRequest(new { message = error });
 
@@ -72,7 +73,7 @@ public static class PortalEndpoints
 
         g.MapPut("/posts/{id:long}", async (long id, PortalPostRequest req, ClaimsPrincipal principal, Database db) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.PortalManage)) return Results.Forbid();
             var (kind, title, summary, body, cover, location, eventAt, error) = ValidatePost(req);
             if (error is not null) return Results.BadRequest(new { message = error });
 
@@ -111,7 +112,7 @@ public static class PortalEndpoints
 
         g.MapDelete("/posts/{id:long}", async (long id, ClaimsPrincipal principal, Database db) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM app_portal_posts WHERE id = @id")
                 .With("@id", id)
@@ -131,7 +132,7 @@ public static class PortalEndpoints
 
         g.MapPut("/about", async (PortalAboutRequest req, ClaimsPrincipal principal, Database db) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.PortalManage)) return Results.Forbid();
             var title = Trim(req.Title, 300);
             var content = Trim(req.Content, 20000);
             var cover = string.IsNullOrWhiteSpace(req.CoverImage) ? null : req.CoverImage.Trim();

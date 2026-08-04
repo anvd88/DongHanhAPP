@@ -97,7 +97,7 @@
 
 html[data-theme="dark"] .gc-panel--strong.gc-datepop,
 html[data-theme="dark"] .gc-panel--strong.gc-monthpop {
-  background: #161f2e;
+  background: #182437;
   box-shadow:
     0 24px 60px -20px rgba(0, 0, 0, 0.7),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -274,7 +274,7 @@ html[data-theme="dark"] .gc-rangepop-value {
   bottom: calc(100% + 3px);
   z-index: 7;
   border: 5px solid transparent;
-  border-top-color: #0f172a;
+  border-top-color: #10233f;
   transform: translate(-50%, 3px);
 }
 
@@ -286,7 +286,7 @@ html[data-theme="dark"] .gc-rangepop-value {
   max-width: 170px;
   padding: 5px 8px;
   border-radius: 7px;
-  background: #0f172a;
+  background: #10233f;
   box-shadow: 0 8px 20px -10px rgba(0, 0, 0, 0.65);
   color: #fff;
   font-size: 0.68rem;
@@ -302,7 +302,7 @@ html[data-theme="dark"] .gc-rangepop .rdp-day_button[data-range-preview-label]::
 
 html[data-theme="dark"] .gc-rangepop .rdp-day_button[data-range-preview-label]::after {
   background: #f8fafc;
-  color: #0f172a;
+  color: #10233f;
 }
 
 @keyframes gc-range-tooltip-in {

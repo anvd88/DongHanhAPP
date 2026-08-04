@@ -506,7 +506,7 @@ function FaceScanAnimation({
   const isScanning = status === "scanning" || status === "error";
   const isSuccess = status === "success";
   const cornerColor = status === "error" ? "#b45309" : isSuccess ? "#16a34a" : "currentColor";
-  const glowColor = status === "error" ? "rgba(245, 158, 11, 0.14)" : isSuccess ? "rgba(34, 197, 94, 0.18)" : "rgba(37, 99, 235, 0.16)";
+  const glowColor = status === "error" ? "rgba(245, 158, 11, 0.14)" : isSuccess ? "rgba(34, 197, 94, 0.18)" : "rgba(52, 87, 213, 0.16)";
 
   return (
     <motion.div
@@ -579,14 +579,14 @@ function FaceScanAnimation({
             <rect x="24" y="22" width="52" height="56" rx="16" />
           </clipPath>
           <linearGradient id="cc-bio-scan-gradient" x1="28" y1="0" x2="72" y2="0" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="#2563eb" stopOpacity="0" />
-            <stop offset="0.5" stopColor="#2563eb" stopOpacity="1" />
-            <stop offset="1" stopColor="#22d3ee" stopOpacity="0" />
+            <stop offset="0" stopColor="#3457d5" stopOpacity="0" />
+            <stop offset="0.5" stopColor="#3457d5" stopOpacity="1" />
+            <stop offset="1" stopColor="#21b5a3" stopOpacity="0" />
           </linearGradient>
           <linearGradient id="cc-bio-scan-wash" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#60a5fa" stopOpacity="0" />
-            <stop offset="0.48" stopColor="#60a5fa" stopOpacity="0.18" />
-            <stop offset="1" stopColor="#22d3ee" stopOpacity="0" />
+            <stop offset="0" stopColor="#6f88ee" stopOpacity="0" />
+            <stop offset="0.48" stopColor="#6f88ee" stopOpacity="0.18" />
+            <stop offset="1" stopColor="#21b5a3" stopOpacity="0" />
           </linearGradient>
           <radialGradient id="cc-bio-scan-field" cx="50%" cy="50%" r="58%">
             <stop offset="0" stopColor="#dbeafe" stopOpacity="0.34" />
@@ -683,7 +683,7 @@ function FaceScanAnimation({
                 x2="75"
                 y1="74"
                 y2="74"
-                stroke="#60a5fa"
+                stroke="#6f88ee"
                 strokeOpacity="0.44"
                 strokeWidth="7"
                 strokeLinecap="round"

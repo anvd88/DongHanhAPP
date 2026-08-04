@@ -1,12 +1,12 @@
 .core-accounting {
-  --ca-ink: #102a3c;
-  --ca-muted: #6d7f8b;
-  --ca-line: rgba(20, 54, 73, .11);
+  --ca-ink: #10233f;
+  --ca-muted: #65758d;
+  --ca-line: rgba(52, 87, 213, .11);
   --ca-surface: rgba(255, 255, 255, .82);
-  --ca-teal: #0f9f92;
-  --ca-blue: #2774d8;
+  --ca-teal: #129887;
+  --ca-blue: #3457d5;
   --ca-orange: #e68a29;
-  --ca-purple: #7d5bd6;
+  --ca-purple: #7259d6;
   --ca-red: #d64f55;
   color: var(--ca-ink);
   padding: 0 0 36px;
@@ -14,8 +14,8 @@
 .ca-hero {
   position: relative; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px;
   margin: -2px -2px 18px; padding: 25px 28px; border-radius: 24px; overflow: hidden;
-  background: linear-gradient(120deg, #0d3343 0%, #124d57 58%, #127b72 130%);
-  box-shadow: 0 18px 45px rgba(14, 50, 65, .2); color: white;
+  background: linear-gradient(120deg, #102f66 0%, #3457d5 58%, #129887 130%);
+  box-shadow: 0 18px 45px rgba(16, 47, 102, .2); color: white;
 }
 .ca-hero::after { content: ""; position: absolute; width: 330px; height: 330px; right: 20%; top: -260px; border: 55px solid rgba(255,255,255,.06); border-radius: 50%; }
 .ca-hero > * { position: relative; z-index: 1; }
@@ -33,7 +33,7 @@
 .ca-tabs { display: flex; gap: 3px; margin-bottom: 18px; padding: 5px; overflow-x: auto; border: 1px solid var(--ca-line); border-radius: 16px; background: rgba(255,255,255,.48); backdrop-filter: blur(18px); }
 .ca-tabs button { position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; min-width: max-content; flex: 1; padding: 10px 11px; border-radius: 11px; color: var(--ca-muted); font-size: 11px; font-weight: 700; transition: .18s ease; }
 .ca-tabs button:hover { color: var(--ca-ink); background: rgba(255,255,255,.65); }
-.ca-tabs button.active { color: #fff; background: #164758; box-shadow: 0 6px 14px rgba(17, 58, 73, .2); }
+.ca-tabs button.active { color: #fff; background: #2946b5; box-shadow: 0 6px 14px rgba(52, 87, 213, .2); }
 .ca-tabs em { display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #e3703a; color: white; font-size: 9px; font-style: normal; }
 .ca-panel-stack { display: flex; flex-direction: column; gap: 16px; }
 .ca-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; }

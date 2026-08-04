@@ -15,6 +15,14 @@ import {
   type LoginTransitionPhase,
   type LoginTransitionState,
 } from "../components/LoginTransitionLayer";
+import {
+  LogoutTransitionLayer,
+  type LogoutAvatarSnapshot,
+  type LogoutTransitionPhase,
+  type LogoutTransitionState,
+} from "../components/LogoutTransitionLayer";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { LogOut } from "lucide-react";
 import { api, session } from "./api";
 import type { User } from "./types";
 import { ensureWaterDailyLogin } from "./waterReminderClock";
@@ -31,7 +39,7 @@ interface AuthCtx {
   completeLoginWithTransition: (login: { user: User }, origin: LoginTransitionOrigin) => void;
   loginTransitionPhase: LoginTransitionPhase | null;
   revealLoginTransition: () => void;
-  logout: () => void;
+  logout: (avatarElement?: HTMLElement | null) => void;
   updateUser: (u: User) => void;
 }
 
@@ -52,6 +60,8 @@ export const useAuth = () => useContext(Ctx);
 const LOGIN_TRANSITION_MIN_COVERED_MS = 600;
 const LOGIN_TRANSITION_COVER_FALLBACK_MS = 1_350;
 const LOGIN_TRANSITION_REMOVE_FALLBACK_MS = 1_500;
+const LOGOUT_TRANSITION_COVER_FALLBACK_MS = 1_250;
+const LOGOUT_TRANSITION_REMOVE_FALLBACK_MS = 1_500;
 
 // Tự động đăng xuất khi không hoạt động (bảo vệ tài khoản trên thiết bị dùng chung).
 // Ngưỡng lấy từ VITE_IDLE_LOGOUT_MINUTES (mặc định 15 phút; đặt 0 để tắt).
@@ -74,6 +84,48 @@ export function webSessionId(): string {
   return sid;
 }
 
+function logoutInitials(user: User) {
+  const name = (user.fullName || user.username || "?").trim();
+  const parts = name.split(/\s+/).filter(Boolean);
+  return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)?.[0] || ""}` : name.slice(0, 2)).toUpperCase();
+}
+
+function visibleLogoutAvatar() {
+  return Array
+    .from(document.querySelectorAll<HTMLElement>("[data-logout-avatar-origin='true']"))
+    .find((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width >= 20 && rect.height >= 20 && style.display !== "none" && style.visibility !== "hidden";
+    }) ?? null;
+}
+
+function captureLogoutAvatar(user: User, preferred?: HTMLElement | null): LogoutAvatarSnapshot {
+  const avatar = preferred && preferred.isConnected ? preferred : visibleLogoutAvatar();
+  const rect = avatar?.getBoundingClientRect();
+  const style = avatar ? window.getComputedStyle(avatar) : null;
+  const image = avatar?.querySelector<HTMLImageElement>("img");
+  const fallbackSize = 48;
+  return {
+    origin: rect && rect.width >= 20 && rect.height >= 20
+      ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+      : {
+          left: window.innerWidth / 2 - fallbackSize / 2,
+          top: window.innerHeight / 2 - fallbackSize / 2,
+          width: fallbackSize,
+          height: fallbackSize,
+        },
+    imageSrc: image?.currentSrc || image?.src || user.avatarUrl || null,
+    label: image ? "" : avatar?.textContent?.trim() || logoutInitials(user),
+    backgroundImage: style?.backgroundImage || "linear-gradient(145deg, #3457d5, #129887)",
+    backgroundColor: style?.backgroundColor || "#3457d5",
+    color: style?.color || "#ffffff",
+    fontFamily: style?.fontFamily || "inherit",
+    fontSize: style?.fontSize || "0.9rem",
+    fontWeight: style?.fontWeight || "800",
+  };
+}
+
 // HIỆN DIỆN ONLINE giờ đi theo KẾT NỐI SignalR, không còn nhịp tim HTTP 45s ở đây nữa. Backend đánh
 // dấu online ngay khi hub kết nối (ChangesHub.OnConnectedAsync) và làm tươi last_seen theo lô mỗi 45s
 // cho các phiên đang mở socket (HubPresenceRefresher) — trình duyệt đang mở app là đã có sẵn kết nối
@@ -84,7 +136,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(() => session.isSignedIn());
   const [loginTransition, setLoginTransition] = useState<LoginTransitionState | null>(null);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutTransition, setLogoutTransition] = useState<LogoutTransitionState | null>(null);
   const loginTransitionId = useRef(0);
+  const logoutTransitionId = useRef(0);
+  const logoutTransitionPhase = useRef<LogoutTransitionPhase | null>(null);
   const pendingTransitionLogin = useRef<{ user: User } | null>(null);
   const loginCoverTimer = useRef<number | null>(null);
   const loginReadyRevealTimer = useRef<number | null>(null);
@@ -92,6 +148,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginTransitionRemoveTimer = useRef<number | null>(null);
   const loginTransitionCoveredAt = useRef<number | null>(null);
   const loginRevealStarted = useRef(false);
+  const pendingLogoutAvatarElement = useRef<HTMLElement | null>(null);
+  const logoutCoverTimer = useRef<number | null>(null);
+  const logoutRemoveTimer = useRef<number | null>(null);
 
   useEffect(() => {
     // Token cũ trong localStorage (phiên bản trước khi chuyển sang cookie) không còn giá trị gì —
@@ -231,16 +290,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [loginTransition?.phase]);
 
+  useLayoutEffect(() => {
+    const phase = logoutTransition?.phase;
+    const origin = logoutTransition?.avatar.origin;
+    if (phase) {
+      document.documentElement.dataset.logoutTransitionPhase = phase;
+      if (origin) {
+        document.documentElement.style.setProperty("--logout-origin-x", `${origin.left + origin.width / 2}px`);
+        document.documentElement.style.setProperty("--logout-origin-y", `${origin.top + origin.height / 2}px`);
+      }
+    } else {
+      delete document.documentElement.dataset.logoutTransitionPhase;
+    }
+    return () => {
+      delete document.documentElement.dataset.logoutTransitionPhase;
+      document.documentElement.style.removeProperty("--logout-origin-x");
+      document.documentElement.style.removeProperty("--logout-origin-y");
+    };
+  }, [logoutTransition]);
+
   useEffect(() => () => {
     if (loginCoverTimer.current !== null) window.clearTimeout(loginCoverTimer.current);
     if (loginReadyRevealTimer.current !== null) window.clearTimeout(loginReadyRevealTimer.current);
     if (loginRevealSafetyTimer.current !== null) window.clearTimeout(loginRevealSafetyTimer.current);
     if (loginTransitionRemoveTimer.current !== null) window.clearTimeout(loginTransitionRemoveTimer.current);
+    if (logoutCoverTimer.current !== null) window.clearTimeout(logoutCoverTimer.current);
+    if (logoutRemoveTimer.current !== null) window.clearTimeout(logoutRemoveTimer.current);
     pendingTransitionLogin.current = null;
+    pendingLogoutAvatarElement.current = null;
+    logoutTransitionPhase.current = null;
   }, []);
 
   const login = async (username: string, password: string) => {
-    return api.post<{ user: User }>("/api/auth/login", { username, password, sid: webSessionId() });
+    // Đăng nhập là endpoint công khai: 401 ở đây là sai thông tin đăng nhập, không phải một phiên
+    // đang hoạt động bị hết hạn. postPublic giữ nguyên thông báo thật từ máy chủ và vẫn gửi cookie
+    // bootstrap HttpOnly cùng-origin vừa được khởi tạo ở màn Login.
+    return api.postPublic<{ user: User }>("/api/auth/login", { username, password, sid: webSessionId() });
   };
 
   // Poll QR: máy chủ đặt cookie phiên ngay trong phản hồi "authenticated" (không trả token ra).
@@ -248,13 +333,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pollQrLogin = useCallback((pollToken: string, signal?: AbortSignal) =>
     api.postPublic<QrLoginPollResult>("/api/auth/qr/poll", { pollToken }, signal), []);
 
-  const logout = () => {
-    // Chỉ máy chủ xoá được cookie HttpOnly, nên đăng xuất PHẢI gọi lên máy chủ — không còn cách
-    // "xoá localStorage cho xong" như trước. Gọi hỏng (mất mạng) thì cookie vẫn còn; phiên sẽ chết
-    // theo hạn cookie hoặc khi người dùng đăng nhập lại.
-    api.post("/api/auth/logout", { sid: webSessionId() }).catch(() => {});
+  const finishLocalLogout = useCallback(() => {
     session.clearLocal();
     void stopRealtime();
+
+    // Nếu người dùng đăng xuất ngay sau khi đăng nhập, dừng sạch chuyển cảnh chiều vào trước khi
+    // dựng màn hình đăng nhập theo chiều ngược lại.
     if (loginCoverTimer.current !== null) window.clearTimeout(loginCoverTimer.current);
     if (loginReadyRevealTimer.current !== null) window.clearTimeout(loginReadyRevealTimer.current);
     if (loginRevealSafetyTimer.current !== null) window.clearTimeout(loginRevealSafetyTimer.current);
@@ -268,7 +352,88 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loginRevealStarted.current = false;
     setLoginTransition(null);
     setUser(null);
-  };
+  }, []);
+
+  const removeLogoutTransition = useCallback(() => {
+    if (logoutCoverTimer.current !== null) {
+      window.clearTimeout(logoutCoverTimer.current);
+      logoutCoverTimer.current = null;
+    }
+    if (logoutRemoveTimer.current !== null) {
+      window.clearTimeout(logoutRemoveTimer.current);
+      logoutRemoveTimer.current = null;
+    }
+    logoutTransitionPhase.current = null;
+    pendingLogoutAvatarElement.current = null;
+    setLogoutTransition(null);
+  }, []);
+
+  const completeLogoutTransitionCover = useCallback(() => {
+    if (logoutTransitionPhase.current !== "covering") return;
+    logoutTransitionPhase.current = "waiting";
+    if (logoutCoverTimer.current !== null) {
+      window.clearTimeout(logoutCoverTimer.current);
+      logoutCoverTimer.current = null;
+    }
+
+    // Chỉ xóa cookie và tháo app sau khi curtain đã phủ kín. Cách này tránh request nền nhận 401
+    // rồi hard-redirect giữa lúc người dùng vẫn còn nhìn thấy giao diện cũ.
+    void api.post("/api/auth/logout", { sid: webSessionId() }).catch(() => {});
+    finishLocalLogout();
+    setLogoutTransition((current) => current ? { ...current, phase: "waiting" } : current);
+  }, [finishLocalLogout]);
+
+  const revealLogoutTransition = useCallback(() => {
+    if (logoutTransitionPhase.current !== "waiting") return;
+    logoutTransitionPhase.current = "revealing";
+    setLogoutTransition((current) => (
+      current?.phase === "waiting" ? { ...current, phase: "revealing" } : current
+    ));
+    if (logoutRemoveTimer.current !== null) window.clearTimeout(logoutRemoveTimer.current);
+    logoutRemoveTimer.current = window.setTimeout(
+      removeLogoutTransition,
+      LOGOUT_TRANSITION_REMOVE_FALLBACK_MS,
+    );
+  }, [removeLogoutTransition]);
+
+  const confirmLogout = useCallback(() => {
+    if (!user || logoutTransition || logoutTransitionPhase.current !== null) return;
+
+    // Đo lại ở đúng thời điểm xác nhận để resize hoặc thay đổi layout trong lúc mở hộp thoại
+    // không làm iris nhảy khỏi avatar mà người dùng vừa chọn.
+    const avatar = captureLogoutAvatar(user, pendingLogoutAvatarElement.current);
+
+    setLogoutConfirmOpen(false);
+    logoutTransitionId.current += 1;
+    logoutTransitionPhase.current = "covering";
+    setLogoutTransition({
+      id: logoutTransitionId.current,
+      phase: "covering",
+      avatar,
+      accountName: user.fullName?.trim() || user.username,
+    });
+
+    // animation completion là mốc chính; timer chỉ dự phòng khi tab nền không phát callback.
+    logoutCoverTimer.current = window.setTimeout(
+      completeLogoutTransitionCover,
+      LOGOUT_TRANSITION_COVER_FALLBACK_MS,
+    );
+  }, [completeLogoutTransitionCover, logoutTransition, user]);
+
+  // Các nút đăng xuất thủ công chỉ mở bước xác nhận. Việc xóa phiên thật bắt đầu ở confirmLogout.
+  const logout = useCallback((avatarElement?: HTMLElement | null) => {
+    if (!user || logoutTransition || logoutTransitionPhase.current !== null) return;
+    pendingLogoutAvatarElement.current = avatarElement?.isConnected ? avatarElement : null;
+    setLogoutConfirmOpen(true);
+  }, [logoutTransition, user]);
+
+  // Đăng xuất do hết thời gian chờ không được dừng lại ở một hộp thoại không có người thao tác.
+  const logoutImmediately = useCallback(() => {
+    setLogoutConfirmOpen(false);
+    removeLogoutTransition();
+    void api.post("/api/auth/logout", { sid: webSessionId() }).catch(() => {});
+    finishLocalLogout();
+  }, [finishLocalLogout, removeLogoutTransition]);
 
   // Tự động đăng xuất khi không hoạt động: mỗi thao tác (chuột/phím/chạm/cuộn) đặt lại đồng hồ;
   // hết ngưỡng mà không có thao tác nào → đăng xuất và đặt cờ để trang đăng nhập báo lý do.
@@ -277,7 +442,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let timer: ReturnType<typeof setTimeout>;
     const onIdle = () => {
       try { sessionStorage.setItem(IDLE_LOGOUT_FLAG, "1"); } catch { /* bỏ qua */ }
-      logout();
+      logoutImmediately();
     };
     const reset = () => {
       clearTimeout(timer);
@@ -290,7 +455,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(timer);
       events.forEach((e) => window.removeEventListener(e, reset));
     };
-  }, [user]);
+  }, [logoutImmediately, user]);
 
   return (
     <Ctx.Provider
@@ -308,6 +473,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }}
     >
       {children}
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        title="Bạn muốn đăng xuất?"
+        description={<>Phiên làm việc của <strong>{user?.fullName || user?.username || "tài khoản hiện tại"}</strong> sẽ được kết thúc.</>}
+        detail="Mọi dữ liệu đã lưu vẫn được giữ nguyên. Bạn sẽ cần đăng nhập lại để tiếp tục làm việc."
+        confirmLabel="Đăng xuất"
+        cancelLabel="Ở lại"
+        busyLabel="Đang đăng xuất..."
+        tone="danger"
+        icon={<LogOut className="h-6 w-6" />}
+        onClose={() => setLogoutConfirmOpen(false)}
+        onConfirm={confirmLogout}
+      />
+      <LogoutTransitionLayer
+        transition={logoutTransition}
+        onCoverComplete={completeLogoutTransitionCover}
+        onLoginReady={revealLogoutTransition}
+        onRevealComplete={removeLogoutTransition}
+      />
       <LoginTransitionLayer
         transition={loginTransition}
         onCoverComplete={completeLoginTransitionCover}

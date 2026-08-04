@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -8,7 +9,7 @@ namespace KetoanMini.Api.Endpoints;
 /// Khoản hoàn tiền phạt: khi một khiếu nại án phạt được duyệt (bác bỏ / giảm tiền) mà tiền đã bị trừ
 /// vào lương, hệ thống sinh một khoản hoàn cho nhân viên. Khoản này phải được PHÒNG KẾ TOÁN duyệt
 /// (chọn hình thức: cộng vào phiếu lương kỳ kế tiếp hoặc chi tiền mặt) trước khi trả cho nhân viên.
-/// Nhận diện kế toán = nhân viên thuộc phòng ban có cờ is_accounting (hoặc Admin).
+/// Ngoài quyền kỹ thuật tương ứng, người xử lý phải là nhân sự đang hoạt động thuộc phòng ban có cờ is_accounting.
 /// </summary>
 public static class PenaltyRefundEndpoints
 {
@@ -58,14 +59,16 @@ public static class PenaltyRefundEndpoints
             .ExecuteNonQueryAsync();
     }
 
-    /// <summary>Người dùng có quyền kế toán (thuộc phòng ban is_accounting) hay không.</summary>
+    /// <summary>Người dùng đang hoạt động và thuộc phòng ban kế toán hay không.</summary>
     public static async Task<bool> IsAccountingAsync(NpgsqlConnection conn, string username)
     {
         var v = await conn.Cmd("""
             SELECT EXISTS(
                 SELECT 1 FROM hr_employees e
                 JOIN hr_departments d ON d.id = e.department_id
-                WHERE e.username = @u AND d.is_accounting = true
+                WHERE lower(e.username) = lower(@u)
+                  AND e.status = 'Active'
+                  AND d.is_accounting = true
             )
             """).With("@u", username).ExecuteScalarAsync();
         return v is bool b && b;
@@ -73,22 +76,25 @@ public static class PenaltyRefundEndpoints
 
     public static void MapPenaltyRefunds(this WebApplication app)
     {
-        var g = app.MapGroup("/api/penalty-refunds").RequireAuthorization();
+        var g = app.MapGroup("/api/penalty-refunds").RequirePermission(Permissions.PenaltyRead);
 
-        // scope: mine (mặc định – của tôi) | queue (kế toán/admin – đang chờ xử lý) | all (admin – tất cả).
+        // scope: mine (mặc định – của tôi) | queue (phòng kế toán – đang chờ xử lý) | all (phòng kế toán – tất cả).
         g.MapGet("/", async (ClaimsPrincipal u, Database db, string? scope) =>
         {
             await using var conn = await db.OpenAsync();
             var me = u.Username();
-            var admin = u.IsAdmin();
-            var accounting = admin || await IsAccountingAsync(conn, me);
-            scope ??= "mine";
+            scope = string.IsNullOrWhiteSpace(scope) ? "mine" : scope.Trim().ToLowerInvariant();
+            if (scope is not ("mine" or "queue" or "all"))
+                return Results.BadRequest(new { message = "Phạm vi danh sách không hợp lệ." });
+            if ((scope is "queue" or "all")
+                && (!u.Can(Permissions.PayoutRead) || !await IsAccountingAsync(conn, me)))
+                return Results.Forbid();
 
             var where = new List<string>();
             Guid myId = default;
-            if (scope == "queue" && accounting)
+            if (scope == "queue")
                 where.Add("r.status IN ('PendingAccounting','Approved')");
-            else if (scope == "all" && accounting)
+            else if (scope == "all")
             {
                 // không lọc
             }
@@ -120,7 +126,7 @@ public static class PenaltyRefundEndpoints
         g.MapPost("/{id:guid}/approve", async (Guid id, ApproveRefundReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!(u.IsAdmin() || await IsAccountingAsync(conn, u.Username()))) return Results.Forbid();
+            if (!await IsAccountingAsync(conn, u.Username())) return Results.Forbid();
             var payout = req.PayoutMethod == "cash" ? "cash" : "payroll";
             var n = await conn.Cmd("""
                 UPDATE hr_penalty_refunds SET status='Approved', payout_method=@pm, approved_by=@by,
@@ -132,13 +138,13 @@ public static class PenaltyRefundEndpoints
             if (n == 0) return Results.BadRequest(new { message = "Khoản hoàn không tồn tại hoặc đã được xử lý." });
             await SignalRefund(db, u, id, "Duyệt hoàn tiền phạt");
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.PayoutApprove);
 
         // Kế toán từ chối khoản hoàn.
         g.MapPost("/{id:guid}/reject", async (Guid id, ApproveRefundReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!(u.IsAdmin() || await IsAccountingAsync(conn, u.Username()))) return Results.Forbid();
+            if (!await IsAccountingAsync(conn, u.Username())) return Results.Forbid();
             var n = await conn.Cmd("""
                 UPDATE hr_penalty_refunds SET status='Rejected', approved_by=@by, note=@note,
                     decided_at=CURRENT_TIMESTAMP
@@ -149,13 +155,13 @@ public static class PenaltyRefundEndpoints
             if (n == 0) return Results.BadRequest(new { message = "Khoản hoàn không tồn tại hoặc đã được xử lý." });
             await SignalRefund(db, u, id, "Từ chối hoàn tiền phạt");
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.PayoutApprove);
 
         // Đánh dấu đã chi tiền mặt (chỉ với khoản đã duyệt hình thức cash).
         g.MapPost("/{id:guid}/mark-paid", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!(u.IsAdmin() || await IsAccountingAsync(conn, u.Username()))) return Results.Forbid();
+            if (!await IsAccountingAsync(conn, u.Username())) return Results.Forbid();
             var n = await conn.Cmd("""
                 UPDATE hr_penalty_refunds SET status='Paid', decided_at=CURRENT_TIMESTAMP
                 WHERE id=@id AND status='Approved' AND payout_method='cash'
@@ -163,7 +169,7 @@ public static class PenaltyRefundEndpoints
             if (n == 0) return Results.BadRequest(new { message = "Chỉ đánh dấu đã chi cho khoản đã duyệt hình thức tiền mặt." });
             await SignalRefund(db, u, id, "Chi tiền mặt hoàn phạt");
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.PayoutPay);
     }
 
     private static object ReadRefund(NpgsqlDataReader r) => new

@@ -53,6 +53,7 @@ public static class DatabaseChangePublisher
         ("app_users", ["presence"]),
         ("user_sessions", ["presence"]),
         ("user_roles", ["presence"]),
+        ("system_roles", ["presence"]),
         // Nhóm dưới đây phục vụ /api/users mà useApi ánh xạ sang scope 'presence', nên dùng chung
         // scope đó thì màn hình quản trị tài khoản tự làm mới đúng chỗ.
         ("work_access_requests", ["presence"]),
@@ -66,9 +67,12 @@ public static class DatabaseChangePublisher
         ("help_faqs", ["data"]),
 
         ("hr_departments", ["hr"]),
+        ("hr_job_positions", ["hr"]),
+        ("hr_employee_positions", ["hr"]),
         ("hr_employees", ["hr"]),
         ("hr_contracts", ["hr"]),
         ("hr_payslips", ["hr"]),
+        ("hr_payslip_history", ["hr"]),
         ("hr_leave_balances", ["hr"]),
         ("hr_documents", ["hr"]),
         ("hr_anniversary_letter", ["hr"]),
@@ -92,6 +96,7 @@ public static class DatabaseChangePublisher
         ("hr_penalty_refunds", ["hr"]),
         ("hr_payout_categories", ["hr"]),
         ("hr_payout_vouchers", ["hr"]),
+        ("hr_payout_voucher_events", ["hr"]),
         ("hr_bank_accounts", ["hr"]),
 
         ("work_tasks", ["tasks"]),

@@ -4,6 +4,8 @@ namespace KetoanMini.Api.Models;
 // Client: "apk"/"android"/"native" = đăng nhập từ app native (KHÔNG bị chặn bởi cờ tắt đăng nhập web).
 // Bỏ trống/null = trình duyệt web (chịu ràng buộc cờ "bật/tắt đăng nhập trên web" của tài khoản).
 public record LoginRequest(string Username, string Password, string? Sid = null, string? Client = null);
+public record LoginBootstrapRequest(string? Sid);
+public record LoginBootstrapResponse(bool Ready, DateTime ExpiresAt, string Protocol, bool SecureTransport);
 // Quên mật khẩu bằng khuôn mặt: username + mật khẩu mới + loạt ảnh quét.
 // Backend so 1:1 với mẫu khuôn mặt đã đăng ký của đúng username này.
 public record FacePasswordResetRequest(string Username, string NewPassword, List<string> Images, string? Client = null);
@@ -92,6 +94,15 @@ public record UserDto(Guid Id, string Username, string FullName, string Email, s
     /// hiện/ẩn tính năng giao việc &amp; nghiệm thu. Rỗng ⇒ chỉ có vai trò chính trong <see cref="Role"/>.</summary>
     public IReadOnlyList<string> Roles { get; init; } = System.Array.Empty<string>();
 
+    /// <summary>Quyền hiệu lực do máy chủ suy từ toàn bộ vai trò hiện hành. Client native chỉ dùng
+    /// danh sách này để dựng giao diện; mọi request đặc quyền vẫn bị middleware/API kiểm tra lại từ
+    /// CSDL. Trả kèm login/me giúp Android không phải tự nhân bản ma trận vai trò và tự động nhận được
+    /// quyền kế thừa (ví dụ Kế toán trưởng luôn có toàn bộ quyền Kế toán).</summary>
+    public IReadOnlyList<string> Permissions =>
+        [.. KetoanMini.Api.Security.Permissions
+            .For(Roles.Count > 0 ? Roles : [Role])
+            .OrderBy(permission => permission, StringComparer.Ordinal)];
+
     /// <summary>Có thẩm quyền giao việc &amp; nghiệm thu = có quyền tasks.assign. Suy từ BẢNG vai trò→quyền
     /// (Security/Permissions.cs) chứ không liệt kê tên vai trò ở đây, để thêm vai trò được giao việc
     /// (Trưởng phòng…) không phải nhớ sửa thêm chỗ này.</summary>
@@ -149,7 +160,7 @@ public record SaveOpeningBalanceRequest(decimal Amount, DateOnly AsOfDate, strin
 // ----- Users (Nhân sự) -----
 public record UserAdminDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt, bool IsOnline, DateTime? LastSeen, bool Verified, bool IsDiamond,
-    IReadOnlyList<string> SecondaryRoles);
+    IReadOnlyList<string> SecondaryRoles, bool RolesManagedByPositions);
 public record CreateUserRequest(string Username, string FullName, string Email, string Password, string Role);
 public record SetLockRequest(bool Locked);
 // Reason: lý do đổi quyền, ghi vào lịch sử phân quyền (user_role_history) để sau này tra soát được

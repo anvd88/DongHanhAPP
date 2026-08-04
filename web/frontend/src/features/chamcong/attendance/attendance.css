@@ -4,14 +4,14 @@
    ra các trang khác. Trang luôn hiển thị sáng (kiosk công khai) bất kể theme.
    ========================================================================= */
 .att-page {
-  --att-navy: #0f2a63;
-  --att-navy-deep: #0b1f4d;
-  --att-blue: #2469ff;
-  --att-blue-deep: #1247ef;
-  --att-cobalt: #1f59ff;
-  --att-cyan: #48e1eb;
-  --att-text-secondary: #5d7099;
-  --att-text-muted: #6f82a6;
+  --att-navy: #102f66;
+  --att-navy-deep: #0d2348;
+  --att-blue: #3457d5;
+  --att-blue-deep: #2946b5;
+  --att-cobalt: #4667dc;
+  --att-cyan: #21b5a3;
+  --att-text-secondary: #5d6f8c;
+  --att-text-muted: #7b8da8;
 
   --att-glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(240, 250, 255, 0.22) 50%, rgba(218, 250, 252, 0.20));
   --att-glass-border: rgba(255, 255, 255, 0.72);
@@ -29,10 +29,10 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   background:
-    radial-gradient(circle at 12% 5%, rgba(88, 151, 255, 0.20), transparent 36%),
-    radial-gradient(circle at 95% 68%, rgba(72, 225, 235, 0.25), transparent 42%),
-    radial-gradient(circle at 55% 10%, rgba(180, 218, 255, 0.18), transparent 46%),
-    linear-gradient(135deg, #f7fbff 0%, #eaf5ff 48%, #ddfbfc 100%);
+    radial-gradient(circle at 12% 5%, rgba(52, 87, 213, 0.18), transparent 36%),
+    radial-gradient(circle at 95% 68%, rgba(18, 152, 135, 0.2), transparent 42%),
+    radial-gradient(circle at 55% 10%, rgba(187, 207, 239, 0.18), transparent 46%),
+    linear-gradient(135deg, #f7fafe 0%, #ecf2fa 48%, #e7f6f3 100%);
 }
 
 /* Quầng sáng nhòe lớn phía sau để nền mềm, không lộ ranh giới gradient. */
@@ -50,7 +50,7 @@
   height: 52vw;
   left: -12vw;
   top: -14vw;
-  background: radial-gradient(circle at 40% 40%, rgba(96, 156, 255, 0.30), transparent 66%);
+  background: radial-gradient(circle at 40% 40%, rgba(52, 87, 213, 0.26), transparent 66%);
   opacity: 0.7;
 }
 .att-page::after {

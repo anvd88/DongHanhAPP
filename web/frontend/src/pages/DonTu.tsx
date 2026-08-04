@@ -8,6 +8,7 @@ import { Table } from "../components/Table";
 import { api } from "../lib/api";
 import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
+import { PERM } from "../lib/access";
 import { useAppNotifications } from "../components/app-notifications-context";
 import {
   applyServerRequestFields,
@@ -443,7 +444,9 @@ function RequestDetailModal({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate text-sm font-semibold text-[var(--text)]">
-                          {a.approverName || (a.approverRole === "Admin" ? "Quản trị viên / HR" : a.approverUsername)}
+                          {a.approverName || (["Admin", "RequestsManage", PERM.requestsManage].includes(a.approverRole)
+                            ? "Bộ phận nhân sự"
+                            : a.approverUsername)}
                         </span>
                         <Badge color={color}>{requestStatusLabel(a.status)}</Badge>
                       </div>

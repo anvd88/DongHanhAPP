@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Building2, CalendarDays, CalendarRange, Clock, Eye, HeartHandshake, MapPin, Pencil, Plus, RotateCcw, Save, Search, Sparkles, Trash2, UserPlus, Users, Wifi, WifiOff } from "lucide-react";
+import { Building2, CalendarDays, CalendarRange, Clock, Copy, Eye, HeartHandshake, MapPin, Pencil, Plus, RotateCcw, Save, Search, Sparkles, Trash2, UserPlus, Users, Wifi, WifiOff } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
@@ -9,7 +9,7 @@ import { api } from "../lib/api";
 import { date, dateTime, moneyVnd } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { useAppNotifications } from "../components/app-notifications-context";
-import { AccountCreateForm, AccountManagePanel, ASSIGNABLE_ROLES } from "./NhanSu";
+import { AccountCreateForm, AccountManagePanel } from "./NhanSu";
 import { PERM, useAccess } from "../lib/access";
 import type { UserAdmin } from "../lib/types";
 import { DiamondLabel, VerifiedBadge } from "../components/VerifiedBadge";
@@ -22,8 +22,10 @@ import {
   type Contract,
   type Department,
   type EmployeeCard,
+  type EmployeeDetail,
   type EmployeeDoc,
   type Holiday,
+  type JobPosition,
   type LeaveBalance,
   type Location,
   type Payslip,
@@ -361,16 +363,6 @@ function accountCreatedDateValue(value?: string | null) {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-const ACCOUNT_ROLE_FILTERS = [
-  { value: "", label: "Tất cả vai trò hệ thống" },
-  { value: "Admin", label: "Admin" },
-  { value: "Accounting", label: "Kế toán" },
-  { value: "HR", label: "Nhân sự (HR)" },
-  { value: "Employee", label: "Nhân viên" },
-  { value: "Pending", label: "Chờ duyệt" },
-  { value: "Locked", label: "Đã khóa" },
-] as const;
-
 function EmployeesTab() {
   const { can } = useAccess();
   const canManageProfiles = can(PERM.hrManage);
@@ -380,10 +372,18 @@ function EmployeesTab() {
   const { data: accounts, loading: accountsLoading, reload: reloadAccounts } = useApi<UserAdmin[]>(canManageAccounts ? "/api/users/?search=&role=" : null);
   const { data: departments } = useApi<Department[]>(canManageProfiles ? "/api/hr/departments" : null);
   const { data: locations } = useApi<Location[]>(canManageProfiles ? "/api/hr/locations" : null);
+  const { data: jobPositions } = useApi<JobPosition[]>(canManageProfiles ? "/api/hr/job-positions" : null);
+  const { data: roleCatalog } = useApi<{ role: string; label: string }[]>(canManageAccounts ? "/api/roles/catalog" : null);
   const [manage, setManage] = useState<EmployeeAccountRow | "new" | null>(null);
   const [search, setSearch] = useState("");
   const [linkFilter, setLinkFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("");
+  const accountRoleFilters = useMemo(() => [
+    { value: "", label: "Tất cả vai trò hệ thống" },
+    ...(roleCatalog ?? []).map((entry) => ({ value: entry.role, label: entry.label })),
+    { value: "Pending", label: "Chờ duyệt" },
+    { value: "Locked", label: "Đã khóa" },
+  ], [roleCatalog]);
 
   const rows = useMemo<EmployeeAccountRow[]>(() => {
     const accountByUsername = new Map<string, UserAdmin>();
@@ -418,8 +418,9 @@ function EmployeesTab() {
       if (canCompareLinks && linkFilter === "missing-profile" && (employee || !account)) return false;
       if (roleFilter === "Pending" && account?.approvalStatus !== "Pending") return false;
       if (roleFilter === "Locked" && account?.isActive !== false) return false;
-      if (roleFilter === "Employee" && account?.role !== "Employee" && account?.role !== "User") return false;
-      if (roleFilter && roleFilter !== "Pending" && roleFilter !== "Locked" && roleFilter !== "Employee" && account?.role !== roleFilter) return false;
+      const effectiveRoles = new Set([account?.role === "User" ? "Employee" : account?.role, ...(account?.secondaryRoles ?? [])].filter(Boolean));
+      if (roleFilter === "Employee" && !effectiveRoles.has("Employee")) return false;
+      if (roleFilter && roleFilter !== "Pending" && roleFilter !== "Locked" && roleFilter !== "Employee" && !effectiveRoles.has(roleFilter)) return false;
       if (!query) return true;
       return [employee?.employeeCode, employee?.fullName, employee?.username, employee?.position,
         employee?.departmentName, employee?.locationName, account?.username, account?.fullName, account?.email]
@@ -450,7 +451,7 @@ function EmployeesTab() {
           <option value="missing-profile">Chưa có hồ sơ nhân viên</option>
         </Select>}
         {canManageAccounts && <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
-          {ACCOUNT_ROLE_FILTERS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          {accountRoleFilters.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </Select>}
       </div>
       <Table<EmployeeAccountRow>
@@ -483,6 +484,11 @@ function EmployeesTab() {
           { header: "Công việc", cell: ({ employee }) => employee ? (
             <div className="min-w-36 text-xs">
               <p className="font-semibold text-[var(--text-secondary)]">{employee.position || "Chưa có chức vụ"}</p>
+              {!!employee.positions?.filter((item) => !item.isPrimary).length && (
+                <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
+                  Kiêm nhiệm: {employee.positions.filter((item) => !item.isPrimary).map((item) => item.name).join(", ")}
+                </p>
+              )}
               <p className="mt-1">{employee.departmentName || "Chưa có phòng ban"}</p>
               {employee.locationName && <p className="mt-0.5 text-[var(--text-muted)]">{employee.locationName}</p>}
             </div>
@@ -530,6 +536,7 @@ function EmployeesTab() {
       {manage && <PersonModal
         target={manage}
         departments={departments ?? []} locations={locations ?? []}
+        jobPositions={jobPositions ?? []}
         employees={employees ?? []} accounts={accounts ?? []}
         canManageProfiles={canManageProfiles} canManageAccounts={canManageAccounts}
         onClose={() => setManage(null)}
@@ -546,12 +553,13 @@ type PersonTarget = EmployeeAccountRow | "new";
  * chỗ với các mục con: Hồ sơ · Tài khoản · Quyền lợi — thay cho việc mở nhiều hộp thoại rời rạc trước đây.
  */
 function PersonModal({
-  target, departments, locations, employees, accounts, canManageProfiles, canManageAccounts,
+  target, departments, locations, jobPositions, employees, accounts, canManageProfiles, canManageAccounts,
   onClose, onEmployeesChanged, onAccountsChanged,
 }: {
   target: PersonTarget;
   departments: Department[];
   locations: Location[];
+  jobPositions: JobPosition[];
   employees: EmployeeCard[];
   accounts: UserAdmin[];
   canManageProfiles: boolean;
@@ -597,14 +605,14 @@ function PersonModal({
       {sub === "profile" && (
         <ProfilePanel
           employee={employee} initialAccount={account}
-          departments={departments} locations={locations} employees={employees}
+          departments={departments} locations={locations} jobPositions={jobPositions} employees={employees}
           onSavedEdit={onEmployeesChanged}
           onCreated={() => { onEmployeesChanged(); onClose(); }}
           onDeleted={() => { onEmployeesChanged(); onClose(); }}
         />
       )}
       {sub === "account" && (account
-        ? <AccountManagePanel value={account} onChanged={onAccountsChanged} onClose={onClose} />
+        ? <AccountManagePanel value={account} rolesManagedByPositions={account.rolesManagedByPositions ?? !!employee} onChanged={onAccountsChanged} onClose={onClose} />
         : <AccountCreateForm
             initial={{ username: employee?.username ?? undefined, fullName: employee?.fullName ?? undefined, email: employee?.email ?? undefined }}
             onSaved={() => { onAccountsChanged(); onClose(); }} />)}
@@ -613,58 +621,164 @@ function PersonModal({
   );
 }
 
-function ProfilePanel({ employee, initialAccount, departments, locations, employees, onSavedEdit, onCreated, onDeleted }: {
-  employee: EmployeeCard | null; initialAccount?: UserAdmin | null; departments: Department[]; locations: Location[]; employees: EmployeeCard[];
+function ProfilePanel({ employee, initialAccount, departments, locations, jobPositions, employees, onSavedEdit, onCreated, onDeleted }: {
+  employee: EmployeeCard | null; initialAccount?: UserAdmin | null; departments: Department[]; locations: Location[]; jobPositions: JobPosition[]; employees: EmployeeCard[];
   onSavedEdit: () => void; onCreated: () => void; onDeleted: () => void;
 }) {
   const { notify, confirm } = useAppNotifications();
-  const [detail] = useState(employee);
-  const [form, setForm] = useState({
-    employeeCode: employee?.employeeCode ?? "",
-    username: employee?.username ?? initialAccount?.username ?? "",
-    fullName: employee?.fullName ?? initialAccount?.fullName ?? "",
-    position: employee?.position ?? "",
-    // Chỉ dùng khi TẠO MỚI: "Chức vụ" là dropdown vai trò hệ thống → quyết định quyền của tài khoản tạo ra.
-    role: "Employee",
-    departmentId: employee?.departmentId ?? "",
-    locationId: employee?.locationId ?? "",
-    accessRole: employee?.accessRole ?? "staff",
-    status: employee?.status ?? "Active",
-    phone: employee?.phone ?? "",
-    email: employee?.email ?? initialAccount?.email ?? "",
-    managerId: "",
-    hireDate: employee?.hireDate ?? accountCreatedDateValue(initialAccount?.createdAt),
-    dob: "",
-    gender: "",
-    address: "",
-  });
+  const resolvePrimaryPosition = (source: EmployeeCard | EmployeeDetail | null) => source?.positionId
+    ?? jobPositions.find((item) => item.name === source?.position)?.id
+    ?? (!source ? jobPositions.find((item) => item.defaultRole === "Employee")?.id : "")
+    ?? "";
+  const assignedPositions = (source: EmployeeCard | EmployeeDetail | null, primaryId: string) => {
+    const ids = source?.positionIds?.length
+      ? source.positionIds
+      : source?.positions?.map((item) => item.id).filter(Boolean) ?? [];
+    return Array.from(new Set([primaryId, ...ids].filter(Boolean)));
+  };
+  const makeForm = (source: EmployeeCard | EmployeeDetail | null) => {
+    const full = source as EmployeeDetail | null;
+    return {
+      employeeCode: source?.employeeCode ?? "",
+      username: source?.username ?? initialAccount?.username ?? "",
+      fullName: source?.fullName ?? initialAccount?.fullName ?? "",
+      position: source?.position ?? "",
+      positionId: resolvePrimaryPosition(source),
+      departmentId: source?.departmentId ?? "",
+      locationId: full?.locationId ?? "",
+      accessRole: full?.accessRole ?? "staff",
+      status: source?.status ?? "Active",
+      phone: source?.phone ?? "",
+      email: source?.email ?? initialAccount?.email ?? "",
+      managerId: full?.managerId ?? "",
+      hireDate: full?.hireDate ?? accountCreatedDateValue(initialAccount?.createdAt),
+      dob: full?.dob ?? "",
+      gender: full?.gender ?? "",
+      address: full?.address ?? "",
+      avatar: source?.avatar ?? null,
+    };
+  };
+  const initialPosition = resolvePrimaryPosition(employee);
+  const [detail, setDetail] = useState<EmployeeDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(Boolean(employee));
+  const [detailError, setDetailError] = useState("");
+  const [form, setForm] = useState(() => makeForm(employee));
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [positionIds, setPositionIds] = useState<string[]>(() => assignedPositions(employee, initialPosition));
   const set = (k: keyof typeof form, v: string) => setForm((s) => ({ ...s, [k]: v }));
 
+  // EmployeeCard chỉ là dữ liệu danh sách. Luôn lấy EmployeeDetail trước khi cho PUT để không vô tình
+  // ghi đè ngày sinh/giới tính/địa chỉ/quản lý/ảnh bằng giá trị rỗng khi người quản trị chỉ sửa chức vụ.
+  useEffect(() => {
+    if (!employee) {
+      setDetail(null);
+      setDetailLoading(false);
+      setDetailError("");
+      return;
+    }
+    let cancelled = false;
+    setDetail(null);
+    setDetailLoading(true);
+    setDetailError("");
+    api.get<EmployeeDetail>(`/api/hr/employees/${employee.id}`)
+      .then((full) => {
+        if (cancelled) return;
+        const primaryId = resolvePrimaryPosition(full);
+        setDetail(full);
+        setForm(makeForm(full));
+        setPositionIds(assignedPositions(full, primaryId));
+      })
+      .catch((error) => {
+        if (!cancelled) setDetailError(error instanceof Error ? error.message : "Không tải được hồ sơ đầy đủ.");
+      })
+      .finally(() => { if (!cancelled) setDetailLoading(false); });
+    return () => { cancelled = true; };
+    // Modal được dựng lại khi đổi nhân viên; chỉ nạp một snapshot đầy đủ cho phiên chỉnh sửa này.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (employee && !detail) return;
+    if (form.positionId || jobPositions.length === 0) return;
+    const selected = jobPositions.find((item) => item.name === detail?.position)
+      ?? (!employee ? jobPositions.find((item) => item.defaultRole === "Employee") : undefined)
+      ?? jobPositions.find((item) => item.isActive);
+    if (!selected) return;
+    setForm((current) => ({
+      ...current,
+      positionId: selected.id,
+      position: selected.name,
+      accessRole: selected.defaultAccessRole || current.accessRole,
+    }));
+    setPositionIds((current) => current.includes(selected.id) ? current : [selected.id, ...current]);
+  }, [detail, employee, form.positionId, jobPositions]);
+
+  const selectPosition = (positionId: string) => {
+    const selected = jobPositions.find((item) => item.id === positionId);
+    setForm((current) => ({
+      ...current,
+      positionId,
+      position: selected?.name ?? current.position,
+      accessRole: selected?.defaultAccessRole ?? current.accessRole,
+    }));
+    if (positionId) setPositionIds((current) => current.includes(positionId) ? current : [positionId, ...current]);
+  };
+
+  const toggleAdditionalPosition = (positionId: string) => {
+    if (positionId === form.positionId) return;
+    setPositionIds((current) => current.includes(positionId)
+      ? current.filter((id) => id !== positionId)
+      : [...current, positionId]);
+  };
+
   const save = async () => {
+    if (employee && !detail) { notify.error("Chưa tải xong hồ sơ đầy đủ; hệ thống chưa lưu để tránh mất dữ liệu."); return; }
     if (!form.fullName.trim()) { notify.error("Vui lòng nhập họ tên."); return; }
+    if (!form.positionId) { notify.error("Vui lòng chọn chức vụ chuẩn cho nhân viên."); return; }
     if (!form.departmentId) { notify.error("Vui lòng chọn phòng ban cho nhân viên."); return; }
     setSaving(true);
     try {
       const body = {
         ...form,
+        positionId: form.positionId || null,
+        positionIds: Array.from(new Set([form.positionId, ...positionIds].filter(Boolean))),
         departmentId: form.departmentId || null,
         locationId: form.locationId || null,
         managerId: form.managerId || null,
         hireDate: form.hireDate || null,
         dob: form.dob || null,
       };
-      if (detail) { await api.put(`/api/hr/employees/${detail.id}`, body); notify.success("Đã lưu hồ sơ."); onSavedEdit(); }
+      if (employee) { await api.put(`/api/hr/employees/${employee.id}`, body); notify.success("Đã lưu hồ sơ."); onSavedEdit(); }
       else {
-        // Tạo hồ sơ mới LUÔN kèm tài khoản đăng nhập (backend tự sinh mã NV + username, mật khẩu mặc định 123).
-        // "Chức vụ" chọn = vai trò hệ thống: lưu nhãn vào position để hiển thị, gửi role để đặt quyền tài khoản.
-        const roleLabel = ASSIGNABLE_ROLES.find((r) => r.key === form.role)?.label ?? "";
+        // Tạo hồ sơ mới LUÔN kèm tài khoản. Backend lấy vai trò/phạm vi mặc định từ chức vụ chuẩn,
+        // sinh username và mật khẩu tạm mạnh; client không được tự khai role.
         const res = await api.post<{ username?: string; accountCreated?: boolean; password?: string }>(
-          "/api/hr/employees", { ...body, position: roleLabel, role: form.role, createAccount: true });
-        if (res?.accountCreated)
-          notify.success(`Đã tạo hồ sơ và tài khoản đăng nhập “${res.username}” · mật khẩu ${res.password}.`);
-        else notify.success("Đã tạo hồ sơ nhân viên.");
+          "/api/hr/employees", { ...body, createAccount: true });
+        if (res?.accountCreated && res.password) {
+          const username = res.username ?? form.username;
+          const credentialText = `Tên đăng nhập: ${username}\nMật khẩu tạm: ${res.password}`;
+          notify.show({
+            title: "Tài khoản đã tạo · chỉ hiển thị mật khẩu lần này",
+            tone: "success",
+            duration: 120000,
+            message: (
+              <div className="space-y-2">
+                <p>Hãy sao chép và gửi riêng cho người dùng trước khi đóng thông báo.</p>
+                <pre className="select-all whitespace-pre-wrap rounded-lg bg-black/10 p-2 font-mono text-xs">{credentialText}</pre>
+                <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-current px-2.5 py-1 text-xs font-bold"
+                  onClick={() => void navigator.clipboard.writeText(credentialText).then(
+                    () => notify.success("Đã sao chép thông tin đăng nhập."),
+                    () => notify.warning("Không thể tự sao chép; hãy chọn phần thông tin phía trên để sao chép thủ công."),
+                  )}>
+                  <Copy className="h-3.5 w-3.5" /> Sao chép
+                </button>
+              </div>
+            ),
+          });
+        } else if (res?.accountCreated) {
+          notify.warning("Tài khoản đã được tạo nhưng máy chủ không trả mật khẩu tạm. Hãy dùng chức năng đặt lại mật khẩu.");
+        } else notify.success("Đã tạo hồ sơ nhân viên.");
         onCreated();
       }
     } catch (e) {
@@ -676,7 +790,12 @@ function ProfilePanel({ employee, initialAccount, departments, locations, employ
 
   const remove = async () => {
     if (!detail) return;
-    const ok = await confirm({ title: `Xóa hồ sơ ${detail.fullName}?`, description: "Toàn bộ hợp đồng, phiếu lương, phép của nhân viên này sẽ bị xóa.", confirmLabel: "Xóa", tone: "danger" });
+    const ok = await confirm({
+      title: `Xóa hồ sơ ${detail.fullName}?`,
+      description: "Hệ thống không xóa lịch sử tài chính. Hồ sơ đã có hợp đồng, phiếu lương hoặc chứng từ liên quan sẽ bị chặn xóa; hãy chuyển trạng thái sang “Đã nghỉ” để khóa tài khoản và giữ nguyên lịch sử.",
+      confirmLabel: "Thử xóa hồ sơ",
+      tone: "danger",
+    });
     if (!ok) return;
     setRemoving(true);
     try {
@@ -692,20 +811,50 @@ function ProfilePanel({ employee, initialAccount, departments, locations, employ
 
   return (
     <div className="space-y-4">
+      {detailLoading && <div className="rounded-xl border border-[var(--gc-border)] bg-[var(--accent-soft)]/30 px-3 py-2 text-sm text-[var(--text-secondary)]">Đang tải hồ sơ đầy đủ để bảo toàn dữ liệu…</div>}
+      {detailError && <div className="rounded-xl bg-red-500/10 px-3 py-2 text-sm font-medium text-[var(--danger)]">{detailError} Hãy đóng và mở lại hồ sơ trước khi chỉnh sửa.</div>}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {detail && <Field label="Mã nhân viên"><Input value={form.employeeCode} onChange={(e) => set("employeeCode", e.target.value)} placeholder="Tự sinh nếu để trống" /></Field>}
-        {detail && <Field label="Tài khoản đăng nhập"><Input value={form.username} onChange={(e) => set("username", e.target.value)} placeholder="username" /></Field>}
+        {employee && <Field label="Mã nhân viên"><Input value={form.employeeCode} onChange={(e) => set("employeeCode", e.target.value)} placeholder="Tự sinh nếu để trống" /></Field>}
+        {employee && <Field label="Tài khoản đăng nhập">
+          <Input value={form.username} disabled placeholder="username" />
+          <p className="mt-1 text-[11px] text-[var(--text-muted)]">Tên đăng nhập của hồ sơ đã liên kết không đổi tại đây để tránh đứt liên kết tài khoản.</p>
+        </Field>}
         <Field label="Họ tên *"><Input value={form.fullName} onChange={(e) => set("fullName", e.target.value)} /></Field>
-        {detail ? (
-          <Field label="Chức vụ"><Input value={form.position} onChange={(e) => set("position", e.target.value)} /></Field>
-        ) : (
-          <Field label="Chức vụ (vai trò hệ thống) *">
-            <Select value={form.role} onChange={(e) => set("role", e.target.value)} className="w-full">
-              {ASSIGNABLE_ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
-            </Select>
-            <p className="mt-1 text-[11px] text-[var(--text-muted)]">Vừa là chức vụ hiển thị, vừa quyết định quyền của tài khoản đăng nhập được tạo.</p>
+        <Field label="Chức vụ chính *">
+          <Select value={form.positionId} onChange={(e) => selectPosition(e.target.value)} className="w-full">
+            <option value="">— Chọn chức vụ —</option>
+            {jobPositions
+              .filter((item) => item.isActive || item.id === form.positionId)
+              .map((item) => <option key={item.id} value={item.id}>{item.name} · {item.defaultRoleLabel}</option>)}
+          </Select>
+          <p className="mt-1 text-[11px] text-[var(--text-muted)]">Chức vụ chính được dùng để hiển thị và làm phạm vi mặc định.</p>
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="Chức vụ kiêm nhiệm">
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-[var(--gc-border)] bg-[var(--surface)] p-2">
+              <div className="grid gap-1 sm:grid-cols-2">
+                {jobPositions
+                  .filter((item) => item.isActive || positionIds.includes(item.id))
+                  .map((item) => {
+                    const primary = item.id === form.positionId;
+                    const checked = primary || positionIds.includes(item.id);
+                    return (
+                      <label key={item.id} className={`flex cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2 text-xs transition ${checked ? "bg-[var(--accent-soft)]" : "hover:bg-[var(--surface-hover)]"}`}>
+                        <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[var(--accent)]" checked={checked} disabled={primary}
+                          onChange={() => toggleAdditionalPosition(item.id)} />
+                        <span>
+                          <span className="font-semibold text-[var(--text)]">{item.name}</span>
+                          <span className="ml-1 text-[var(--text-muted)]">· {item.defaultRoleLabel}</span>
+                          {primary && <span className="ml-1 font-semibold text-[var(--accent)]">(chính)</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </div>
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">Có thể chọn nhiều chức vụ. Máy chủ hợp nhất quyền từ tất cả chức vụ và kiểm soát việc cấp quyền đặc biệt.</p>
           </Field>
-        )}
+        </div>
         <Field label="Phòng ban *">
           <Select value={form.departmentId} onChange={(e) => set("departmentId", e.target.value)} className="w-full">
             <option value="">— Chọn phòng ban —</option>
@@ -727,7 +876,7 @@ function ProfilePanel({ employee, initialAccount, departments, locations, employ
         <Field label="Quản lý trực tiếp">
           <Select value={form.managerId} onChange={(e) => set("managerId", e.target.value)} className="w-full">
             <option value="">— Không —</option>
-            {employees.filter((e) => e.id !== detail?.id).map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)}
+            {employees.filter((e) => e.id !== employee?.id).map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)}
           </Select>
         </Field>
         <Field label="Ngày vào làm / ngày tạo tài khoản"><Input type="date" value={form.hireDate} onChange={(e) => set("hireDate", e.target.value)} /></Field>
@@ -743,19 +892,19 @@ function ProfilePanel({ employee, initialAccount, departments, locations, employ
         <Field label="Giới tính"><Input value={form.gender} onChange={(e) => set("gender", e.target.value)} placeholder="Nam / Nữ" /></Field>
         <div className="sm:col-span-2"><Field label="Địa chỉ"><Input value={form.address} onChange={(e) => set("address", e.target.value)} /></Field></div>
       </div>
-      {!detail && !initialAccount && (
+      {!employee && !initialAccount && (
         <div className="flex items-start gap-2.5 rounded-xl border border-[var(--gc-border)] bg-[var(--accent-soft)]/30 p-3">
           <UserPlus className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" />
           <span className="text-sm">
             <span className="font-semibold text-[var(--text)]">Tài khoản đăng nhập sẽ được tạo tự động</span>
-            <span className="block text-xs text-[var(--text-secondary)]">Hệ thống tự sinh mã nhân viên và tên đăng nhập từ họ tên (vd: <code className="font-mono">annv01</code>), mật khẩu mặc định <b>123</b>. Quyền của tài khoản lấy theo <b>Chức vụ</b> đã chọn ở trên.</span>
+            <span className="block text-xs text-[var(--text-secondary)]">Hệ thống tự sinh mã nhân viên, tên đăng nhập và mật khẩu tạm mạnh chỉ hiển thị một lần. Một tài khoản duy nhất nhận hợp quyền từ <b>chức vụ chính và các chức vụ kiêm nhiệm</b>.</span>
           </span>
         </div>
       )}
-      {detail && <p className="text-xs text-[var(--text-muted)]">Lưu ý: ngày sinh/giới tính/địa chỉ đầy đủ sẽ ghi đè khi lưu ở chế độ quản trị.</p>}
+      {employee && <p className="text-xs text-[var(--text-muted)]">Hồ sơ chỉ được phép lưu sau khi dữ liệu đầy đủ đã tải xong.</p>}
       <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--gc-border)] pt-4">
-        {detail && <Button variant="danger" loading={removing} disabled={saving} onClick={() => void remove()}><Trash2 className="h-4 w-4" /> Xóa hồ sơ</Button>}
-        <Button onClick={save} loading={saving} disabled={removing}><Save className="h-4 w-4" /> {detail ? "Lưu hồ sơ" : "Tạo hồ sơ"}</Button>
+        {employee && <Button variant="danger" loading={removing} disabled={saving || detailLoading || !detail} onClick={() => void remove()}><Trash2 className="h-4 w-4" /> Xóa hồ sơ</Button>}
+        <Button onClick={save} loading={saving} disabled={removing || detailLoading || Boolean(employee && !detail)}><Save className="h-4 w-4" /> {employee ? "Lưu hồ sơ" : "Tạo hồ sơ"}</Button>
       </div>
     </div>
   );

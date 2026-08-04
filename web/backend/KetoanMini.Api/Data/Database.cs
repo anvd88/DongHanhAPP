@@ -52,6 +52,9 @@ public static class SqlExtensions
     public static NpgsqlCommand Cmd(this NpgsqlConnection conn, string sql)
         => new(sql, conn);
 
+    public static NpgsqlCommand Cmd(this NpgsqlConnection conn, string sql, NpgsqlTransaction transaction)
+        => new(sql, conn, transaction);
+
     public static NpgsqlCommand With(this NpgsqlCommand cmd, string name, object? value)
     {
         cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);

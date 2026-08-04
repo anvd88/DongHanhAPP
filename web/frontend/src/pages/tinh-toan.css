@@ -44,11 +44,11 @@
   flex: 0 0 auto;
   place-items: center;
   border-radius: 13px;
-  background: linear-gradient(135deg, #0d7dff, #184cff 64%, #7257ff);
+  background: linear-gradient(135deg, #129887, #3457d5 64%, #7259d6);
   color: white;
   font-size: 0.9rem;
   font-weight: 900;
-  box-shadow: 0 16px 28px -18px rgba(37, 99, 235, 0.9), inset 0 1px 0 rgba(255,255,255,0.48);
+  box-shadow: 0 16px 28px -18px rgba(52, 87, 213, 0.82), inset 0 1px 0 rgba(255,255,255,0.48);
 }
 
 .calc-brand strong,
@@ -200,7 +200,7 @@
 .calc-hero-stats strong {
   display: block;
   margin: 10px 0 8px;
-  color: #071a4a;
+  color: #10233f;
   font-size: clamp(2.2rem, 5vw, 4rem);
   font-weight: 950;
   line-height: 0.95;
@@ -238,7 +238,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #173b74;
+  color: #2946b5;
   font-size: 1rem;
   font-weight: 900;
 }
@@ -465,7 +465,7 @@
 
 .calc-result-card strong {
   min-width: 0;
-  color: #071a4a;
+  color: #10233f;
   font-size: clamp(1.1rem, 2vw, 1.55rem);
   font-weight: 950;
   line-height: 1.05;

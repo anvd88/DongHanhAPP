@@ -4,6 +4,8 @@ import {
   BanknoteArrowDown,
   CheckCircle2,
   CircleDollarSign,
+  CircleCheckBig,
+  History,
   Hourglass,
   Pencil,
   Plus,
@@ -14,6 +16,7 @@ import {
   Tags,
   Trash2,
   TriangleAlert,
+  UserCheck,
   XCircle,
 } from "lucide-react";
 import { GlassPanel } from "../components/glass/GlassPanel";
@@ -24,10 +27,11 @@ import { useAppNotifications } from "../components/app-notifications-context";
 import { Badge, Button, EmptyState, Field, Input, Select, Spinner } from "../components/ui";
 import { StatCard } from "../features/giacong/StatCard";
 import { api } from "../lib/api";
-import { useAuth } from "../lib/auth";
-import { date, dateTime, moneyVnd } from "../lib/format";
+import { PERM, useAccess } from "../lib/access";
+import { dateTime, moneyVnd } from "../lib/format";
 import {
   voucherSourceLabel,
+  voucherEventLabel,
   voucherStatusColor,
   voucherStatusLabel,
   type EmployeeDetail,
@@ -35,8 +39,8 @@ import {
   type PayoutRefundSource,
   type PayoutSummary,
   type PayoutVoucher,
+  type PayoutVoucherEvent,
 } from "../lib/hr";
-import { isAccountingRole, isAdmin } from "../lib/types";
 import { useApi } from "../lib/useApi";
 import "../features/giacong/giacong.css";
 
@@ -72,32 +76,36 @@ const badgeColor = (status: string) => {
 const isQrExpired = (v: PayoutVoucher) =>
   !v.qrValue || !v.qrExpiresAt || new Date(v.qrExpiresAt).getTime() <= Date.now();
 
+type VoucherActionKind = "approve" | "complete" | "reject" | "cancel";
+
 /**
- * Sổ phiếu chi tiền mặt của phòng kế toán. Luồng một phiếu: kế toán lập → người nhận quét QR ký nhận →
- * kế toán "Duyệt chi". Nút duyệt chi CHỈ mở khi phiếu đã được ký nhận — chốt chống gian lận nằm ở đó.
- * Nhân viên thường vào trang này chỉ thấy phiếu của chính mình (server lọc, không phải chỉ ẩn trên UI).
+ * Sổ phiếu chi tiền mặt: kế toán lập → người nhận xác nhận (nếu cần) → kế toán trưởng duyệt → thủ quỹ
+ * hoàn tất. UI chỉ dựng nút từ access-profile; backend vẫn kiểm permission, phòng ban và trạng thái DB.
  */
 export function PhieuChi() {
-  const { user } = useAuth();
-  const admin = isAdmin(user);
-  const { notify, confirm } = useAppNotifications();
+  const { can } = useAccess();
+  const { notify } = useAppNotifications();
   const { data: me } = useApi<EmployeeDetail>("/api/hr/me");
-  // Quyền thật do server chốt; đây chỉ để dựng đúng giao diện (role kế toán + thuộc phòng kế toán).
-  const cashier = isAccountingRole(user) && !!me?.isAccounting;
-  const canSeeLedger = cashier || admin;
+  const accountingMember = !!me?.isAccounting;
+  const canCreate = accountingMember && can(PERM.payoutCreate);
+  const canApprove = accountingMember && can(PERM.payoutApprove);
+  const canPay = accountingMember && can(PERM.payoutPay);
+  const canManageCategories = can(PERM.systemSettingsManage);
+  const hasMoneyPermission = can(PERM.payoutCreate) || can(PERM.payoutApprove) || can(PERM.payoutPay);
 
   const [tab, setTab] = useState("queue");
   const [month, setMonth] = useState("");
   const [creating, setCreating] = useState(false);
   const [managingCategories, setManagingCategories] = useState(false);
   const [qrVoucher, setQrVoucher] = useState<PayoutVoucher | null>(null);
+  const [historyVoucher, setHistoryVoucher] = useState<PayoutVoucher | null>(null);
+  const [voucherAction, setVoucherAction] = useState<{ voucher: PayoutVoucher; kind: VoucherActionKind } | null>(null);
 
-  const scope = canSeeLedger ? "all" : "mine";
-  const query = `/api/payout-vouchers?scope=${scope}${month ? `&month=${month}` : ""}`;
+  const query = `/api/payout-vouchers?scope=all${month ? `&month=${month}` : ""}`;
   const { data, loading, reload } = useApi<PayoutVoucher[]>(query, [query]);
   const { data: summary, reload: reloadSummary } = useApi<PayoutSummary>(
-    canSeeLedger ? `/api/payout-vouchers/summary?month=${month || currentMonth()}` : null,
-    [canSeeLedger, month],
+    `/api/payout-vouchers/summary?month=${month || currentMonth()}`,
+    [month],
   );
 
   const vouchers = useMemo(() => data ?? [], [data]);
@@ -114,52 +122,22 @@ export function PhieuChi() {
     const fresh = vouchers.find((v) => v.id === qrVoucher.id);
     if (!fresh) return;
     if (fresh.status !== "AwaitingScan") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- dữ liệu realtime bên ngoài đã kết thúc modal QR.
       setQrVoucher(null);
-      notify.success(`${fresh.voucherNo} đã được người nhận ký nhận. Bạn có thể duyệt chi.`);
+      notify.success(`${fresh.voucherNo} đã được người nhận xác nhận và chuyển sang hàng chờ duyệt.`);
     } else if (fresh.qrValue !== qrVoucher.qrValue) {
       setQrVoucher(fresh);
     }
   }, [vouchers, qrVoucher, notify]);
 
   const visible = useMemo(() => {
-    if (tab === "queue") return vouchers.filter((v) => v.status === "AwaitingScan" || v.status === "Confirmed");
+    if (tab === "queue")
+      return vouchers.filter((v) =>
+        ["AwaitingScan", "AwaitingApproval", "Confirmed", "Approved"].includes(v.status),
+      );
     if (tab === "paid") return vouchers.filter((v) => v.status === "Paid");
     return vouchers;
   }, [vouchers, tab]);
-
-  const approve = async (v: PayoutVoucher) => {
-    const ok = await confirm({
-      title: "Duyệt chi phiếu này?",
-      description: `${v.voucherNo} · ${moneyVnd(v.amount)} cho ${v.employeeName}. Phiếu đã được người nhận ký nhận.`,
-      confirmLabel: "Duyệt chi",
-      tone: "info",
-    });
-    if (!ok) return;
-    try {
-      await api.post(`/api/payout-vouchers/${v.id}/approve`, {});
-      notify.success(`Đã duyệt chi ${v.voucherNo}.`);
-      refresh();
-    } catch (e) {
-      notify.error(e instanceof Error ? e.message : "Không duyệt chi được.");
-    }
-  };
-
-  const cancel = async (v: PayoutVoucher) => {
-    const ok = await confirm({
-      title: "Hủy phiếu chi?",
-      description: `${v.voucherNo} · ${moneyVnd(v.amount)}. Khoản hoàn tiền phạt (nếu có) sẽ quay lại hàng chờ.`,
-      confirmLabel: "Hủy phiếu",
-      tone: "danger",
-    });
-    if (!ok) return;
-    try {
-      await api.post(`/api/payout-vouchers/${v.id}/cancel`, { reason: "" });
-      notify.success("Đã hủy phiếu.");
-      refresh();
-    } catch (e) {
-      notify.error(e instanceof Error ? e.message : "Không hủy được.");
-    }
-  };
 
   const openQr = async (v: PayoutVoucher) => {
     // Mã cũ hết hạn (người nhận tới muộn) thì xin mã mới ngay khi mở, khỏi bắt kế toán bấm hai lần.
@@ -180,54 +158,49 @@ export function PhieuChi() {
   const totalPaid = summary?.totalPaid ?? 0;
   const totalPending = summary?.totalPending ?? 0;
   const awaiting = vouchers.filter((v) => v.status === "AwaitingScan").length;
-  const confirmed = vouchers.filter((v) => v.status === "Confirmed").length;
+  const awaitingReview = vouchers.filter((v) => v.status === "Confirmed" || v.status === "AwaitingApproval").length;
+  const approved = vouchers.filter((v) => v.status === "Approved").length;
 
   return (
     <div className="gc-page space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-[0.78rem] font-bold uppercase tracking-wide text-[var(--gc-text-soft)]">Phòng kế toán</p>
-          <h1 className="text-[1.75rem] font-black text-[var(--gc-text)]">
-            {canSeeLedger ? "Phiếu chi tiền mặt" : "Phiếu chi của tôi"}
-          </h1>
+          <h1 className="text-[1.75rem] font-black text-[var(--gc-text)]">Phiếu chi tiền mặt</h1>
         </div>
-        {cashier && (
+        {(canManageCategories || canCreate) && (
           <div className="flex flex-wrap gap-2">
-            {admin && (
+            {canManageCategories && (
               <Button variant="ghost" onClick={() => setManagingCategories(true)}>
                 <Tags className="h-4 w-4" /> Loại chi
               </Button>
             )}
-            <Button onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" /> Lập phiếu chi
-            </Button>
+            {canCreate && (
+              <Button onClick={() => setCreating(true)}>
+                <Plus className="h-4 w-4" /> Lập phiếu chi
+              </Button>
+            )}
           </div>
-        )}
-        {admin && !cashier && (
-          <Button variant="ghost" onClick={() => setManagingCategories(true)}>
-            <Tags className="h-4 w-4" /> Loại chi
-          </Button>
         )}
       </div>
 
-      {admin && !cashier && (
+      {hasMoneyPermission && !accountingMember && (
         <GlassPanel className="flex items-start gap-3 p-4 text-sm text-[var(--gc-text-soft)]">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <p>
-            Bạn đang xem sổ chi với quyền quản trị. Việc lập phiếu và duyệt chi chỉ dành cho tài khoản có role
-            kế toán thuộc phòng kế toán — quản trị hệ thống cố ý không được chi tiền.
+            Tài khoản có quyền nghiệp vụ nhưng hồ sơ nhân viên chưa thuộc phòng kế toán. Server sẽ không cho
+            lập, duyệt hay hoàn tất chi cho đến khi điều kiện phòng ban được đáp ứng.
           </p>
         </GlassPanel>
       )}
 
-      {canSeeLedger && (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard index={0} icon={CircleDollarSign} label="Đã chi trong tháng" value={moneyVnd(totalPaid)} tone="0, 184, 148" />
-          <StatCard index={1} icon={Hourglass} label="Đang chờ chi" value={moneyVnd(totalPending)} tone="217, 119, 6" />
-          <StatCard index={2} icon={ScanLine} label="Chờ người nhận quét" value={String(awaiting)} tone="88, 112, 152" />
-          <StatCard index={3} icon={CheckCircle2} label="Đã ký nhận · chờ duyệt" value={String(confirmed)} tone="59, 130, 246" />
-        </div>
-      )}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard index={0} icon={CircleDollarSign} label="Đã chi trong tháng" value={moneyVnd(totalPaid)} tone="0, 184, 148" />
+        <StatCard index={1} icon={Hourglass} label="Đang trong quy trình" value={moneyVnd(totalPending)} tone="217, 119, 6" />
+        <StatCard index={2} icon={ScanLine} label="Chờ người nhận" value={String(awaiting)} tone="88, 112, 152" />
+        <StatCard index={3} icon={UserCheck} label="Chờ duyệt" value={String(awaitingReview)} tone="59, 130, 246" />
+        <StatCard index={4} icon={CircleCheckBig} label="Đã duyệt · chờ chi" value={String(approved)} tone="124, 58, 237" />
+      </div>
 
       <GlassPanel strong className="p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -243,7 +216,7 @@ export function PhieuChi() {
           <EmptyState
             icon={<ReceiptText className="h-8 w-8" />}
             title={tab === "queue" ? "Không có phiếu nào đang chờ." : "Chưa có phiếu chi nào."}
-            hint={cashier ? "Bấm “Lập phiếu chi” để tạo phiếu mới." : undefined}
+            hint={canCreate ? "Bấm “Lập phiếu chi” để tạo phiếu mới." : undefined}
           />
         ) : (
           <div className="space-y-2.5">
@@ -251,18 +224,19 @@ export function PhieuChi() {
               <VoucherRow
                 key={v.id}
                 v={v}
-                showEmployee={canSeeLedger}
-                cashier={cashier}
+                canCreate={canCreate}
+                canApprove={canApprove}
+                canPay={canPay}
                 onQr={() => openQr(v)}
-                onApprove={() => approve(v)}
-                onCancel={() => cancel(v)}
+                onAction={(kind) => setVoucherAction({ voucher: v, kind })}
+                onHistory={() => setHistoryVoucher(v)}
               />
             ))}
           </div>
         )}
       </GlassPanel>
 
-      {canSeeLedger && (summary?.byCategory.length ?? 0) > 0 && (
+      {(summary?.byCategory.length ?? 0) > 0 && (
         <GlassPanel className="p-4">
           <h2 className="mb-3 text-sm font-black text-[var(--gc-text)]">
             Chi tiết theo loại · tháng {summary!.month.split("-").reverse().join("/")}
@@ -304,13 +278,31 @@ export function PhieuChi() {
           onCreated={(v) => {
             setCreating(false);
             refresh();
-            notify.success(`Đã lập phiếu ${v.voucherNo}. Đưa mã QR cho người nhận quét.`);
-            setQrVoucher(v);
+            if (v.status === "AwaitingScan") {
+              notify.success(`Đã lập phiếu ${v.voucherNo}. Đưa mã QR cho người nhận quét.`);
+              setQrVoucher(v);
+            } else {
+              notify.success(`Đã lập phiếu ${v.voucherNo} và chuyển sang chờ duyệt.`);
+            }
           }}
         />
       )}
 
       {qrVoucher && <VoucherQrModal voucher={qrVoucher} onClose={() => setQrVoucher(null)} onRefreshed={setQrVoucher} />}
+
+      {historyVoucher && <VoucherHistoryModal voucher={historyVoucher} onClose={() => setHistoryVoucher(null)} />}
+
+      {voucherAction && (
+        <VoucherActionModal
+          voucher={voucherAction.voucher}
+          kind={voucherAction.kind}
+          onClose={() => setVoucherAction(null)}
+          onDone={() => {
+            setVoucherAction(null);
+            refresh();
+          }}
+        />
+      )}
 
       {managingCategories && <CategoriesModal onClose={() => setManagingCategories(false)} />}
     </div>
@@ -319,36 +311,40 @@ export function PhieuChi() {
 
 function VoucherRow({
   v,
-  showEmployee,
-  cashier,
+  canCreate,
+  canApprove,
+  canPay,
   onQr,
-  onApprove,
-  onCancel,
+  onAction,
+  onHistory,
 }: {
   v: PayoutVoucher;
-  showEmployee: boolean;
-  cashier: boolean;
+  canCreate: boolean;
+  canApprove: boolean;
+  canPay: boolean;
   onQr: () => void;
-  onApprove: () => void;
-  onCancel: () => void;
+  onAction: (kind: VoucherActionKind) => void;
+  onHistory: () => void;
 }) {
   const done = v.status === "Paid";
-  const cancelled = v.status === "Cancelled";
+  const terminalFailure = v.status === "Cancelled" || v.status === "Rejected";
+  const beforeApproval = ["AwaitingScan", "AwaitingApproval", "Confirmed"].includes(v.status);
+  const canCancel = (canCreate && beforeApproval) || (canApprove && (beforeApproval || v.status === "Approved"));
   return (
     <article
       className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--glass-border)] px-3.5 py-3"
-      style={cancelled ? { opacity: 0.55 } : undefined}
+      style={terminalFailure ? { opacity: 0.65 } : undefined}
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <strong className="text-[var(--gc-text)]">{showEmployee ? v.employeeName : v.categoryName}</strong>
+          <strong className="text-[var(--gc-text)]">{v.employeeName}</strong>
           <span className="text-[0.76rem] font-semibold text-[var(--gc-text-soft)]">{v.voucherNo}</span>
           <Badge color={badgeColor(v.status)}>{voucherStatusLabel(v.status)}</Badge>
         </div>
         <small className="text-[var(--gc-text-muted)]">
-          {showEmployee ? `${v.categoryName} · ` : ""}
+          {v.categoryName} ·{" "}
           {voucherSourceLabel(v.sourceKind)}
-          {v.sourceNo ? ` ${v.sourceNo}` : ""} · {date(v.createdAt)}
+          {v.sourceNo ? ` ${v.sourceNo}` : ""} · lập {dateTime(v.createdAt)} bởi {v.createdBy || "Hệ thống"}
           {v.reason ? ` · ${v.reason}` : ""}
         </small>
         {v.status === "Confirmed" && v.confirmedAt && (
@@ -356,33 +352,57 @@ function VoucherRow({
             Người nhận đã ký nhận lúc {dateTime(v.confirmedAt)}
           </small>
         )}
-        {done && v.paidAt && (
+        {v.approvedAt && (
+          <small className="block text-blue-600 dark:text-blue-400">
+            Duyệt lúc {dateTime(v.approvedAt)} bởi {v.approvedBy || "Hệ thống"}
+          </small>
+        )}
+        {done && (v.completedAt || v.paidAt) && (
           <small className="block text-[var(--gc-text-muted)]">
-            Đã chi lúc {dateTime(v.paidAt)} · duyệt bởi {v.approvedBy}
+            Hoàn tất lúc {dateTime(v.completedAt ?? v.paidAt!)} bởi {v.completedBy || "Hệ thống"}
+          </small>
+        )}
+        {v.status === "Rejected" && v.rejectedAt && (
+          <small className="block text-red-600 dark:text-red-400">
+            Từ chối lúc {dateTime(v.rejectedAt)} bởi {v.rejectedBy || "Hệ thống"} · {v.rejectReason}
+          </small>
+        )}
+        {v.status === "Cancelled" && v.cancelledAt && (
+          <small className="block text-[var(--gc-text-muted)]">
+            Hủy lúc {dateTime(v.cancelledAt)} bởi {v.cancelledBy || "Hệ thống"} · {v.cancelReason}
           </small>
         )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[1.05rem] font-black text-[var(--gc-text)]">{moneyVnd(v.amount)}</span>
-        {cashier && !done && !cancelled && (
-          <>
-            {v.status === "AwaitingScan" && (
-              <Button variant="soft" onClick={onQr}>
-                <QrCode className="h-4 w-4" /> Mã QR
-              </Button>
-            )}
-            <Button
-              onClick={onApprove}
-              disabled={v.status !== "Confirmed"}
-              title={v.status !== "Confirmed" ? "Người nhận chưa quét QR xác nhận đã nhận tiền" : undefined}
-            >
-              <BanknoteArrowDown className="h-4 w-4" /> Duyệt chi
-            </Button>
-            <Button variant="ghost" onClick={onCancel}>
-              <XCircle className="h-4 w-4" />
-            </Button>
-          </>
+        <Button variant="ghost" onClick={onHistory} title="Xem lịch sử phiếu">
+          <History className="h-4 w-4" /> Lịch sử
+        </Button>
+        {canCreate && v.status === "AwaitingScan" && (
+          <Button variant="soft" onClick={onQr}>
+            <QrCode className="h-4 w-4" /> Mã QR
+          </Button>
+        )}
+        {canApprove && (v.status === "Confirmed" || v.status === "AwaitingApproval") && (
+          <Button onClick={() => onAction("approve")}>
+            <CheckCircle2 className="h-4 w-4" /> Duyệt chi
+          </Button>
+        )}
+        {canApprove && beforeApproval && (
+          <Button variant="danger" onClick={() => onAction("reject")}>
+            <XCircle className="h-4 w-4" /> Từ chối
+          </Button>
+        )}
+        {canPay && v.status === "Approved" && (
+          <Button onClick={() => onAction("complete")}>
+            <BanknoteArrowDown className="h-4 w-4" /> Hoàn tất chi
+          </Button>
+        )}
+        {canCancel && !done && !terminalFailure && (
+          <Button variant="ghost" onClick={() => onAction("cancel")} title="Hủy phiếu">
+            <XCircle className="h-4 w-4" /> Hủy
+          </Button>
         )}
       </div>
     </article>
@@ -403,6 +423,7 @@ function CreateVoucherModal({ onClose, onCreated }: { onClose: () => void; onCre
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [note, setNote] = useState("");
+  const [requiresConfirmation, setRequiresConfirmation] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const pendingRefunds = refunds ?? [];
@@ -443,12 +464,21 @@ function CreateVoucherModal({ onClose, onCreated }: { onClose: () => void; onCre
               amount: Number(amount),
               reason: reason.trim(),
               note: note.trim(),
+              requiresRecipientConfirmation: requiresConfirmation,
             };
       const res = await api.post<{ id: string; voucherNo: string }>("/api/payout-vouchers", body);
       // Lấy lại phiếu vừa lập để có mã QR mà server sinh kèm.
       const list = await api.get<PayoutVoucher[]>("/api/payout-vouchers?scope=all");
       const fresh = list.find((v) => v.id === res.id);
-      onCreated(fresh ?? ({ ...(picked as unknown as PayoutVoucher), id: res.id, voucherNo: res.voucherNo } as PayoutVoucher));
+      onCreated(
+        fresh ??
+          ({
+            ...(picked as unknown as PayoutVoucher),
+            id: res.id,
+            voucherNo: res.voucherNo,
+            status: mode === "refund" || requiresConfirmation ? "AwaitingScan" : "AwaitingApproval",
+          } as PayoutVoucher),
+      );
     } catch (e) {
       notify.error(e instanceof Error ? e.message : "Không lập được phiếu.");
     } finally {
@@ -468,7 +498,7 @@ function CreateVoucherModal({ onClose, onCreated }: { onClose: () => void; onCre
             Đóng
           </Button>
           <Button onClick={submit} loading={saving}>
-            Lập phiếu &amp; tạo mã QR
+            {mode === "refund" || requiresConfirmation ? "Lập phiếu & tạo mã QR" : "Lập phiếu chờ duyệt"}
           </Button>
         </div>
       }
@@ -549,6 +579,204 @@ function CreateVoucherModal({ onClose, onCreated }: { onClose: () => void; onCre
         <Field label="Ghi chú">
           <Input value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
+        {mode === "manual" && (
+          <label className="flex items-start gap-3 rounded-xl border border-[var(--glass-border)] p-3.5 text-sm text-[var(--gc-text-soft)]">
+            <input
+              className="mt-0.5 h-4 w-4"
+              type="checkbox"
+              checked={requiresConfirmation}
+              onChange={(e) => setRequiresConfirmation(e.target.checked)}
+            />
+            <span>
+              <strong className="block text-[var(--gc-text)]">Yêu cầu người nhận xác nhận bằng QR</strong>
+              Tắt lựa chọn này chỉ khi khoản chi không cần ký nhận; phiếu sẽ đi thẳng sang hàng chờ duyệt.
+            </span>
+          </label>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function VoucherActionModal({
+  voucher,
+  kind,
+  onClose,
+  onDone,
+}: {
+  voucher: PayoutVoucher;
+  kind: VoucherActionKind;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { notify } = useAppNotifications();
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const destructive = kind === "reject" || kind === "cancel";
+  const config: Record<VoucherActionKind, { title: string; button: string; success: string; hint: string }> = {
+    approve: {
+      title: "Duyệt phiếu chi",
+      button: "Xác nhận duyệt",
+      success: "Đã duyệt phiếu, đang chờ thủ quỹ hoàn tất.",
+      hint: "Ghi chú duyệt (không bắt buộc)",
+    },
+    complete: {
+      title: "Hoàn tất chi tiền",
+      button: "Xác nhận đã chi",
+      success: "Đã ghi nhận hoàn tất chi tiền.",
+      hint: "Ghi chú thực chi (không bắt buộc)",
+    },
+    reject: {
+      title: "Từ chối phiếu chi",
+      button: "Từ chối",
+      success: "Đã từ chối phiếu chi.",
+      hint: "Lý do từ chối (bắt buộc)",
+    },
+    cancel: {
+      title: "Hủy phiếu chi",
+      button: "Hủy phiếu",
+      success: "Đã hủy phiếu chi.",
+      hint: "Lý do hủy (bắt buộc)",
+    },
+  };
+  const copy = config[kind];
+
+  const submit = async () => {
+    const clean = note.trim();
+    if (destructive && !clean) return notify.error(copy.hint);
+    setSaving(true);
+    try {
+      const body = destructive ? { reason: clean } : { note: clean };
+      await api.post(`/api/payout-vouchers/${voucher.id}/${kind}`, body);
+      notify.success(copy.success);
+      onDone();
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không cập nhật được phiếu chi.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={copy.title}
+      panel
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Đóng</Button>
+          <Button variant={destructive ? "danger" : "primary"} onClick={submit} loading={saving}>
+            {copy.button}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <GlassPanel className="p-3.5 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-black text-[var(--gc-text)]">{voucher.voucherNo} · {voucher.employeeName}</p>
+              <p className="text-[var(--gc-text-muted)]">{voucher.reason}</p>
+            </div>
+            <strong className="shrink-0 text-lg text-[var(--gc-text)]">{moneyVnd(voucher.amount)}</strong>
+          </div>
+        </GlassPanel>
+        <Field label={copy.hint}>
+          <textarea
+            className="km-form-control min-h-24 w-full resize-y rounded-xl border px-3.5 py-2.5 text-sm outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={2000}
+          />
+        </Field>
+        {destructive && (
+          <p className="text-xs text-[var(--gc-text-muted)]">
+            Lý do và người thao tác sẽ được lưu vĩnh viễn trong lịch sử phiếu.
+          </p>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function VoucherHistoryModal({ voucher, onClose }: { voucher: PayoutVoucher; onClose: () => void }) {
+  const { data, loading } = useApi<PayoutVoucherEvent[]>(`/api/payout-vouchers/${voucher.id}/history`);
+  const events = data ?? [];
+  const milestones = [
+    { label: "Lập phiếu", at: voucher.createdAt, actor: voucher.createdBy },
+    voucher.confirmedAt ? { label: "Người nhận xác nhận", at: voucher.confirmedAt, actor: voucher.confirmedBy } : null,
+    voucher.approvedAt ? { label: "Duyệt chi", at: voucher.approvedAt, actor: voucher.approvedBy } : null,
+    voucher.rejectedAt ? { label: "Từ chối", at: voucher.rejectedAt, actor: voucher.rejectedBy } : null,
+    voucher.cancelledAt ? { label: "Hủy phiếu", at: voucher.cancelledAt, actor: voucher.cancelledBy } : null,
+    voucher.completedAt ? { label: "Hoàn tất", at: voucher.completedAt, actor: voucher.completedBy } : null,
+  ].filter((m): m is { label: string; at: string; actor: string } => !!m);
+
+  return (
+    <Modal open onClose={onClose} title={`Lịch sử ${voucher.voucherNo}`} panel wide>
+      <div className="space-y-5">
+        <GlassPanel className="p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-black text-[var(--gc-text)]">{voucher.employeeName} · {voucher.categoryName}</p>
+              <p className="text-sm text-[var(--gc-text-muted)]">{voucher.reason}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xl font-black text-[var(--gc-text)]">{moneyVnd(voucher.amount)}</p>
+              <Badge color={badgeColor(voucher.status)}>{voucherStatusLabel(voucher.status)}</Badge>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {milestones.map((m) => (
+              <div key={m.label} className="rounded-xl border border-[var(--glass-border)] p-3 text-xs">
+                <p className="font-bold text-[var(--gc-text)]">{m.label}</p>
+                <p className="text-[var(--gc-text-muted)]">{dateTime(m.at)}</p>
+                <p className="text-[var(--gc-text-soft)]">{m.actor || "Hệ thống"}</p>
+              </div>
+            ))}
+          </div>
+        </GlassPanel>
+
+        {loading && !data ? (
+          <Spinner />
+        ) : events.length === 0 ? (
+          <EmptyState icon={<History className="h-8 w-8" />} title="Chưa có sự kiện lịch sử." />
+        ) : (
+          <ol className="relative ml-3 border-l border-[var(--glass-border)] pl-6">
+            {events.map((event) => (
+              <li key={event.id} className="relative pb-6 last:pb-0">
+                <span className="absolute -left-[1.93rem] top-1.5 h-3 w-3 rounded-full border-2 border-[var(--accent)] bg-white dark:bg-slate-900" />
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="font-black text-[var(--gc-text)]">{voucherEventLabel(event.action)}</p>
+                    <p className="text-xs text-[var(--gc-text-muted)]">
+                      {event.actorName || event.actor || "Hệ thống"}
+                      {event.actorName && event.actor && event.actorName !== event.actor ? ` (${event.actor})` : ""}
+                    </p>
+                  </div>
+                  <time className="text-xs font-semibold text-[var(--gc-text-soft)]">{dateTime(event.occurredAt)}</time>
+                </div>
+                {(event.beforeStatus || event.afterStatus) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    {event.beforeStatus && <Badge color={badgeColor(event.beforeStatus)}>{voucherStatusLabel(event.beforeStatus)}</Badge>}
+                    {event.beforeStatus && event.afterStatus && <span className="text-[var(--gc-text-muted)]">→</span>}
+                    {event.afterStatus && <Badge color={badgeColor(event.afterStatus)}>{voucherStatusLabel(event.afterStatus)}</Badge>}
+                  </div>
+                )}
+                {event.note && <p className="mt-2 text-sm text-[var(--gc-text-soft)]">{event.note}</p>}
+                {(event.before || event.after) && (
+                  <details className="mt-2 text-xs text-[var(--gc-text-muted)]">
+                    <summary className="cursor-pointer font-semibold">Dữ liệu trước/sau</summary>
+                    <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                      <pre className="max-h-48 overflow-auto rounded-xl bg-black/5 p-2.5 dark:bg-white/5">{JSON.stringify(event.before, null, 2)}</pre>
+                      <pre className="max-h-48 overflow-auto rounded-xl bg-black/5 p-2.5 dark:bg-white/5">{JSON.stringify(event.after, null, 2)}</pre>
+                    </div>
+                  </details>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
       </div>
     </Modal>
   );

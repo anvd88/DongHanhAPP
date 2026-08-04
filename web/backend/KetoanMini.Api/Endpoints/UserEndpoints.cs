@@ -21,12 +21,12 @@ public static class UserEndpoints
         // Chỉ đọc, nguồn là Security/Permissions.cs (không nhân bản mapping ở frontend).
         app.MapGet("/api/roles/catalog", () =>
         {
-            string[] roles =
-                [AppRoles.Admin, AppRoles.Accounting, AppRoles.ChiefAccountant, AppRoles.Hr, AppRoles.Manager, AppRoles.Warehouse, AppRoles.Employee];
-            var catalog = roles.Select(role => new
+            var catalog = AppRoles.All.Select(role => new
             {
                 role,
                 label = AppRoles.Label(role),
+                assignable = AppRoles.Assignable.Contains(role),
+                technical = string.Equals(role, AppRoles.Kiosk, StringComparison.Ordinal),
                 permissions = (Permissions.RolePermissions.TryGetValue(role, out var perms) ? perms : Array.Empty<string>())
                     .Select(p => new { key = p, label = Permissions.Label(p) })
                     .ToArray(),
@@ -39,13 +39,23 @@ public static class UserEndpoints
             await using var conn = await db.OpenAsync();
             var where = "WHERE u.is_deleted = FALSE";
             if (!string.IsNullOrWhiteSpace(search)) where += " AND (u.username ILIKE @s OR u.full_name ILIKE @s OR u.email ILIKE @s)";
+            var roleFilter = role switch
+            {
+                "Pending" or "Locked" => null,
+                _ => AppRoles.Normalize(role),
+            };
             where += role switch
             {
-                "Admin" => " AND u.role = 'Admin'",
-                "User" => " AND u.role = 'User'",
                 "Pending" => " AND u.approval_status = 'Pending'",
                 "Locked" => " AND u.is_active = FALSE",
-                _ => ""
+                _ when roleFilter is not null => """
+                     AND (u.role=@role OR EXISTS (
+                         SELECT 1 FROM user_roles role_filter
+                         WHERE role_filter.username=u.username AND role_filter.role=@role
+                           AND (role_filter.expires_at IS NULL OR role_filter.expires_at>CURRENT_TIMESTAMP)
+                     ))
+                     """,
+                _ => "",
             };
 
             var list = new List<UserAdminDto>();
@@ -55,8 +65,16 @@ public static class UserEndpoints
                           p.last_seen,
                           (u.role = 'Admin' OR vu.username IS NOT NULL) AS verified,
                           (u.role = 'Admin' OR du.username IS NOT NULL) AS is_diamond,
+                          EXISTS(
+                              SELECT 1 FROM hr_employees e
+                              JOIN hr_employee_positions ep ON ep.employee_id=e.id
+                              WHERE e.user_id=u.id
+                                 OR (e.user_id IS NULL AND lower(e.username)=lower(u.username))
+                          ) AS roles_managed_by_positions,
                           COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
-                                    FROM user_roles ur WHERE ur.username = u.username), '') AS secondary_roles
+                                    FROM user_roles ur
+                                    WHERE ur.username = u.username
+                                      AND (ur.expires_at IS NULL OR ur.expires_at>CURRENT_TIMESTAMP)), '') AS secondary_roles
                    FROM app_users u
                    LEFT JOIN web_verified_users vu ON vu.username = u.username
                    LEFT JOIN web_diamond_members du ON du.username = u.username
@@ -71,6 +89,7 @@ public static class UserEndpoints
                    {where}
                    ORDER BY u.created_at DESC");
             if (!string.IsNullOrWhiteSpace(search)) cmd.With("@s", $"%{search}%");
+            if (roleFilter is not null) cmd.With("@role", roleFilter);
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
             {
@@ -79,43 +98,77 @@ public static class UserEndpoints
                     .Select(AppRoles.Normalize).OfType<string>().Distinct().ToList();
                 list.Add(new UserAdminDto(r.Guid("id"), r.Str("username"), r.Str("full_name"),
                     r.Str("email"), r.Str("role"), r.Bool("is_active"), r.Str("approval_status"), r.DtNull("created_at"),
-                    r.Bool("is_online"), r.DtNull("last_seen"), r.Bool("verified"), r.Bool("is_diamond"), secondary));
+                    r.Bool("is_online"), r.DtNull("last_seen"), r.Bool("verified"), r.Bool("is_diamond"), secondary,
+                    r.Bool("roles_managed_by_positions")));
             }
             return Results.Ok(list);
         });
 
-        g.MapPost("/", async (CreateUserRequest req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/", async (CreateUserRequest req, ClaimsPrincipal u, Database db,
+            IHubContext<ChangesHub> hub, HttpContext http) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mật khẩu." });
             var role = AppRoles.Normalize(req.Role);
-            if (role is null)
-                return Results.BadRequest(new { message = $"Role phải là một trong: {string.Join(", ", AppRoles.All)}." });
+            if (role is null || !AppRoles.Assignable.Contains(role))
+                return Results.BadRequest(new { message = $"Role phải là một trong: {string.Join(", ", AppRoles.Assignable)}." });
 
             await using var conn = await db.OpenAsync();
-            var exists = await conn.Cmd("SELECT COUNT(*) FROM app_users WHERE username=@u AND is_deleted=FALSE")
+            var exists = await conn.Cmd("SELECT COUNT(*) FROM app_users WHERE lower(username)=lower(@u) AND is_deleted=FALSE")
                 .With("@u", req.Username.Trim()).ExecuteScalarAsync();
             if (Convert.ToInt32(exists) > 0)
                 return Results.Conflict(new { message = "Tên đăng nhập đã tồn tại." });
 
-            var id = Guid.NewGuid();
-            await conn.Cmd(
-                @"INSERT INTO app_users (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
-                  VALUES (@id, @u, @fn, @em, @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, @by,
-                          COALESCE((SELECT (e.hire_date::timestamp + TIME '09:00') AT TIME ZONE 'Asia/Ho_Chi_Minh'
-                                    FROM hr_employees e
-                                    WHERE lower(e.username)=lower(@u) AND e.hire_date IS NOT NULL LIMIT 1), CURRENT_TIMESTAMP))")
-                .With("@id", id).With("@u", req.Username.Trim()).With("@fn", req.FullName ?? "")
-                .With("@em", req.Email ?? "")
-                .With("@role", role)
-                .With("@ph", PasswordHasher.Hash(req.Password)).With("@by", u.Username())
-                .ExecuteNonQueryAsync();
-
             var employeeId = await conn.Cmd("SELECT id FROM hr_employees WHERE lower(username)=lower(@u) LIMIT 1")
                 .With("@u", req.Username.Trim()).ExecuteScalarAsync();
-            if (employeeId is Guid eid) await HrEndpoints.SyncEmployeeAccountSharedFields(conn, eid);
+            var rolesManagedByPositions = employeeId is Guid managedEmployee
+                                          && await conn.Cmd("SELECT EXISTS(SELECT 1 FROM hr_employee_positions WHERE employee_id=@id)")
+                                              .With("@id", managedEmployee).ExecuteScalarAsync() is bool managed && managed;
+            if (rolesManagedByPositions && employeeId is Guid positionManagedEmployee)
+            {
+                var derivedPrimary = (await EmployeePositionRoleService.LoadDerivedRolesAsync(conn, positionManagedEmployee))[0];
+                // Hồ sơ đã có chức vụ thì server là source-of-truth; bỏ qua role cũ client gửi lên.
+                role = derivedPrimary;
+            }
+
+            var id = Guid.NewGuid();
+            EmployeePositionRoleService.SyncResult? roleSync = null;
+            await using var tx = await conn.BeginTransactionAsync();
+            try
+            {
+                await conn.Cmd(
+                    @"INSERT INTO app_users (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
+                      VALUES (@id, @u, @fn, @em, @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, @by,
+                              COALESCE((SELECT (e.hire_date::timestamp + TIME '09:00') AT TIME ZONE 'Asia/Ho_Chi_Minh'
+                                        FROM hr_employees e
+                                        WHERE lower(e.username)=lower(@u) AND e.hire_date IS NOT NULL LIMIT 1), CURRENT_TIMESTAMP))", tx)
+                    .With("@id", id).With("@u", req.Username.Trim()).With("@fn", req.FullName ?? "")
+                    .With("@em", req.Email ?? "")
+                    .With("@role", role)
+                    .With("@ph", PasswordHasher.Hash(req.Password)).With("@by", u.Username())
+                    .ExecuteNonQueryAsync();
+            }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                return Results.Conflict(new { message = "Tên đăng nhập đã tồn tại (không phân biệt chữ hoa/thường)." });
+            }
+
+            if (employeeId is Guid eid)
+            {
+                await HrEndpoints.SyncEmployeeAccountSharedFields(conn, eid, tx);
+                if (rolesManagedByPositions)
+                    roleSync = await EmployeePositionRoleService.SyncAsync(
+                        conn, eid, u.Username(), http.Connection.RemoteIpAddress?.ToString() ?? "", tx);
+            }
+            await tx.CommitAsync();
 
             await db.RecordAudit(u.Username(), "Tạo người dùng", "User", req.Username, "Admin tạo tài khoản (web).");
+            if (roleSync is { Changed: true })
+            {
+                await db.RecordAudit(u.Username(), "Đồng bộ vai trò theo chức vụ", "User", roleSync.Username,
+                    $"[{roleSync.RolesBefore}] → [{roleSync.RolesAfter}] (web).");
+                try { await hub.Clients.User(roleSync.Username).SendAsync("changed", "access"); } catch { }
+            }
             return Results.Ok(new { id });
         });
 
@@ -125,22 +178,47 @@ public static class UserEndpoints
             IHubContext<ChangesHub> hub, HttpContext http) =>
         {
             var role = AppRoles.Normalize(req.Role);
-            if (role is null)
-                return Results.BadRequest(new { message = $"Role phải là một trong: {string.Join(", ", AppRoles.All)}." });
+            if (role is null || !AppRoles.Assignable.Contains(role))
+                return Results.BadRequest(new { message = $"Role phải là một trong: {string.Join(", ", AppRoles.Assignable)}." });
 
             await using var conn = await db.OpenAsync();
-            var target = await conn.Cmd("SELECT username FROM app_users WHERE id=@id AND is_deleted=FALSE")
-                .With("@id", id).ExecuteScalarAsync() as string;
-            if (target is null) return Results.NotFound();
+            await using var tx = await conn.BeginTransactionAsync();
+            string target;
+            string currentRole;
+            await using (var reader = await conn.Cmd("""
+                SELECT username, role FROM app_users WHERE id=@id AND is_deleted=FALSE FOR UPDATE
+                """, tx).With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync()) return Results.NotFound();
+                target = reader.Str("username");
+                currentRole = AppRoles.Normalize(reader.Str("role")) ?? AppRoles.Employee;
+            }
+            if (await EmployeePositionRoleService.IsManagedAccountAsync(conn, id, tx))
+                return Results.Conflict(new
+                {
+                    message = "Vai trò tài khoản này được quản lý theo chức vụ. Hãy thay đổi chức vụ trong hồ sơ nhân sự."
+                });
             // Tự hạ quyền chính mình là cách nhanh nhất để khoá hết admin ra ngoài hệ thống.
             if (string.Equals(target, u.Username(), StringComparison.OrdinalIgnoreCase))
                 return Results.BadRequest(new { message = "Không thể tự đổi vai trò của chính mình." });
+            if (string.Equals(currentRole, AppRoles.Admin, StringComparison.Ordinal)
+                && !string.Equals(role, AppRoles.Admin, StringComparison.Ordinal))
+            {
+                await conn.Cmd("SELECT pg_advisory_xact_lock(823746120031)", tx).ExecuteNonQueryAsync();
+                var otherAdmins = Convert.ToInt32(await conn.Cmd("""
+                    SELECT COUNT(*) FROM app_users
+                    WHERE role='Admin' AND is_active=TRUE AND is_deleted=FALSE AND id<>@id
+                    """, tx).With("@id", id).ExecuteScalarAsync());
+                if (otherAdmins == 0)
+                    return Results.Conflict(new { message = "Không thể hạ quyền quản trị viên hoạt động cuối cùng." });
+            }
 
             var before = await SnapshotRolesAsync(conn, target);
-            await conn.Cmd("UPDATE app_users SET role=@r WHERE id=@id").With("@id", id).With("@r", role)
+            await conn.Cmd("UPDATE app_users SET role=@r WHERE id=@id", tx).With("@id", id).With("@r", role)
                 .ExecuteNonQueryAsync();
             await AfterAuthorizationChangeAsync(conn, db, hub, http, u.Username(), target,
                 "Đổi vai trò chính", before, req.Reason);
+            await tx.CommitAsync();
             return Results.NoContent();
         });
 
@@ -160,9 +238,15 @@ public static class UserEndpoints
                 });
 
             await using var conn = await db.OpenAsync();
-            var target = await conn.Cmd("SELECT username FROM app_users WHERE id=@id AND is_deleted=FALSE")
+            await using var tx = await conn.BeginTransactionAsync();
+            var target = await conn.Cmd("SELECT username FROM app_users WHERE id=@id AND is_deleted=FALSE FOR UPDATE", tx)
                 .With("@id", id).ExecuteScalarAsync() as string;
             if (string.IsNullOrWhiteSpace(target)) return Results.NotFound();
+            if (await EmployeePositionRoleService.IsManagedAccountAsync(conn, id, tx))
+                return Results.Conflict(new
+                {
+                    message = "Vai trò tài khoản này được quản lý theo chức vụ. Hãy thay đổi chức vụ trong hồ sơ nhân sự."
+                });
 
             var before = await SnapshotRolesAsync(conn, target);
             if (req.Grant)
@@ -172,15 +256,16 @@ public static class UserEndpoints
                       ON CONFLICT (username, role) DO UPDATE SET
                           granted_by = EXCLUDED.granted_by,
                           granted_at = EXCLUDED.granted_at,
-                          expires_at = EXCLUDED.expires_at")
+                          expires_at = EXCLUDED.expires_at", tx)
                     .With("@u", target).With("@r", role).With("@by", u.Username())
                     .With("@exp", (object?)req.ExpiresAt ?? DBNull.Value).ExecuteNonQueryAsync();
             else
-                await conn.Cmd("DELETE FROM user_roles WHERE username=@u AND role=@r")
+                await conn.Cmd("DELETE FROM user_roles WHERE username=@u AND role=@r", tx)
                     .With("@u", target).With("@r", role).ExecuteNonQueryAsync();
 
             var what = $"{(req.Grant ? "Cấp" : "Thu hồi")} vai trò {AppRoles.Label(role)}";
             await AfterAuthorizationChangeAsync(conn, db, hub, http, u.Username(), target, what, before, req.Reason);
+            await tx.CommitAsync();
             return Results.NoContent();
         });
 
@@ -190,7 +275,8 @@ public static class UserEndpoints
             var resigned = await conn.Cmd("""
                 SELECT EXISTS(
                     SELECT 1 FROM hr_employees e
-                    JOIN app_users au ON au.id=@id AND (au.id=e.user_id OR lower(au.username)=lower(e.username))
+                    JOIN app_users au ON au.id=@id
+                     AND (au.id=e.user_id OR (e.user_id IS NULL AND lower(au.username)=lower(e.username)))
                     WHERE lower(e.status)<>'active'
                 )
                 """).With("@id", id).ExecuteScalarAsync() is bool stopped && stopped;
@@ -203,47 +289,58 @@ public static class UserEndpoints
             return n > 0 ? Results.NoContent() : Results.NotFound();
         });
 
-        g.MapPost("/{id:guid}/lock", async (Guid id, SetLockRequest req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/{id:guid}/lock", async (Guid id, SetLockRequest req, ClaimsPrincipal u, Database db,
+            IHubContext<ChangesHub> hub) =>
         {
             await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            string username;
+            string role;
             await using (var reader = await conn.Cmd(
-                "SELECT username, role FROM app_users WHERE id=@id AND is_deleted=FALSE LIMIT 1")
-                .With("@id", id)
-                .ExecuteReaderAsync())
+                "SELECT username, role FROM app_users WHERE id=@id AND is_deleted=FALSE FOR UPDATE", tx)
+                .With("@id", id).ExecuteReaderAsync())
             {
                 if (!await reader.ReadAsync()) return Results.NotFound();
-
-                var username = reader.Str("username");
-                var role = reader.Str("role");
-                if (req.Locked && string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (string.Equals(username, u.Username(), StringComparison.OrdinalIgnoreCase))
-                        return Results.BadRequest(new { message = "Không thể tự khóa tài khoản Admin đang dùng." });
-                    await reader.CloseAsync();
-                    var otherActiveAdmins = Convert.ToInt32(await conn.Cmd(
-                        "SELECT COUNT(*) FROM app_users WHERE role='Admin' AND is_active=TRUE AND is_deleted=FALSE AND id<>@id")
-                        .With("@id", id).ExecuteScalarAsync());
-                    if (otherActiveAdmins == 0)
-                        return Results.BadRequest(new { message = "Phải có ít nhất một Admin hoạt động khác trước khi khóa tài khoản này." });
-                }
-
-                if (!reader.IsClosed) await reader.CloseAsync();
-                if (!req.Locked)
-                {
-                    var resigned = await conn.Cmd("""
-                        SELECT EXISTS(
-                            SELECT 1 FROM hr_employees e
-                            WHERE lower(e.username)=lower(@u) AND lower(e.status)<>'active'
-                        )
-                        """).With("@u", username).ExecuteScalarAsync() is bool stopped && stopped;
-                    if (resigned)
-                        return Results.BadRequest(new { message = "Nhân viên đã nghỉ làm. Hãy chuyển hồ sơ về Đang làm trước khi mở khóa tài khoản." });
-                }
-                var n = await conn.Cmd("UPDATE app_users SET is_active=@active WHERE id=@id AND is_deleted=FALSE")
-                    .With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
-                if (n > 0) await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", username, "(web)");
-                return n > 0 ? Results.NoContent() : Results.NotFound();
+                username = reader.Str("username");
+                role = AppRoles.Normalize(reader.Str("role")) ?? AppRoles.Employee;
             }
+
+            if (req.Locked && string.Equals(role, AppRoles.Admin, StringComparison.Ordinal))
+            {
+                if (string.Equals(username, u.Username(), StringComparison.OrdinalIgnoreCase))
+                    return Results.BadRequest(new { message = "Không thể tự khóa tài khoản Admin đang dùng." });
+                await conn.Cmd("SELECT pg_advisory_xact_lock(823746120031)", tx).ExecuteNonQueryAsync();
+                var otherActiveAdmins = Convert.ToInt32(await conn.Cmd(
+                    "SELECT COUNT(*) FROM app_users WHERE role='Admin' AND is_active=TRUE AND is_deleted=FALSE AND id<>@id", tx)
+                    .With("@id", id).ExecuteScalarAsync());
+                if (otherActiveAdmins == 0)
+                    return Results.BadRequest(new { message = "Phải có ít nhất một Admin hoạt động khác trước khi khóa tài khoản này." });
+            }
+
+            if (!req.Locked)
+            {
+                var resigned = await conn.Cmd("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM hr_employees e
+                        WHERE (e.user_id=@id OR (e.user_id IS NULL AND lower(e.username)=lower(@u)))
+                          AND lower(e.status)<>'active'
+                    )
+                    """, tx).With("@id", id).With("@u", username).ExecuteScalarAsync() is bool stopped && stopped;
+                if (resigned)
+                    return Results.BadRequest(new { message = "Nhân viên đã nghỉ làm. Hãy chuyển hồ sơ về Đang làm trước khi mở khóa tài khoản." });
+            }
+            var n = await conn.Cmd("""
+                UPDATE app_users
+                SET is_active=@active, authorization_version=COALESCE(authorization_version, 1)+1
+                WHERE id=@id AND is_deleted=FALSE
+                """, tx).With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
+            await tx.CommitAsync();
+            if (n > 0)
+            {
+                await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", username, "(web)");
+                try { await hub.Clients.User(username).SendAsync("changed", "access"); } catch { }
+            }
+            return n > 0 ? Results.NoContent() : Results.NotFound();
         });
 
         // Cấp / thu hồi "tích xanh" thủ công cho một tài khoản. Tài khoản Admin luôn có tích xanh
@@ -351,15 +448,47 @@ public static class UserEndpoints
             try
             {
                 var find = new NpgsqlCommand(
-                    "SELECT username FROM app_users WHERE id=@id AND is_deleted=FALSE FOR UPDATE LIMIT 1",
+                    "SELECT username, role FROM app_users WHERE id=@id AND is_deleted=FALSE FOR UPDATE LIMIT 1",
                     conn, tx);
                 find.Parameters.AddWithValue("@id", id);
+                string username;
+                string targetRole;
+                await using (var reader = await find.ExecuteReaderAsync())
+                {
+                    if (!await reader.ReadAsync())
+                    {
+                        await tx.RollbackAsync();
+                        return Results.NotFound();
+                    }
+                    username = reader.Str("username").Trim();
+                    targetRole = AppRoles.Normalize(reader.Str("role")) ?? AppRoles.Employee;
+                }
 
-                var username = Convert.ToString(await find.ExecuteScalarAsync())?.Trim();
-                if (string.IsNullOrWhiteSpace(username))
+                if (string.Equals(username, u.Username(), StringComparison.OrdinalIgnoreCase))
                 {
                     await tx.RollbackAsync();
-                    return Results.NotFound();
+                    return Results.BadRequest(new { message = "Không thể tự xóa tài khoản đang đăng nhập." });
+                }
+                if (await EmployeePositionRoleService.IsManagedAccountAsync(conn, id, tx))
+                {
+                    await tx.RollbackAsync();
+                    return Results.Conflict(new
+                    {
+                        message = "Tài khoản đang gắn hồ sơ/chức vụ nhân sự. Hãy xóa hồ sơ nhân sự để hệ thống khóa và hạ quyền tài khoản an toàn."
+                    });
+                }
+                if (string.Equals(targetRole, AppRoles.Admin, StringComparison.Ordinal))
+                {
+                    await conn.Cmd("SELECT pg_advisory_xact_lock(823746120031)", tx).ExecuteNonQueryAsync();
+                    var otherAdmins = Convert.ToInt32(await conn.Cmd("""
+                        SELECT COUNT(*) FROM app_users
+                        WHERE role='Admin' AND is_active=TRUE AND is_deleted=FALSE AND id<>@id
+                        """, tx).With("@id", id).ExecuteScalarAsync());
+                    if (otherAdmins == 0)
+                    {
+                        await tx.RollbackAsync();
+                        return Results.Conflict(new { message = "Không thể xóa quản trị viên khi chưa có quản trị viên hoạt động khác." });
+                    }
                 }
 
                 await DeleteUserEverywhere(conn, tx, id, username);

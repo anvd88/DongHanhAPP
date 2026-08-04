@@ -45,8 +45,8 @@ public sealed class PenaltyLedgerTests : IAsyncLifetime
         // Người duyệt đơn khiếu nại (cần app_users để cấp token gọi endpoint approve).
         await conn.Cmd("""
             INSERT INTO app_users (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at, is_deleted)
-            VALUES (@id, @u, @u, '', 'Employee', @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, FALSE)
-            ON CONFLICT (username) DO UPDATE SET is_active=TRUE, is_deleted=FALSE
+            VALUES (@id, @u, @u, '', 'Manager', @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, FALSE)
+            ON CONFLICT (username) DO UPDATE SET is_active=TRUE, is_deleted=FALSE, role='Manager'
             """).With("@id", Guid.NewGuid()).With("@u", _approver).With("@ph", PasswordHasher.Hash("test-pass"))
             .ExecuteNonQueryAsync();
     }
@@ -243,7 +243,7 @@ public sealed class PenaltyLedgerTests : IAsyncLifetime
         await using var _ = conn;
         var id = (Guid)(await conn.Cmd("SELECT id FROM app_users WHERE username=@u").With("@u", username).ExecuteScalarAsync())!;
         var token = scope.ServiceProvider.GetRequiredService<TokenService>()
-            .CreateToken(new UserDto(id, username, username, "", "Employee", true, "Approved", DateTime.UtcNow));
+            .CreateToken(new UserDto(id, username, username, "", AppRoles.Manager, true, "Approved", DateTime.UtcNow));
         var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;

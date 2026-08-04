@@ -87,6 +87,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<QrLoginService>())
 // Giao thức QR server-driven: vé quyết định được Data Protection mã hóa, tự chứa và không cần cache
 // RAM. Các action message/link HTTPS đọc bằng IOptionsMonitor nên đổi cấu hình server không cần build APK.
 builder.Services.AddDataProtection();
+builder.Services.AddSingleton<LoginBootstrapService>();
 builder.Services.Configure<QrScannerOptions>(builder.Configuration.GetSection("QrScanner"));
 builder.Services.AddSingleton<QrActionTokenService>();
 builder.Services.AddSingleton<QrConfiguredActionRegistry>();
@@ -228,6 +229,13 @@ builder.Services.AddRateLimiter(options =>
         RateLimitKey(http), _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = 40, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
+        }));
+    // Mỗi lần mở trang Login có đúng một bootstrap tiền xác thực. Dùng quota riêng, đủ rộng cho cả
+    // văn phòng chung NAT và không ăn vào quota thử mật khẩu của policy "login".
+    options.AddPolicy("login-bootstrap", http => RateLimitPartition.GetFixedWindowLimiter(
+        RateLimitKey(http), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 180, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
         }));
     // Xác minh lại mật khẩu để khôi phục PIN cục bộ. PIN còn có khóa thử sai ngay trên thiết bị;
     // giới hạn này bảo vệ thêm endpoint mật khẩu mà vẫn đủ rộng cho nhiều nhân viên chung NAT.
@@ -380,7 +388,22 @@ var staticContentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionConte
 staticContentTypes.Mappings[".tflite"] = "application/octet-stream";
 staticContentTypes.Mappings[".task"] = "application/octet-stream"; // model FaceLandmarker (chống giả mạo chớp mắt)
 staticContentTypes.Mappings[".wasm"] = "application/wasm";
-app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = staticContentTypes });
+var staticFileOptions = new StaticFileOptions
+{
+    ContentTypeProvider = staticContentTypes,
+    OnPrepareResponse = context =>
+    {
+        // index.html always points to the newest hashed bundles. Do not cache the SPA shell,
+        // so a normal refresh after restart/build loads the latest frontend without Ctrl+F5.
+        if (string.Equals(context.File.Name, "index.html", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+            context.Context.Response.Headers.Pragma = "no-cache";
+            context.Context.Response.Headers.Expires = "0";
+        }
+    }
+};
+app.UseStaticFiles(staticFileOptions);
 
 app.UseRouting();
 app.UseCors();
@@ -632,8 +655,14 @@ app.MapGet("/api/health", async (Database db, HttpContext ctx) =>
     }
 });
 
+// Schema danh tính là điều kiện an toàn bắt buộc. Không được chạy API trên schema cũ/mơ hồ khi
+// migration tài khoản thất bại; ghi log Critical rồi để host dừng để bộ giám sát/triển khai rollback.
 try { await PostgresSchema.EnsureAsync(app.Services.GetRequiredService<Database>(), app.Configuration, app.Logger); }
-catch (Exception ex) { app.Logger.LogWarning("Khong khoi tao duoc schema PostgreSQL luc khoi dong: {Msg}", ex.Message); }
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "Khong khoi tao duoc schema PostgreSQL bat buoc; dung khoi dong de dong mac dinh.");
+    throw;
+}
 
 // Bản phát hành cũ còn nằm trong cột bytea → chuyển ra đĩa (một lần, đọc theo khúc). Phải chạy SAU
 // khi schema có cột has_apk và TRƯỚC khi phục vụ request để app không thấy bản "đã đăng mà không tải được".
@@ -674,12 +703,12 @@ app.MapHelp();
 
 // Hub tín hiệu real-time (web + desktop kết nối tới đây).
 app.MapHub<ChangesHub>("/hubs/changes")
-    .RequireAuthorization(p => p.RequireRole(AppRoles.All))
+    .RequireAuthorization()
     .RequireRateLimiting("signalr");
 
 // SPA fallback: mọi route không phải /api và không phải file tĩnh → trả index.html
 // để React Router xử lý (deep-link /dashboard, /giacong… reload không 404).
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html", staticFileOptions);
 
 // Tạo bảng gia công nếu chưa có (best-effort, không chặn khởi động nếu DB tạm thời offline).
 try { await GiaCongEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
@@ -705,9 +734,15 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tro chuyen luc
 try { await FeedbackEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang phan hoi luc khoi dong: {Msg}", ex.Message); }
 
-// Nền tảng nhân sự phải tạo TRƯỚC (đơn từ & ca làm tham chiếu hr_employees).
+// Nền tảng nhân sự + role/position migration là điều kiện BẮT BUỘC: middleware phân quyền chỉ được
+// phục vụ sau khi identity không phân biệt hoa/thường, chức vụ và vai trò đã reconcile thành công.
+// Nuốt lỗi ở đây sẽ khiến ứng dụng chạy nửa migration và có thể cấp nhầm quyền, nên phải fail closed.
 try { await HrEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
-catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang nhan su luc khoi dong: {Msg}", ex.Message); }
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "Khong khoi tao duoc nen tang role/nhan su bat buoc; dung khoi dong de dong mac dinh.");
+    throw;
+}
 
 try { await RequestEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang don tu luc khoi dong: {Msg}", ex.Message); }

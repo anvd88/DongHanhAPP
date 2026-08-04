@@ -16,7 +16,7 @@ import {
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme-context";
 import { initials } from "../lib/format";
-import { isAdmin } from "../lib/types";
+import { useAccess } from "../lib/access";
 import { APP_BRAND_NAME } from "../lib/branding";
 import { VerifiedBadge } from "./VerifiedBadge";
 import { EditProfileModal, ChangePasswordModal } from "./AccountModals";
@@ -24,6 +24,7 @@ import { useChatNotifications } from "./chat-notifications-context";
 
 export function Header({ onMenu }: { onMenu: () => void }) {
   const { user, logout } = useAuth();
+  const { profile } = useAccess();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const { unreadCount } = useChatNotifications();
@@ -31,6 +32,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
   const [shiftOpen, setShiftOpen] = useState(false);
   const [modal, setModal] = useState<null | "profile" | "password">(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const avatarRef = useRef<HTMLSpanElement>(null);
   const now = new Date();
 
   useEffect(() => {
@@ -63,7 +65,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
       </div>
 
       <label className="km-header-search">
-        <Search className="h-5 w-5 text-[#6d82a6]" aria-hidden="true" />
+        <Search className="h-5 w-5 text-[#65758d]" aria-hidden="true" />
         <input ref={searchRef} placeholder="Nhập để tìm kiếm..." aria-label="Nhập để tìm kiếm" />
         <kbd>Ctrl + K</kbd>
       </label>
@@ -135,7 +137,12 @@ export function Header({ onMenu }: { onMenu: () => void }) {
           type="button"
           aria-expanded={menuOpen}
         >
-          <span className="km-avatar overflow-hidden">
+          <span
+            ref={avatarRef}
+            className="km-avatar overflow-hidden"
+            data-login-avatar-target="true"
+            data-logout-avatar-origin="true"
+          >
             {user?.avatarUrl ? (
               <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
             ) : (
@@ -158,7 +165,9 @@ export function Header({ onMenu }: { onMenu: () => void }) {
                   {user?.fullName || user?.username}
                   {user?.verified && <VerifiedBadge size={14} />}
                 </div>
-                <div className="mt-0.5">{isAdmin(user) ? "Quản trị viên" : "Nhân viên"}</div>
+                <div className="mt-0.5">
+                  {profile?.roleLabels?.length ? profile.roleLabels.join(" · ") : "Nhân viên"}
+                </div>
               </div>
               <button
                 onClick={() => { setMenuOpen(false); setModal("profile"); }}
@@ -176,7 +185,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
               </button>
               <div className="my-1 border-t border-[var(--glass-border)]" />
               <button
-                onClick={logout}
+                onClick={() => { setMenuOpen(false); logout(avatarRef.current); }}
                 className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--danger)] transition-colors hover:bg-red-500/10"
                 type="button"
               >

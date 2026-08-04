@@ -7,9 +7,9 @@ import { Badge, Button } from "../components/ui";
 import { Table } from "../components/Table";
 import { api } from "../lib/api";
 import { dateTime, initials } from "../lib/format";
-import { useAuth } from "../lib/auth";
 import { useApi } from "../lib/useApi";
-import { isAdmin, type ChatConversation, type ChatMessage, type FeedbackItem } from "../lib/types";
+import { type ChatConversation, type ChatMessage, type FeedbackItem } from "../lib/types";
+import { PERM, useAccess } from "../lib/access";
 import { useAppNotifications } from "../components/app-notifications-context";
 
 type FeedbackFilter = "all" | "ChatReport" | "AttendanceIssue";
@@ -85,15 +85,15 @@ function SupportBubble({ msg }: { msg: ChatMessage }) {
 
 export function PhanHoi() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const admin = isAdmin(user);
+  const { can } = useAccess();
+  const supportAgent = can(PERM.usersManage);
   const { notify, confirm } = useAppNotifications();
   const { data, loading, error, reload, setData } = useApi<FeedbackItem[]>("/api/feedback");
   const {
     data: conversationData,
     loading: conversationsLoading,
     reload: reloadConversations,
-  } = useApi<ChatConversation[]>(admin ? "/api/chat/conversations" : null, [admin]);
+  } = useApi<ChatConversation[]>(supportAgent ? "/api/chat/conversations" : null, [supportAgent]);
   const [filter, setFilter] = useState<FeedbackFilter>("all");
   const [page, setPage] = useState<FeedbackPage>("feedback");
   const [resolvingId, setResolvingId] = useState<number | null>(null);
@@ -112,16 +112,16 @@ export function PhanHoi() {
     loading: supportMessagesLoading,
     reload: reloadSupportMessages,
   } = useApi<ChatMessage[]>(
-    admin && activeSupportId ? `/api/chat/conversations/${activeSupportId}/messages` : null,
-    [admin, activeSupportId],
+    supportAgent && activeSupportId ? `/api/chat/conversations/${activeSupportId}/messages` : null,
+    [supportAgent, activeSupportId],
   );
   const supportMessages = supportMessageData ?? [];
 
-  // Chọn sẵn cuộc hỗ trợ đầu tiên khi admin mở trang mà chưa chọn gì. Gán lúc render thay vì trong
+  // Chọn sẵn cuộc hỗ trợ đầu tiên khi nhân sự hỗ trợ mở trang mà chưa chọn gì. Gán lúc render thay vì trong
   // useEffect: effect vẽ thừa một khung hình "chưa chọn cuộc nào" rồi mới nhảy, và React Compiler
   // cấm setState đồng bộ trong effect. Điều kiện tự chặn — chọn xong thì `activeSupportId` có giá
   // trị nên lần render sau không vào nhánh này nữa.
-  if (admin && !activeSupportId && supportConversations.length > 0) {
+  if (supportAgent && !activeSupportId && supportConversations.length > 0) {
     setActiveSupportId(supportConversations[0].id);
   }
 
@@ -161,7 +161,7 @@ export function PhanHoi() {
     setOpeningChatId(row.id);
     try {
       let conversationId = row.conversationId;
-      if (admin) {
+      if (supportAgent) {
         const res = await api.post<{ id: string }>(`/api/chat/support/${encodeURIComponent(row.reporterUsername)}`);
         conversationId = res.id;
         setActiveSupportId(conversationId);
@@ -172,7 +172,7 @@ export function PhanHoi() {
         conversationId = res.id;
       }
       if (!conversationId) throw new Error("Không tìm thấy cuộc trò chuyện phản hồi.");
-      if (!admin) navigate(`/chats?conversation=${encodeURIComponent(conversationId)}`);
+      if (!supportAgent) navigate(`/chats?conversation=${encodeURIComponent(conversationId)}`);
     } catch (e) {
       notify.error(e instanceof Error ? e.message : "Không mở được cuộc trò chuyện phản hồi.");
     } finally {
@@ -201,10 +201,10 @@ export function PhanHoi() {
     <div className="gc-root">
       <PageHeader
         title="Phản hồi"
-        subtitle={admin ? "Theo dõi báo xấu trò chuyện và báo lỗi chấm công" : "Theo dõi các phản hồi đã gửi"}
+        subtitle={supportAgent ? "Theo dõi báo xấu trò chuyện và báo lỗi chấm công" : "Theo dõi các phản hồi đã gửi"}
       />
 
-      {admin && (
+      {supportAgent && (
         <div
           className="mb-4 inline-grid grid-cols-2 rounded-2xl p-1"
           style={{ background: "var(--glass-bg-strong)", border: "1px solid var(--glass-border)" }}
@@ -233,7 +233,7 @@ export function PhanHoi() {
         </div>
       )}
 
-      {admin && page === "support" && (
+      {supportAgent && page === "support" && (
         <GlassPanel strong className="mb-4 overflow-hidden rounded-[20px]">
           <div className="flex flex-col gap-3 border-b border-[var(--gc-border)] px-5 py-4 md:flex-row md:items-center md:justify-between">
             <div>
@@ -365,11 +365,11 @@ export function PhanHoi() {
         </GlassPanel>
       )}
 
-      {(!admin || page === "feedback") && (
+      {(!supportAgent || page === "feedback") && (
       <GlassPanel strong className="overflow-hidden rounded-[20px]">
         <div className="flex flex-col gap-3 border-b border-[var(--gc-border)] px-5 py-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="font-bold text-[var(--text)]">{admin ? "Danh sách phản hồi" : "Phản hồi của tôi"}</h2>
+            <h2 className="font-bold text-[var(--text)]">{supportAgent ? "Danh sách phản hồi" : "Phản hồi của tôi"}</h2>
             <p className="text-xs text-[var(--text-secondary)]">Thời gian hiển thị đầy đủ ngày, giờ và phút.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -422,7 +422,7 @@ export function PhanHoi() {
               {
                 header: "Xử lý",
                 align: "right",
-                cell: (r) => admin ? (
+                cell: (r) => supportAgent ? (
                   <div className="flex justify-end gap-2">
                     <Button variant="soft" loading={openingChatId === r.id} onClick={() => openFeedbackChat(r)}>
                       <MessageCircle className="h-4 w-4" />

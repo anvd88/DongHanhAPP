@@ -23,6 +23,29 @@ export interface Location {
 
 // Phạm vi dữ liệu nhân sự. Đây không phải vai trò hệ thống của tài khoản.
 export type AccessRole = "staff" | "dept_manager" | "location_manager";
+
+/** Chức vụ chuẩn do backend seed; defaultRole quyết định quyền tài khoản gắn với hồ sơ. */
+export interface JobPosition {
+  id: string;
+  code: string;
+  name: string;
+  defaultRole: string;
+  defaultRoleLabel: string;
+  defaultAccessRole: AccessRole;
+  isSystem: boolean;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+/** Chức vụ đã gắn vào một hồ sơ. Một người có một chức vụ chính và có thể kiêm nhiệm nhiều chức vụ. */
+export interface EmployeePosition {
+  id: string;
+  code: string;
+  name: string;
+  defaultRole: string;
+  defaultRoleLabel: string;
+  isPrimary: boolean;
+}
 export const ACCESS_ROLES: { value: AccessRole; label: string }[] = [
   { value: "staff", label: "Chỉ hồ sơ của mình" },
   { value: "dept_manager", label: "Toàn bộ phòng ban" },
@@ -38,6 +61,11 @@ export interface EmployeeCard {
   username: string;
   fullName: string;
   position: string;
+  positionId?: string | null;
+  positionCode?: string | null;
+  /** Danh sách đầy đủ; positionId/position vẫn là chức vụ chính để tương thích ứng dụng cũ. */
+  positionIds?: string[];
+  positions?: EmployeePosition[];
   hireDate?: string | null;
   status: string;
   phone: string;
@@ -99,6 +127,63 @@ export interface Payslip {
   note: string;
   details?: PayslipDetails;
   published: boolean;
+}
+
+export type PayslipLifecycleStatus = "Draft" | "Published" | "Acknowledged" | "Deleted";
+
+export interface PayslipHistoryCurrent {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  period: string;
+  status: PayslipLifecycleStatus;
+  published: boolean;
+  netPay: number;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  acknowledgedAt?: string | null;
+  createdBy: string;
+  updatedBy: string;
+}
+
+export interface PayslipHistoryEvent {
+  id: string;
+  payslipId: string;
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  period: string;
+  revision: number;
+  action: string;
+  statusBefore?: PayslipLifecycleStatus | null;
+  statusAfter: PayslipLifecycleStatus;
+  actor: string;
+  occurredAt: string;
+  summary: {
+    netPay?: number;
+    totalEarnings?: number;
+    totalDeductions?: number;
+    published?: boolean;
+    note?: string;
+  };
+  snapshot: PayslipDetails & {
+    workDays?: number;
+    overtimeHours?: number;
+    baseSalary?: number;
+    allowance?: number;
+    overtimePay?: number;
+    netPay?: number;
+    note?: string;
+    published?: boolean;
+    acknowledgedAt?: string | null;
+  };
+}
+
+export interface PayslipHistoryEnvelope {
+  payslip?: PayslipHistoryCurrent | null;
+  history: PayslipHistoryEvent[];
 }
 
 export interface SalaryComponent {
@@ -399,14 +484,14 @@ export const BANK_BRANDS: BankBrand[] = [
     code: "vietcombank",
     name: "Ngân hàng TMCP Ngoại thương Việt Nam",
     shortName: "Vietcombank",
-    gradient: "linear-gradient(135deg, #0aa14f 0%, #067a3a 45%, #024f27 100%)",
+    gradient: "linear-gradient(135deg, #21b5a3 0%, #129887 45%, #0b665f 100%)",
     glow: "rgba(9, 143, 74, 0.45)",
   },
   {
     code: "sacombank",
     name: "Ngân hàng TMCP Sài Gòn Thương Tín",
     shortName: "Sacombank",
-    gradient: "linear-gradient(135deg, #1573d4 0%, #0d4ea3 45%, #082a63 100%)",
+    gradient: "linear-gradient(135deg, #6f88ee 0%, #3457d5 45%, #102f66 100%)",
     glow: "rgba(15, 95, 189, 0.45)",
   },
 ];
@@ -508,7 +593,7 @@ export interface PayoutCategory {
   sortOrder: number;
 }
 
-/** Phiếu chi: kế toán lập → người nhận quét QR ký nhận → kế toán duyệt chi. */
+/** Phiếu chi: kế toán lập → người nhận xác nhận (nếu cần) → kế toán trưởng duyệt → thủ quỹ hoàn tất. */
 export interface PayoutVoucher {
   id: string;
   voucherNo: string;
@@ -523,16 +608,40 @@ export interface PayoutVoucher {
   sourceNo: string;
   reason: string;
   note: string;
-  status: string; // AwaitingScan | Confirmed | Paid | Cancelled
+  status: string; // AwaitingScan | AwaitingApproval | Confirmed | Approved | Paid | Rejected | Cancelled
   createdBy: string;
+  requiresRecipientConfirmation: boolean;
   confirmedAt?: string | null;
+  confirmedBy: string;
   approvedBy: string;
+  approvedAt?: string | null;
   paidAt?: string | null;
+  completedBy: string;
+  completedAt?: string | null;
+  rejectedBy: string;
+  rejectedAt?: string | null;
+  rejectReason: string;
+  cancelledBy: string;
+  cancelledAt?: string | null;
   cancelReason: string;
   createdAt: string;
   /** Chỉ kế toán mới nhận được (server ẩn với người khác) — nội dung để vẽ mã QR. */
   qrValue?: string | null;
   qrExpiresAt?: string | null;
+}
+
+/** Một dòng sự kiện append-only của phiếu chi. before/after là snapshot server, không chứa mã QR. */
+export interface PayoutVoucherEvent {
+  id: string;
+  action: string;
+  actor: string;
+  actorName: string;
+  beforeStatus?: string | null;
+  afterStatus?: string | null;
+  note: string;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  occurredAt: string;
 }
 
 /** Khoản hoàn tiền phạt đang chờ chi — kế toán chọn là ra đúng số tiền phải chi. */
@@ -565,14 +674,29 @@ export interface PayoutSummary {
 export const voucherStatusLabel = (s: string) =>
   ({
     AwaitingScan: "Chờ người nhận quét QR",
+    AwaitingApproval: "Chờ duyệt chi",
     Confirmed: "Đã ký nhận · chờ duyệt chi",
-    Paid: "Đã chi",
+    Approved: "Đã duyệt · chờ thủ quỹ",
+    Paid: "Hoàn tất · đã chi",
+    Rejected: "Đã từ chối",
     Cancelled: "Đã hủy",
   } as Record<string, string>)[s] ?? s;
 
 export const voucherStatusColor = (s: string) =>
-  ({ AwaitingScan: "warning", Confirmed: "info", Paid: "success", Cancelled: "muted" } as Record<string, string>)[s] ??
+  ({ AwaitingScan: "warning", AwaitingApproval: "warning", Confirmed: "info", Approved: "purple", Paid: "success", Rejected: "danger", Cancelled: "muted" } as Record<string, string>)[s] ??
   "muted";
+
+export const voucherEventLabel = (action: string) =>
+  ({
+    created: "Lập phiếu",
+    qr_regenerated: "Tạo lại mã xác nhận",
+    recipient_confirmed: "Người nhận xác nhận",
+    amount_updated: "Cập nhật số tiền",
+    approved: "Duyệt chi",
+    rejected: "Từ chối",
+    cancelled: "Hủy phiếu",
+    completed: "Hoàn tất chi",
+  } as Record<string, string>)[action] ?? action;
 
 export const voucherSourceLabel = (k: string) =>
   ({ manual: "Nhập tay", refund: "Hoàn tiền phạt", payslip: "Phiếu lương" } as Record<string, string>)[k] ?? k;

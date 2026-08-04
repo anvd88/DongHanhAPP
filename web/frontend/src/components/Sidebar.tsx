@@ -59,6 +59,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [modal, setModal] = useState<null | "profile" | "password">(null);
   const navRef = useRef<HTMLElement | null>(null);
+  const profileAvatarRef = useRef<HTMLSpanElement | null>(null);
   const indicatorRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef(new Map<string, HTMLAnchorElement>());
   const indicatorState = useRef<IndicatorState>(makeIndicatorState());
@@ -335,7 +336,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           onClick={() => setProfileOpen((value) => !value)}
           aria-expanded={profileOpen}
         >
-          <span className="km-sidebar-profile-avatar overflow-hidden">
+          <span
+            ref={profileAvatarRef}
+            className="km-sidebar-profile-avatar overflow-hidden"
+            data-logout-avatar-origin="true"
+          >
             {user?.avatarUrl ? (
               <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
             ) : (
@@ -366,7 +371,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 <KeyRound className="h-4 w-4" /> Đổi mật khẩu
               </button>
               <div className="km-sidebar-profile-menu-separator" />
-              <button type="button" className="is-danger" onClick={logout}>
+              <button type="button" className="is-danger" onClick={() => { setProfileOpen(false); logout(profileAvatarRef.current); }}>
                 <LogOut className="h-4 w-4" /> Đăng xuất
               </button>
             </div>

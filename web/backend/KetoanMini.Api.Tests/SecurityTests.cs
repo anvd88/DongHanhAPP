@@ -6,9 +6,11 @@ using KetoanMini.Api.Endpoints;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace KetoanMini.Api.Tests;
@@ -55,6 +57,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        // Không ghi Windows Event Log từ TestServer: CI/sandbox không có quyền tạo event source.
+        builder.ConfigureLogging(logging => logging.ClearProviders());
+        // Không ghi key Data Protection vào AppData của máy chạy test. Provider chỉ sống trong fixture,
+        // đủ để kiểm giao thức cookie/QR mà không hạ cấu hình lưu key của production.
+        builder.ConfigureServices(services =>
+            services.AddDataProtection().UseEphemeralDataProtectionProvider());
         builder.ConfigureAppConfiguration((_, cfg) =>
         {
             cfg.AddInMemoryCollection(new Dictionary<string, string?>

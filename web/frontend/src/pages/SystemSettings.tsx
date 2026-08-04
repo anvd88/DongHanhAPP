@@ -27,8 +27,9 @@ import { useAppNotifications } from "../components/app-notifications-context";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../shadcn/tooltip";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { PERM, useAccess } from "../lib/access";
 import { dateTime } from "../lib/format";
-import { isAdmin, type ChatDbUsage, type Release } from "../lib/types";
+import { type ChatDbUsage, type Release } from "../lib/types";
 import { useApi } from "../lib/useApi";
 import {
   isKeepCreateVoucherOpenEnabled,
@@ -78,7 +79,11 @@ function formatHHMMSS(ms: number) {
 
 export function SystemSettings() {
   const { user } = useAuth();
-  const admin = isAdmin(user);
+  const { can } = useAccess();
+  const canReadDatabaseUsage = can(PERM.usersManage);
+  const canManageAppConfig = can(PERM.systemSettingsManage);
+  const canManageReleases = can(PERM.systemReleasesManage);
+  const hasManagementTabs = canReadDatabaseUsage || canManageAppConfig || canManageReleases;
   const [tab, setTab] = useState<"settings" | "db" | "updates">("settings");
   const [now, setNow] = useState(() => new Date());
   const [waterEnabled, setWaterEnabled] = useState(() => (user ? isWaterReminderEnabled(user.id) : true));
@@ -232,8 +237,8 @@ export function SystemSettings() {
         subtitle="Cài đặt thông báo và tuỳ chọn trải nghiệm web"
       />
 
-      {/* Thanh trượt phần quản trị (chỉ admin). */}
-      {admin && (
+      {/* Các phần quản trị hiện theo quyền chi tiết do backend cấp. */}
+      {hasManagementTabs && (
         <div className="system-segment" data-active={tab} role="tablist">
           <span className="system-segment-thumb" aria-hidden="true" />
           <button
@@ -251,6 +256,8 @@ export function SystemSettings() {
             type="button"
             role="tab"
             aria-selected={tab === "db"}
+            aria-disabled={!canReadDatabaseUsage}
+            disabled={!canReadDatabaseUsage}
             data-on={tab === "db"}
             className="system-segment-btn"
             onClick={() => setTab("db")}
@@ -262,6 +269,8 @@ export function SystemSettings() {
             type="button"
             role="tab"
             aria-selected={tab === "updates"}
+            aria-disabled={!canManageAppConfig && !canManageReleases}
+            disabled={!canManageAppConfig && !canManageReleases}
             data-on={tab === "updates"}
             className="system-segment-btn"
             onClick={() => setTab("updates")}
@@ -272,12 +281,12 @@ export function SystemSettings() {
         </div>
       )}
 
-      {admin && tab === "db" ? (
+      {canReadDatabaseUsage && tab === "db" ? (
         <ChatDbUsagePanel />
-      ) : admin && tab === "updates" ? (
+      ) : (canManageAppConfig || canManageReleases) && tab === "updates" ? (
         <div className="space-y-4">
-          <AppConfigPanel />
-          <ReleaseUpdatePanel />
+          {canManageAppConfig && <AppConfigPanel />}
+          {canManageReleases && <ReleaseUpdatePanel />}
         </div>
       ) : (
       <>
@@ -557,7 +566,7 @@ type AppConfig = {
 };
 
 /**
- * Cấu hình ứng dụng điều khiển từ xa (remote config): admin đổi mà KHÔNG cần phát hành APK mới.
+ * Cấu hình ứng dụng điều khiển từ xa (remote config): người có quyền đổi mà KHÔNG cần phát hành APK mới.
  * App đọc lúc đăng nhập + khi quay lại foreground rồi áp dụng: thông báo chạy chữ, bật/tắt banner
  * nhắc đăng ký khuôn mặt, nhịp tự làm mới nền.
  */
@@ -1013,7 +1022,7 @@ function fmtBytes(value: number): string {
   return `${size.toLocaleString("vi-VN", { maximumFractionDigits: unit === 0 ? 0 : 1 })} ${units[unit]}`;
 }
 
-/** Tab "Cơ sở dữ liệu": dung lượng mục Trò chuyện trong DB (admin). */
+/** Tab "Cơ sở dữ liệu": dung lượng mục Trò chuyện trong DB (người có quyền quản lý người dùng). */
 function ChatDbUsagePanel() {
   const { data, loading, error, reload } = useApi<ChatDbUsage>("/api/chat/db-usage");
 

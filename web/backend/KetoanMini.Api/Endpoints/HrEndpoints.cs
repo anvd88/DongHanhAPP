@@ -1,9 +1,12 @@
 using System.Globalization;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
+using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -166,6 +169,14 @@ public static class HrEndpoints
             ON CONFLICT (id) DO NOTHING;
             """).ExecuteNonQueryAsync(ct);
 
+        await RoleFoundationMigration.ApplyAsync(conn, ct);
+        await RoleCatalogExpansionMigration.ApplyAsync(conn, ct);
+        await EmployeePositionMigration.ApplyAsync(conn, ct);
+        await JobPositionCatalogExpansionMigration.ApplyAsync(conn, ct);
+        await LegacyRolePositionBackfillMigration.ApplyAsync(conn, ct);
+        await CanonicalRolePositionCorrectionMigration.ApplyAsync(conn, ct);
+        await IdentityConsistencyMigration.ApplyAsync(conn, ct);
+        await PayrollRoleAndScopedBranchMigration.ApplyAsync(conn, ct);
         await EnsureAccountingDepartment(conn, ct);
         await BackfillMissingDepartments(conn, ct);
         await BackfillSharedEmployeeAccountData(conn, ct);
@@ -315,6 +326,34 @@ public static class HrEndpoints
     {
         var g = app.MapGroup("/api/hr").RequirePermission(Permissions.HrSelfAccess);
 
+        // Danh mục chức vụ là nguồn chung cho web/Android. Client chỉ gửi positionId; server tự lấy
+        // vai trò và phạm vi mặc định, không tin chuỗi role do client tự khai.
+        g.MapGet("/job-positions", async (Database db, bool? includeInactive) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var list = new List<object>();
+            await using var r = await conn.Cmd($"""
+                SELECT id, code, name, default_role, default_access_role, is_system, is_active, sort_order
+                FROM hr_job_positions
+                {(includeInactive == true ? "" : "WHERE is_active=TRUE")}
+                ORDER BY sort_order, name
+                """).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new
+                {
+                    id = r.Guid("id"),
+                    code = r.Str("code"),
+                    name = r.Str("name"),
+                    defaultRole = r.Str("default_role"),
+                    defaultRoleLabel = AppRoles.Label(r.Str("default_role")),
+                    defaultAccessRole = r.Str("default_access_role"),
+                    isSystem = r.Bool("is_system"),
+                    isActive = r.Bool("is_active"),
+                    sortOrder = r.Int("sort_order"),
+                });
+            return Results.Ok(list);
+        }).RequirePermission(Permissions.HrRead);
+
         // ---------------- Phòng ban ----------------
         g.MapGet("/departments", async (Database db) =>
         {
@@ -348,7 +387,7 @@ public static class HrEndpoints
 
         g.MapPost("/departments", async (SaveDepartmentReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { message = "Vui lòng nhập tên phòng ban." });
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
@@ -367,7 +406,7 @@ public static class HrEndpoints
 
         g.MapPut("/departments/{id:guid}", async (Guid id, SaveDepartmentReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             // Giữ nguyên is_accounting — form không đổi được (phòng kế toán do hệ thống quản lý).
             var n = await conn.Cmd("""
@@ -385,7 +424,7 @@ public static class HrEndpoints
 
         g.MapDelete("/departments/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             // Không cho xóa phòng kế toán CUỐI CÙNG — đó là cửa quyền lập/duyệt phiếu chi tiền mặt.
             var isAccounting = await conn.Cmd("SELECT is_accounting FROM hr_departments WHERE id=@id")
@@ -424,7 +463,7 @@ public static class HrEndpoints
 
         g.MapPost("/locations", async (SaveLocationReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { message = "Vui lòng nhập tên địa điểm." });
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
@@ -437,7 +476,7 @@ public static class HrEndpoints
 
         g.MapPut("/locations/{id:guid}", async (Guid id, SaveLocationReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("UPDATE hr_locations SET code=@code, name=@name, address=@addr WHERE id=@id")
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", (req.Name ?? "").Trim()).With("@addr", req.Address ?? "")
@@ -449,7 +488,7 @@ public static class HrEndpoints
 
         g.MapDelete("/locations/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_locations WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
@@ -467,7 +506,9 @@ public static class HrEndpoints
 
             var where = new List<string>();
             if (!string.IsNullOrWhiteSpace(search))
-                where.Add("(e.full_name ILIKE @s OR e.employee_code ILIKE @s OR e.username ILIKE @s OR e.position ILIKE @s)");
+                where.Add("(e.full_name ILIKE @s OR e.employee_code ILIKE @s OR e.username ILIKE @s OR e.position ILIKE @s"
+                          + " OR EXISTS (SELECT 1 FROM hr_employee_positions esp JOIN hr_job_positions sp ON sp.id=esp.position_id"
+                          + " WHERE esp.employee_id=e.id AND (sp.name ILIKE @s OR sp.code ILIKE @s)))");
             if (departmentId is not null) where.Add("e.department_id = @dept");
 
             // Áp bộ lọc phạm vi (trừ Admin thấy tất cả).
@@ -483,7 +524,15 @@ public static class HrEndpoints
             }
 
             var sql = $"""
-                SELECT e.id, e.employee_code, e.username, e.full_name, e.position, e.hire_date, e.status,
+                SELECT e.id, e.employee_code, e.username, e.full_name, e.position, e.position_id,
+                       COALESCE(jp.code, '') AS position_code,
+                       COALESCE(jp.default_role, '') AS position_default_role,
+                       COALESCE(pa.position_ids, ARRAY[]::uuid[]) AS assigned_position_ids,
+                       COALESCE(pa.position_codes, ARRAY[]::text[]) AS assigned_position_codes,
+                       COALESCE(pa.position_names, ARRAY[]::text[]) AS assigned_position_names,
+                       COALESCE(pa.position_roles, ARRAY[]::text[]) AS assigned_position_roles,
+                       COALESCE(pa.primary_flags, ARRAY[]::boolean[]) AS assigned_position_primary_flags,
+                       e.hire_date, e.status,
                        e.phone, e.email, e.avatar, e.department_id, e.location_id, e.access_role,
                        COALESCE(d.name, '') AS department_name,
                        COALESCE(l.name, '') AS location_name,
@@ -492,6 +541,17 @@ public static class HrEndpoints
                 LEFT JOIN hr_departments d ON d.id = e.department_id
                 LEFT JOIN hr_locations l ON l.id = e.location_id
                 LEFT JOIN hr_employees m ON m.id = e.manager_id
+                LEFT JOIN hr_job_positions jp ON jp.id = e.position_id
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(p.id ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_ids,
+                           array_agg(p.code::text ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_codes,
+                           array_agg(p.name::text ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_names,
+                           array_agg(p.default_role::text ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_roles,
+                           array_agg(ep.is_primary ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS primary_flags
+                    FROM hr_employee_positions ep
+                    JOIN hr_job_positions p ON p.id=ep.position_id
+                    WHERE ep.employee_id=e.id
+                ) pa ON TRUE
                 {(where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "")}
                 ORDER BY e.full_name
                 """;
@@ -639,12 +699,36 @@ public static class HrEndpoints
             return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
 
-        g.MapPost("/employees", async (SaveEmployeeReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/employees", async (SaveEmployeeReq req, ClaimsPrincipal u, Database db,
+            IHubContext<ChangesHub> hub, HttpContext http) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.FullName)) return Results.BadRequest(new { message = "Vui lòng nhập họ tên." });
             if (req.DepartmentId is null) return Results.BadRequest(new { message = "Vui lòng chọn phòng ban cho nhân viên." });
             await using var conn = await db.OpenAsync();
+
+            var requestedRole = AppRoles.Normalize(req.Role);
+            if (!string.IsNullOrWhiteSpace(req.Role) && requestedRole is null)
+                return Results.BadRequest(new { message = $"Vai trò phải là một trong: {string.Join(", ", AppRoles.Assignable)}." });
+            var selection = await ResolvePositionSelectionAsync(
+                conn, req.PositionIds, req.PositionId, req.Position, req.Role, defaultToEmployee: true);
+            if (selection.Error is not null)
+                return Results.BadRequest(new { message = selection.Error });
+            if (selection.Positions.Length == 0)
+                return Results.BadRequest(new { message = "Mỗi nhân viên phải có ít nhất một chức vụ trong danh mục." });
+
+            var accountRoles = selection.EffectiveRoles;
+            var accountRole = accountRoles[0];
+            var employeePosition = selection.Primary?.Name ?? (req.Position ?? "").Trim();
+            var employeePositionId = selection.Primary?.Id;
+            var employeeAccessRole = selection.EffectiveAccessRole;
+            var canManageUsers = u.Can(Permissions.UsersManage);
+
+            // HR được giữ workflow "tạo hồ sơ → tự sinh tài khoản" cho nhân viên thường. Chỉ người có
+            // users.manage mới được tạo/gắn bất kỳ chức vụ sinh ra vai trò đặc quyền nào.
+            if (!canManageUsers && accountRoles.Any(AppRoles.IsPrivileged))
+                return Results.Forbid();
+
             var id = Guid.NewGuid();
             var code = string.IsNullOrWhiteSpace(req.EmployeeCode) ? await NextEmployeeCode(conn) : req.EmployeeCode!.Trim();
 
@@ -666,91 +750,249 @@ public static class HrEndpoints
                     loginUsername = baseName + (char)('a' + k);
             }
 
+            var accountExists = Convert.ToInt64(await conn.Cmd(
+                    "SELECT COUNT(*) FROM app_users WHERE lower(username)=lower(@u) AND is_deleted=FALSE")
+                .With("@u", loginUsername).ExecuteScalarAsync()) > 0;
+            // Không cho HR ghép một hồ sơ mới vào tài khoản có sẵn rồi dùng việc đồng bộ hồ sơ để
+            // đổi quyền/thông tin của tài khoản đó.
+            if (accountExists && !canManageUsers) return Results.Forbid();
+
+            var accountCreated = false;
+            string? temporaryPassword = null;
+            EmployeePositionRoleService.SyncResult? roleSync = null;
+            await using var tx = await conn.BeginTransactionAsync();
             try
             {
                 await conn.Cmd("""
                     INSERT INTO hr_employees
                         (id, employee_code, username, full_name, dob, gender, phone, email, address,
-                         department_id, position, manager_id, hire_date, status, location_id, access_role)
+                         department_id, position, position_id, manager_id, hire_date, status, location_id, access_role)
                     VALUES (@id, @code, @username, @fn, @dob, @gender, @phone, @email, @addr,
-                            @dept, @pos, @mgr, @hire, @status, @loc, @arole)
-                    """)
+                            @dept, @pos, @posId, @mgr, @hire, @status, @loc, @arole)
+                    """, tx)
                     .With("@id", id).With("@code", code).With("@username", loginUsername)
                     .With("@fn", req.FullName.Trim()).With("@dob", (object?)req.Dob ?? DBNull.Value)
                     .With("@gender", req.Gender ?? "").With("@phone", req.Phone ?? "").With("@email", req.Email ?? "")
                     .With("@addr", req.Address ?? "").With("@dept", (object?)req.DepartmentId ?? DBNull.Value)
-                    .With("@pos", req.Position ?? "").With("@mgr", (object?)req.ManagerId ?? DBNull.Value)
+                    .With("@pos", employeePosition).With("@posId", (object?)employeePositionId ?? DBNull.Value)
+                    .With("@mgr", (object?)req.ManagerId ?? DBNull.Value)
                     .With("@hire", (object?)req.HireDate ?? DBNull.Value).With("@status", req.Status ?? "Active")
-                    .With("@loc", (object?)req.LocationId ?? DBNull.Value).With("@arole", NormalizeAccessRole(req.AccessRole))
+                    .With("@loc", (object?)req.LocationId ?? DBNull.Value).With("@arole", employeeAccessRole)
                     .ExecuteNonQueryAsync();
-            }
-            catch (PostgresException ex) when (ex.SqlState == "23505")
-            {
-                return Results.Json(new { message = "Mã nhân viên hoặc tài khoản đã tồn tại." }, statusCode: 400);
-            }
 
-            // Tự tạo tài khoản đăng nhập cho hồ sơ mới (mật khẩu mặc định "123"), trừ khi đã có sẵn hoặc bị tắt.
-            // Vai trò hệ thống của tài khoản lấy từ "Chức vụ" chọn ở form (Admin/Kế toán/HR/…); mặc định Nhân viên.
-            var accountRole = AppRoles.Normalize(req.Role) ?? AppRoles.Employee;
-            var accountCreated = false;
-            if (req.CreateAccount && !string.IsNullOrWhiteSpace(loginUsername))
-            {
-                var exists = Convert.ToInt64(await conn.Cmd(
-                        "SELECT COUNT(*) FROM app_users WHERE lower(username)=lower(@u) AND is_deleted=FALSE")
-                    .With("@u", loginUsername).ExecuteScalarAsync()) > 0;
-                if (!exists)
+                await SyncEmployeePositionsAsync(conn, tx, id, selection, u.Username());
+
+                // Tự tạo tài khoản đăng nhập cho hồ sơ mới, trừ khi đã có sẵn hoặc bị tắt. Vai trò
+                // chính/phụ đều được suy ra từ toàn bộ chức vụ; mật khẩu tạm chỉ trả đúng một lần.
+                // Tạo hồ sơ luôn tạo tài khoản (contract nghiệp vụ cũ). Cờ CreateAccount chỉ còn được
+                // giữ trong DTO để client cũ không lỗi khi gửi lên; server không cho tạo hồ sơ mồ côi.
+                if (!accountExists && !string.IsNullOrWhiteSpace(loginUsername))
                 {
+                    temporaryPassword = RandomNumberGenerator.GetHexString(16).ToUpperInvariant();
                     await conn.Cmd("""
                         INSERT INTO app_users
                             (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at)
                         VALUES (@id, @u, @fn, @em, @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, @by,
                                 COALESCE((SELECT (e.hire_date::timestamp + TIME '09:00') AT TIME ZONE 'Asia/Ho_Chi_Minh'
                                           FROM hr_employees e WHERE lower(e.username)=lower(@u) AND e.hire_date IS NOT NULL LIMIT 1), CURRENT_TIMESTAMP))
-                        """)
+                        """, tx)
                         .With("@id", Guid.NewGuid()).With("@u", loginUsername).With("@fn", req.FullName.Trim())
                         .With("@em", req.Email ?? "").With("@role", accountRole)
-                        .With("@ph", PasswordHasher.Hash("123")).With("@by", u.Username())
+                        .With("@ph", PasswordHasher.Hash(temporaryPassword)).With("@by", u.Username())
                         .ExecuteNonQueryAsync();
                     accountCreated = true;
-                    await db.RecordAudit(u.Username(), "Tạo người dùng", "User", loginUsername, $"Tự tạo tài khoản khi lập hồ sơ nhân viên (vai trò {AppRoles.Label(accountRole)}, mật khẩu mặc định 123).");
                 }
+
+                await SyncEmployeeAccountSharedFields(conn, id, tx);
+                if (accountCreated || accountExists)
+                    roleSync = await EmployeePositionRoleService.SyncAsync(
+                        conn, id, u.Username(), http.Connection.RemoteIpAddress?.ToString() ?? "", tx);
+                await tx.CommitAsync();
+            }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                return Results.Json(new { message = "Mã nhân viên hoặc tài khoản đã tồn tại." }, statusCode: 400);
+            }
+            catch (EmployeePositionRoleService.LastAdministratorException ex)
+            {
+                return Results.Conflict(new { message = ex.Message });
             }
 
             await Signal(db, u, "Tạo hồ sơ nhân viên", "Employee", req.FullName);
-            await SyncEmployeeAccountSharedFields(conn, id);
-            return Results.Ok(new { id, employeeCode = code, username = loginUsername, accountCreated, password = accountCreated ? "123" : null });
+            if (accountCreated)
+                await db.RecordAudit(u.Username(), "Tạo người dùng", "User", loginUsername,
+                    $"Tự tạo tài khoản khi lập hồ sơ nhân viên (vai trò {string.Join(", ", accountRoles.Select(AppRoles.Label))}; mật khẩu tạm được trả một lần).");
+            if (roleSync is { Changed: true })
+            {
+                await db.RecordAudit(u.Username(), "Đồng bộ vai trò theo chức vụ", "User", roleSync.Username,
+                    $"[{roleSync.RolesBefore}] → [{roleSync.RolesAfter}] (web).");
+                try { await hub.Clients.User(roleSync.Username).SendAsync("changed", "access"); } catch { }
+            }
+            return Results.Ok(new { id, employeeCode = code, username = loginUsername, accountCreated, password = temporaryPassword });
         });
 
-        g.MapPut("/employees/{id:guid}", async (Guid id, SaveEmployeeReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPut("/employees/{id:guid}", async (Guid id, SaveEmployeeReq req, ClaimsPrincipal u, Database db,
+            IHubContext<ChangesHub> hub, HttpContext http) =>
         {
             await using var conn = await db.OpenAsync();
-            // Admin sửa mọi hồ sơ; nhân viên chỉ sửa liên hệ của chính mình.
-            var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", id).ExecuteScalarAsync() as string;
-            var isSelf = string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase);
-            if (!u.IsAdmin() && !isSelf) return Results.Forbid();
+            await using var tx = await conn.BeginTransactionAsync();
+            // Người có quyền quản lý HR sửa hồ sơ; nhân viên chỉ sửa liên hệ của chính mình.
+            string mine;
+            string currentPosition;
+            Guid? currentPositionId;
+            string currentAccessRole;
+            Guid? currentDepartmentId;
+            Guid? currentLocationId;
+            await using (var r = await conn.Cmd("""
+                SELECT username, position, position_id, access_role, department_id, location_id
+                FROM hr_employees WHERE id=@id FOR UPDATE
+                """, tx).With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await r.ReadAsync()) return Results.NotFound();
+                mine = r.Str("username");
+                currentPosition = r.Str("position");
+                currentPositionId = r.IsDBNull(r.GetOrdinal("position_id")) ? null : r.Guid("position_id");
+                currentAccessRole = NormalizeAccessRole(r.Str("access_role"));
+                currentDepartmentId = r.IsDBNull(r.GetOrdinal("department_id")) ? null : r.Guid("department_id");
+                currentLocationId = r.IsDBNull(r.GetOrdinal("location_id")) ? null : r.Guid("location_id");
+            }
+            var canManageHr = u.Can(Permissions.HrManage);
+            var canManageUsers = u.Can(Permissions.UsersManage);
+            var accountUsername = mine;
+            Guid? accountId = null;
+            string accountPrimaryRole = "";
+            await using (var r = await conn.Cmd("""
+                SELECT u.id, u.username, u.role
+                FROM hr_employees e
+                JOIN app_users u ON u.is_deleted=FALSE
+                 AND (u.id=e.user_id OR (e.user_id IS NULL AND lower(u.username)=lower(e.username)))
+                WHERE e.id=@employee
+                ORDER BY (u.id=e.user_id) DESC
+                LIMIT 1
+                FOR UPDATE OF u
+                """, tx).With("@employee", id).ExecuteReaderAsync())
+                if (await r.ReadAsync())
+                {
+                    accountId = r.Guid("id");
+                    accountUsername = r.Str("username");
+                    accountPrimaryRole = AppRoles.Normalize(r.Str("role")) ?? AppRoles.Employee;
+                }
+            var hasAccount = accountId is not null;
+            var isSelf = string.Equals(accountUsername, u.Username(), StringComparison.OrdinalIgnoreCase);
+            if (!canManageHr && !isSelf) return Results.Forbid();
 
-            if (u.IsAdmin() && req.DepartmentId is null)
+            if (canManageHr && req.DepartmentId is null)
                 return Results.BadRequest(new { message = "Vui lòng chọn phòng ban cho nhân viên." });
 
-            NpgsqlCommand cmd;
-            if (u.IsAdmin())
+            PositionSelection? selection = null;
+            var positionsChanged = false;
+            var effectiveRolesChanged = false;
+            var accessRoleChanged = false;
+            var scopeCoordinatesChanged = false;
+            var preservePositionContract = false;
+            var desiredAccessRole = currentAccessRole;
+            if (canManageHr)
             {
+                if (!string.IsNullOrWhiteSpace(req.Role) && AppRoles.Normalize(req.Role) is null)
+                    return Results.BadRequest(new { message = $"Vai trò phải là một trong: {string.Join(", ", AppRoles.Assignable)}." });
+                var positionContractOmitted = req.PositionIds is null && req.PositionId is null
+                                              && string.IsNullOrWhiteSpace(req.Position)
+                                              && string.IsNullOrWhiteSpace(req.Role);
+                preservePositionContract = positionContractOmitted;
+                selection = positionContractOmitted
+                    ? await LoadCurrentPositionSelectionAsync(conn, id)
+                    : await ResolvePositionSelectionAsync(
+                        conn, req.PositionIds, req.PositionId, req.Position, req.Role, defaultToEmployee: false);
+                if (selection.Error is not null)
+                    return Results.BadRequest(new { message = selection.Error });
+                positionsChanged = await PositionSelectionChangedAsync(conn, id, selection);
+                var currentRoles = await EmployeePositionRoleService.LoadDerivedRolesAsync(conn, id);
+                var desiredRoles = selection.EffectiveRoles;
+                desiredAccessRole = selection.Positions.Length > 0
+                    ? selection.EffectiveAccessRole
+                    : preservePositionContract ? currentAccessRole : "staff";
+                effectiveRolesChanged = !currentRoles.ToHashSet(StringComparer.Ordinal)
+                    .SetEquals(desiredRoles);
+                accessRoleChanged = !string.Equals(currentAccessRole, desiredAccessRole, StringComparison.Ordinal);
+                scopeCoordinatesChanged = currentDepartmentId != req.DepartmentId
+                                          || currentLocationId != req.LocationId;
+
+                if (hasAccount && !string.Equals((req.Username ?? "").Trim(), mine, StringComparison.OrdinalIgnoreCase))
+                    return Results.BadRequest(new
+                    {
+                        message = "Không thể đổi tên đăng nhập trong hồ sơ đã gắn tài khoản. Hãy giữ nguyên username."
+                    });
+
+                if (!canManageUsers)
+                {
+                    // HR có thể đổi giữa các chức danh thông thường hoặc giữa các chức danh cùng tập
+                    // quyền. Mọi thay đổi làm tăng/giảm vai trò đặc quyền phải qua users.manage.
+                    var currentPrivileged = currentRoles.Where(AppRoles.IsPrivileged)
+                        .ToHashSet(StringComparer.Ordinal);
+                    var desiredPrivileged = desiredRoles.Where(AppRoles.IsPrivileged)
+                        .ToHashSet(StringComparer.Ordinal);
+                    if (!currentPrivileged.SetEquals(desiredPrivileged)) return Results.Forbid();
+                    if (accessRoleChanged
+                        && (!string.Equals(currentAccessRole, "staff", StringComparison.Ordinal)
+                            || !string.Equals(desiredAccessRole, "staff", StringComparison.Ordinal)))
+                        return Results.Forbid();
+                    if (scopeCoordinatesChanged
+                        && (currentPrivileged.Count > 0 || desiredPrivileged.Count > 0
+                            || !string.Equals(currentAccessRole, "staff", StringComparison.Ordinal)
+                            || !string.Equals(desiredAccessRole, "staff", StringComparison.Ordinal)))
+                        return Results.Forbid();
+                }
+                if (hasAccount && (effectiveRolesChanged || accessRoleChanged || scopeCoordinatesChanged) && isSelf)
+                    return Results.BadRequest(new { message = "Không thể tự thay đổi tập vai trò của chính mình qua hồ sơ nhân sự." });
+
+                if (hasAccount && !string.Equals(req.Status ?? "Active", "Active", StringComparison.OrdinalIgnoreCase))
+                {
+                    var accountRoles = await AccessProfileService.LoadRolesAsync(conn, accountUsername) ?? [];
+                    if (!canManageUsers && accountRoles.Any(AppRoles.IsPrivileged)) return Results.Forbid();
+                    if (isSelf)
+                        return Results.BadRequest(new { message = "Không thể tự chuyển hồ sơ của chính mình sang trạng thái ngừng hoạt động." });
+                    if (string.Equals(accountPrimaryRole, AppRoles.Admin, StringComparison.Ordinal))
+                    {
+                        await conn.Cmd("SELECT pg_advisory_xact_lock(823746120031)", tx).ExecuteNonQueryAsync();
+                        var otherAdmins = Convert.ToInt32(await conn.Cmd("""
+                            SELECT COUNT(*) FROM app_users
+                            WHERE role='Admin' AND is_active=TRUE AND is_deleted=FALSE AND id<>@id
+                            """, tx).With("@id", accountId!.Value).ExecuteScalarAsync());
+                        if (otherAdmins == 0)
+                            return Results.Conflict(new { message = "Không thể ngừng hoạt động quản trị viên cuối cùng." });
+                    }
+                }
+            }
+
+            EmployeePositionRoleService.SyncResult? roleSync = null;
+            NpgsqlCommand cmd;
+            if (canManageHr)
+            {
+                var employeePosition = selection!.Primary?.Name
+                                       ?? (preservePositionContract ? currentPosition : (req.Position ?? "").Trim());
+                var employeePositionId = selection.Primary?.Id
+                                         ?? (preservePositionContract ? currentPositionId : null);
+                var employeeAccessRole = selection.Positions.Length > 0
+                    ? selection.EffectiveAccessRole
+                    : preservePositionContract ? currentAccessRole : NormalizeAccessRole(req.AccessRole);
+
                 cmd = conn.Cmd("""
                     UPDATE hr_employees SET employee_code=@code, username=@username, full_name=@fn, dob=@dob,
                         gender=@gender, phone=@phone, email=@email, address=@addr, department_id=@dept,
-                        position=@pos, manager_id=@mgr, hire_date=@hire, status=@status, avatar=@avatar,
+                        position=@pos, position_id=@posId, manager_id=@mgr, hire_date=@hire, status=@status, avatar=@avatar,
                         location_id=@loc, access_role=@arole,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE id=@id
-                    """)
+                    """, tx)
                     .With("@code", (req.EmployeeCode ?? "").Trim()).With("@username", (req.Username ?? "").Trim())
                     .With("@fn", (req.FullName ?? "").Trim()).With("@dob", (object?)req.Dob ?? DBNull.Value)
                     .With("@gender", req.Gender ?? "").With("@phone", req.Phone ?? "").With("@email", req.Email ?? "")
                     .With("@addr", req.Address ?? "").With("@dept", (object?)req.DepartmentId ?? DBNull.Value)
-                    .With("@pos", req.Position ?? "").With("@mgr", (object?)req.ManagerId ?? DBNull.Value)
+                    .With("@pos", employeePosition).With("@posId", (object?)employeePositionId ?? DBNull.Value)
+                    .With("@mgr", (object?)req.ManagerId ?? DBNull.Value)
                     .With("@hire", (object?)req.HireDate ?? DBNull.Value).With("@status", req.Status ?? "Active")
                     .With("@avatar", (object?)req.Avatar ?? DBNull.Value)
-                    .With("@loc", (object?)req.LocationId ?? DBNull.Value).With("@arole", NormalizeAccessRole(req.AccessRole));
+                    .With("@loc", (object?)req.LocationId ?? DBNull.Value).With("@arole", employeeAccessRole);
             }
             else
             {
@@ -759,7 +1001,7 @@ public static class HrEndpoints
                     UPDATE hr_employees SET phone=@phone, email=@email, address=@addr, dob=@dob,
                         gender=@gender, avatar=@avatar, updated_at=CURRENT_TIMESTAMP
                     WHERE id=@id
-                    """)
+                    """, tx)
                     .With("@phone", req.Phone ?? "").With("@email", req.Email ?? "").With("@addr", req.Address ?? "")
                     .With("@dob", (object?)req.Dob ?? DBNull.Value).With("@gender", req.Gender ?? "")
                     .With("@avatar", (object?)req.Avatar ?? DBNull.Value);
@@ -767,18 +1009,147 @@ public static class HrEndpoints
             cmd.With("@id", id);
             var n = await cmd.ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await SyncEmployeeAccountSharedFields(conn, id);
+            if (canManageHr && positionsChanged)
+                await SyncEmployeePositionsAsync(conn, tx, id, selection!, u.Username());
+            try
+            {
+                await SyncEmployeeAccountSharedFields(conn, id, tx);
+                if (canManageHr && hasAccount
+                                && (effectiveRolesChanged || accessRoleChanged || scopeCoordinatesChanged))
+                {
+                    roleSync = await EmployeePositionRoleService.SyncAsync(
+                        conn, id, u.Username(), http.Connection.RemoteIpAddress?.ToString() ?? "", tx,
+                        forceAuthorizationChange: accessRoleChanged || scopeCoordinatesChanged,
+                        changeReason: accessRoleChanged || scopeCoordinatesChanged
+                            ? $"Phạm vi chức vụ thay đổi: access={currentAccessRole}→{desiredAccessRole}; "
+                              + $"department={currentDepartmentId}→{req.DepartmentId}; location={currentLocationId}→{req.LocationId}."
+                            : null);
+                }
+            }
+            catch (EmployeePositionRoleService.LastAdministratorException ex)
+            {
+                return Results.Conflict(new { message = ex.Message });
+            }
+            await tx.CommitAsync();
             await Signal(db, u, "Cập nhật hồ sơ nhân viên", "Employee", req.FullName ?? id.ToString());
+            if (roleSync is { Changed: true })
+            {
+                var accessAction = string.Equals(roleSync.RolesBefore, roleSync.RolesAfter, StringComparison.Ordinal)
+                    ? "Đồng bộ phạm vi theo chức vụ"
+                    : "Đồng bộ vai trò theo chức vụ";
+                await db.RecordAudit(u.Username(), accessAction, "User", roleSync.Username,
+                    $"[{roleSync.RolesBefore}] → [{roleSync.RolesAfter}] (web).");
+                try { await hub.Clients.User(roleSync.Username).SendAsync("changed", "access"); } catch { }
+            }
+            else if (canManageHr && hasAccount
+                     && !string.Equals(req.Status ?? "Active", "Active", StringComparison.OrdinalIgnoreCase))
+            {
+                try { await hub.Clients.User(accountUsername).SendAsync("changed", "access"); } catch { }
+            }
             return Results.NoContent();
         });
 
-        g.MapDelete("/employees/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
+        g.MapDelete("/employees/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db,
+            IHubContext<ChangesHub> hub, HttpContext http) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("DELETE FROM hr_employees WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            var employeeExists = await conn.Cmd(
+                    "SELECT 1 FROM hr_employees WHERE id=@id FOR UPDATE", tx)
+                .With("@id", id).ExecuteScalarAsync();
+            if (employeeExists is null or DBNull) return Results.NotFound();
+
+            var hasFinancialHistory = await conn.Cmd("""
+                SELECT EXISTS(SELECT 1 FROM hr_payslips WHERE employee_id=@id)
+                    OR EXISTS(SELECT 1 FROM hr_payout_vouchers WHERE employee_id=@id)
+                    OR EXISTS(SELECT 1 FROM hr_penalties WHERE employee_id=@id)
+                """, tx).With("@id", id).ExecuteScalarAsync() is bool financial && financial;
+            if (hasFinancialHistory)
+                return Results.Conflict(new
+                {
+                    message = "Hồ sơ đã có dữ liệu lương/phiếu chi/kỷ luật tài chính nên không thể xóa. Hãy chuyển trạng thái sang Ngừng hoạt động để giữ lịch sử."
+                });
+
+            Guid? linkedUserId = null;
+            string linkedUsername = "";
+            string linkedPrimaryRole = "";
+            await using (var r = await conn.Cmd("""
+                SELECT u.id, u.username, u.role
+                FROM hr_employees e
+                JOIN app_users u ON u.is_deleted=FALSE
+                 AND (u.id=e.user_id OR (e.user_id IS NULL AND lower(u.username)=lower(e.username)))
+                WHERE e.id=@employee
+                ORDER BY (u.id=e.user_id) DESC
+                LIMIT 1
+                FOR UPDATE OF u
+                """, tx).With("@employee", id).ExecuteReaderAsync())
+                if (await r.ReadAsync())
+                {
+                    linkedUserId = r.Guid("id");
+                    linkedUsername = r.Str("username");
+                    linkedPrimaryRole = AppRoles.Normalize(r.Str("role")) ?? AppRoles.Employee;
+                }
+
+            var linkedRoles = linkedUserId is null
+                ? Array.Empty<string>()
+                : (await AccessProfileService.LoadRolesAsync(conn, linkedUsername) ?? []).ToArray();
+            if (linkedUserId is not null)
+            {
+                if (string.Equals(linkedUsername, u.Username(), StringComparison.OrdinalIgnoreCase))
+                    return Results.BadRequest(new { message = "Không thể tự xóa hồ sơ đang gắn với tài khoản của chính mình." });
+                if (!u.Can(Permissions.UsersManage) && linkedRoles.Any(AppRoles.IsPrivileged))
+                    return Results.Forbid();
+                if (string.Equals(linkedPrimaryRole, AppRoles.Admin, StringComparison.Ordinal))
+                {
+                    await conn.Cmd("SELECT pg_advisory_xact_lock(823746120031)", tx).ExecuteNonQueryAsync();
+                    var otherAdmins = Convert.ToInt32(await conn.Cmd("""
+                        SELECT COUNT(*) FROM app_users
+                        WHERE role='Admin' AND is_active=TRUE AND is_deleted=FALSE AND id<>@id
+                        """, tx).With("@id", linkedUserId.Value).ExecuteScalarAsync());
+                    if (otherAdmins == 0)
+                        return Results.Conflict(new { message = "Không thể xóa hồ sơ của quản trị viên hoạt động cuối cùng." });
+                }
+            }
+
+            if (linkedUserId is not null)
+            {
+                await conn.Cmd("""
+                    UPDATE app_users
+                    SET is_active=FALSE, role='Employee',
+                        authorization_version=COALESCE(authorization_version, 1)+1
+                    WHERE id=@id
+                    """, tx).With("@id", linkedUserId.Value).ExecuteNonQueryAsync();
+                await conn.Cmd("DELETE FROM user_roles WHERE username=@username", tx)
+                    .With("@username", linkedUsername).ExecuteNonQueryAsync();
+                await conn.Cmd("""
+                    UPDATE user_sessions
+                    SET revoked=TRUE, revoked_at=CURRENT_TIMESTAMP, revoked_by=@by,
+                        is_active=FALSE, ended_at=CURRENT_TIMESTAMP,
+                        end_reason='Hồ sơ nhân sự đã bị xóa'
+                    WHERE username=@username AND (is_active=TRUE OR revoked=FALSE)
+                    """, tx).With("@by", u.Username()).With("@username", linkedUsername).ExecuteNonQueryAsync();
+                await conn.Cmd("""
+                    INSERT INTO user_role_history
+                        (username, changed_by, action, roles_before, roles_after, reason, client_ip)
+                    VALUES (@username, @by, 'Khóa và hạ quyền khi xóa hồ sơ', @roles, 'Employee',
+                            'Hồ sơ nhân sự bị xóa; tài khoản được vô hiệu hóa, hạ về Nhân viên và thu hồi toàn bộ phiên.', @ip)
+                    """, tx).With("@username", linkedUsername).With("@by", u.Username())
+                    .With("@roles", string.Join(", ", linkedRoles))
+                    .With("@ip", http.Connection.RemoteIpAddress?.ToString() ?? "")
+                    .ExecuteNonQueryAsync();
+            }
+            var n = await conn.Cmd("DELETE FROM hr_employees WHERE id=@id", tx)
+                .With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
+            await tx.CommitAsync();
             await Signal(db, u, "Xóa hồ sơ nhân viên", "Employee", id.ToString());
+            if (linkedUserId is not null)
+            {
+                await db.RecordAudit(u.Username(), "Khóa tài khoản khi xóa hồ sơ", "User", linkedUsername,
+                    "Tài khoản bị vô hiệu hóa, hạ về Nhân viên và toàn bộ phiên bị thu hồi; không xóa dữ liệu tài khoản.");
+                try { await hub.Clients.User(linkedUsername).SendAsync("changed", "access"); } catch { }
+            }
             return Results.NoContent();
         });
 
@@ -810,7 +1181,7 @@ public static class HrEndpoints
 
         g.MapPost("/employees/{id:guid}/contracts", async (Guid id, SaveContractReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var cid = Guid.NewGuid();
             await conn.Cmd("""
@@ -827,7 +1198,7 @@ public static class HrEndpoints
 
         g.MapPut("/contracts/{cid:guid}", async (Guid cid, SaveContractReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("""
                 UPDATE hr_contracts SET contract_no=@no, contract_type=@type, start_date=@start, end_date=@end,
@@ -844,7 +1215,7 @@ public static class HrEndpoints
 
         g.MapDelete("/contracts/{cid:guid}", async (Guid cid, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_contracts WHERE id=@id").With("@id", cid).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
@@ -859,8 +1230,9 @@ public static class HrEndpoints
             // Nhân viên chỉ xem phiếu đã phát hành của mình; admin xem tất cả.
             var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", id).ExecuteScalarAsync() as string;
             var isSelf = string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase);
-            if (!u.IsAdmin() && !isSelf) return Results.Forbid();
-            var onlyPublished = !u.IsAdmin();
+            var canReadPayroll = u.Can(Permissions.PayrollRead);
+            if (!canReadPayroll && !isSelf) return Results.Forbid();
+            var onlyPublished = !canReadPayroll;
             var list = new List<object>();
             await using var r = await conn.Cmd($"""
                 SELECT id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, details::text AS details, published
@@ -888,11 +1260,26 @@ public static class HrEndpoints
 
         g.MapPost("/employees/{id:guid}/payslips", async (Guid id, SavePayslipReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PayrollManage)) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Period)) return Results.BadRequest(new { message = "Thiếu kỳ lương (yyyy-MM)." });
             await using var conn = await db.OpenAsync();
             var period = req.Period.Trim();
-            var pid = Guid.NewGuid();
+            await using var tx = await conn.BeginTransactionAsync();
+            await PayrollEndpoints.LockPayslipKey(conn, id, period);
+            var before = await PayrollEndpoints.ReadPayslipState(conn, id, period, lockRow: true);
+            if (!req.Published && before is not null)
+            {
+                var cancel = await PayoutVoucherEndpoints.CancelPayslipVoucherForUnpublishAsync(
+                    conn, before.Id, u.Username());
+                if (cancel == PayoutVoucherEndpoints.PayslipVoucherCancelResult.Blocked)
+                {
+                    await tx.RollbackAsync();
+                    return Results.Conflict(new
+                    {
+                        message = "Không thể chuyển phiếu lương về nháp vì phiếu chi liên quan đã được duyệt hoặc đã chi.",
+                    });
+                }
+            }
 
             // BACKEND làm chủ tiền phạt: req.Deductions = khấu trừ KHÁC (không gồm phạt). Phạt được CAP theo
             // lương còn lại (không làm âm lương); phần chưa thu tự chuyển sang kỳ sau (theo sổ cái).
@@ -901,18 +1288,20 @@ public static class HrEndpoints
             var totalDeductions = req.Deductions + penaltyTotal;
             var net = req.BaseSalary + req.Allowance + req.OvertimePay - totalDeductions;
 
-            await conn.Cmd("""
-                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, published)
-                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @pub)
+            var pid = (Guid)(await conn.Cmd("""
+                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, published, created_by, updated_by, updated_at, acknowledged_at)
+                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @pub, @by, @by, CURRENT_TIMESTAMP, NULL)
                 ON CONFLICT (employee_id, period) DO UPDATE SET
                     work_days=@wd, overtime_hours=@ot, base_salary=@base, allowance=@allow,
-                    overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, published=@pub
+                    overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, published=@pub,
+                    updated_by=@by, updated_at=CURRENT_TIMESTAMP, acknowledged_at=NULL
+                RETURNING id
                 """)
-                .With("@id", pid).With("@emp", id).With("@period", period)
+                .With("@id", Guid.NewGuid()).With("@emp", id).With("@period", period)
                 .With("@wd", req.WorkDays).With("@ot", req.OvertimeHours).With("@base", req.BaseSalary)
                 .With("@allow", req.Allowance).With("@otp", req.OvertimePay).With("@ded", totalDeductions)
                 .With("@net", net).With("@note", req.Note ?? "").With("@pub", req.Published)
-                .ExecuteNonQueryAsync();
+                .With("@by", u.Username()).ExecuteScalarAsync())!;
 
             // Ghi sổ tiền phạt thực trừ khi phát hành; nháp thì xóa sổ kỳ này (chưa tính là đã thu).
             if (req.Published)
@@ -920,25 +1309,44 @@ public static class HrEndpoints
             else
                 await PenaltyEndpoints.ClearDeductionsForPeriod(conn, id, period);
 
+            if (req.Published)
+                await PayoutVoucherEndpoints.SyncPayslipVoucherAsync(conn, pid, id, period, net, u.Username());
+
+            var after = await PayrollEndpoints.ReadPayslipState(conn, pid);
+            await PayrollEndpoints.AppendPayslipHistory(conn, after!, before?.Status,
+                PayrollEndpoints.PayslipAction(before?.Status, after!.Status), u.Username());
+            await tx.CommitAsync();
+
             await Signal(db, u, "Lập phiếu lương", "Payslip", period);
-            return Results.Ok(new { id = pid, penaltyTotal });
+            return Results.Ok(new { id = pid, penaltyTotal, status = after.Status });
         });
 
         g.MapDelete("/payslips/{pid:guid}", async (Guid pid, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PayrollManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
 
             // Trước khi xóa: gỡ ghi sổ tiền phạt của kỳ này (coi như chưa thu) để phạt còn nợ được thu lại kỳ sau.
-            Guid emp = default; string period = "";
-            await using (var r = await conn.Cmd("SELECT employee_id, period FROM hr_payslips WHERE id=@id")
-                .With("@id", pid).ExecuteReaderAsync())
-                if (await r.ReadAsync()) { emp = r.Guid("employee_id"); period = r.Str("period"); }
-            if (emp == default) return Results.NotFound();
-            await PenaltyEndpoints.ClearDeductionsForPeriod(conn, emp, period);
+            var before = await PayrollEndpoints.ReadPayslipState(conn, pid, lockRow: true);
+            if (before is null) { await tx.RollbackAsync(); return Results.NotFound(); }
+            var cancel = await PayoutVoucherEndpoints.CancelPayslipVoucherForUnpublishAsync(
+                conn, before.Id, u.Username(), "Phiếu lương bị xóa");
+            if (cancel == PayoutVoucherEndpoints.PayslipVoucherCancelResult.Blocked)
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new
+                {
+                    message = "Không thể xóa phiếu lương vì phiếu chi liên quan đã được duyệt hoặc đã chi.",
+                });
+            }
+            await PenaltyEndpoints.ClearDeductionsForPeriod(conn, before.EmployeeId, before.Period);
+
+            await PayrollEndpoints.AppendPayslipHistory(conn, before, before.Status, "Deleted", u.Username(), "Deleted");
 
             var n = await conn.Cmd("DELETE FROM hr_payslips WHERE id=@id").With("@id", pid).ExecuteNonQueryAsync();
-            if (n == 0) return Results.NotFound();
+            if (n == 0) { await tx.RollbackAsync(); return Results.NotFound(); }
+            await tx.CommitAsync();
             await Signal(db, u, "Xóa phiếu lương", "Payslip", pid.ToString());
             return Results.NoContent();
         });
@@ -968,7 +1376,7 @@ public static class HrEndpoints
 
         g.MapPost("/employees/{id:guid}/leave-balances", async (Guid id, SaveLeaveBalanceReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var bid = Guid.NewGuid();
             await conn.Cmd("""
@@ -1012,7 +1420,7 @@ public static class HrEndpoints
             await using var conn = await db.OpenAsync();
             var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", id).ExecuteScalarAsync() as string;
             var isSelf = string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase);
-            if (!u.IsAdmin() && !isSelf) return Results.Forbid();
+            if (!u.Can(Permissions.HrManage) && !isSelf) return Results.Forbid();
             var did = Guid.NewGuid();
             await conn.Cmd("""
                 INSERT INTO hr_documents (id, employee_id, doc_type, title, issued_by, issued_date, file_url, note)
@@ -1029,7 +1437,7 @@ public static class HrEndpoints
         g.MapDelete("/documents/{did:guid}", async (Guid did, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!u.IsAdmin())
+            if (!u.Can(Permissions.HrManage))
             {
                 var owner = await conn.Cmd("""
                     SELECT e.username FROM hr_documents d JOIN hr_employees e ON e.id = d.employee_id WHERE d.id=@id
@@ -1045,45 +1453,50 @@ public static class HrEndpoints
         // ---------------- Trung tâm quản lý trên KetoanAPK ----------------
         g.MapGet("/manager/summary", async (ClaimsPrincipal u, Database db, string? date, string? month) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrRead)) return Results.Forbid();
             var day = ManagerDate(date);
             var period = ManagerPeriod(month, day);
             await using var conn = await db.OpenAsync();
+            var scope = await ResolveScopeAsync(conn, u);
             return Results.Ok(new
             {
                 date = day,
                 month = period,
-                headcount = await ReadManagerHeadcount(conn, u, day),
-                departments = await ReadManagerDepartments(conn, day),
+                headcount = await ReadManagerHeadcount(conn, u, day, scope),
+                departments = await ReadManagerDepartments(conn, day, scope, u.Username()),
             });
         });
 
         g.MapGet("/manager/attendance", async (ClaimsPrincipal u, Database db, string? date, string? status, Guid? departmentId) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrRead)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
-            return Results.Ok(await ReadManagerAttendance(conn, ManagerDate(date), status, departmentId));
+            var scope = await ResolveScopeAsync(conn, u);
+            return Results.Ok(await ReadManagerAttendance(conn, ManagerDate(date), status, departmentId, scope, u.Username()));
         });
 
         g.MapGet("/manager/contracts/expiring", async (ClaimsPrincipal u, Database db, int? days) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrRead)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
-            return Results.Ok(await ReadExpiringContracts(conn, Math.Clamp(days ?? 60, 1, 365)));
+            var scope = await ResolveScopeAsync(conn, u);
+            return Results.Ok(await ReadExpiringContracts(conn, Math.Clamp(days ?? 60, 1, 365), scope, u.Username()));
         });
 
         g.MapGet("/manager/reports", async (ClaimsPrincipal u, Database db, string? month) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrRead)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
-            return Results.Ok(await ReadManagerReport(conn, month));
+            var scope = await ResolveScopeAsync(conn, u);
+            return Results.Ok(await ReadManagerReport(conn, month, scope, u.Username()));
         });
 
         g.MapGet("/manager/alerts", async (ClaimsPrincipal u, Database db, string? month) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.HrRead)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
-            return Results.Ok(await ReadManagerAlerts(conn, month));
+            var scope = await ResolveScopeAsync(conn, u);
+            return Results.Ok(await ReadManagerAlerts(conn, month, scope, u.Username()));
         });
     }
 
@@ -1123,7 +1536,8 @@ public static class HrEndpoints
         _ => status,
     };
 
-    private static async Task<object> ReadManagerHeadcount(NpgsqlConnection conn, ClaimsPrincipal u, DateOnly day)
+    private static async Task<object> ReadManagerHeadcount(
+        NpgsqlConnection conn, ClaimsPrincipal u, DateOnly day, AccessScope scope)
     {
         var total = 0;
         var present = 0;
@@ -1134,9 +1548,10 @@ public static class HrEndpoints
         var overtime = 0;
         var unassigned = 0;
 
-        await using (var r = await conn.Cmd("""
+        var headcountCmd = conn.Cmd($"""
             WITH active AS (
-                SELECT id, username FROM hr_employees WHERE status='Active'
+                SELECT e.id, e.username FROM hr_employees e
+                WHERE e.status='Active' AND {EmployeeScopeSql(scope, "e")}
             ),
             logs AS (
                 SELECT e.id AS employee_id,
@@ -1213,7 +1628,9 @@ public static class HrEndpoints
                    ) AS overtime
             FROM rows
             """)
-            .With("@tz", Tz).With("@day", day).ExecuteReaderAsync())
+            .With("@tz", Tz).With("@day", day);
+        BindEmployeeScope(headcountCmd, scope, u.Username());
+        await using (var r = await headcountCmd.ExecuteReaderAsync())
         {
             if (await r.ReadAsync())
             {
@@ -1233,19 +1650,26 @@ public static class HrEndpoints
             WHERE r.status='Pending' AND EXISTS (
                 SELECT 1 FROM hr_request_approvals a
                 WHERE a.request_id=r.id AND a.step_no=r.current_step AND a.status='Pending'
-                  AND (a.approver_username=@me OR (a.approver_role='Admin' AND @admin))
+                  AND (lower(a.approver_username)=lower(@me)
+                       OR (lower(a.approver_role) IN (lower(@finalRole), lower(@legacyFinalRole)) AND @canManage))
             )
-            """).With("@me", u.Username()).With("@admin", u.IsAdmin()).ExecuteScalarAsync());
+            """).With("@me", u.Username()).With("@canManage", u.Can(Permissions.RequestsManage))
+            .With("@finalRole", RequestEndpoints.FinalApprovalQueue)
+            .With("@legacyFinalRole", RequestEndpoints.LegacyFinalApprovalQueue)
+            .ExecuteScalarAsync());
 
-        var expiring = Convert.ToInt32(await conn.Cmd("""
+        var expiringCmd = conn.Cmd($"""
             SELECT COUNT(DISTINCT c.employee_id)
             FROM hr_contracts c
             JOIN hr_employees e ON e.id=c.employee_id
             WHERE e.status='Active' AND c.status='Active'
               AND c.end_date IS NOT NULL AND c.end_date <= @until
-            """).With("@until", day.AddDays(60)).ExecuteScalarAsync());
+              AND {EmployeeScopeSql(scope, "e")}
+            """).With("@until", day.AddDays(60));
+        BindEmployeeScope(expiringCmd, scope, u.Username());
+        var expiring = Convert.ToInt32(await expiringCmd.ExecuteScalarAsync());
 
-        var alerts = (await ReadManagerAlerts(conn, ManagerPeriod(null, day))).Count;
+        var alerts = (await ReadManagerAlerts(conn, ManagerPeriod(null, day), scope, u.Username())).Count;
 
         return new
         {
@@ -1264,15 +1688,16 @@ public static class HrEndpoints
         };
     }
 
-    private static async Task<List<object>> ReadManagerDepartments(NpgsqlConnection conn, DateOnly day)
+    private static async Task<List<object>> ReadManagerDepartments(
+        NpgsqlConnection conn, DateOnly day, AccessScope scope, string username)
     {
         var list = new List<object>();
-        await using var r = await conn.Cmd("""
+        var cmd = conn.Cmd($"""
             WITH active AS (
                 SELECT e.id, e.username, e.department_id, COALESCE(d.name, 'Chưa có phòng ban') AS department_name
                 FROM hr_employees e
                 LEFT JOIN hr_departments d ON d.id=e.department_id
-                WHERE e.status='Active'
+                WHERE e.status='Active' AND {EmployeeScopeSql(scope, "e")}
             ),
             logs AS (
                 SELECT e.id AS employee_id,
@@ -1326,7 +1751,9 @@ public static class HrEndpoints
             LEFT JOIN business_req br ON br.employee_id=a.id
             GROUP BY a.department_id, a.department_name
             ORDER BY a.department_name
-            """).With("@tz", Tz).With("@day", day).ExecuteReaderAsync();
+            """).With("@tz", Tz).With("@day", day);
+        BindEmployeeScope(cmd, scope, username);
+        await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
         {
             list.Add(new
@@ -1343,7 +1770,9 @@ public static class HrEndpoints
         return list;
     }
 
-    private static async Task<List<object>> ReadManagerAttendance(NpgsqlConnection conn, DateOnly day, string? status, Guid? departmentId)
+    private static async Task<List<object>> ReadManagerAttendance(
+        NpgsqlConnection conn, DateOnly day, string? status, Guid? departmentId,
+        AccessScope scope, string username)
     {
         var list = new List<object>();
         var sql = $"""
@@ -1352,7 +1781,9 @@ public static class HrEndpoints
                        COALESCE(d.name, 'Chưa có phòng ban') AS department_name
                 FROM hr_employees e
                 LEFT JOIN hr_departments d ON d.id=e.department_id
-                WHERE e.status='Active' {(departmentId is not null ? "AND e.department_id=@dept" : "")}
+                WHERE e.status='Active'
+                  AND {EmployeeScopeSql(scope, "e")}
+                  {(departmentId is not null ? "AND e.department_id=@dept" : "")}
             ),
             logs AS (
                 SELECT e.id AS employee_id,
@@ -1438,6 +1869,7 @@ public static class HrEndpoints
             ORDER BY current_status, a.department_name, a.full_name
             """;
         var cmd = conn.Cmd(sql).With("@tz", Tz).With("@day", day);
+        BindEmployeeScope(cmd, scope, username);
         if (departmentId is not null) cmd.With("@dept", departmentId.Value);
         await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
@@ -1467,11 +1899,12 @@ public static class HrEndpoints
         return list;
     }
 
-    private static async Task<List<object>> ReadExpiringContracts(NpgsqlConnection conn, int days)
+    private static async Task<List<object>> ReadExpiringContracts(
+        NpgsqlConnection conn, int days, AccessScope scope, string username)
     {
         var list = new List<object>();
         var today = ManagerDate(null);
-        await using var r = await conn.Cmd("""
+        var cmd = conn.Cmd($"""
             SELECT c.id, c.contract_no, c.contract_type, c.start_date, c.end_date, c.status,
                    e.id AS employee_id, e.employee_code, e.full_name, COALESCE(d.name, '') AS department_name,
                    (c.end_date - @today) AS days_left
@@ -1480,9 +1913,12 @@ public static class HrEndpoints
             LEFT JOIN hr_departments d ON d.id=e.department_id
             WHERE e.status='Active' AND c.status='Active' AND c.end_date IS NOT NULL
               AND c.end_date <= @until
+              AND {EmployeeScopeSql(scope, "e")}
             ORDER BY c.end_date, e.full_name
             LIMIT 200
-            """).With("@today", today).With("@until", today.AddDays(days)).ExecuteReaderAsync();
+            """).With("@today", today).With("@until", today.AddDays(days));
+        BindEmployeeScope(cmd, scope, username);
+        await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
         {
             var daysLeft = r.Int("days_left");
@@ -1505,18 +1941,20 @@ public static class HrEndpoints
         return list;
     }
 
-    private static async Task<object> ReadManagerReport(NpgsqlConnection conn, string? month)
+    private static async Task<object> ReadManagerReport(
+        NpgsqlConnection conn, string? month, AccessScope scope, string username)
     {
         var (from, to, period) = ManagerMonthRange(month);
         var departments = new List<object>();
         decimal totalWorked = 0, totalAbsent = 0, totalLate = 0, totalLeave = 0, totalOvertimeMinutes = 0;
 
-        await using (var r = await conn.Cmd("""
+        var reportCmd = conn.Cmd($"""
             WITH active AS (
                 SELECT e.id, e.username, COALESCE(d.name, 'Chưa có phòng ban') AS department_name
                 FROM hr_employees e
                 LEFT JOIN hr_departments d ON d.id=e.department_id
-                WHERE e.status='Active' OR e.hire_date BETWEEN @from AND @to
+                WHERE (e.status='Active' OR e.hire_date BETWEEN @from AND @to)
+                  AND {EmployeeScopeSql(scope, "e")}
             ),
             logs AS (
                 SELECT e.id AS employee_id, (l.occurred_at AT TIME ZONE @tz)::date AS d,
@@ -1582,6 +2020,7 @@ public static class HrEndpoints
                 JOIN hr_employees e ON e.id=r.employee_id
                 LEFT JOIN hr_departments d ON d.id=e.department_id
                 WHERE r.status='Approved' AND r.req_type IN ('leave','sick')
+                  AND {EmployeeScopeSql(scope, "e")}
                   AND COALESCE(
                     CASE WHEN r.payload->>'fromDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'fromDate')::date END,
                     CASE WHEN r.payload->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'date')::date END,
@@ -1603,7 +2042,9 @@ public static class HrEndpoints
             FROM attendance_agg a
             FULL JOIN leave_agg l ON l.department_name=a.department_name
             ORDER BY department_name
-            """).With("@tz", Tz).With("@from", from).With("@to", to).ExecuteReaderAsync())
+            """).With("@tz", Tz).With("@from", from).With("@to", to);
+        BindEmployeeScope(reportCmd, scope, username);
+        await using (var r = await reportCmd.ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
             {
@@ -1632,13 +2073,17 @@ public static class HrEndpoints
         var pendingRequests = 0;
         var approvedRequests = 0;
         var rejectedRequests = 0;
-        await using (var r = await conn.Cmd("""
-            SELECT COUNT(*) FILTER (WHERE status='Pending') AS pending,
-                   COUNT(*) FILTER (WHERE status='Approved') AS approved,
-                   COUNT(*) FILTER (WHERE status='Rejected') AS rejected
-            FROM hr_requests
-            WHERE (created_at AT TIME ZONE @tz)::date BETWEEN @from AND @to
-            """).With("@tz", Tz).With("@from", from).With("@to", to).ExecuteReaderAsync())
+        var requestCmd = conn.Cmd($"""
+            SELECT COUNT(*) FILTER (WHERE r.status='Pending') AS pending,
+                   COUNT(*) FILTER (WHERE r.status='Approved') AS approved,
+                   COUNT(*) FILTER (WHERE r.status='Rejected') AS rejected
+            FROM hr_requests r
+            JOIN hr_employees e ON e.id=r.employee_id
+            WHERE (r.created_at AT TIME ZONE @tz)::date BETWEEN @from AND @to
+              AND {EmployeeScopeSql(scope, "e")}
+            """).With("@tz", Tz).With("@from", from).With("@to", to);
+        BindEmployeeScope(requestCmd, scope, username);
+        await using (var r = await requestCmd.ExecuteReaderAsync())
         {
             if (await r.ReadAsync())
             {
@@ -1651,12 +2096,15 @@ public static class HrEndpoints
         var newHires = 0;
         var inactiveThisMonth = 0;
         var activeEnd = 0;
-        await using (var r = await conn.Cmd("""
-            SELECT COUNT(*) FILTER (WHERE hire_date BETWEEN @from AND @to) AS new_hires,
-                   COUNT(*) FILTER (WHERE status <> 'Active' AND updated_at::date BETWEEN @from AND @to) AS inactive_this_month,
-                   COUNT(*) FILTER (WHERE status='Active' AND (hire_date IS NULL OR hire_date <= @to)) AS active_end
-            FROM hr_employees
-            """).With("@from", from).With("@to", to).ExecuteReaderAsync())
+        var employeeCmd = conn.Cmd($"""
+            SELECT COUNT(*) FILTER (WHERE e.hire_date BETWEEN @from AND @to) AS new_hires,
+                   COUNT(*) FILTER (WHERE e.status <> 'Active' AND e.updated_at::date BETWEEN @from AND @to) AS inactive_this_month,
+                   COUNT(*) FILTER (WHERE e.status='Active' AND (e.hire_date IS NULL OR e.hire_date <= @to)) AS active_end
+            FROM hr_employees e
+            WHERE {EmployeeScopeSql(scope, "e")}
+            """).With("@from", from).With("@to", to);
+        BindEmployeeScope(employeeCmd, scope, username);
+        await using (var r = await employeeCmd.ExecuteReaderAsync())
         {
             if (await r.ReadAsync())
             {
@@ -1690,17 +2138,18 @@ public static class HrEndpoints
         };
     }
 
-    private static async Task<List<ManagerAlert>> ReadManagerAlerts(NpgsqlConnection conn, string? month)
+    private static async Task<List<ManagerAlert>> ReadManagerAlerts(
+        NpgsqlConnection conn, string? month, AccessScope scope, string username)
     {
         var (from, to, period) = ManagerMonthRange(month);
         var alerts = new List<ManagerAlert>();
 
-        await using (var r = await conn.Cmd("""
+        var attendanceAlertCmd = conn.Cmd($"""
             WITH active AS (
                 SELECT e.id, e.employee_code, e.username, e.full_name, COALESCE(d.name, '') AS department_name
                 FROM hr_employees e
                 LEFT JOIN hr_departments d ON d.id=e.department_id
-                WHERE e.status='Active'
+                WHERE e.status='Active' AND {EmployeeScopeSql(scope, "e")}
             ),
             logs AS (
                 SELECT e.id AS employee_id, (l.occurred_at AT TIME ZONE @tz)::date AS d,
@@ -1735,7 +2184,9 @@ public static class HrEndpoints
                        AND dr.first_in::time > dr.start_time + (dr.late_grace_minutes * INTERVAL '1 minute')
                    ) >= 3
                 OR COUNT(*) FILTER (WHERE dr.first_in IS NULL) >= 2
-            """).With("@tz", Tz).With("@from", from).With("@to", to).ExecuteReaderAsync())
+            """).With("@tz", Tz).With("@from", from).With("@to", to);
+        BindEmployeeScope(attendanceAlertCmd, scope, username);
+        await using (var r = await attendanceAlertCmd.ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
             {
@@ -1758,7 +2209,7 @@ public static class HrEndpoints
             }
         }
 
-        await using (var r = await conn.Cmd("""
+        var leaveAlertCmd = conn.Cmd($"""
             SELECT e.id, e.employee_code, e.full_name, COALESCE(d.name, '') AS department_name,
                    COALESCE(SUM(
                      CASE WHEN r.payload->>'days' ~ '^[0-9]+(\.[0-9]+)?$' THEN (r.payload->>'days')::numeric
@@ -1780,6 +2231,7 @@ public static class HrEndpoints
             JOIN hr_employees e ON e.id=r.employee_id
             LEFT JOIN hr_departments d ON d.id=e.department_id
             WHERE e.status='Active' AND r.status='Approved' AND r.req_type IN ('leave','sick')
+              AND {EmployeeScopeSql(scope, "e")}
               AND COALESCE(
                 CASE WHEN r.payload->>'fromDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'fromDate')::date END,
                 CASE WHEN r.payload->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (r.payload->>'date')::date END,
@@ -1795,7 +2247,9 @@ public static class HrEndpoints
                      CASE WHEN r.payload->>'days' ~ '^[0-9]+(\.[0-9]+)?$' THEN (r.payload->>'days')::numeric
                      ELSE 1::numeric END
                    ), 0) >= 3
-            """).With("@tz", Tz).With("@from", from).With("@to", to).ExecuteReaderAsync())
+            """).With("@tz", Tz).With("@from", from).With("@to", to);
+        BindEmployeeScope(leaveAlertCmd, scope, username);
+        await using (var r = await leaveAlertCmd.ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
             {
@@ -1810,7 +2264,7 @@ public static class HrEndpoints
         }
 
         var today = ManagerDate(null);
-        await using (var r = await conn.Cmd("""
+        var contractAlertCmd = conn.Cmd($"""
             SELECT e.id, e.employee_code, e.full_name, COALESCE(d.name, '') AS department_name,
                    c.contract_no, c.end_date, (c.end_date - @today) AS days_left
             FROM hr_contracts c
@@ -1818,8 +2272,11 @@ public static class HrEndpoints
             LEFT JOIN hr_departments d ON d.id=e.department_id
             WHERE e.status='Active' AND c.status='Active' AND c.end_date IS NOT NULL
               AND c.end_date <= @until
+              AND {EmployeeScopeSql(scope, "e")}
             ORDER BY c.end_date
-            """).With("@today", today).With("@until", today.AddDays(30)).ExecuteReaderAsync())
+            """).With("@today", today).With("@until", today.AddDays(30));
+        BindEmployeeScope(contractAlertCmd, scope, username);
+        await using (var r = await contractAlertCmd.ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
             {
@@ -1855,25 +2312,33 @@ public static class HrEndpoints
         decimal Metric,
         string MetricLabel);
 
-    private static object ReadEmployeeCard(NpgsqlDataReader r) => new
+    private static object ReadEmployeeCard(NpgsqlDataReader r)
     {
-        id = r.Guid("id"),
-        employeeCode = r.Str("employee_code"),
-        username = r.Str("username"),
-        fullName = r.Str("full_name"),
-        position = r.Str("position"),
-        hireDate = DateOrNull(r, "hire_date"),
-        status = r.Str("status"),
-        phone = r.Str("phone"),
-        email = r.Str("email"),
-        avatar = r.IsDBNull(r.GetOrdinal("avatar")) ? null : r.Str("avatar"),
-        departmentId = r.IsDBNull(r.GetOrdinal("department_id")) ? (Guid?)null : r.Guid("department_id"),
-        departmentName = r.Str("department_name"),
-        locationId = r.IsDBNull(r.GetOrdinal("location_id")) ? (Guid?)null : r.Guid("location_id"),
-        locationName = r.Str("location_name"),
-        accessRole = r.Str("access_role"),
-        managerName = r.Str("manager_name"),
-    };
+        var positions = ReadEmployeePositions(r);
+        return new
+        {
+            id = r.Guid("id"),
+            employeeCode = r.Str("employee_code"),
+            username = r.Str("username"),
+            fullName = r.Str("full_name"),
+            position = r.Str("position"),
+            positionId = r.IsDBNull(r.GetOrdinal("position_id")) ? (Guid?)null : r.Guid("position_id"),
+            positionCode = r.Str("position_code"),
+            positions,
+            positionIds = positions.Select(p => p.Id).ToArray(),
+            hireDate = DateOrNull(r, "hire_date"),
+            status = r.Str("status"),
+            phone = r.Str("phone"),
+            email = r.Str("email"),
+            avatar = r.IsDBNull(r.GetOrdinal("avatar")) ? null : r.Str("avatar"),
+            departmentId = r.IsDBNull(r.GetOrdinal("department_id")) ? (Guid?)null : r.Guid("department_id"),
+            departmentName = r.Str("department_name"),
+            locationId = r.IsDBNull(r.GetOrdinal("location_id")) ? (Guid?)null : r.Guid("location_id"),
+            locationName = r.Str("location_name"),
+            accessRole = r.Str("access_role"),
+            managerName = r.Str("manager_name"),
+        };
+    }
 
     /// <summary>
     /// Đồng bộ các trường dùng chung giữa hr_employees và app_users. Ngày vào làm là ngày tạo tài
@@ -1883,7 +2348,21 @@ public static class HrEndpoints
     internal static async Task SyncEmployeeAccountSharedFields(
         NpgsqlConnection conn, Guid employeeId, CancellationToken ct = default)
     {
-        await conn.Cmd("""
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await SyncEmployeeAccountSharedFieldsCore(conn, employeeId, tx, ct);
+        await tx.CommitAsync(ct);
+    }
+
+    internal static Task SyncEmployeeAccountSharedFields(
+        NpgsqlConnection conn, Guid employeeId, NpgsqlTransaction tx, CancellationToken ct = default)
+        => SyncEmployeeAccountSharedFieldsCore(conn, employeeId, tx, ct);
+
+    private static async Task SyncEmployeeAccountSharedFieldsCore(
+        NpgsqlConnection conn, Guid employeeId, NpgsqlTransaction tx, CancellationToken ct)
+    {
+        NpgsqlCommand Cmd(string sql) => conn.Cmd(sql, tx);
+
+        await Cmd("""
             UPDATE hr_employees e
             SET user_id = u.id,
                 full_name = CASE WHEN btrim(e.full_name) = '' THEN u.full_name ELSE e.full_name END,
@@ -1891,16 +2370,55 @@ public static class HrEndpoints
                 hire_date = COALESCE(e.hire_date, (u.created_at AT TIME ZONE @tz)::date),
                 updated_at = CURRENT_TIMESTAMP
             FROM app_users u
-            WHERE e.id=@id AND u.is_deleted=FALSE AND lower(u.username)=lower(e.username)
+            WHERE e.id=@id AND u.is_deleted=FALSE
+              AND (u.id=e.user_id OR (e.user_id IS NULL AND lower(u.username)=lower(e.username)))
             """).With("@id", employeeId).With("@tz", Tz).ExecuteNonQueryAsync(ct);
 
-        await conn.Cmd("""
+        var deactivationTarget = await Cmd("""
+            SELECT u.id
+            FROM hr_employees e
+            JOIN app_users u ON u.is_deleted=FALSE
+             AND (u.id=e.user_id OR (e.user_id IS NULL AND lower(u.username)=lower(e.username)))
+            WHERE e.id=@id AND lower(e.status)<>'active' AND u.is_active=TRUE
+            ORDER BY (u.id=e.user_id) DESC
+            LIMIT 1
+            FOR UPDATE OF u
+            """).With("@id", employeeId).ExecuteScalarAsync(ct);
+        if (deactivationTarget is Guid targetUserId)
+        {
+            // Mọi đường vô hiệu hóa dùng chung khóa, không chỉ đường đã đọc thấy role Admin. Khóa hàng
+            // ở trên ngăn role bị đổi giữa lúc phân loại và UPDATE; advisory lock nối tiếp mọi thao tác
+            // có thể làm mất Admin cuối cùng.
+            await Cmd("SELECT pg_advisory_xact_lock(823746120031)").ExecuteNonQueryAsync(ct);
+            var soleAdmin = await Cmd("""
+                SELECT EXISTS(
+                    SELECT 1 FROM app_users target
+                    WHERE target.id=@id AND target.role='Admin' AND target.is_active=TRUE
+                      AND NOT EXISTS (
+                          SELECT 1 FROM app_users other
+                          WHERE other.role='Admin' AND other.is_active=TRUE
+                            AND other.is_deleted=FALSE AND other.id<>target.id
+                      )
+                )
+                """).With("@id", targetUserId).ExecuteScalarAsync(ct) is bool last && last;
+            if (soleAdmin) throw new EmployeePositionRoleService.LastAdministratorException();
+        }
+
+        await Cmd("""
             UPDATE app_users u
             SET full_name = e.full_name,
                 email = e.email,
                 created_at = CASE
                     WHEN e.hire_date IS NULL THEN u.created_at
                     ELSE ((e.hire_date::timestamp + (u.created_at AT TIME ZONE @tz)::time) AT TIME ZONE @tz)
+                END,
+                authorization_version = CASE
+                    WHEN lower(e.status) <> 'active' AND u.is_active=TRUE
+                         AND (lower(u.role) <> 'admin' OR EXISTS (
+                             SELECT 1 FROM app_users other
+                             WHERE other.role='Admin' AND other.is_active=TRUE AND other.is_deleted=FALSE AND other.id<>u.id
+                         )) THEN COALESCE(u.authorization_version, 1)+1
+                    ELSE COALESCE(u.authorization_version, 1)
                 END,
                 is_active = CASE
                     WHEN lower(e.status) <> 'active'
@@ -1912,15 +2430,16 @@ public static class HrEndpoints
                 END
             FROM hr_employees e
             WHERE e.id=@id AND u.is_deleted=FALSE
-              AND (u.id=e.user_id OR lower(u.username)=lower(e.username))
+              AND (u.id=e.user_id OR (e.user_id IS NULL AND lower(u.username)=lower(e.username)))
             """).With("@id", employeeId).With("@tz", Tz).ExecuteNonQueryAsync(ct);
 
-        await conn.Cmd("""
+        await Cmd("""
             UPDATE user_sessions s
             SET revoked=TRUE, revoked_at=CURRENT_TIMESTAMP, revoked_by='employment-status',
                 is_active=FALSE, ended_at=CURRENT_TIMESTAMP, end_reason='Nhân viên đã nghỉ việc'
             FROM hr_employees e
-            JOIN app_users u ON u.is_deleted=FALSE AND (u.id=e.user_id OR lower(u.username)=lower(e.username))
+            JOIN app_users u ON u.is_deleted=FALSE
+             AND (u.id=e.user_id OR (e.user_id IS NULL AND lower(u.username)=lower(e.username)))
             WHERE e.id=@id AND lower(e.status)<>'active' AND u.is_active=FALSE
               AND s.username=u.username AND (s.is_active=TRUE OR s.revoked=FALSE)
             """).With("@id", employeeId).ExecuteNonQueryAsync(ct);
@@ -1930,8 +2449,15 @@ public static class HrEndpoints
     {
         await using var r = await conn.Cmd("""
             SELECT e.id, e.employee_code, e.username, e.full_name, e.dob, e.gender, e.phone, e.email, e.address,
-                   e.department_id, e.position, e.manager_id, e.hire_date, e.status, e.avatar,
+                   e.department_id, e.position, e.position_id, e.manager_id, e.hire_date, e.status, e.avatar,
                    e.location_id, e.access_role,
+                   COALESCE(jp.code, '') AS position_code,
+                   COALESCE(jp.default_role, '') AS position_default_role,
+                   COALESCE(pa.position_ids, ARRAY[]::uuid[]) AS assigned_position_ids,
+                   COALESCE(pa.position_codes, ARRAY[]::text[]) AS assigned_position_codes,
+                   COALESCE(pa.position_names, ARRAY[]::text[]) AS assigned_position_names,
+                   COALESCE(pa.position_roles, ARRAY[]::text[]) AS assigned_position_roles,
+                   COALESCE(pa.primary_flags, ARRAY[]::boolean[]) AS assigned_position_primary_flags,
                    COALESCE(d.name, '') AS department_name,
                    COALESCE(d.is_accounting, false) AS is_accounting,
                    COALESCE(l.name, '') AS location_name,
@@ -1940,9 +2466,21 @@ public static class HrEndpoints
             LEFT JOIN hr_departments d ON d.id = e.department_id
             LEFT JOIN hr_locations l ON l.id = e.location_id
             LEFT JOIN hr_employees m ON m.id = e.manager_id
+            LEFT JOIN hr_job_positions jp ON jp.id = e.position_id
+            LEFT JOIN LATERAL (
+                SELECT array_agg(p.id ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_ids,
+                       array_agg(p.code::text ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_codes,
+                       array_agg(p.name::text ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_names,
+                       array_agg(p.default_role::text ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS position_roles,
+                       array_agg(ep.is_primary ORDER BY ep.is_primary DESC, p.sort_order, p.name, p.id) AS primary_flags
+                FROM hr_employee_positions ep
+                JOIN hr_job_positions p ON p.id=ep.position_id
+                WHERE ep.employee_id=e.id
+            ) pa ON TRUE
             WHERE e.id=@id
             """).With("@id", id).ExecuteReaderAsync();
         if (!await r.ReadAsync()) return null;
+        var positions = ReadEmployeePositions(r);
         return new
         {
             id = r.Guid("id"),
@@ -1960,6 +2498,10 @@ public static class HrEndpoints
             locationName = r.Str("location_name"),
             accessRole = r.Str("access_role"),
             position = r.Str("position"),
+            positionId = r.IsDBNull(r.GetOrdinal("position_id")) ? (Guid?)null : r.Guid("position_id"),
+            positionCode = r.Str("position_code"),
+            positions,
+            positionIds = positions.Select(p => p.Id).ToArray(),
             managerId = r.IsDBNull(r.GetOrdinal("manager_id")) ? (Guid?)null : r.Guid("manager_id"),
             managerName = r.Str("manager_name"),
             hireDate = DateOrNull(r, "hire_date"),
@@ -1967,6 +2509,36 @@ public static class HrEndpoints
             avatar = r.IsDBNull(r.GetOrdinal("avatar")) ? null : r.Str("avatar"),
             isAccounting = r.Bool("is_accounting"),
         };
+    }
+
+    private sealed record EmployeePositionView(
+        Guid Id, string Code, string Name, string DefaultRole, string DefaultRoleLabel, bool IsPrimary);
+
+    private static EmployeePositionView[] ReadEmployeePositions(NpgsqlDataReader r)
+    {
+        var ids = r.GetFieldValue<Guid[]>(r.GetOrdinal("assigned_position_ids"));
+        var codes = r.GetFieldValue<string[]>(r.GetOrdinal("assigned_position_codes"));
+        var names = r.GetFieldValue<string[]>(r.GetOrdinal("assigned_position_names"));
+        var roles = r.GetFieldValue<string[]>(r.GetOrdinal("assigned_position_roles"));
+        var primary = r.GetFieldValue<bool[]>(r.GetOrdinal("assigned_position_primary_flags"));
+        var count = new[] { ids.Length, codes.Length, names.Length, roles.Length, primary.Length }.Min();
+        if (count > 0)
+            return Enumerable.Range(0, count)
+                .Select(i => new EmployeePositionView(
+                    ids[i], codes[i], names[i], roles[i], AppRoles.Label(roles[i]), primary[i]))
+                .ToArray();
+
+        // Hàng được ghi bởi client/tiện ích cũ sau migration vẫn trả contract mới một cách an toàn.
+        if (!r.IsDBNull(r.GetOrdinal("position_id")))
+        {
+            var role = r.Str("position_default_role");
+            return
+            [
+                new EmployeePositionView(r.Guid("position_id"), r.Str("position_code"), r.Str("position"),
+                    role, AppRoles.Label(role), true),
+            ];
+        }
+        return [];
     }
 
     // ---- Phân quyền theo phạm vi (chức vụ/phòng ban/địa điểm) ----
@@ -1977,15 +2549,263 @@ public static class HrEndpoints
     private static string NormalizeAccessRole(string? role)
         => ValidAccessRoles.Contains(role) ? role! : "staff";
 
+    /// <summary>Mảnh SQL cố định theo scope đã được server tính. Chỉ tên alias nội bộ được truyền vào;
+    /// mọi giá trị người dùng đều đi qua parameter ở <see cref="BindEmployeeScope"/>.</summary>
+    private static string EmployeeScopeSql(AccessScope scope, string alias) => scope.Kind switch
+    {
+        ScopeKind.Department when scope.DepartmentId is not null => $"{alias}.department_id=@scopeDept",
+        ScopeKind.Location when scope.LocationId is not null => $"{alias}.location_id=@scopeLoc",
+        ScopeKind.SelfOnly => $"lower({alias}.username)=lower(@scopeUser)",
+        _ => "TRUE",
+    };
+
+    private static void BindEmployeeScope(NpgsqlCommand cmd, AccessScope scope, string username)
+    {
+        switch (scope.Kind)
+        {
+            case ScopeKind.Department when scope.DepartmentId is { } departmentId:
+                cmd.With("@scopeDept", departmentId);
+                break;
+            case ScopeKind.Location when scope.LocationId is { } locationId:
+                cmd.With("@scopeLoc", locationId);
+                break;
+            case ScopeKind.SelfOnly:
+                cmd.With("@scopeUser", username);
+                break;
+        }
+    }
+
+    private sealed record JobPositionAssignment(
+        Guid Id, string Code, string Name, string DefaultRole, string DefaultAccessRole, int SortOrder);
+
+    private sealed record PositionSelection(
+        JobPositionAssignment[] Positions,
+        JobPositionAssignment? Primary,
+        string? Error)
+    {
+        public string EffectiveAccessRole => Positions
+            .OrderByDescending(p => AccessRolePriority(p.DefaultAccessRole))
+            .Select(p => NormalizeAccessRole(p.DefaultAccessRole))
+            .FirstOrDefault() ?? "staff";
+
+        public string[] EffectiveRoles => Positions.Select(p => AppRoles.Normalize(p.DefaultRole))
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .OrderByDescending(AppRoles.PrimaryPriority)
+            .ThenBy(role => role, StringComparer.Ordinal)
+            .DefaultIfEmpty(AppRoles.Employee)
+            .ToArray();
+    }
+
+    private static int AccessRolePriority(string? role) => NormalizeAccessRole(role) switch
+    {
+        "location_manager" => 2,
+        "dept_manager" => 1,
+        _ => 0,
+    };
+
+    /// <summary>
+    /// PositionIds là tập đầy đủ của contract mới; PositionId là chức vụ chính. Khi PositionIds vắng
+    /// mặt, PositionId/tên/role cũ vẫn được chấp nhận để nâng cấp cuốn chiếu web và Android.
+    /// </summary>
+    private static async Task<PositionSelection> ResolvePositionSelectionAsync(
+        NpgsqlConnection conn,
+        Guid[]? positionIds,
+        Guid? primaryPositionId,
+        string? legacyName,
+        string? legacyRole,
+        bool defaultToEmployee)
+    {
+        var explicitSet = positionIds is not null;
+        if (explicitSet && positionIds!.Length == 0)
+            return new PositionSelection([], null, "Mỗi nhân viên phải có ít nhất một chức vụ.");
+        if (explicitSet && positionIds!.Distinct().Count() != positionIds!.Length)
+            return new PositionSelection([], null, "Danh sách chức vụ không được chứa giá trị trùng lặp.");
+        if (explicitSet && primaryPositionId is null)
+            return new PositionSelection([], null, "Vui lòng chọn đúng một chức vụ chính.");
+        var ids = (positionIds ?? (primaryPositionId is { } only ? [only] : [])).Distinct().ToArray();
+        if (explicitSet && primaryPositionId is not null && !ids.Contains(primaryPositionId.Value))
+            return new PositionSelection([], null, "Chức vụ chính phải nằm trong danh sách chức vụ đã chọn.");
+
+        var positions = new List<JobPositionAssignment>();
+        if (ids.Length > 0)
+        {
+            await using var r = await conn.Cmd("""
+                SELECT id, code, name, default_role, default_access_role, sort_order
+                FROM hr_job_positions
+                WHERE id=ANY(@ids) AND is_active=TRUE
+                """).With("@ids", ids).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                positions.Add(ReadJobPosition(r));
+            if (positions.Count != ids.Length)
+                return new PositionSelection([], null, "Một hoặc nhiều chức vụ không tồn tại hoặc đã ngừng sử dụng.");
+        }
+        else if (!explicitSet)
+        {
+            var legacy = await ResolveJobPositionAsync(conn, primaryPositionId, legacyName);
+            if (legacy is null && AppRoles.Normalize(legacyRole) is { } normalizedRole)
+            {
+                await using var r = await conn.Cmd("""
+                    SELECT id, code, name, default_role, default_access_role, sort_order
+                    FROM hr_job_positions
+                    WHERE default_role=@role AND is_active=TRUE
+                    ORDER BY is_system DESC, sort_order, code
+                    LIMIT 1
+                    """).With("@role", normalizedRole).ExecuteReaderAsync();
+                if (await r.ReadAsync()) legacy = ReadJobPosition(r);
+            }
+            if (legacy is null && defaultToEmployee
+                               && string.IsNullOrWhiteSpace(legacyName)
+                               && string.IsNullOrWhiteSpace(legacyRole))
+                legacy = await ResolveJobPositionAsync(conn, null, "EMPLOYEE");
+            if (legacy is not null) positions.Add(legacy);
+            else if (!string.IsNullOrWhiteSpace(legacyName) || !string.IsNullOrWhiteSpace(legacyRole))
+                return new PositionSelection([], null,
+                    "Chức vụ không tồn tại trong danh mục hoặc đã ngừng sử dụng. Vui lòng chọn chức vụ có sẵn.");
+        }
+
+        var primary = primaryPositionId is { } primaryId
+            ? positions.FirstOrDefault(p => p.Id == primaryId)
+            : positions.OrderByDescending(p => AppRoles.PrimaryPriority(p.DefaultRole))
+                .ThenBy(p => p.SortOrder).ThenBy(p => p.Code, StringComparer.Ordinal).FirstOrDefault();
+        return new PositionSelection(positions.ToArray(), primary, null);
+    }
+
+    /// <summary>Đọc chức vụ hệ thống đang hoạt động. PositionId là contract mới; đối chiếu tên/mã chỉ
+    /// để các bản web/Android cũ tiếp tục tạo đúng vai trò trong giai đoạn nâng cấp cuốn chiếu.</summary>
+    private static async Task<JobPositionAssignment?> ResolveJobPositionAsync(
+        NpgsqlConnection conn, Guid? positionId, string? legacyName)
+    {
+        NpgsqlCommand? cmd = null;
+        if (positionId is { } id)
+            cmd = conn.Cmd("""
+                SELECT id, code, name, default_role, default_access_role, sort_order
+                FROM hr_job_positions WHERE id=@id AND is_active=TRUE LIMIT 1
+                """).With("@id", id);
+        else if (!string.IsNullOrWhiteSpace(legacyName))
+            cmd = conn.Cmd("""
+                SELECT id, code, name, default_role, default_access_role, sort_order
+                FROM hr_job_positions
+                WHERE is_active=TRUE AND (lower(name)=lower(@value) OR upper(code)=upper(@value))
+                ORDER BY sort_order LIMIT 1
+                """).With("@value", legacyName.Trim());
+
+        if (cmd is null) return null;
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return ReadJobPosition(r);
+    }
+
+    private static JobPositionAssignment ReadJobPosition(NpgsqlDataReader r) => new(
+        r.Guid("id"), r.Str("code"), r.Str("name"), r.Str("default_role"),
+        r.Str("default_access_role"), r.Int("sort_order"));
+
+    private static async Task SyncEmployeePositionsAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        Guid employeeId,
+        PositionSelection selection,
+        string assignedBy,
+        CancellationToken ct = default)
+    {
+        await conn.Cmd("DELETE FROM hr_employee_positions WHERE employee_id=@employee", tx)
+            .With("@employee", employeeId).ExecuteNonQueryAsync(ct);
+        foreach (var position in selection.Positions)
+            await conn.Cmd("""
+                INSERT INTO hr_employee_positions(employee_id, position_id, is_primary, assigned_by)
+                VALUES (@employee, @position, @primary, @by)
+                """, tx).With("@employee", employeeId).With("@position", position.Id)
+                .With("@primary", selection.Primary?.Id == position.Id).With("@by", assignedBy)
+                .ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task<PositionSelection> LoadCurrentPositionSelectionAsync(
+        NpgsqlConnection conn, Guid employeeId)
+    {
+        var positions = new List<JobPositionAssignment>();
+        Guid? primaryId = null;
+        await using (var r = await conn.Cmd("""
+            SELECT p.id, p.code, p.name, p.default_role, p.default_access_role, p.sort_order, ep.is_primary
+            FROM hr_employee_positions ep
+            JOIN hr_job_positions p ON p.id=ep.position_id
+            WHERE ep.employee_id=@employee
+            ORDER BY ep.is_primary DESC, p.sort_order, p.code
+            """).With("@employee", employeeId).ExecuteReaderAsync())
+            while (await r.ReadAsync())
+            {
+                var position = ReadJobPosition(r);
+                positions.Add(position);
+                if (r.Bool("is_primary")) primaryId = position.Id;
+            }
+
+        if (positions.Count == 0)
+        {
+            await using var r = await conn.Cmd("""
+                SELECT p.id, p.code, p.name, p.default_role, p.default_access_role, p.sort_order
+                FROM hr_employees e
+                JOIN hr_job_positions p ON p.id=e.position_id
+                WHERE e.id=@employee
+                LIMIT 1
+                """).With("@employee", employeeId).ExecuteReaderAsync();
+            if (await r.ReadAsync())
+            {
+                var position = ReadJobPosition(r);
+                positions.Add(position);
+                primaryId = position.Id;
+            }
+        }
+
+        var primary = primaryId is { } id ? positions.FirstOrDefault(p => p.Id == id) : positions.FirstOrDefault();
+        return new PositionSelection(positions.ToArray(), primary, null);
+    }
+
+    private static async Task<bool> PositionSelectionChangedAsync(
+        NpgsqlConnection conn, Guid employeeId, PositionSelection desired)
+    {
+        var current = new List<(Guid Id, bool Primary)>();
+        await using var r = await conn.Cmd("""
+            SELECT position_id, is_primary
+            FROM hr_employee_positions WHERE employee_id=@employee
+            ORDER BY position_id
+            """).With("@employee", employeeId).ExecuteReaderAsync();
+        while (await r.ReadAsync()) current.Add((r.Guid("position_id"), r.Bool("is_primary")));
+        var expected = desired.Positions.Select(p => (p.Id, desired.Primary?.Id == p.Id))
+            .OrderBy(p => p.Id).ToArray();
+        return !current.SequenceEqual(expected);
+    }
+
+    private static async Task<bool> EmployeeHasAccountAsync(NpgsqlConnection conn, Guid employeeId)
+        => await conn.Cmd("""
+            SELECT EXISTS(
+                SELECT 1 FROM hr_employees e
+                JOIN app_users u ON u.is_deleted=FALSE
+                 AND (u.id=e.user_id OR (e.user_id IS NULL AND lower(u.username)=lower(e.username)))
+                WHERE e.id=@employee
+            )
+            """).With("@employee", employeeId).ExecuteScalarAsync() is bool found && found;
+
     /// <summary>Xác định phạm vi dữ liệu người dùng được xem: Admin = tất cả; quản lý phòng ban =
     /// phòng của mình; quản lý địa điểm = địa điểm của mình; còn lại = chỉ chính mình.</summary>
     private static async Task<AccessScope> ResolveScopeAsync(NpgsqlConnection conn, ClaimsPrincipal u)
     {
-        if (u.IsHrManager()) return new AccessScope(ScopeKind.All, null, null);
-        await using var r = await conn.Cmd(
-            "SELECT access_role, department_id, location_id FROM hr_employees WHERE username=@u LIMIT 1")
+        if (u.Can(Permissions.HrManage))
+            return new AccessScope(ScopeKind.All, null, null);
+        var companyWide = u.Can(Permissions.CompanyScopeAll);
+        await using var r = await conn.Cmd("""
+            SELECT e.access_role, e.department_id, e.location_id
+            FROM app_users account
+            JOIN hr_employees e
+              ON e.user_id=account.id
+              OR (e.user_id IS NULL AND lower(e.username)=lower(account.username))
+            WHERE lower(account.username)=lower(@u) AND account.is_deleted=FALSE
+            ORDER BY (e.user_id=account.id) DESC
+            LIMIT 1
+            """)
             .With("@u", u.Username()).ExecuteReaderAsync();
-        if (!await r.ReadAsync()) return new AccessScope(ScopeKind.SelfOnly, null, null);
+        if (!await r.ReadAsync())
+            return companyWide
+                ? new AccessScope(ScopeKind.All, null, null)
+                : new AccessScope(ScopeKind.SelfOnly, null, null);
         var role = r.Str("access_role");
         Guid? dept = r.IsDBNull(r.GetOrdinal("department_id")) ? null : r.Guid("department_id");
         Guid? loc = r.IsDBNull(r.GetOrdinal("location_id")) ? null : r.Guid("location_id");
@@ -1993,6 +2813,7 @@ public static class HrEndpoints
         {
             "dept_manager" when dept is not null => new AccessScope(ScopeKind.Department, dept, loc),
             "location_manager" when loc is not null => new AccessScope(ScopeKind.Location, dept, loc),
+            _ when companyWide => new AccessScope(ScopeKind.All, null, null),
             _ => new AccessScope(ScopeKind.SelfOnly, dept, loc),
         };
     }
@@ -2110,7 +2931,7 @@ public static class HrEndpoints
     public record SaveEmployeeReq(string? EmployeeCode, string? Username, string? FullName, DateOnly? Dob, string? Gender,
         string? Phone, string? Email, string? Address, Guid? DepartmentId, string? Position, Guid? ManagerId,
         DateOnly? HireDate, string? Status, string? Avatar, Guid? LocationId = null, string? AccessRole = null,
-        bool CreateAccount = true, string? Role = null);
+        bool CreateAccount = true, string? Role = null, Guid? PositionId = null, Guid[]? PositionIds = null);
     public record SaveAvatarReq(string? Avatar);
     public record SaveAnniversaryLetterReq(bool Enabled, string? Title, string? Body, string? Signature);
     public record SaveContractReq(string? ContractNo, string? ContractType, DateOnly? StartDate, DateOnly? EndDate,

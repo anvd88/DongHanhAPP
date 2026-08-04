@@ -16,9 +16,14 @@ import type { UserAdmin } from "../lib/types";
 const ROLES = [
   { key: "", label: "Tất cả vai trò hệ thống" },
   { key: "Admin", label: "Admin" },
-  { key: "Accounting", label: "Kế toán" },
+  { key: "Executive", label: "Ban giám đốc" },
+  { key: "ChiefAccountant", label: "Kế toán trưởng" },
+  { key: "Accounting", label: "Kế toán viên" },
+  { key: "Cashier", label: "Thủ quỹ" },
   { key: "HR", label: "Nhân sự (HR)" },
-  { key: "User", label: "User" },
+  { key: "Manager", label: "Trưởng phòng" },
+  { key: "Warehouse", label: "Thủ kho" },
+  { key: "Employee", label: "Nhân viên" },
   { key: "Pending", label: "Chờ duyệt" },
   { key: "Locked", label: "Đã khóa" },
 ];
@@ -29,10 +34,13 @@ const ROLES = [
  */
 export const ASSIGNABLE_ROLES = [
   { key: "Admin", label: "Admin" },
-  { key: "Accounting", label: "Kế toán" },
+  { key: "Executive", label: "Ban giám đốc" },
   { key: "ChiefAccountant", label: "Kế toán trưởng" },
+  { key: "Accounting", label: "Kế toán viên" },
+  { key: "Cashier", label: "Thủ quỹ" },
   { key: "HR", label: "Nhân sự (HR)" },
   { key: "Manager", label: "Trưởng phòng" },
+  { key: "Warehouse", label: "Thủ kho" },
   // "User" là bí danh cũ của Employee (backend tự quy đổi) nên không đưa vào đây cho khỏi trùng.
   { key: "Employee", label: "Nhân viên" },
 ];
@@ -382,10 +390,12 @@ export function AddUserModal({ initial, onClose, onSaved }: { initial?: NewUserI
  * để nhúng làm mục con "Tài khoản" của một người trong bảng Nhân viên. Kèm hiển thị QUYỀN mỗi vai trò
  * cấp để người quản trị thấy rõ đang trao gì.
  */
-export function AccountManagePanel({ value: u, onChanged, onClose }: {
+export function AccountManagePanel({ value: u, onChanged, onClose, rolesManagedByPositions = false }: {
   value: UserAdmin;
   onChanged: () => void;
   onClose: () => void;
+  /** Hồ sơ đã gắn chức vụ: vai trò được suy từ chức vụ, không chỉnh tay ở tab tài khoản. */
+  rolesManagedByPositions?: boolean;
 }) {
   const { notify, confirm } = useAppNotifications();
   const { user } = useAuth();
@@ -486,10 +496,14 @@ export function AccountManagePanel({ value: u, onChanged, onClose }: {
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Vai trò hệ thống chính">
-            <Select value={u.role} disabled={saving || u.username === user?.username} onChange={(e) => void changeRole(e.target.value)} className="w-full">
+            <Select value={u.role} disabled={saving || rolesManagedByPositions || u.username === user?.username} onChange={(e) => void changeRole(e.target.value)} className="w-full">
               {ASSIGNABLE_ROLES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
             </Select>
-            <p className="mt-1 text-[11px] text-[var(--text-muted)]">Quyết định các chức năng tài khoản được dùng; độc lập với phạm vi dữ liệu HR trong hồ sơ nhân viên.</p>
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+              {rolesManagedByPositions
+                ? "Vai trò được đồng bộ tự động từ chức vụ chính và các chức vụ kiêm nhiệm trong Hồ sơ."
+                : "Quyết định các chức năng tài khoản được dùng; độc lập với phạm vi dữ liệu HR trong hồ sơ nhân viên."}
+            </p>
           </Field>
           <Field label="Hạng tài khoản">
             <Select value={u.isDiamond ? "diamond" : "normal"} disabled={saving || u.role === "Admin"}
@@ -505,7 +519,8 @@ export function AccountManagePanel({ value: u, onChanged, onClose }: {
         <div>
           <p className="mb-2 text-xs font-semibold text-[var(--text-secondary)]">Vai trò hệ thống bổ sung</p>
           <div className="flex flex-wrap gap-2">
-            {u.role === "Admin" ? <span className="text-sm text-[var(--text-muted)]">Admin có sẵn mọi quyền.</span> :
+            {rolesManagedByPositions ? <span className="text-sm text-[var(--text-muted)]">Hãy đổi danh sách chức vụ trong mục Hồ sơ để cấp hoặc thu hồi vai trò.</span> :
+              u.role === "Admin" ? <span className="text-sm text-[var(--text-muted)]">Admin có sẵn mọi quyền.</span> :
               SECONDARY_ROLES.filter((x) => x.key !== u.role).map((x) => {
                 const active = u.secondaryRoles?.includes(x.key) ?? false;
                 return <button key={x.key} type="button" disabled={saving} onClick={() => void toggleSecondary(x.key, !active)}

@@ -88,7 +88,7 @@
   color: #047857;
   background:
     radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.66), transparent 32%),
-    linear-gradient(135deg, rgba(52, 211, 153, 0.25), rgba(37, 99, 235, 0.13));
+    linear-gradient(135deg, rgba(33, 181, 163, 0.24), rgba(52, 87, 213, 0.13));
 }
 
 .system-settings-icon.is-accounting {
@@ -99,14 +99,14 @@
 }
 
 .system-settings-icon.is-chat {
-  color: #2563eb;
+  color: #3457d5;
   background:
     radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.68), transparent 32%),
     linear-gradient(135deg, rgba(96, 165, 250, 0.24), rgba(14, 165, 233, 0.14));
 }
 
 .system-settings-icon.is-perf {
-  color: #7c3aed;
+  color: #7259d6;
   background:
     radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.68), transparent 32%),
     linear-gradient(135deg, rgba(139, 92, 246, 0.24), rgba(59, 130, 246, 0.14));
@@ -257,7 +257,7 @@
 .water-toggle.is-on .water-toggle-track {
   background:
     radial-gradient(circle at 74% 44%, rgba(255, 255, 255, 0.5), transparent 42%),
-    linear-gradient(135deg, #42d5ff, #1977ff 62%, #2958f4);
+    linear-gradient(135deg, #21b5a3, #3457d5 62%, #7259d6);
   box-shadow:
     0 0 22px rgba(53, 177, 255, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
@@ -290,7 +290,7 @@
 .eye-toggle.is-on .water-toggle-track {
   background:
     radial-gradient(circle at 74% 44%, rgba(255, 255, 255, 0.5), transparent 42%),
-    linear-gradient(135deg, #22d3b6, #0f8fb4 58%, #315eea);
+    linear-gradient(135deg, #21b5a3, #129887 58%, #3457d5);
   box-shadow:
     0 0 22px rgba(45, 212, 191, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
@@ -303,7 +303,7 @@
 .attendance-toggle.is-on .water-toggle-track {
   background:
     radial-gradient(circle at 74% 44%, rgba(255, 255, 255, 0.52), transparent 42%),
-    linear-gradient(135deg, #34d399, #0f9f8f 58%, #2563eb);
+    linear-gradient(135deg, #21b5a3, #129887 58%, #3457d5);
   box-shadow:
     0 0 22px rgba(16, 185, 129, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
@@ -316,7 +316,7 @@
 .accounting-toggle.is-on .water-toggle-track {
   background:
     radial-gradient(circle at 74% 44%, rgba(255, 255, 255, 0.52), transparent 42%),
-    linear-gradient(135deg, #38bdf8, #0ea5a3 58%, #2563eb);
+    linear-gradient(135deg, #6f88ee, #129887 58%, #3457d5);
   box-shadow:
     0 0 22px rgba(14, 165, 233, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
@@ -352,7 +352,7 @@
   border-radius: 999px;
   background:
     radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.5), transparent 42%),
-    linear-gradient(135deg, #42d5ff, #1977ff 62%, #2958f4);
+    linear-gradient(135deg, #21b5a3, #3457d5 62%, #7259d6);
   box-shadow:
     0 0 22px rgba(53, 177, 255, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
@@ -442,7 +442,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   border-radius: 999px;
-  background: linear-gradient(90deg, #42d5ff, #1977ff 60%, #2958f4);
+  background: linear-gradient(90deg, #21b5a3, #3457d5 60%, #7259d6);
   box-shadow: 0 0 14px rgba(53, 177, 255, 0.4);
   transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -556,7 +556,7 @@ html[data-theme="dark"] .water-toggle:hover {
 
 html[data-theme="dark"] .water-toggle.is-on { color: #5fdcff; }
 html[data-theme="dark"] .eye-toggle.is-on { color: #5fe6cf; }
-html[data-theme="dark"] .attendance-toggle.is-on { color: #4ee0b0; }
+html[data-theme="dark"] .attendance-toggle.is-on { color: #21b5a3; }
 html[data-theme="dark"] .accounting-toggle.is-on { color: #6fd0ff; }
 
 html[data-theme="dark"] .reminder-toggle-countdown {

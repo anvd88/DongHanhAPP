@@ -8,7 +8,7 @@ namespace KetoanMini.Api.Realtime;
 /// Hub đẩy tín hiệu thay đổi dữ liệu xuống mọi client (web + app).
 /// Broadcast "changed" chỉ mang TÊN PHẠM VI ("hr", "data"…), không kèm dữ liệu nghiệp vụ — máy khách
 /// nhận tín hiệu rồi tự gọi API (đã kiểm quyền) để lấy phần mình được xem.
-/// Hub YÊU CẦU ĐĂNG NHẬP: <c>Program.cs</c> gắn <c>RequireAuthorization(RequireRole(AppRoles.All))</c>,
+/// Hub YÊU CẦU ĐĂNG NHẬP: <c>Program.cs</c> gắn <c>RequireAuthorization()</c>,
 /// nên kết nối ẩn danh bị chặn ngay từ bước negotiate (quan trọng vì hub đang lộ ra Internet qua
 /// Cloudflare Tunnel). Vì vậy <see cref="HubCallerContext.UserIdentifier"/> luôn có giá trị —
 /// token nào cũng mang claim Name (xem <c>TokenService</c>); thấy "(ẩn danh)" trong log là dấu hiệu

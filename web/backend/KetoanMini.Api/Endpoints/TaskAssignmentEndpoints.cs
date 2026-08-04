@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Npgsql;
 
@@ -70,25 +71,32 @@ public static class TaskAssignmentEndpoints
     public static void MapTasks(this WebApplication app)
     {
         // Ai đăng nhập cũng vào được: người thường thấy việc được giao cho mình; Thủ kho/Admin còn giao & nghiệm thu.
-        var g = app.MapGroup("/api/tasks").RequireAuthorization();
+        var g = app.MapGroup("/api/tasks").RequirePermission(Permissions.TasksSelf);
 
         // Metadata dựng form giao việc: có được quyền giao không + danh sách người có thể nhận việc.
         g.MapGet("/meta", async (ClaimsPrincipal u, Database db) =>
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
-            var canAssign = await ApiHelpers.IsTaskAssignerAsync(conn, me, PrimaryRole(u));
+            var canAssign = u.Can(Permissions.TasksAssign);
             var assignees = new List<object>();
             if (canAssign)
             {
+                var scope = await ResolveAssigneeScopeAsync(conn, u);
                 await using var r = await conn.Cmd("""
-                    SELECT e.username, e.full_name, e.position, COALESCE(d.name,'') AS dept
+                    SELECT au.username, e.full_name, e.position, COALESCE(d.name,'') AS dept
                     FROM hr_employees e
+                    JOIN app_users au ON au.is_deleted=FALSE
+                     AND (au.id=e.user_id OR (e.user_id IS NULL AND lower(au.username)=lower(e.username)))
                     LEFT JOIN hr_departments d ON d.id = e.department_id
                     WHERE e.status = 'Active' AND e.username <> ''
-                      AND EXISTS (SELECT 1 FROM app_users au WHERE au.username = e.username AND au.is_deleted = FALSE)
+                      AND (@all OR (@location IS NOT NULL AND e.location_id=@location)
+                                OR (@department IS NOT NULL AND e.department_id=@department))
                     ORDER BY d.name NULLS LAST, e.full_name
-                    """).ExecuteReaderAsync();
+                    """).With("@all", scope.Kind == AssigneeScopeKind.All)
+                    .With("@location", (object?)scope.LocationId ?? DBNull.Value)
+                    .With("@department", (object?)scope.DepartmentId ?? DBNull.Value)
+                    .ExecuteReaderAsync();
                 while (await r.ReadAsync())
                     assignees.Add(new
                     {
@@ -107,9 +115,9 @@ public static class TaskAssignmentEndpoints
         g.MapGet("/", async (ClaimsPrincipal u, Database db) =>
         {
             var me = u.Username();
-            var admin = u.IsAdmin();
+            var admin = u.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
-            var canAssign = await ApiHelpers.IsTaskAssignerAsync(conn, me, PrimaryRole(u));
+            var canAssign = u.Can(Permissions.TasksAssign);
 
             var inbox = new List<WorkTaskDto>();
             await using (var r = await conn.Cmd(
@@ -148,7 +156,7 @@ public static class TaskAssignmentEndpoints
 
             var isAssigner = string.Equals(task.AssignerUsername, me, StringComparison.OrdinalIgnoreCase);
             var isAssignee = string.Equals(task.AssigneeUsername, me, StringComparison.OrdinalIgnoreCase);
-            if (!isAssigner && !isAssignee && !u.IsAdmin()) return Results.Forbid();
+            if (!isAssigner && !isAssignee && !u.Can(Permissions.UsersManage)) return Results.Forbid();
 
             var events = new List<WorkTaskEventDto>();
             await using (var r = await conn.Cmd(
@@ -158,11 +166,11 @@ public static class TaskAssignmentEndpoints
                     events.Add(new WorkTaskEventDto(r.Long("id"), r.Str("actor_username"), r.Str("actor_name"),
                         r.Str("kind"), r.Str("note"), r.Dt("created_at")));
 
-            var canReview = (isAssigner || u.IsAdmin());
+            var canReview = isAssigner || u.Can(Permissions.UsersManage);
             var flags = new
             {
                 mine = isAssignee,
-                assignedByMe = isAssigner || u.IsAdmin(),
+                assignedByMe = isAssigner || u.Can(Permissions.UsersManage),
                 canSubmit = isAssignee && AssigneeOpen.Contains(task.Status),
                 canStart = isAssignee && task.Status == "assigned",
                 canReview = canReview && task.Status == "submitted",
@@ -177,7 +185,7 @@ public static class TaskAssignmentEndpoints
         {
             var me = u.Username();
             await using var conn = await db.OpenAsync();
-            if (!await ApiHelpers.IsTaskAssignerAsync(conn, me, PrimaryRole(u)))
+            if (!u.Can(Permissions.TasksAssign))
                 return Results.Json(new { message = "Bạn không có quyền giao việc." }, statusCode: 403);
 
             var title = (req.Title ?? "").Trim();
@@ -185,10 +193,12 @@ public static class TaskAssignmentEndpoints
             var assignee = (req.AssigneeUsername ?? "").Trim();
             if (assignee.Length == 0) return Results.BadRequest(new { message = "Vui lòng chọn người nhận việc." });
 
-            var assigneeName = await conn.Cmd(
-                "SELECT COALESCE(full_name, username) FROM app_users WHERE username=@u AND is_deleted=FALSE LIMIT 1")
-                .With("@u", assignee).ExecuteScalarAsync() as string;
-            if (assigneeName is null) return Results.BadRequest(new { message = "Không tìm thấy người nhận việc." });
+            var scope = await ResolveAssigneeScopeAsync(conn, u);
+            var target = await LoadAssignableEmployeeAsync(conn, scope, assignee);
+            if (target is null)
+                return Results.BadRequest(new { message = "Người nhận việc không nằm trong phạm vi bạn được giao." });
+            assignee = target.Username;
+            var assigneeName = target.FullName;
 
             var priority = NormalizePriority(req.Priority);
             var assignerName = await DisplayName(conn, me);
@@ -218,7 +228,7 @@ public static class TaskAssignmentEndpoints
             await using var conn = await db.OpenAsync();
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
-            if (!CanReview(t, me, u.IsAdmin())) return Results.Forbid();
+            if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
             if (t.Status is "accepted" or "cancelled")
                 return Results.BadRequest(new { message = "Việc đã kết thúc, không sửa được." });
 
@@ -232,10 +242,13 @@ public static class TaskAssignmentEndpoints
             var reassigned = false;
             if (assignee.Length > 0 && !string.Equals(assignee, t.AssigneeUsername, StringComparison.OrdinalIgnoreCase))
             {
-                assigneeName = await conn.Cmd(
-                    "SELECT COALESCE(full_name, username) FROM app_users WHERE username=@u AND is_deleted=FALSE LIMIT 1")
-                    .With("@u", assignee).ExecuteScalarAsync() as string ?? "";
-                if (assigneeName.Length == 0) return Results.BadRequest(new { message = "Không tìm thấy người nhận việc." });
+                if (!u.Can(Permissions.TasksAssign)) return Results.Forbid();
+                var scope = await ResolveAssigneeScopeAsync(conn, u);
+                var target = await LoadAssignableEmployeeAsync(conn, scope, assignee);
+                if (target is null)
+                    return Results.BadRequest(new { message = "Người nhận việc không nằm trong phạm vi bạn được giao." });
+                assignee = target.Username;
+                assigneeName = target.FullName;
                 reassigned = true;
             }
             else assignee = t.AssigneeUsername;
@@ -310,7 +323,7 @@ public static class TaskAssignmentEndpoints
             await using var conn = await db.OpenAsync();
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
-            if (!CanReview(t, me, u.IsAdmin())) return Results.Forbid();
+            if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
             if (t.Status != "submitted") return Results.BadRequest(new { message = "Chỉ nghiệm thu được việc đang chờ nghiệm thu." });
 
             var note = (req.Note ?? "").Trim();
@@ -336,7 +349,7 @@ public static class TaskAssignmentEndpoints
             await using var conn = await db.OpenAsync();
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
-            if (!CanReview(t, me, u.IsAdmin())) return Results.Forbid();
+            if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
             if (t.Status != "submitted") return Results.BadRequest(new { message = "Chỉ trả lại được việc đang chờ nghiệm thu." });
 
             var note = (req.Note ?? "").Trim();
@@ -360,7 +373,7 @@ public static class TaskAssignmentEndpoints
             await using var conn = await db.OpenAsync();
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
-            if (!CanReview(t, me, u.IsAdmin())) return Results.Forbid();
+            if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
             if (t.Status is "accepted" or "cancelled") return Results.BadRequest(new { message = "Việc đã kết thúc." });
 
             var note = (req.Note ?? "").Trim();
@@ -382,7 +395,7 @@ public static class TaskAssignmentEndpoints
             await using var conn = await db.OpenAsync();
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
-            var isAssigner = CanReview(t, me, u.IsAdmin());
+            var isAssigner = CanReview(t, me, u.Can(Permissions.UsersManage));
             var isAssignee = string.Equals(t.AssigneeUsername, me, StringComparison.OrdinalIgnoreCase);
             if (!isAssigner && !isAssignee) return Results.Forbid();
 
@@ -400,7 +413,7 @@ public static class TaskAssignmentEndpoints
             await using var conn = await db.OpenAsync();
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
-            if (!CanReview(t, me, u.IsAdmin())) return Results.Forbid();
+            if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
             await conn.Cmd("DELETE FROM work_tasks WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             await db.RecordAudit(me, "Xoá việc", "WorkTask", t.TaskNo, t.Title);
             return Results.NoContent();
@@ -409,8 +422,67 @@ public static class TaskAssignmentEndpoints
 
     // ── Trợ giúp chung ───────────────────────────────────────────────────────────
 
-    private static string PrimaryRole(ClaimsPrincipal u) =>
-        u.FindFirstValue(ClaimTypes.Role) ?? "";
+    private enum AssigneeScopeKind { None, Department, Location, All }
+    private sealed record AssigneeScope(AssigneeScopeKind Kind, Guid? DepartmentId, Guid? LocationId);
+    private sealed record AssignableEmployee(string Username, string FullName);
+
+    private static async Task<AssigneeScope> ResolveAssigneeScopeAsync(
+        NpgsqlConnection conn, ClaimsPrincipal u)
+    {
+        if (!u.Can(Permissions.TasksAssign))
+            return new AssigneeScope(AssigneeScopeKind.None, null, null);
+        if (u.Can(Permissions.UsersManage))
+            return new AssigneeScope(AssigneeScopeKind.All, null, null);
+
+        await using var r = await conn.Cmd("""
+            SELECT e.access_role, e.department_id, e.location_id
+            FROM app_users account
+            JOIN hr_employees e
+              ON e.user_id=account.id
+              OR (e.user_id IS NULL AND lower(e.username)=lower(account.username))
+            WHERE lower(account.username)=lower(@u) AND account.is_deleted=FALSE
+            ORDER BY (e.user_id=account.id) DESC
+            LIMIT 1
+            """).With("@u", u.Username()).ExecuteReaderAsync();
+        if (!await r.ReadAsync())
+            return new AssigneeScope(AssigneeScopeKind.None, null, null);
+
+        var accessRole = r.Str("access_role");
+        var departmentId = r.IsDBNull(r.GetOrdinal("department_id")) ? (Guid?)null : r.Guid("department_id");
+        var locationId = r.IsDBNull(r.GetOrdinal("location_id")) ? (Guid?)null : r.Guid("location_id");
+        if (string.Equals(accessRole, "location_manager", StringComparison.Ordinal) && locationId is not null)
+            return new AssigneeScope(AssigneeScopeKind.Location, null, locationId);
+        if (departmentId is not null)
+            return new AssigneeScope(AssigneeScopeKind.Department, departmentId, null);
+        return new AssigneeScope(AssigneeScopeKind.None, null, null);
+    }
+
+    private static async Task<AssignableEmployee?> LoadAssignableEmployeeAsync(
+        NpgsqlConnection conn, AssigneeScope scope, string username)
+    {
+        if (scope.Kind == AssigneeScopeKind.None) return null;
+        await using var r = await conn.Cmd("""
+            SELECT account.username,
+                   COALESCE(NULLIF(e.full_name,''), NULLIF(account.full_name,''), account.username) AS full_name
+            FROM app_users account
+            JOIN hr_employees e
+              ON e.user_id=account.id
+              OR (e.user_id IS NULL AND lower(e.username)=lower(account.username))
+            WHERE lower(account.username)=lower(@u)
+              AND account.is_deleted=FALSE AND account.is_active=TRUE AND e.status='Active'
+              AND (@all OR (@location IS NOT NULL AND e.location_id=@location)
+                        OR (@department IS NOT NULL AND e.department_id=@department))
+            ORDER BY (e.user_id=account.id) DESC
+            LIMIT 1
+            """).With("@u", username)
+            .With("@all", scope.Kind == AssigneeScopeKind.All)
+            .With("@location", (object?)scope.LocationId ?? DBNull.Value)
+            .With("@department", (object?)scope.DepartmentId ?? DBNull.Value)
+            .ExecuteReaderAsync();
+        return await r.ReadAsync()
+            ? new AssignableEmployee(r.Str("username"), r.Str("full_name"))
+            : null;
+    }
 
     private static string NormalizePriority(string? p)
     {

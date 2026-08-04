@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using ClosedXML.Excel;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -30,6 +31,72 @@ public static class PayrollEndpoints
                 updated_by varchar(128) NOT NULL DEFAULT '',
                 updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- Mỗi lần lập/cập nhật/phát hành/xác nhận phiếu lương tạo đúng một phiên bản ở bảng này.
+            -- Không đặt FK về phiếu/nhân viên: lịch sử kế toán phải còn nguyên kể cả khi hồ sơ nguồn bị xóa.
+            ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS created_by varchar(128) NOT NULL DEFAULT '';
+            ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS updated_by varchar(128) NOT NULL DEFAULT '';
+            ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+            CREATE TABLE IF NOT EXISTS hr_payslip_history (
+                id uuid PRIMARY KEY,
+                payslip_id uuid NOT NULL,
+                employee_id uuid NOT NULL,
+                employee_name varchar(200) NOT NULL DEFAULT '',
+                employee_code varchar(32) NOT NULL DEFAULT '',
+                period varchar(7) NOT NULL,
+                revision integer NOT NULL,
+                action varchar(32) NOT NULL,
+                status_before varchar(24) NULL,
+                status_after varchar(24) NOT NULL,
+                actor varchar(128) NOT NULL,
+                occurred_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                summary jsonb NOT NULL DEFAULT '{}',
+                snapshot jsonb NOT NULL DEFAULT '{}',
+                CONSTRAINT ck_hr_payslip_history_revision CHECK (revision > 0),
+                CONSTRAINT ux_hr_payslip_history_revision UNIQUE (payslip_id, revision)
+            );
+            CREATE INDEX IF NOT EXISTS ix_hr_payslip_history_employee_period
+                ON hr_payslip_history (employee_id, period, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_hr_payslip_history_payslip
+                ON hr_payslip_history (payslip_id, revision DESC);
+
+            -- Bảng sự kiện là append-only. Ngay cả lỗi lập trình/quyền SQL thông thường cũng không được
+            -- sửa lại quá khứ; muốn đính chính phải thêm một sự kiện mới.
+            CREATE OR REPLACE FUNCTION prevent_hr_payslip_history_mutation()
+            RETURNS trigger LANGUAGE plpgsql AS $fn$
+            BEGIN
+                RAISE EXCEPTION 'hr_payslip_history is append-only';
+            END;
+            $fn$;
+            DROP TRIGGER IF EXISTS trg_hr_payslip_history_immutable ON hr_payslip_history;
+            CREATE TRIGGER trg_hr_payslip_history_immutable
+                BEFORE UPDATE OR DELETE ON hr_payslip_history
+                FOR EACH ROW EXECUTE FUNCTION prevent_hr_payslip_history_mutation();
+
+            -- Phiếu có từ phiên bản cũ được ghi nhận một lần để màn lịch sử không có khoảng trống.
+            INSERT INTO hr_payslip_history
+                (id, payslip_id, employee_id, employee_name, employee_code, period, revision,
+                 action, status_before, status_after, actor, occurred_at, summary, snapshot)
+            SELECT gen_random_uuid(), p.id, p.employee_id, COALESCE(e.full_name,''), COALESCE(e.employee_code,''),
+                   p.period,
+                   COALESCE((SELECT MAX(h.revision)+1 FROM hr_payslip_history h
+                             WHERE h.employee_id=p.employee_id AND h.period=p.period),1),
+                   'Imported', NULL,
+                   CASE WHEN NOT p.published THEN 'Draft'
+                        WHEN p.acknowledged_at IS NOT NULL THEN 'Acknowledged' ELSE 'Published' END,
+                   COALESCE(NULLIF(p.created_by,''), 'system:migration'), p.created_at,
+                   jsonb_build_object('netPay',p.net_pay,'totalDeductions',p.deductions,
+                                      'published',p.published,'note',p.note),
+                   jsonb_build_object('workDays',p.work_days,'overtimeHours',p.overtime_hours,
+                                      'baseSalary',p.base_salary,'allowance',p.allowance,
+                                      'overtimePay',p.overtime_pay,'deductions',p.deductions,
+                                      'netPay',p.net_pay,'note',p.note,'details',p.details,
+                                      'published',p.published,'acknowledgedAt',p.acknowledged_at)
+            FROM hr_payslips p
+            LEFT JOIN hr_employees e ON e.id=p.employee_id
+            WHERE NOT EXISTS (SELECT 1 FROM hr_payslip_history h WHERE h.payslip_id=p.id)
+            ON CONFLICT (payslip_id, revision) DO NOTHING;
             """).ExecuteNonQueryAsync(ct);
     }
 
@@ -42,7 +109,7 @@ public static class PayrollEndpoints
         // Danh sách nhân viên kèm mức lương (admin) — cho trang bảng lương.
         g.MapGet("/salaries", async (ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PayrollRead)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
@@ -78,7 +145,7 @@ public static class PayrollEndpoints
         g.MapGet("/salaries/{employeeId:guid}", async (Guid employeeId, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!u.IsAdmin())
+            if (!u.Can(Permissions.PayrollRead))
             {
                 var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", employeeId).ExecuteScalarAsync() as string;
                 if (!string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
@@ -88,7 +155,7 @@ public static class PayrollEndpoints
 
         g.MapPut("/salaries/{employeeId:guid}", async (Guid employeeId, SaveSalaryReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PayrollManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var componentsJson = SerializeComponents(req.Components);
             await conn.Cmd("""
@@ -181,11 +248,29 @@ public static class PayrollEndpoints
             return Results.Ok(list);
         });
 
-        g.MapPost("/my-payslips/{id:guid}/ack", async(Guid id,ClaimsPrincipal u,Database db)=>{
-            await using var c=await db.OpenAsync();var n=await c.Cmd("""
-              UPDATE hr_payslips p SET acknowledged_at=COALESCE(acknowledged_at,CURRENT_TIMESTAMP)
-              FROM hr_employees e WHERE p.id=@id AND p.employee_id=e.id AND e.username=@u AND p.published=TRUE
-              """).With("@id",id).With("@u",u.Username()).ExecuteNonQueryAsync();return n==0?Results.NotFound():Results.NoContent();});
+        g.MapPost("/my-payslips/{id:guid}/ack", async (Guid id, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            var before = await ReadPayslipState(conn, id, lockRow: true);
+            if (before is null || !before.Published ||
+                !string.Equals(before.EmployeeUsername, u.Username(), StringComparison.OrdinalIgnoreCase))
+            {
+                await tx.RollbackAsync();
+                return Results.NotFound();
+            }
+
+            // Idempotent: mở lại cùng phiếu không tạo thêm sự kiện giả.
+            if (before.AcknowledgedAt is null)
+            {
+                await conn.Cmd("UPDATE hr_payslips SET acknowledged_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP, updated_by=@by WHERE id=@id")
+                    .With("@id", id).With("@by", u.Username()).ExecuteNonQueryAsync();
+                var after = await ReadPayslipState(conn, id);
+                await AppendPayslipHistory(conn, after!, before.Status, "Acknowledged", u.Username());
+            }
+            await tx.CommitAsync();
+            return Results.NoContent();
+        });
         g.MapPost("/my-payslips/{id:guid}/inquiries",async(Guid id,PayslipInquiryReq req,ClaimsPrincipal u,Database db)=>{
             if(string.IsNullOrWhiteSpace(req.Message))return Results.BadRequest(new{message="Vui lòng nhập nội dung thắc mắc."});await using var c=await db.OpenAsync();
             var emp=await c.Cmd("SELECT p.employee_id FROM hr_payslips p JOIN hr_employees e ON e.id=p.employee_id WHERE p.id=@id AND e.username=@u AND p.published=TRUE").With("@id",id).With("@u",u.Username()).ExecuteScalarAsync();if(emp is not Guid eid)return Results.NotFound();
@@ -203,7 +288,7 @@ public static class PayrollEndpoints
         // Xem trước phiếu lương (chưa lưu): lấy mức lương + bảng công + phạt của kỳ.
         g.MapGet("/compute", async (ClaimsPrincipal u, Database db, Guid employeeId, string period) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PayrollRead)) return Results.Forbid();
             if (employeeId == Guid.Empty || !ValidPeriod(period))
                 return Results.BadRequest(new { message = "Thiếu nhân viên hoặc kỳ lương (yyyy-MM)." });
             await using var conn = await db.OpenAsync();
@@ -211,10 +296,25 @@ public static class PayrollEndpoints
             return result is null ? Results.NotFound() : Results.Ok(result);
         });
 
+        // Trạng thái hiện tại + toàn bộ dòng thời gian của một phiếu, kể cả bản nháp.
+        // Chỉ người có quyền quản trị bảng lương được xem vì snapshot chứa số tiền chi tiết.
+        g.MapGet("/payslips/history", async (ClaimsPrincipal u, Database db, Guid employeeId, string period) =>
+        {
+            if (!u.Can(Permissions.PayrollRead)) return Results.Forbid();
+            if (employeeId == Guid.Empty || !ValidPeriod(period))
+                return Results.BadRequest(new { message = "Thiếu nhân viên hoặc kỳ lương (yyyy-MM)." });
+
+            await using var conn = await db.OpenAsync();
+            var current = await ReadPayslipState(conn, employeeId, period);
+            var history = await ReadPayslipHistory(conn, employeeId, period);
+            object? payslip = current is null ? null : PayslipStatePayload(current);
+            return Results.Ok(new { payslip, history });
+        });
+
         // Lập (hoặc cập nhật) phiếu lương cho kỳ từ dữ liệu đã tính; adjustments là các khoản điều chỉnh thủ công.
         g.MapPost("/payslips", async (CreatePayslipReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PayrollManage)) return Results.Forbid();
             if (req.EmployeeId == Guid.Empty || !ValidPeriod(req.Period))
                 return Results.BadRequest(new { message = "Thiếu nhân viên hoặc kỳ lương (yyyy-MM)." });
             await using var conn = await db.OpenAsync();
@@ -228,14 +328,31 @@ public static class PayrollEndpoints
             if (result is null) return Results.NotFound();
 
             var detailsJson = JsonSerializer.Serialize(result.Details);
+            await using var tx = await conn.BeginTransactionAsync();
+            await LockPayslipKey(conn, req.EmployeeId, req.Period);
+            var before = await ReadPayslipState(conn, req.EmployeeId, req.Period, lockRow: true);
+            if (!req.Published && before is not null)
+            {
+                var cancel = await PayoutVoucherEndpoints.CancelPayslipVoucherForUnpublishAsync(
+                    conn, before.Id, u.Username());
+                if (cancel == PayoutVoucherEndpoints.PayslipVoucherCancelResult.Blocked)
+                {
+                    await tx.RollbackAsync();
+                    return Results.Conflict(new
+                    {
+                        message = "Không thể chuyển phiếu lương về nháp vì phiếu chi liên quan đã được duyệt hoặc đã chi.",
+                    });
+                }
+            }
             // RETURNING id: lập lại phiếu của kỳ cũ thì DO UPDATE trả về id của DÒNG ĐANG CÓ, không phải
             // guid vừa sinh — phiếu chi lương bám theo id này nên phải là id thật.
             var pid = (Guid)(await conn.Cmd("""
-                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, details, published)
-                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @details::jsonb, @pub)
+                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, details, published, created_by, updated_by, updated_at, acknowledged_at)
+                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @details::jsonb, @pub, @by, @by, CURRENT_TIMESTAMP, NULL)
                 ON CONFLICT (employee_id, period) DO UPDATE SET
                     work_days=@wd, overtime_hours=@ot, base_salary=@base, allowance=@allow,
-                    overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, details=@details::jsonb, published=@pub
+                    overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, details=@details::jsonb,
+                    published=@pub, updated_by=@by, updated_at=CURRENT_TIMESTAMP, acknowledged_at=NULL
                 RETURNING id
                 """)
                 .With("@id", Guid.NewGuid()).With("@emp", req.EmployeeId).With("@period", req.Period)
@@ -243,6 +360,7 @@ public static class PayrollEndpoints
                 .With("@base", result.BaseSalary).With("@allow", result.Allowance).With("@otp", result.OvertimePay)
                 .With("@ded", result.TotalDeductions).With("@net", result.NetPay)
                 .With("@note", req.Note ?? "").With("@details", detailsJson).With("@pub", req.Published)
+                .With("@by", u.Username())
                 .ExecuteScalarAsync())!;
 
             if (req.Published)
@@ -267,8 +385,13 @@ public static class PayrollEndpoints
                 await PayoutVoucherEndpoints.SyncPayslipVoucherAsync(conn, pid, req.EmployeeId, req.Period,
                     result.NetPay, u.Username());
 
+            var after = await ReadPayslipState(conn, pid);
+            var action = PayslipAction(before?.Status, after!.Status);
+            await AppendPayslipHistory(conn, after, before?.Status, action, u.Username());
+            await tx.CommitAsync();
+
             await Signal(db, u, req.EmployeeId, "Lập phiếu lương", "Payslip");
-            return Results.Ok(new { id = pid, netPay = result.NetPay });
+            return Results.Ok(new { id = pid, netPay = result.NetPay, status = after.Status });
         });
 
         // ---------------- Xuất Excel toàn công ty ----------------
@@ -276,7 +399,7 @@ public static class PayrollEndpoints
         // sheet "Phiếu lương" xếp 6 phiếu/khổ A4 để in.
         g.MapGet("/export", async (ClaimsPrincipal u, Database db, string? month) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PayrollRead)) return Results.Forbid();
             var period = NormalizePeriod(month);
             await using var conn = await db.OpenAsync();
             var bytes = await BuildExportWorkbook(conn, period);
@@ -287,6 +410,158 @@ public static class PayrollEndpoints
     }
 
     // ---- Đọc chi tiết phiếu lương đã lưu (jsonb) cho màn "Phiếu lương của tôi" ----
+
+    internal sealed record PayslipAuditState(
+        Guid Id, Guid EmployeeId, string EmployeeName, string EmployeeCode, string EmployeeUsername,
+        string Period, decimal WorkDays, decimal OvertimeHours, decimal BaseSalary, decimal Allowance,
+        decimal OvertimePay, decimal Deductions, decimal NetPay, string Note, bool Published,
+        DateTime CreatedAt, DateTime UpdatedAt, DateTime? AcknowledgedAt, string CreatedBy, string UpdatedBy,
+        string SnapshotJson, string SummaryJson)
+    {
+        public string Status => !Published ? "Draft" : AcknowledgedAt is not null ? "Acknowledged" : "Published";
+    }
+
+    /// <summary>
+    /// Khóa logic theo nhân viên+kỳ, kể cả khi chưa có dòng hr_payslips. Nhờ vậy hai request lập phiếu
+    /// đầu tiên đồng thời không thể cùng tự nhận là revision 1 / sự kiện tạo mới.
+    /// </summary>
+    internal static async Task LockPayslipKey(NpgsqlConnection conn, Guid employeeId, string period)
+    {
+        await conn.Cmd("SELECT pg_advisory_xact_lock(hashtextextended(@key, 0))")
+            .With("@key", $"payslip:{employeeId:N}:{period}").ExecuteScalarAsync();
+    }
+
+    internal static async Task<PayslipAuditState?> ReadPayslipState(
+        NpgsqlConnection conn, Guid employeeId, string period, bool lockRow = false)
+        => await ReadPayslipStateCore(conn, "p.employee_id=@key AND p.period=@period", employeeId, period, lockRow);
+
+    internal static async Task<PayslipAuditState?> ReadPayslipState(
+        NpgsqlConnection conn, Guid payslipId, bool lockRow = false)
+        => await ReadPayslipStateCore(conn, "p.id=@key", payslipId, null, lockRow);
+
+    private static async Task<PayslipAuditState?> ReadPayslipStateCore(
+        NpgsqlConnection conn, string predicate, Guid key, string? period, bool lockRow)
+    {
+        // FOR UPDATE chỉ khóa bảng p; LEFT JOIN nhân viên không cần/không được khóa.
+        var sql = $"""
+            SELECT p.id, p.employee_id, COALESCE(e.full_name,'') AS employee_name,
+                   COALESCE(e.employee_code,'') AS employee_code, COALESCE(e.username,'') AS employee_username,
+                   p.period, p.work_days, p.overtime_hours, p.base_salary, p.allowance, p.overtime_pay,
+                   p.deductions, p.net_pay, p.note, p.published, p.created_at, p.updated_at,
+                   p.acknowledged_at, p.created_by, p.updated_by,
+                   jsonb_build_object(
+                       'workDays',p.work_days,'overtimeHours',p.overtime_hours,'baseSalary',p.base_salary,
+                       'allowance',p.allowance,'overtimePay',p.overtime_pay,'deductions',p.deductions,
+                       'netPay',p.net_pay,'note',p.note,'details',p.details,'published',p.published,
+                       'acknowledgedAt',p.acknowledged_at)::text AS snapshot,
+                   jsonb_build_object(
+                       'netPay',p.net_pay,'totalEarnings',p.net_pay+p.deductions,
+                       'totalDeductions',p.deductions,'published',p.published,'note',p.note)::text AS summary
+            FROM hr_payslips p
+            LEFT JOIN hr_employees e ON e.id=p.employee_id
+            WHERE {predicate}
+            {(lockRow ? "FOR UPDATE OF p" : "")}
+            """;
+        var cmd = conn.Cmd(sql).With("@key", key);
+        if (period is not null) cmd.With("@period", period);
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new PayslipAuditState(
+            r.Guid("id"), r.Guid("employee_id"), r.Str("employee_name"), r.Str("employee_code"),
+            r.Str("employee_username"), r.Str("period"), r.Dec("work_days"), r.Dec("overtime_hours"),
+            r.Dec("base_salary"), r.Dec("allowance"), r.Dec("overtime_pay"), r.Dec("deductions"),
+            r.Dec("net_pay"), r.Str("note"), r.Bool("published"), r.Dt("created_at"), r.Dt("updated_at"),
+            r.DtNull("acknowledged_at"), r.Str("created_by"), r.Str("updated_by"),
+            r.Str("snapshot"), r.Str("summary"));
+    }
+
+    internal static async Task AppendPayslipHistory(
+        NpgsqlConnection conn, PayslipAuditState state, string? statusBefore, string action, string actor,
+        string? statusAfter = null)
+    {
+        await conn.Cmd("""
+            INSERT INTO hr_payslip_history
+                (id, payslip_id, employee_id, employee_name, employee_code, period, revision,
+                 action, status_before, status_after, actor, occurred_at, summary, snapshot)
+            VALUES
+                (@id, @pid, @emp, @name, @code, @period,
+                 COALESCE((SELECT MAX(revision)+1 FROM hr_payslip_history
+                           WHERE employee_id=@emp AND period=@period),1),
+                 @action, @before, @after, @actor, CURRENT_TIMESTAMP, @summary::jsonb, @snapshot::jsonb)
+            """)
+            .With("@id", Guid.NewGuid()).With("@pid", state.Id).With("@emp", state.EmployeeId)
+            .With("@name", state.EmployeeName).With("@code", state.EmployeeCode).With("@period", state.Period)
+            .With("@action", action).With("@before", (object?)statusBefore ?? DBNull.Value)
+            .With("@after", statusAfter ?? state.Status)
+            .With("@actor", string.IsNullOrWhiteSpace(actor) ? "system" : actor.Trim())
+            .With("@summary", state.SummaryJson).With("@snapshot", state.SnapshotJson)
+            .ExecuteNonQueryAsync();
+    }
+
+    internal static string PayslipAction(string? before, string after)
+    {
+        if (before is null) return after == "Draft" ? "DraftCreated" : "PublishedCreated";
+        if (after == "Draft") return before == "Draft" ? "DraftUpdated" : "ReturnedToDraft";
+        if (before == "Draft") return "Published";
+        if (before == "Acknowledged") return "PublishedRevised";
+        return "PublishedUpdated";
+    }
+
+    private static object PayslipStatePayload(PayslipAuditState p) => new
+    {
+        id = p.Id,
+        employeeId = p.EmployeeId,
+        employeeName = p.EmployeeName,
+        employeeCode = p.EmployeeCode,
+        p.Period,
+        p.Status,
+        p.Published,
+        p.NetPay,
+        p.Note,
+        p.CreatedAt,
+        p.UpdatedAt,
+        p.AcknowledgedAt,
+        p.CreatedBy,
+        p.UpdatedBy,
+    };
+
+    private static async Task<List<object>> ReadPayslipHistory(NpgsqlConnection conn, Guid employeeId, string period)
+    {
+        var result = new List<object>();
+        await using var r = await conn.Cmd("""
+            SELECT id, payslip_id, employee_id, employee_name, employee_code, period, revision,
+                   action, status_before, status_after, actor, occurred_at,
+                   summary::text AS summary, snapshot::text AS snapshot
+            FROM hr_payslip_history
+            WHERE employee_id=@emp AND period=@period
+            ORDER BY revision DESC, occurred_at DESC
+            """).With("@emp", employeeId).With("@period", period).ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            result.Add(new
+            {
+                id = r.Guid("id"),
+                payslipId = r.Guid("payslip_id"),
+                employeeId = r.Guid("employee_id"),
+                employeeName = r.Str("employee_name"),
+                employeeCode = r.Str("employee_code"),
+                period = r.Str("period"),
+                revision = r.Int("revision"),
+                action = r.Str("action"),
+                statusBefore = r.IsDBNull(r.GetOrdinal("status_before")) ? null : r.Str("status_before"),
+                statusAfter = r.Str("status_after"),
+                actor = r.Str("actor"),
+                occurredAt = r.Dt("occurred_at"),
+                summary = ParseJsonElement(r.Str("summary")),
+                snapshot = ParseJsonElement(r.Str("snapshot")),
+            });
+        return result;
+    }
+
+    private static JsonElement ParseJsonElement(string json)
+    {
+        try { return JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json).RootElement.Clone(); }
+        catch { return JsonDocument.Parse("{}").RootElement.Clone(); }
+    }
 
     private sealed record PayslipDetail(List<object> Earnings, List<object> Deductions,
         decimal WorkedDays, decimal AbsentDays, decimal LateDays, decimal OvertimeHours,
@@ -553,9 +828,10 @@ public static class PayrollEndpoints
         return JsonSerializer.Serialize(clean);
     }
 
-    private static bool ValidPeriod(string? period)
-        => !string.IsNullOrWhiteSpace(period) && period.Length >= 7
-           && int.TryParse(period[..4], out _) && int.TryParse(period.Substring(5, 2), out var m) && m is >= 1 and <= 12;
+    internal static bool ValidPeriod(string? period)
+        => !string.IsNullOrWhiteSpace(period) && period.Length == 7 && period[4] == '-'
+           && int.TryParse(period[..4], out var y) && y is >= 1900 and <= 9999
+           && int.TryParse(period.Substring(5, 2), out var m) && m is >= 1 and <= 12;
 
     /// <summary>
     /// Chỉ ghi audit. Trigger trên hr_salaries / hr_payslips / hr_payslip_inquiries / hr_penalty_refunds

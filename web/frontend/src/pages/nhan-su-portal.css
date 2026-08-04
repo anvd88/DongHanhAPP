@@ -1,12 +1,12 @@
 .hr-mobile-portal {
-  --hrp-bg: #f5f6f8;
+  --hrp-bg: #eef3fa;
   --hrp-surface: #ffffff;
-  --hrp-border: #d9dee7;
-  --hrp-text: #172033;
-  --hrp-muted: #667085;
-  --hrp-soft: #eef2f6;
-  --hrp-primary: #1f5f4a;
-  --hrp-primary-strong: #164733;
+  --hrp-border: #d2ddec;
+  --hrp-text: #10233f;
+  --hrp-muted: #65758d;
+  --hrp-soft: #e8eef7;
+  --hrp-primary: #129887;
+  --hrp-primary-strong: #0b7668;
   --hrp-warning: #b7791f;
   --hrp-danger: #b42318;
   width: min(100%, 920px);
@@ -458,14 +458,14 @@
 }
 
 html[data-theme="dark"] .hr-mobile-portal {
-  --hrp-bg: #0f141b;
-  --hrp-surface: #171d26;
-  --hrp-border: #2b3442;
-  --hrp-text: #f2f4f7;
-  --hrp-muted: #a6afbd;
-  --hrp-soft: #222b36;
-  --hrp-primary: #3e8f70;
-  --hrp-primary-strong: #8ed8b8;
+  --hrp-bg: #070b12;
+  --hrp-surface: #111b2a;
+  --hrp-border: #2a384c;
+  --hrp-text: #f0f5fb;
+  --hrp-muted: #9eabba;
+  --hrp-soft: #182437;
+  --hrp-primary: #2ac1b1;
+  --hrp-primary-strong: #78ddd2;
 }
 
 html[data-theme="dark"] .km-app-shell:has(.hr-mobile-portal) .km-page {
@@ -495,7 +495,7 @@ html[data-theme="dark"] .hrp-attendance-meta span {
 }
 
 html[data-theme="dark"] .hrp-action-icon {
-  background: #20342c;
+  background: #0a3438;
 }
 
 html[data-theme="dark"] .hrp-action[data-tone="warning"] .hrp-action-icon {
@@ -505,7 +505,7 @@ html[data-theme="dark"] .hrp-action[data-tone="warning"] .hrp-action-icon {
 
 html[data-theme="dark"] .hrp-action[data-tone="success"] .hrp-action-icon {
   background: #173827;
-  color: #8ed8b8;
+  color: #78ddd2;
 }
 
 html[data-theme="dark"] .hrp-action[data-tone="danger"] .hrp-action-icon {

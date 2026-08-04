@@ -5,6 +5,7 @@ import {
   Ban,
   Banknote,
   CheckCircle2,
+  Clock3,
   FilePlus2,
   Megaphone,
   Pencil,
@@ -17,8 +18,8 @@ import {
 } from "lucide-react";
 import { Field, Input, Select } from "../../components/ui";
 import { api } from "../../lib/api";
-import { useAuth } from "../../lib/auth";
-import { date, moneyVnd } from "../../lib/format";
+import { PERM, useAccess } from "../../lib/access";
+import { date, dateTime, moneyVnd } from "../../lib/format";
 import {
   payoutMethodLabel,
   penaltySchedule,
@@ -30,6 +31,9 @@ import {
   type EmployeeDetail,
   type PayLine,
   type PayrollCompute,
+  type PayslipHistoryEnvelope,
+  type PayslipHistoryEvent,
+  type PayslipLifecycleStatus,
   type Penalty,
   type PenaltyRefund,
   type PenaltyType,
@@ -39,7 +43,6 @@ import {
 } from "../../lib/hr";
 import { useApi } from "../../lib/useApi";
 import { useAppNotifications } from "../../components/app-notifications-context";
-import { isAdmin } from "../../lib/types";
 import "./hr-pages.css";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "muted";
@@ -185,8 +188,10 @@ function HrModal({
 }
 
 export function HRPenaltyPage() {
-  const { user } = useAuth();
-  const admin = isAdmin(user);
+  const { can } = useAccess();
+  const admin = can(PERM.penaltyManage);
+  const canApproveRefund = can(PERM.payoutApprove);
+  const canPayRefund = can(PERM.payoutPay);
   const { notify, confirm } = useAppNotifications();
   const [month, setMonth] = useState("");
   const query = admin
@@ -194,7 +199,7 @@ export function HRPenaltyPage() {
     : "/api/penalties?scope=mine";
   const { data, loading, reload } = useApi<Penalty[]>(query, [query]);
   const { data: me } = useApi<EmployeeDetail>("/api/hr/me");
-  const canAccounting = admin || !!me?.isAccounting;
+  const canAccounting = !!me?.isAccounting && can(PERM.payoutRead);
   const { data: myRefunds, reload: reloadMyRefunds } = useApi<PenaltyRefund[]>("/api/penalty-refunds?scope=mine");
   const { data: queueRefunds, reload: reloadQueue } = useApi<PenaltyRefund[]>(
     canAccounting ? "/api/penalty-refunds?scope=queue" : null,
@@ -296,12 +301,12 @@ export function HRPenaltyPage() {
               r={r}
               showEmployee
               actions={
-                r.status === "PendingAccounting" ? (
+                r.status === "PendingAccounting" && canApproveRefund ? (
                   <>
                     <HrButton onClick={() => setApprovingRefund(r)}><CheckCircle2 className="h-4 w-4" /> Duyệt</HrButton>
                     <HrButton tone="danger" onClick={() => refundAction(r, "reject")}><XCircle className="h-4 w-4" /> Từ chối</HrButton>
                   </>
-                ) : r.status === "Approved" && r.payoutMethod === "cash" ? (
+                ) : r.status === "Approved" && r.payoutMethod === "cash" && canPayRefund ? (
                   <HrButton onClick={() => refundAction(r, "mark-paid")}><Banknote className="h-4 w-4" /> Đã chi tiền</HrButton>
                 ) : null
               }
@@ -647,22 +652,26 @@ function PenaltyModal({ penalty, onClose, onSaved }: { penalty: Penalty | null; 
 
 export function HRPayrollPage() {
   const [tab, setTab] = useState<"salary" | "payslip">("salary");
+  const { can } = useAccess();
+  const canManagePayroll = can(PERM.payrollManage);
   return (
     <HrPage eyebrow="Quản trị" title="Bảng lương" className="hr-page--payroll">
       <div className="hr-tabs">
         {[
           ["salary", "Mức lương"],
-          ["payslip", "Lập phiếu lương"],
+          ["payslip", "Lập & lịch sử phiếu"],
         ].map(([key, label]) => (
           <button key={key} type="button" data-active={tab === key} onClick={() => setTab(key as typeof tab)}>{label}</button>
         ))}
       </div>
-      {tab === "salary" ? <SalaryAdmin /> : <PayslipMaker />}
+      {tab === "salary"
+        ? <SalaryAdmin canManage={canManagePayroll} />
+        : <PayslipMaker canManage={canManagePayroll} />}
     </HrPage>
   );
 }
 
-function SalaryAdmin() {
+function SalaryAdmin({ canManage }: { canManage: boolean }) {
   const { data, loading, reload } = useApi<SalaryListItem[]>("/api/payroll/salaries");
   const [edit, setEdit] = useState<SalaryListItem | null>(null);
   return (
@@ -682,13 +691,13 @@ function SalaryAdmin() {
           </div>
           <div className="hr-penalty-right">
             <HrStatus status={row.hasSalary ? "success" : "muted"}>{row.hasSalary ? "Đã gán" : "Chưa gán"}</HrStatus>
-            <div className="hr-penalty-actions">
+            {canManage && <div className="hr-penalty-actions">
               <button type="button" className="hr-icon-btn" onClick={() => setEdit(row)} aria-label="Sửa mức lương"><Pencil className="h-4 w-4" /></button>
-            </div>
+            </div>}
           </div>
         </article>
       )) : <HrEmpty text="Chưa có nhân viên." />)}
-      {edit && <SalaryModal item={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload({ silent: true }); }} />}
+      {canManage && edit && <SalaryModal item={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload({ silent: true }); }} />}
     </HrCard>
   );
 }
@@ -796,7 +805,7 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
   );
 }
 
-function PayslipMaker() {
+function PayslipMaker({ canManage }: { canManage: boolean }) {
   const { notify } = useAppNotifications();
   const { data: employees } = useApi<EmployeeCard[]>("/api/hr/employees");
   const [employeeId, setEmployeeId] = useState("");
@@ -808,6 +817,10 @@ function PayslipMaker() {
   const canQuery = Boolean(employeeId && period);
   const { data: compute, loading } = useApi<PayrollCompute>(
     canQuery ? `/api/payroll/compute?employeeId=${employeeId}&period=${period}` : null,
+    [employeeId, period],
+  );
+  const { data: savedPayslip, loading: historyLoading, reload: reloadHistory } = useApi<PayslipHistoryEnvelope>(
+    canQuery ? `/api/payroll/payslips/history?employeeId=${employeeId}&period=${period}` : null,
     [employeeId, period],
   );
 
@@ -858,8 +871,9 @@ function PayslipMaker() {
         adjustments: adjustments.filter((a) => a.label.trim()).map((a) => ({ label: a.label.trim(), amount: Number(a.amount) || 0, kind: a.kind })),
         approvedOvertimeDates: otDays.filter((d) => otSelected.has(d.date)).map((d) => d.date),
       });
-      notify.success("Đã lập phiếu lương.");
+      notify.success(published ? "Đã phát hành phiếu lương." : "Đã lưu phiếu lương nháp.");
       setAdjustments([]);
+      reloadHistory({ silent: true });
     } catch (e) {
       notify.error(e instanceof Error ? e.message : "Không lập được phiếu.");
     } finally {
@@ -881,6 +895,10 @@ function PayslipMaker() {
         </div>
       </HrCard>
 
+      {canQuery && (
+        <PayslipHistoryPanel data={savedPayslip} loading={historyLoading} employeeId={employeeId} period={period} />
+      )}
+
       {!canQuery ? (
         <HrCard className="hr-payroll-empty-card"><HrEmpty text="Chọn nhân viên và kỳ lương để tính." /></HrCard>
       ) : loading && !compute ? (
@@ -896,7 +914,7 @@ function PayslipMaker() {
           <HrCard className="hr-payroll-overtime-card">
             <div className="hr-salary-components-head">
               <strong>Duyệt tăng ca theo ngày</strong>
-              {otDays.length > 0 && (
+              {canManage && otDays.length > 0 && (
                 <div>
                   <button type="button" onClick={() => setOtSelected(new Set(otDays.map((d) => d.date)))}>Chọn tất cả</button>
                   <button type="button" onClick={() => setOtSelected(new Set())}>Bỏ chọn</button>
@@ -909,7 +927,7 @@ function PayslipMaker() {
               <div className="hr-ot-list">
                 {otDays.map((d) => (
                   <label key={d.date} className="hr-ot-row" data-on={otSelected.has(d.date)}>
-                    <input type="checkbox" checked={otSelected.has(d.date)} onChange={() => toggleOt(d.date)} />
+                    <input type="checkbox" checked={otSelected.has(d.date)} disabled={!canManage} onChange={() => toggleOt(d.date)} />
                     <span className="hr-ot-date">{date(d.date)}</span>
                     <span className="hr-ot-out">Ra {d.checkOut}</span>
                     <span className="hr-ot-min">{Math.round((d.minutes / 60) * 100) / 100} giờ</span>
@@ -943,7 +961,7 @@ function PayslipMaker() {
             </div>
           </HrCard>
 
-          <HrCard className="hr-payroll-adjust-card">
+          {canManage && <HrCard className="hr-payroll-adjust-card">
             <div className="hr-salary-components-head">
               <strong>Điều chỉnh thêm cho kỳ này</strong>
               <div>
@@ -960,17 +978,99 @@ function PayslipMaker() {
                 <button type="button" className="hr-icon-btn" onClick={() => removeAdj(i)} aria-label="Xóa"><Trash2 className="h-4 w-4" /></button>
               </div>
             ))}
-          </HrCard>
+          </HrCard>}
 
-          <HrCard className="hr-sync-card hr-payroll-submit-card">
+          {canManage ? <HrCard className="hr-sync-card hr-payroll-submit-card">
             <label className="hr-publish-check">
               <input type="checkbox" checked={published} onChange={(e) => setPublished(e.target.checked)} /> Phát hành cho nhân viên
             </label>
             <HrButton onClick={create} disabled={saving}><Banknote className="h-4 w-4" /> Lập phiếu lương</HrButton>
-          </HrCard>
+          </HrCard> : <HrCard className="hr-sync-card hr-payroll-submit-card">
+            <p className="hr-salary-empty">Bạn có quyền xem bảng lương và lịch sử, nhưng không có quyền sửa mức lương hoặc lập/phát hành phiếu.</p>
+          </HrCard>}
         </>
       ) : <HrCard className="hr-payroll-empty-card"><HrEmpty text="Không tính được lương." /></HrCard>}
     </>
+  );
+}
+
+const payslipStatusLabel = (status?: PayslipLifecycleStatus | null) =>
+  ({ Draft: "Bản nháp", Published: "Đã phát hành", Acknowledged: "Nhân viên đã xác nhận", Deleted: "Đã xóa" } as Record<string, string>)[status ?? ""] ?? "Chưa có";
+
+const payslipStatusTone = (status?: PayslipLifecycleStatus | null): Tone =>
+  status === "Acknowledged" ? "success" : status === "Published" ? "success" : status === "Draft" ? "warning" : "muted";
+
+const payslipActionLabel = (event: PayslipHistoryEvent) =>
+  ({
+    Imported: "Ghi nhận phiếu có sẵn",
+    DraftCreated: "Tạo phiếu nháp",
+    PublishedCreated: "Tạo và phát hành phiếu",
+    DraftUpdated: "Cập nhật phiếu nháp",
+    Published: "Phát hành phiếu",
+    PublishedUpdated: "Cập nhật phiếu đã phát hành",
+    PublishedRevised: "Sửa phiếu sau khi nhân viên xác nhận",
+    ReturnedToDraft: "Chuyển phiếu về nháp",
+    Acknowledged: "Nhân viên xác nhận đã xem",
+    Deleted: "Xóa phiếu",
+  } as Record<string, string>)[event.action] ?? event.action;
+
+function PayslipHistoryPanel({
+  data,
+  loading,
+  employeeId,
+  period,
+}: {
+  data: PayslipHistoryEnvelope | null;
+  loading: boolean;
+  employeeId: string;
+  period: string;
+}) {
+  // useApi giữ dữ liệu cũ trong lúc đổi bộ lọc để tránh chớp trang. Với lương thì không được hiện tạm
+  // phiếu của người vừa chọn trước dưới tên người mới, nên chặn dữ liệu không khớp ngay tại đây.
+  const owner = data?.payslip ?? data?.history[0];
+  if (owner && (owner.employeeId !== employeeId || owner.period !== period))
+    return <HrCard className="hr-payroll-history-card"><HrEmpty text="Đang tải lịch sử phiếu lương..." /></HrCard>;
+  if (loading && !data) return <HrCard className="hr-payroll-history-card"><HrEmpty text="Đang tải lịch sử phiếu lương..." /></HrCard>;
+  if (!data?.payslip && !data?.history.length) {
+    return <HrCard className="hr-payroll-history-card"><HrEmpty text="Kỳ này chưa có phiếu đã lưu, kể cả bản nháp." /></HrCard>;
+  }
+
+  const current = data.payslip;
+  return (
+    <HrCard className="hr-payroll-history-card">
+      <div className="hr-payroll-history-head">
+        <div>
+          <span>Phiếu đã lưu</span>
+          <strong>{current ? `Kỳ ${addMonths(current.period, 0)} · ${moneyVnd(current.netPay)}` : "Phiếu đã được xóa"}</strong>
+          {current?.status === "Draft" && <small>Bản nháp chỉ được lưu trong sổ, chưa hiển thị cho nhân viên.</small>}
+          {current?.status === "Published" && <small>Phiếu đã gửi cho nhân viên và đang chờ xác nhận đã xem.</small>}
+          {current?.status === "Acknowledged" && <small>Nhân viên đã xác nhận phiếu lương này.</small>}
+        </div>
+        <HrStatus status={payslipStatusTone(current?.status)}>{payslipStatusLabel(current?.status ?? (data.history[0]?.statusAfter))}</HrStatus>
+      </div>
+
+      <div className="hr-payroll-timeline-title"><Clock3 className="h-4 w-4" /><strong>Lịch sử thay đổi</strong><span>{data.history.length} sự kiện</span></div>
+      <ol className="hr-payroll-timeline">
+        {data.history.map((event) => (
+          <li key={event.id} data-status={event.statusAfter}>
+            <span className="hr-payroll-timeline-dot" aria-hidden="true" />
+            <div className="hr-payroll-timeline-event">
+              <div>
+                <strong>{payslipActionLabel(event)}</strong>
+                <time dateTime={event.occurredAt}>{dateTime(event.occurredAt)}</time>
+              </div>
+              <p>
+                {event.statusBefore ? `${payslipStatusLabel(event.statusBefore)} → ` : ""}
+                <b>{payslipStatusLabel(event.statusAfter)}</b> · phiên bản {event.revision} · bởi {event.actor || "Hệ thống"}
+              </p>
+              {typeof event.summary?.netPay === "number" && (
+                <small>Thực nhận {moneyVnd(event.summary.netPay)}{event.summary.note ? ` · ${event.summary.note}` : ""}</small>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </HrCard>
   );
 }
 

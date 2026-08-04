@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -44,7 +45,7 @@ public static class BankAccountEndpoints
 
     public static void MapBankAccounts(this WebApplication app)
     {
-        var g = app.MapGroup("/api/bank-accounts").RequireAuthorization();
+        var g = app.MapGroup("/api/bank-accounts").RequirePermission(Permissions.HrSelfAccess);
 
         g.MapGet("/banks", () =>
             Results.Ok(Array.ConvertAll(Banks, b => new { code = b.Code, name = b.Name, shortName = b.ShortName })));
@@ -173,7 +174,7 @@ public static class BankAccountEndpoints
     private static async Task<Guid?> ResolveEmployee(NpgsqlConnection conn, ClaimsPrincipal u, Guid? employeeId)
     {
         if (employeeId is { } given && given != Guid.Empty)
-            return u.IsAdmin() ? given : null; // chỉ admin được xem/tạo hộ nhân viên khác
+            return u.Can(Permissions.PayrollManage) ? given : null; // chỉ người quản lý lương được thao tác hộ
         return await HrEndpoints.EnsureEmployeeForUser(conn, u.Username());
     }
 
@@ -184,7 +185,7 @@ public static class BankAccountEndpoints
     /// <summary>Admin quản lý mọi thẻ; nhân viên chỉ quản lý thẻ của chính mình.</summary>
     private static async Task<bool> CanManage(NpgsqlConnection conn, ClaimsPrincipal u, Guid employeeId)
     {
-        if (u.IsAdmin()) return true;
+        if (u.Can(Permissions.PayrollManage)) return true;
         var owner = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
             .With("@id", employeeId).ExecuteScalarAsync() as string;
         return string.Equals(owner, u.Username(), StringComparison.OrdinalIgnoreCase);

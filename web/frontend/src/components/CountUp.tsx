@@ -9,7 +9,31 @@ import { useEffect, useRef, useState } from "react";
  * đang tắt hiệu ứng chuyển động. Các animation trang trí khác vẫn tôn trọng chế độ giảm chuyển động.
  */
 
-const easeOutExpo = (t: number) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
+const FINAL_COUNT_UNITS = 20;
+const HUNDREDS_COUNT_UNITS = 180;
+const SHORT_PHASE_RATIO = 0.2;
+
+function hermite(
+  from: number,
+  to: number,
+  fromTangent: number,
+  toTangent: number,
+  progress: number,
+) {
+  const t = Math.min(1, Math.max(0, progress));
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (
+    (2 * t3 - 3 * t2 + 1) * from
+    + (t3 - 2 * t2 + t) * fromTangent
+    + (-2 * t3 + 3 * t2) * to
+    + (t3 - t2) * toTangent
+  );
+}
+
+function harmonicMean(a: number, b: number) {
+  return a > 0 && b > 0 ? (2 * a * b) / (a + b) : 0;
+}
 
 // Bắt token số đầu tiên: phần nguyên có thể ngăn nghìn bằng '.', phần thập phân bằng ','.
 const NUM_RE = /-?\d[\d.]*(?:,\d+)?/;
@@ -23,7 +47,7 @@ function parseViNumber(token: string): { value: number; decimals: number } {
 
 export function CountUp({
   text,
-  duration = 3000,
+  duration = 5000,
 }: {
   /** Giá trị hiển thị: chuỗi đã định dạng hoặc số thô. */
   text: string | number;
@@ -64,14 +88,61 @@ export function CountUp({
       return;
     }
     const from = fromRef.current;
+    const delta = target - from;
+    const direction = Math.sign(delta);
+    const distance = Math.abs(delta);
+    const finalDistance = Math.min(FINAL_COUNT_UNITS, distance * SHORT_PHASE_RATIO);
+    const hundredsDistance = Math.min(HUNDREDS_COUNT_UNITS, distance * SHORT_PHASE_RATIO);
+    const finalDelta = direction * finalDistance;
+    const hundredsDelta = direction * hundredsDistance;
+    const leadDelta = delta - hundredsDelta - finalDelta;
+    const hundredsTarget = target - finalDelta;
+    const leadTarget = hundredsTarget - hundredsDelta;
+    const leadDuration = duration * (1 - 2 * SHORT_PHASE_RATIO);
+    const hundredsDuration = duration * SHORT_PHASE_RATIO;
+    const finalDuration = duration - leadDuration - hundredsDuration;
+    const leadSpeed = leadDuration > 0 ? Math.abs(leadDelta) / leadDuration : 0;
+    const hundredsSpeed = hundredsDuration > 0 ? Math.abs(hundredsDelta) / hundredsDuration : 0;
+    const finalSpeed = finalDuration > 0 ? Math.abs(finalDelta) / finalDuration : 0;
+    const leadHundredsSpeed = harmonicMean(leadSpeed, hundredsSpeed);
+    const hundredsFinalSpeed = harmonicMean(hundredsSpeed, finalSpeed);
+    const startVelocity = direction * Math.max(0, 2 * leadSpeed - leadHundredsSpeed);
+    const leadHundredsVelocity = direction * leadHundredsSpeed;
+    const hundredsFinalVelocity = direction * hundredsFinalSpeed;
     // Mốc thời gian lấy từ CHÍNH khung hình đầu tiên (rAF truyền timestamp vào) thay vì gọi
     // performance.now() sẵn: bỏ được khoảng trễ giữa lúc effect chạy và lúc trình duyệt vẽ khung
     // đầu — nếu không, quãng trễ đó bị tính vào thời lượng và số nhảy vọt ngay khung đầu tiên.
     let start: number | null = null;
     const step = (now: number) => {
       start ??= now;
-      const p = Math.min(1, (now - start) / duration);
-      setDisplay(from + (target - from) * easeOutExpo(p));
+      const elapsed = Math.min(duration, now - start);
+      const value = elapsed <= leadDuration && leadDuration > 0
+        ? hermite(
+            from,
+            leadTarget,
+            startVelocity * leadDuration,
+            leadHundredsVelocity * leadDuration,
+            elapsed / leadDuration,
+          )
+        : elapsed <= leadDuration + hundredsDuration && hundredsDuration > 0
+          ? hermite(
+              leadTarget,
+              hundredsTarget,
+              leadHundredsVelocity * hundredsDuration,
+              hundredsFinalVelocity * hundredsDuration,
+              (elapsed - leadDuration) / hundredsDuration,
+            )
+          : finalDuration > 0
+            ? hermite(
+              hundredsTarget,
+              target,
+              hundredsFinalVelocity * finalDuration,
+              0,
+              (elapsed - leadDuration - hundredsDuration) / finalDuration,
+            )
+            : target;
+      const p = duration > 0 ? elapsed / duration : 1;
+      setDisplay(p >= 1 ? target : value);
       if (p < 1) {
         rafRef.current = requestAnimationFrame(step);
       } else {

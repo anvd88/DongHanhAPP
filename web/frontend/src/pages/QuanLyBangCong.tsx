@@ -79,7 +79,7 @@ function EmployeePicker({
 
   return (
     <div ref={boxRef} className="relative">
-      <div className="flex items-center gap-2 rounded-xl border border-[#d3ddec] bg-white px-3 py-2 dark:border-white/14 dark:bg-[#141d2c]">
+      <div className="flex items-center gap-2 rounded-xl border border-[#d2ddec] bg-white px-3 py-2 dark:border-white/14 dark:bg-[#111b2a]">
         <Search className="h-4 w-4 shrink-0 text-[var(--accent)]" />
         <input
           value={query}
@@ -118,7 +118,7 @@ function EmployeePicker({
       </div>
 
       {open && (
-        <div className="absolute z-30 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-[#d3ddec] bg-white p-1 shadow-2xl ring-1 ring-black/5 dark:border-white/12 dark:bg-[#161f2e] dark:ring-white/10">
+        <div className="absolute z-30 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-[#d2ddec] bg-white p-1 shadow-2xl ring-1 ring-black/5 dark:border-white/12 dark:bg-[#182437] dark:ring-white/10">
           {filtered.length === 0 ? (
             <div className="px-3 py-3 text-sm text-[var(--text-muted)]">Không tìm thấy nhân viên phù hợp.</div>
           ) : (

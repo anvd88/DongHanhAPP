@@ -115,6 +115,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.AppNotification
+import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.data.PayEstimate
@@ -190,7 +191,7 @@ fun HomeScreen(
             ) { onSelect(HrDestination.Tasks) }
         }
 
-        if (user.isAdmin) {
+        if (user.can(AppPermissions.HrRead)) {
             item { AdminDashboardCard(manager.summary?.headcount) { onSelect(HrDestination.Approval) } }
         } else {
             item {
@@ -216,7 +217,7 @@ fun HomeScreen(
             item { HrCard { CardHeader("Công ty"); HubList(destinations = hub, onSelect = onSelect) } }
         }
 
-        if (!user.isAdmin) {
+        if (!user.can(AppPermissions.HrRead)) {
             item { MiniWeekCard(state.timesheet) { onSelect(HrDestination.Timesheet) } }
         }
 

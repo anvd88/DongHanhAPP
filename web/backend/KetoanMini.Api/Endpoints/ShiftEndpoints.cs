@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -63,7 +64,7 @@ public static class ShiftEndpoints
 
     public static void MapShifts(this WebApplication app)
     {
-        var g = app.MapGroup("/api/shifts").RequireAuthorization();
+        var g = app.MapGroup("/api/shifts").RequirePermission(Permissions.AttendanceSelf);
 
         // ---------------- Danh mục ca ----------------
         g.MapGet("/", async (Database db) =>
@@ -92,7 +93,6 @@ public static class ShiftEndpoints
 
         g.MapPost("/", async (SaveShiftReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             if (!TryTime(req.StartTime, out var start) || !TryTime(req.EndTime, out var end))
                 return Results.BadRequest(new { message = "Giờ vào/ra không hợp lệ (HH:mm)." });
             await using var conn = await db.OpenAsync();
@@ -107,11 +107,10 @@ public static class ShiftEndpoints
                 .ExecuteNonQueryAsync();
             await Signal(db, u, "Tạo ca làm", "Shift", req.Name ?? "");
             return Results.Ok(new { id });
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         g.MapPut("/{id:guid}", async (Guid id, SaveShiftReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             if (!TryTime(req.StartTime, out var start) || !TryTime(req.EndTime, out var end))
                 return Results.BadRequest(new { message = "Giờ vào/ra không hợp lệ (HH:mm)." });
             await using var conn = await db.OpenAsync();
@@ -127,32 +126,60 @@ public static class ShiftEndpoints
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Cập nhật ca làm", "Shift", req.Name ?? "");
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_shifts WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Xóa ca làm", "Shift", id.ToString());
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // ---------------- Phân ca ----------------
-        g.MapGet("/assignments", async (Database db, DateOnly from, DateOnly to, Guid? employeeId) =>
+        g.MapGet("/assignments", async (ClaimsPrincipal u, Database db, DateOnly from, DateOnly to, Guid? employeeId) =>
         {
             await using var conn = await db.OpenAsync();
+            var scope = await ResolveAttendanceScopeAsync(conn, u);
+            if (employeeId is { } requestedEmployee
+                && !await EmployeeWithinAttendanceScopeAsync(conn, requestedEmployee, scope))
+            {
+                return Results.Forbid();
+            }
+
+            var where = new List<string> { "a.work_date BETWEEN @from AND @to" };
+            if (employeeId is { }) where.Add("a.employee_id=@emp");
+            switch (scope.Kind)
+            {
+                case AttendanceScopeKind.Department when scope.DepartmentId is not null:
+                    where.Add("e.department_id=@scopeDept");
+                    break;
+                case AttendanceScopeKind.Location when scope.LocationId is not null:
+                    where.Add("e.location_id=@scopeLoc");
+                    break;
+                case AttendanceScopeKind.Self when scope.EmployeeId is not null:
+                    where.Add("a.employee_id=@scopeEmployee");
+                    break;
+                case AttendanceScopeKind.Self:
+                    // Không có hồ sơ liên kết: đóng mặc định và không làm lộ lịch của người khác.
+                    where.Add("FALSE");
+                    break;
+            }
+
             var cmd = conn.Cmd($"""
                 SELECT a.id, a.employee_id, a.shift_id, a.work_date, a.note,
                        e.full_name AS emp_name, e.employee_code, s.name AS shift_name, s.start_time, s.end_time
                 FROM hr_shift_assignments a
                 JOIN hr_employees e ON e.id=a.employee_id
                 JOIN hr_shifts s ON s.id=a.shift_id
-                WHERE a.work_date BETWEEN @from AND @to {(employeeId is not null ? "AND a.employee_id=@emp" : "")}
+                WHERE {string.Join(" AND ", where)}
                 ORDER BY a.work_date, e.full_name
                 """).With("@from", from).With("@to", to);
-            if (employeeId is not null) cmd.With("@emp", employeeId.Value);
+            if (employeeId is { } target) cmd.With("@emp", target);
+            if (scope.DepartmentId is { } departmentId) cmd.With("@scopeDept", departmentId);
+            if (scope.LocationId is { } locationId) cmd.With("@scopeLoc", locationId);
+            if (scope.EmployeeId is { } ownEmployeeId) cmd.With("@scopeEmployee", ownEmployeeId);
             var list = new List<object>();
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
@@ -174,7 +201,6 @@ public static class ShiftEndpoints
 
         g.MapPost("/assignments", async (AssignShiftReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
             await conn.Cmd("""
@@ -187,17 +213,16 @@ public static class ShiftEndpoints
                 .ExecuteNonQueryAsync();
             await Signal(db, u, "Phân ca", "ShiftAssignment", req.WorkDate.ToString("yyyy-MM-dd"));
             return Results.Ok(new { id });
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         g.MapDelete("/assignments/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_shift_assignments WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Hủy phân ca", "ShiftAssignment", id.ToString());
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // ---------------- Ngay nghi le / nghi cong ty ----------------
         g.MapGet("/holidays", async (Database db, DateOnly? from, DateOnly? to) =>
@@ -233,7 +258,6 @@ public static class ShiftEndpoints
 
         g.MapPost("/holidays", async (SaveHolidayReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             var holidayType = NormalizeHolidayType(req.HolidayType);
             var name = string.IsNullOrWhiteSpace(req.Name)
                 ? (holidayType == "public" ? "Ngày nghỉ lễ" : "Ngày nghỉ công ty")
@@ -252,11 +276,10 @@ public static class ShiftEndpoints
                 .ExecuteNonQueryAsync();
             await Signal(db, u, "Cap nhat ngay nghi", "Holiday", req.HolidayDate.ToString("yyyy-MM-dd"));
             return Results.Ok(new { id });
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         g.MapDelete("/holidays/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var name = await conn.Cmd("SELECT holiday_date::text FROM hr_holidays WHERE id=@id")
                 .With("@id", id).ExecuteScalarAsync() as string ?? id.ToString();
@@ -264,12 +287,12 @@ public static class ShiftEndpoints
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Xoa ngay nghi", "Holiday", name);
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
     }
 
     public static void MapTimesheet(this WebApplication app)
     {
-        var g = app.MapGroup("/api/timesheet").RequireAuthorization();
+        var g = app.MapGroup("/api/timesheet").RequirePermission(Permissions.AttendanceSelf);
 
         g.MapGet("/me", async (ClaimsPrincipal u, Database db, string? month) =>
         {
@@ -281,8 +304,9 @@ public static class ShiftEndpoints
         g.MapGet("/employee/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db, string? month) =>
         {
             await using var conn = await db.OpenAsync();
-            var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", id).ExecuteScalarAsync() as string;
-            if (!u.IsAdmin() && !string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            var scope = await ResolveAttendanceScopeAsync(conn, u);
+            if (!await EmployeeWithinAttendanceScopeAsync(conn, id, scope))
+                return Results.Forbid();
             return Results.Ok(await BuildTimesheet(conn, id, month));
         });
     }
@@ -590,6 +614,84 @@ public static class ShiftEndpoints
 
     private static bool TryTime(string? value, out TimeOnly time)
         => TimeOnly.TryParse(string.IsNullOrWhiteSpace(value) ? "" : value, out time);
+
+    private enum AttendanceScopeKind { All, Department, Location, Self }
+
+    private sealed record AttendanceScope(
+        AttendanceScopeKind Kind, Guid? EmployeeId, Guid? DepartmentId, Guid? LocationId);
+
+    /// <summary>
+    /// Phạm vi đọc lịch/bảng công. HR/Admin và Ban giám đốc cấp công ty xem toàn bộ; người có
+    /// attendance.read còn lại bị giới hạn theo chức vụ quản lý phòng/chi nhánh. Thiếu hồ sơ hoặc
+    /// thiếu khóa phạm vi thì đóng về chính mình, không suy rộng.
+    /// </summary>
+    private static async Task<AttendanceScope> ResolveAttendanceScopeAsync(
+        NpgsqlConnection conn, ClaimsPrincipal u)
+    {
+        if (u.Can(Permissions.AttendanceManage) || u.Can(Permissions.CompanyScopeAll))
+            return new AttendanceScope(AttendanceScopeKind.All, null, null, null);
+
+        Guid? employeeId = null;
+        Guid? departmentId = null;
+        Guid? locationId = null;
+        var accessRole = "staff";
+        await using (var r = await conn.Cmd("""
+            SELECT e.id, e.access_role, e.department_id, e.location_id
+            FROM app_users account
+            JOIN hr_employees e
+              ON e.user_id=account.id
+              OR (e.user_id IS NULL AND lower(e.username)=lower(account.username))
+            WHERE account.username=@username AND account.is_deleted=FALSE
+            ORDER BY (e.user_id=account.id) DESC, e.created_at, e.id
+            LIMIT 1
+            """).With("@username", u.Username()).ExecuteReaderAsync())
+        {
+            if (await r.ReadAsync())
+            {
+                employeeId = r.Guid("id");
+                accessRole = r.Str("access_role");
+                departmentId = r.IsDBNull(r.GetOrdinal("department_id")) ? null : r.Guid("department_id");
+                locationId = r.IsDBNull(r.GetOrdinal("location_id")) ? null : r.Guid("location_id");
+            }
+        }
+
+        if (u.Can(Permissions.AttendanceRead))
+        {
+            if (string.Equals(accessRole, "location_manager", StringComparison.Ordinal)
+                && locationId is not null)
+                return new AttendanceScope(AttendanceScopeKind.Location, employeeId, departmentId, locationId);
+            if (string.Equals(accessRole, "dept_manager", StringComparison.Ordinal)
+                && departmentId is not null)
+                return new AttendanceScope(AttendanceScopeKind.Department, employeeId, departmentId, locationId);
+        }
+
+        return new AttendanceScope(AttendanceScopeKind.Self, employeeId, departmentId, locationId);
+    }
+
+    private static async Task<bool> EmployeeWithinAttendanceScopeAsync(
+        NpgsqlConnection conn, Guid employeeId, AttendanceScope scope)
+    {
+        if (scope.Kind == AttendanceScopeKind.All)
+            return await conn.Cmd("SELECT EXISTS(SELECT 1 FROM hr_employees WHERE id=@id)")
+                .With("@id", employeeId).ExecuteScalarAsync() is true;
+        if (scope.Kind == AttendanceScopeKind.Self)
+            return scope.EmployeeId == employeeId;
+
+        var sql = scope.Kind switch
+        {
+            AttendanceScopeKind.Department =>
+                "SELECT EXISTS(SELECT 1 FROM hr_employees WHERE id=@id AND department_id=@scope)",
+            AttendanceScopeKind.Location =>
+                "SELECT EXISTS(SELECT 1 FROM hr_employees WHERE id=@id AND location_id=@scope)",
+            _ => "SELECT FALSE",
+        };
+        var scopeId = scope.Kind == AttendanceScopeKind.Department
+            ? scope.DepartmentId
+            : scope.LocationId;
+        if (scopeId is null) return false;
+        return await conn.Cmd(sql).With("@id", employeeId).With("@scope", scopeId.Value)
+            .ExecuteScalarAsync() is true;
+    }
 
     /// <summary>
     /// Chỉ ghi audit. Tín hiệu real-time do trigger trên hr_shifts / hr_shift_assignments / hr_holidays

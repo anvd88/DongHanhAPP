@@ -7,7 +7,7 @@ import { dateTime } from "../../lib/format";
 import { useApi } from "../../lib/useApi";
 import { useAppNotifications } from "../app-notifications-context";
 import { useAuth } from "../../lib/auth";
-import { isAdmin } from "../../lib/types";
+import { PERM, useAccess } from "../../lib/access";
 import {
   fieldDisplayValue,
   fieldLabel,
@@ -114,7 +114,7 @@ function ApprovalTimeline({ approvals }: { approvals: RequestApproval[] }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-sm font-semibold text-[var(--text)]">
-                  {a.approverName || (a.approverRole === "Admin" ? "Quản trị viên / HR" : a.approverUsername)}
+                  {a.approverName || (["Admin", "RequestsManage", PERM.requestsManage].includes(a.approverRole) ? "Bộ phận nhân sự" : a.approverUsername)}
                 </span>
                 <Badge color={a.status === "Approved" ? "success" : a.status === "Rejected" ? "danger" : "warning"}>
                   {requestStatusLabel(a.status)}
@@ -143,7 +143,6 @@ function ApprovalTimeline({ approvals }: { approvals: RequestApproval[] }) {
  */
 export function RequestReviewModal({
   id,
-  mode = "act",
   onClose,
   onDecided,
 }: {
@@ -154,6 +153,7 @@ export function RequestReviewModal({
 }) {
   const { notify } = useAppNotifications();
   const { user } = useAuth();
+  const { can } = useAccess();
   const { data, loading } = useApi<RequestDetail>(`/api/requests/${id}`);
   const [comment, setComment] = useState("");
   const [signature, setSignature] = useState<string | null>(null);
@@ -163,17 +163,17 @@ export function RequestReviewModal({
   const [newMonths, setNewMonths] = useState("");
 
   const me = user?.username ?? "";
-  const admin = isAdmin(user);
   const curStep = data?.approvals.find((a) => a.stepNo === data.request.currentStep);
   // Được quyết định khi: đơn đang chờ, bước hiện tại còn chờ, và tôi là người duyệt bước đó
-  // (hoặc là admin ở bước "Admin"). Ở hộp thư (act) mặc định tin phần lọc của máy chủ.
+  // hoặc có quyền quản lý đơn ở bước hàng đợi Nhân sự. Backend vẫn chốt lại ở endpoint quyết định.
+  const isHrQueueStep = !!curStep && ["Admin", "RequestsManage", PERM.requestsManage].includes(curStep.approverRole);
   const canDecide =
     !!data &&
     data.request.status === "Pending" &&
     !!curStep &&
     curStep.status === "Pending" &&
-    (curStep.approverUsername === me || (curStep.approverRole === "Admin" && admin));
-  const actionable = mode === "act" ? data?.request.status === "Pending" : canDecide;
+    (curStep.approverUsername === me || (isHrQueueStep && can(PERM.requestsManage)));
+  const actionable = canDecide;
 
   // Khiếu nại án phạt: ở bước duyệt cuối, người duyệt chọn xử lý phạt (bác bỏ / giảm tiền / trả góp).
   const isPenaltyAppeal = data?.request.type === "penalty_appeal";
@@ -308,7 +308,7 @@ export function RequestReviewModal({
               <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--accent-soft)]/40 p-4 text-sm text-[var(--text-secondary)]">
                 {data.request.status !== "Pending"
                   ? "Đơn đã được xử lý xong. Bạn đang xem ở chế độ theo dõi."
-                  : `Đơn đang chờ ${curStep?.approverName || (curStep?.approverRole === "Admin" ? "Quản trị viên / HR" : curStep?.approverUsername) || "người duyệt"} duyệt ở bước ${data.request.currentStep}. Bạn chỉ có thể theo dõi.`}
+                  : `Đơn đang chờ ${curStep?.approverName || (curStep && ["Admin", "RequestsManage", PERM.requestsManage].includes(curStep.approverRole) ? "Bộ phận nhân sự" : curStep?.approverUsername) || "người duyệt"} duyệt ở bước ${data.request.currentStep}. Bạn chỉ có thể theo dõi.`}
               </div>
             )}
             {actionable && (

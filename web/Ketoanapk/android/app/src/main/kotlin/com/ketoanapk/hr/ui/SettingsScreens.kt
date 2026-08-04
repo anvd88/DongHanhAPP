@@ -95,6 +95,7 @@ import androidx.core.content.ContextCompat
 import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.data.AppPinStore
 import com.ketoanapk.hr.data.AppPersonalization
+import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.DeviceSession
 import com.ketoanapk.hr.data.HrUser
 
@@ -167,9 +168,7 @@ private fun SettingsHome(
     onLogout: () -> Unit,
 ) {
     LaunchedEffect(Unit) { vm.loadFaceStatus() }
-    val canPreviewAnniversary = user.isAdmin ||
-        user.role.equals("HR", ignoreCase = true) ||
-        user.roles.any { it.equals("HR", ignoreCase = true) }
+    val canPreviewAnniversary = user.can(AppPermissions.HrManage)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
@@ -185,7 +184,7 @@ private fun SettingsHome(
                         Text(user.displayName, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(user.username, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    StatusChip(if (user.isAdmin) "Quản trị" else "Nhân viên", if (user.isAdmin) Tone.Neutral else Tone.Muted)
+                    StatusChip(user.roleLabel, if (user.can(AppPermissions.UsersManage)) Tone.Neutral else Tone.Muted)
                     Spacer(Modifier.width(6.dp))
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Xem hồ sơ", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

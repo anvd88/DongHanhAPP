@@ -203,7 +203,7 @@ function NoAccessScreen({ failed }: { failed: boolean }) {
             Thử lại
           </button>
         )}
-        <button type="button" className="km-btn" onClick={logout}>
+        <button type="button" className="km-btn" onClick={() => logout()}>
           Đăng xuất
         </button>
       </div>

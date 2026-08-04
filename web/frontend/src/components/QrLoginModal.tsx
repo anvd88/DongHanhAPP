@@ -32,10 +32,14 @@ function accountInitials(account: QrLoginAccount) {
 export function QrLoginModal({
   onClose,
   embedded = false,
+  className,
 }: {
-  onClose: () => void;
+  /** Trả về false khi cảnh hiện tại chưa thể đóng (ví dụ đang giao cảnh). */
+  onClose: (trigger?: HTMLElement) => boolean | void;
   /** Hiển thị gọn trong thẻ đăng nhập (thay cho ô tài khoản/mật khẩu) thay vì bật hộp thoại nổi. */
   embedded?: boolean;
+  /** Lớp bổ sung khi nhúng trong màn hình đăng nhập. */
+  className?: string;
 }) {
   const { pollQrLogin, completeExternalLogin } = useAuth();
   const [session, setSession] = useState<QrSession | null>(null);
@@ -221,11 +225,11 @@ export function QrLoginModal({
     };
   }, [completeExternalLogin, confirmed, expired, pollQrLogin, rejected, session]);
 
-  const close = useCallback(() => {
+  const close = useCallback((trigger?: HTMLElement) => {
+    if (onClose(trigger) === false) return;
     generationRef.current += 1;
     void cancelToken(pollTokenRef.current);
     pollTokenRef.current = null;
-    onClose();
   }, [cancelToken, onClose]);
 
   useEffect(() => {
@@ -294,8 +298,15 @@ export function QrLoginModal({
               <div className="flex aspect-square w-full max-w-[248px] items-center justify-center rounded-2xl border border-slate-200 bg-slate-100 p-3 shadow-inner dark:border-slate-700 dark:bg-slate-900">
                 {loading && <Loader2 className="h-8 w-8 animate-spin text-[var(--accent)]" />}
                 {!loading && session && (
-                  <div className="rounded-xl bg-white p-1.5">
-                    <QRCodeSVG value={session.qrCode} size={210} level="M" marginSize={4} title="Mã QR đăng nhập web" />
+                  <div className="w-full max-w-[222px] rounded-xl bg-white p-1.5">
+                    <QRCodeSVG
+                      className="h-auto w-full"
+                      value={session.qrCode}
+                      size={210}
+                      level="M"
+                      marginSize={4}
+                      title="Mã QR đăng nhập web"
+                    />
                   </div>
                 )}
                 {!loading && !session && (
@@ -350,9 +361,9 @@ export function QrLoginModal({
 
   if (embedded) {
     return (
-      <div className="login-qr-inline">
+      <div className={`login-qr-inline${className ? ` ${className}` : ""}`}>
         {body}
-        <button type="button" className="login-qr-back" onClick={close}>
+        <button type="button" className="login-qr-back" onClick={(event) => close(event.currentTarget)}>
           <ArrowLeft aria-hidden="true" /> Quay lại đăng nhập tài khoản
         </button>
       </div>
@@ -360,7 +371,7 @@ export function QrLoginModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={close}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => close()}>
       <div
         className="fade-in w-full max-w-sm overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-950"
         role="dialog"
@@ -374,7 +385,7 @@ export function QrLoginModal({
           </span>
           <button
             type="button"
-            onClick={close}
+            onClick={() => close()}
             className="absolute right-4 rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
             aria-label="Đóng"
           >

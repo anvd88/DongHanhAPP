@@ -89,7 +89,7 @@
   width: 32px;
   place-items: center;
   border-radius: 10px;
-  background: linear-gradient(135deg, #4f8df7, #27d2d0);
+  background: linear-gradient(135deg, #3457d5, #21b5a3);
   color: #fff;
   font-size: 0.72rem;
   font-weight: 950;
@@ -157,7 +157,7 @@
   display: inline-block;
   width: max-content;
   max-width: 100%;
-  background: linear-gradient(90deg, #5a95f7, #22d3ee 72%);
+  background: linear-gradient(90deg, #6f88ee, #21b5a3 72%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -197,7 +197,7 @@
   margin-top: 40px;
   border: 0;
   border-radius: 12px;
-  background: linear-gradient(135deg, #4d8fe0, #25cbd0);
+  background: linear-gradient(135deg, #3457d5, #21b5a3);
   padding: 0 30px;
   color: #ffffff;
   cursor: pointer;
@@ -320,7 +320,7 @@
 
 .apk-feature-tab.is-active {
   color: #ffffff;
-  background: linear-gradient(135deg, #f59e0b 0%, #4d8fe0 48%, #14b8a6 100%);
+  background: linear-gradient(135deg, #f59e0b 0%, #3457d5 48%, #129887 100%);
   box-shadow: 0 16px 36px -24px rgba(20, 184, 166, 0.9);
 }
 
@@ -386,7 +386,7 @@
   place-items: center;
   overflow: hidden;
   border-radius: 8px;
-  background: linear-gradient(135deg, #f59e0b 0%, #2563eb 52%, #0ea5e9 74%, #14b8a6 100%);
+  background: linear-gradient(135deg, #f59e0b 0%, #3457d5 52%, #6f88ee 74%, #129887 100%);
   color: #ffffff;
   box-shadow: 0 18px 34px -24px rgba(14, 165, 233, 0.72);
 }
@@ -539,10 +539,10 @@
   border: 1px solid rgba(255, 255, 255, 0.62);
   background:
     radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.36), transparent 36%),
-    linear-gradient(135deg, #1d4ed8, #3b82f6 54%, #60a5fa);
+    linear-gradient(135deg, #2946b5, #3457d5 54%, #6f88ee);
   color: #ffffff;
   box-shadow:
-    0 18px 38px -26px rgba(37, 99, 235, 0.52),
+    0 18px 38px -26px rgba(52, 87, 213, 0.48),
     inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
@@ -637,7 +637,7 @@
   gap: 9px;
   border: 1px solid var(--btn-primary-border);
   border-radius: 14px;
-  background: linear-gradient(135deg, #4d8fe0, #25cbd0);
+  background: linear-gradient(135deg, #3457d5, #21b5a3);
   padding: 11px 18px;
   color: var(--btn-primary-text);
   font-size: 0.95rem;
@@ -720,7 +720,7 @@ html[data-theme="dark"] .apk-app-icon {
   border-color: rgba(255, 255, 255, 0.1);
   background:
     radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.18), transparent 36%),
-    linear-gradient(135deg, #1d4ed8, #2563eb 52%, #0ea5e9);
+    linear-gradient(135deg, #2946b5, #3457d5 52%, #129887);
 }
 
 html[data-theme="dark"] .apk-qr-box canvas {

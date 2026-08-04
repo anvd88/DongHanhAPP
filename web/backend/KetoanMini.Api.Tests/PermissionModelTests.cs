@@ -51,8 +51,10 @@ public sealed class PermissionMapTests
 
     [Theory]
     [InlineData(AppRoles.Employee)]
+    [InlineData(AppRoles.Executive)]
     [InlineData(AppRoles.Accounting)]
     [InlineData(AppRoles.ChiefAccountant)]
+    [InlineData(AppRoles.Cashier)]
     [InlineData(AppRoles.Hr)]
     [InlineData(AppRoles.Manager)]
     [InlineData(AppRoles.Warehouse)]
@@ -71,6 +73,42 @@ public sealed class PermissionMapTests
     {
         Assert.DoesNotContain(Permissions.VouchersApprove, Permissions.For([AppRoles.Accounting]));
         Assert.Contains(Permissions.VouchersApprove, Permissions.For([AppRoles.ChiefAccountant]));
+    }
+
+    [Fact]
+    public void KeToanTruong_LuonKeThuaDayDuMoiQuyenCuaKeToan()
+    {
+        var accounting = Permissions.For([AppRoles.Accounting]);
+        var chief = Permissions.For([AppRoles.ChiefAccountant]);
+
+        Assert.Empty(accounting.Except(chief));
+        Assert.Contains(Permissions.PayoutCreate, chief);
+        Assert.Contains(Permissions.PayoutApprove, chief);
+    }
+
+    [Fact]
+    public void ThuQuy_ChiDuocThucChi_KhongTuLapHayTuDuyet()
+    {
+        var cashier = Permissions.For([AppRoles.Cashier]);
+
+        Assert.Contains(Permissions.PayoutRead, cashier);
+        Assert.Contains(Permissions.PayoutPay, cashier);
+        Assert.DoesNotContain(Permissions.PayoutCreate, cashier);
+        Assert.DoesNotContain(Permissions.PayoutApprove, cashier);
+    }
+
+    [Fact]
+    public void BanGiamDoc_XemToanCongTy_NhungKhongQuanTriHayTuDuyetTien()
+    {
+        var executive = Permissions.For([AppRoles.Executive]);
+
+        Assert.Contains(Permissions.CompanyScopeAll, executive);
+        Assert.Contains(Permissions.ReportRead, executive);
+        Assert.Contains(Permissions.VouchersRead, executive);
+        Assert.DoesNotContain(Permissions.UsersManage, executive);
+        Assert.DoesNotContain(Permissions.VouchersApprove, executive);
+        Assert.DoesNotContain(Permissions.PayoutApprove, executive);
+        Assert.DoesNotContain(Permissions.PayoutPay, executive);
     }
 
     [Fact]

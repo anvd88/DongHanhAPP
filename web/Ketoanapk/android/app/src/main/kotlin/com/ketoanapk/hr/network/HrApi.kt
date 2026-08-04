@@ -29,6 +29,7 @@ import com.ketoanapk.hr.data.OfflineAttendanceRecord
 import com.ketoanapk.hr.data.AttendancePolicy
 import com.ketoanapk.hr.data.QrAttendanceBody
 import com.ketoanapk.hr.data.HrUser
+import com.ketoanapk.hr.data.JobPosition
 import com.ketoanapk.hr.data.LoginRequest
 import com.ketoanapk.hr.data.LoginResponse
 import com.ketoanapk.hr.data.MobileAppLoginChallenge
@@ -105,6 +106,7 @@ interface HrApi {
     @GET("api/hr/me")
     suspend fun myProfile(): EmployeeDetail
     @GET("api/hr/employees/{id}") suspend fun employeeDetail(@Path("id") id:String):EmployeeDetail
+    @GET("api/hr/job-positions") suspend fun jobPositions():List<JobPosition>
     @PUT("api/hr/employees/{id}") suspend fun updateEmployee(@Path("id") id:String,@Body body:com.ketoanapk.hr.data.SaveEmployeeBody):retrofit2.Response<Unit>
     @PUT("api/payroll/salaries/{id}") suspend fun updateSalary(@Path("id") id:String,@Body body:com.ketoanapk.hr.data.SaveSalaryBody):retrofit2.Response<Unit>
 
@@ -225,7 +227,13 @@ interface HrApi {
     suspend fun refreshPayoutQr(@Path("id") id: String): com.ketoanapk.hr.data.PayoutQrResponse
 
     @POST("api/payout-vouchers/{id}/approve")
-    suspend fun approvePayoutVoucher(@Path("id") id: String): retrofit2.Response<Unit>
+    suspend fun approvePayoutVoucher(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.TransitionPayoutBody): retrofit2.Response<Unit>
+
+    @POST("api/payout-vouchers/{id}/complete")
+    suspend fun completePayoutVoucher(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.TransitionPayoutBody): retrofit2.Response<Unit>
+
+    @POST("api/payout-vouchers/{id}/reject")
+    suspend fun rejectPayoutVoucher(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.CancelPayoutBody): retrofit2.Response<Unit>
 
     @POST("api/payout-vouchers/{id}/cancel")
     suspend fun cancelPayoutVoucher(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.CancelPayoutBody): retrofit2.Response<Unit>

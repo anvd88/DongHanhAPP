@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -67,12 +68,12 @@ public static class SurveyEndpoints
 
     public static void MapSurveys(this WebApplication app)
     {
-        var g = app.MapGroup("/api/surveys").RequireAuthorization();
+        var g = app.MapGroup("/api/surveys").RequirePermission(Permissions.PortalRead);
 
         // ---------- Tạo / quản trị (Admin) ----------
         g.MapPost("/", async (CreateSurveyReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Title)) return Results.BadRequest(new { message = "Thiếu tiêu đề khảo sát." });
             if (req.Questions is null || req.Questions.Length == 0)
                 return Results.BadRequest(new { message = "Khảo sát phải có ít nhất một câu hỏi." });
@@ -108,7 +109,7 @@ public static class SurveyEndpoints
         // Danh sách toàn bộ (Admin) kèm số phản hồi.
         g.MapGet("/", async (ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
@@ -222,7 +223,7 @@ public static class SurveyEndpoints
         // Kết quả tổng hợp (Admin) — chỉ số đếm / danh sách, KHÔNG kèm danh tính.
         g.MapGet("/{id:guid}/results", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
 
             var total = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM survey_responses WHERE survey_id=@id")
@@ -267,7 +268,7 @@ public static class SurveyEndpoints
         // Đóng khảo sát.
         g.MapPost("/{id:guid}/close", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("UPDATE surveys SET is_active=FALSE WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
@@ -278,7 +279,7 @@ public static class SurveyEndpoints
         // Xóa khảo sát (kèm câu hỏi + phản hồi qua ON DELETE CASCADE).
         g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM surveys WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();

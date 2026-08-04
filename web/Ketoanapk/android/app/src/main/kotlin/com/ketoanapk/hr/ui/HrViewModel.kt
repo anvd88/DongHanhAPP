@@ -46,6 +46,7 @@ import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ketoanapk.hr.data.AppConfig
+import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.AuditEntry
 import com.ketoanapk.hr.data.AppEvents
 import com.ketoanapk.hr.data.AppNotification
@@ -73,6 +74,7 @@ import com.ketoanapk.hr.data.HrRepository
 import com.ketoanapk.hr.data.SessionRestore
 import com.ketoanapk.hr.data.SessionStatus
 import com.ketoanapk.hr.data.HrUser
+import com.ketoanapk.hr.data.JobPosition
 import com.ketoanapk.hr.data.ManagerSummary
 import com.ketoanapk.hr.data.MobileAppLoginChallenge
 import com.ketoanapk.hr.data.NotificationCenter
@@ -147,7 +149,8 @@ enum class HrDestination(
     val title: String,
     val label: String,
     val icon: ImageVector,
-    val adminOnly: Boolean = false,
+    /** Quyền server cần có để ứng dụng hiện/đi tới màn này; null = mọi tài khoản đã đăng nhập. */
+    val requiredPermission: String? = null,
 ) {
     Home("Trang chủ", "Trang chủ", Icons.Filled.Home),
     // Màn "chứa" nhóm cá nhân, mở bằng ảnh đại diện trên header (thay ngăn kéo hamburger đã bỏ).
@@ -174,15 +177,18 @@ enum class HrDestination(
     // Phiếu chi tiền mặt: nhân viên xem phiếu của mình; kế toán lập phiếu + hiện QR ngay trên app.
     Payout("Phiếu chi", "Phiếu chi", Icons.Filled.Payments),
     // Người quản lý xử lý đơn đang chờ ngay trong ứng dụng.
-    Approval("Đơn chờ duyệt", "Chờ duyệt", Icons.Filled.Inbox),
+    Approval("Đơn chờ duyệt", "Chờ duyệt", Icons.Filled.Inbox, AppPermissions.RequestsApprove),
     Penalty("Kỷ luật", "Kỷ luật", Icons.Filled.Gavel),
-    People("Quản lý nhân sự", "Quản lý", Icons.Filled.People, adminOnly = true),
-    Dashboard("Dashboard điều hành", "Dashboard", Icons.Filled.Dashboard, adminOnly = true),
-    Payroll("Bảng lương", "Lương", Icons.Filled.Payments, adminOnly = true),
-    Audit("Nhật ký hệ thống", "Nhật ký", Icons.Filled.History, adminOnly = true),
+    People("Quản lý nhân sự", "Quản lý", Icons.Filled.People, AppPermissions.HrManage),
+    Dashboard("Dashboard điều hành", "Dashboard", Icons.Filled.Dashboard, AppPermissions.HrRead),
+    Payroll("Bảng lương", "Lương", Icons.Filled.Payments, AppPermissions.PayrollRead),
+    Audit("Nhật ký hệ thống", "Nhật ký", Icons.Filled.History, AppPermissions.AuditRead),
     Settings("Cài đặt", "Cài đặt", Icons.Filled.Settings),
     Notifications("Thông báo", "Thông báo", Icons.Filled.Notifications),
 }
+
+private fun HrDestination.isAvailableTo(user: HrUser): Boolean =
+    requiredPermission?.let(user::can) ?: true
 
 data class TalentUiState(
     val loading:Boolean=false,
@@ -279,6 +285,7 @@ data class ManagerUiState(
     val summary: ManagerSummary? = null,
     val employees: List<EmployeeCard> = emptyList(),
     val departments: List<Department> = emptyList(),
+    val jobPositions: List<JobPosition> = emptyList(),
 )
 
 /** Lương dự tính của chính nhân viên (tháng hiện tại). */
@@ -671,16 +678,22 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * RÀNG BUỘC: đúng 5 mục và nút QR nổi LUÔN ở giữa (chỉ số 2) — nút tròn nổi được căn TopCenter nên
      * đổi thứ tự sẽ khiến nút lệch khỏi khe trống. Vị trí giữa (Scan) chỉ là chỗ trống giữ khe cho nút QR.
      */
-    fun bottomDestinations(user: HrUser): List<HrDestination> = if (user.isAdmin) {
-        listOf(
+    fun bottomDestinations(user: HrUser): List<HrDestination> = when {
+        user.can(AppPermissions.HrManage) -> listOf(
             HrDestination.Home,
             HrDestination.Approval,
             HrDestination.Scan,
             HrDestination.People,
             HrDestination.Personal,
         )
-    } else {
-        listOf(
+        user.can(AppPermissions.RequestsApprove) -> listOf(
+            HrDestination.Home,
+            HrDestination.Approval,
+            HrDestination.Scan,
+            HrDestination.Requests,
+            HrDestination.Personal,
+        )
+        else -> listOf(
             HrDestination.Home,
             HrDestination.Timesheet,
             HrDestination.Scan,
@@ -697,18 +710,26 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * Nhóm cá nhân không nằm ở đây vì màn Cá nhân chia 3 cụm, xem PersonalHubScreen.
      */
     fun hubFor(destination: HrDestination): List<HrDestination> {
-        val admin = (authState as? AuthState.SignedIn)?.user?.isAdmin == true
-        return when (destination) {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return emptyList()
+        val destinations = when (destination) {
             // Chat không có ở đây: Danh bạ/Cuộc gọi là TAB trong mini app Chat, xem ChatMiniApp.
-            // Admin đã có tab "Chờ duyệt" ở thanh dưới nên không lặp lại nó ở đây.
+            // Người duyệt đã có tab "Chờ duyệt" ở thanh dưới nên không lặp lại nó ở đây.
             HrDestination.Requests ->
-                if (admin) listOf(HrDestination.Penalty)
+                if (user.can(AppPermissions.RequestsApprove)) listOf(HrDestination.Penalty)
                 else listOf(HrDestination.Approval, HrDestination.Penalty)
-            HrDestination.People -> listOf(HrDestination.Dashboard, HrDestination.Payroll, HrDestination.Audit)
+            HrDestination.People -> listOf(
+                HrDestination.Dashboard, HrDestination.Payroll, HrDestination.Audit,
+            ).filter { it.isAvailableTo(user) }
             // Cổng thông tin và Việc cần làm đã có thẻ riêng trên Trang chủ nên không lặp lại.
-            HrDestination.Home -> listOf(HrDestination.Feedback)
+            // Các vai trò chuyên môn không có tab Quản lý vẫn cần lối vào Dashboard/Lương/Nhật ký.
+            HrDestination.Home -> (
+                listOf(HrDestination.Feedback) +
+                    if (user.can(AppPermissions.HrManage)) emptyList()
+                    else listOf(HrDestination.Dashboard, HrDestination.Payroll, HrDestination.Audit)
+            ).filter { it.isAvailableTo(user) }
             else -> emptyList()
         }
+        return destinations.filter { it.isAvailableTo(user) }
     }
 
     /** Số trên huy hiệu của một điểm đến (0 = không hiện). Dùng chung cho thanh dưới và các màn chứa. */
@@ -729,6 +750,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     if ((changeScope == "chat" || changeScope == "all") && selected == HrDestination.Chat)
                         refreshChatRealtime()
                     if (changeScope == "config" || changeScope == "all") loadAppConfig(force = true)
+                    if (changeScope == "access") refreshCurrentAccess()
                     if ((changeScope == "portal" || changeScope == "all") && selected == HrDestination.Portal)
                         loadPortal(silent = true)
                     if ((changeScope == "audit" || changeScope == "all") && selected == HrDestination.Audit)
@@ -826,7 +848,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         refreshHome(user, silent = false)
         loadTimesheet(currentMonthKey(), silent = false)
         loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
-        if (user.isAdmin) refreshManager(silent = true)
+        if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
         faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
         loadAppConfig(force = true)
         consumePendingTarget(user)
@@ -1057,7 +1079,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun syncNotifications(user: HrUser, state: HomeUiState) {
         viewModelScope.launch {
-            val fresh = notificationCenter.sync(state.requests, state.inbox, state.penalties, user.isAdmin)
+            val fresh = notificationCenter.sync(
+                state.requests,
+                state.inbox,
+                state.penalties,
+                user.can(AppPermissions.PenaltyManage),
+            )
             notifications = notificationCenter.current
             if (repo.pushNotificationsEnabled() && hasNotificationPermission()) {
                 fresh.forEach { AppNotifier.show(getApplication<Application>(), it) }
@@ -1107,7 +1134,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         val dest = name?.let { runCatching { HrDestination.valueOf(it) }.getOrNull() } ?: return
         val user = (authState as? AuthState.SignedIn)?.user
         if (user == null) { pendingTarget = dest; pendingEntityId = entityId; return }
-        if (dest.adminOnly && !user.isAdmin) return
+        if (!dest.isAvailableTo(user)) return
         select(dest)
         openNotificationEntity(dest, entityId)
     }
@@ -1117,7 +1144,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         val entityId = pendingEntityId
         pendingTarget = null
         pendingEntityId = null
-        if (dest.adminOnly && !user.isAdmin) return
+        if (!dest.isAvailableTo(user)) return
         goTo(dest)
         openNotificationEntity(dest, entityId)
     }
@@ -1178,12 +1205,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun closeSearch() { searchOpen = false; searchQuery = "" }
     fun typeSearch(value: String) { searchQuery = value.take(60) }
 
-    /** Các màn khớp từ khoá. Rỗng khi chưa gõ gì. Ẩn màn quản trị với người không phải admin. */
+    /** Các màn khớp từ khoá. Rỗng khi chưa gõ gì. Ẩn màn mà hồ sơ quyền server không cho phép. */
     fun searchResults(user: HrUser): List<HrDestination> {
         val q = searchKey(searchQuery.trim())
         if (q.isBlank()) return emptyList()
         return HrDestination.entries.filter {
-            (!it.adminOnly || user.isAdmin) && searchKey(it.title).contains(q)
+            it.isAvailableTo(user) && searchKey(it.title).contains(q)
         }
     }
 
@@ -1227,7 +1254,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun select(destination: HrDestination) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
-        if (destination.adminOnly && !user.isAdmin) return
+        if (!destination.isAvailableTo(user)) return
         goTo(destination)
         enterDestination(destination, user)
     }
@@ -1295,7 +1322,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Audit -> loadAudit(reset = true)
             else -> {
                 refreshHome(user, silent = false)
-                if (user.isAdmin) refreshManager(silent = true)
+                if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
             }
         }
         // Nếu đang mở chi tiết một đơn thì làm mới luôn (kéo để xem tiến trình duyệt mới nhất).
@@ -1323,8 +1350,17 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun runDiagnostics()=viewModelScope.launch{val ctx=getApplication<Application>();val map=linkedMapOf<String,String>();map["API"]=if(runCatching{repo.appConfig()}.isSuccess)"OK" else "Lỗi";map["SignalR"]=if(realtime.isConnected())"Đã kết nối" else "Đang kết nối lại";map["FCM"]=if(pushToken.isNullOrBlank())"Chưa có token" else "OK";map["Camera"]=if(ContextCompat.checkSelfPermission(ctx,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED)"Đã cấp quyền" else "Chưa cấp quyền";map["Micro"]=if(ContextCompat.checkSelfPermission(ctx,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)"Đã cấp quyền" else "Chưa cấp quyền";map["TURN"]=if(repo.fetchTurnCreds()?.urls?.isNotEmpty()==true)"OK" else "Chưa cấu hình / không kết nối";diagnostics=map;supportTickets=runCatching{repo.mySupportTickets()}.getOrDefault(emptyList())}
     fun createSupportTicket(message:String)=viewModelScope.launch{runCatching{repo.createSupportTicket(message)}.onSuccess{actionMessage="Đã gửi báo lỗi.";runDiagnostics()}.onFailure{actionMessage=readable(it)}}
     fun closeManagedEmployee(){managedEmployee=null}
-    fun updateManagedEmployee(detail:EmployeeDetail,departmentId:String?,position:String,status:String,managerId:String?=detail.managerId)=viewModelScope.launch{
-        val body=com.ketoanapk.hr.data.SaveEmployeeBody(detail.employeeCode,detail.username,detail.fullName,detail.dob,detail.gender,detail.phone,detail.email,detail.address,departmentId,position,managerId,detail.hireDate,status,detail.avatar)
+    fun updateManagedEmployee(detail:EmployeeDetail,departmentId:String?,positionId:String?,positionIds:List<String>,status:String,managerId:String?=detail.managerId)=viewModelScope.launch{
+        val selectedPosition = managerState.jobPositions.firstOrNull { it.id == positionId }
+        val body=com.ketoanapk.hr.data.SaveEmployeeBody(
+            employeeCode=detail.employeeCode, username=detail.username, fullName=detail.fullName,
+            dob=detail.dob, gender=detail.gender, phone=detail.phone, email=detail.email,
+            address=detail.address, departmentId=departmentId,
+            position=selectedPosition?.name ?: detail.position, managerId=managerId,
+            hireDate=detail.hireDate, status=status, avatar=detail.avatar,
+            locationId=detail.locationId, accessRole=detail.accessRole, positionId=positionId,
+            positionIds=(listOfNotNull(positionId)+positionIds).distinct(),
+        )
         runCatching{repo.updateEmployee(detail.id,body)}.onSuccess{actionMessage="Đã cập nhật hồ sơ nhân viên.";openManagedEmployee(detail.id);refreshManager(false)}.onFailure{actionMessage=readable(it)}}
     fun updateManagedSalary(id:String,base:Double,allowance:Double,overtime:Double)=viewModelScope.launch{runCatching{repo.updateSalary(id,com.ketoanapk.hr.data.SaveSalaryBody(base,allowance,overtime))}.onSuccess{actionMessage="Đã cập nhật cấu trúc lương.";(authState as? AuthState.SignedIn)?.user?.let{refreshHome(it,true)}}.onFailure{actionMessage=readable(it)}}
 
@@ -1335,7 +1371,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
         refreshHome(user, silent = false)
         loadWorkTasks(silent = workTasksState.inbox.isNotEmpty() || workTasksState.outbox.isNotEmpty())
-        if (user.isAdmin) refreshManager(silent = true)
+        if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
     }
 
     fun openTask(task: TaskCenterItem) {
@@ -1358,7 +1394,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess {
                     actionMessage = "Đã duyệt đơn."
                     refreshHome(user, silent = true)
-                    if (user.isAdmin) refreshManager(silent = true)
+                    if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
                 }
                 .onFailure { actionMessage = readable(it) }
             taskActionBusyId = null
@@ -1841,7 +1877,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 val detail = runCatching { repo.requestDetail(id) }.getOrNull()
                 requestDetailState = requestDetailState.copy(deciding = false, detail = detail ?: requestDetailState.detail)
                 refreshHome(user, silent = true)
-                if (user.isAdmin) refreshManager(silent = true)
+                if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
             }.onFailure {
                 requestDetailState = requestDetailState.copy(deciding = false, decisionError = readable(it))
             }
@@ -1896,7 +1932,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess {
                     actionMessage = it
                     refreshHome(user, silent = true)
-                    if (user.isAdmin) refreshManager(silent = true)
+                    if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
                 }
                 .onFailure { actionMessage = readable(it) }
         }
@@ -1937,10 +1973,26 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---------------- Phiếu chi tiền mặt ----------------
 
-    /** Tài khoản này có được lập/duyệt chi không: role Accounting VÀ thuộc phòng ban kế toán. */
-    val isCashier: Boolean
-        get() = (authState as? AuthState.SignedIn)?.user?.role.equals("Accounting", ignoreCase = true) &&
-            homeState.employee?.isAccounting == true
+    /** Màn hồ sơ nhân sự dùng cờ này để không hiện nút sửa lương cho vai trò chỉ được đọc lương. */
+    val canManagePayroll: Boolean
+        get() = (authState as? AuthState.SignedIn)?.user?.can(AppPermissions.PayrollManage) == true
+
+    private fun canUsePayout(permission: String): Boolean {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return false
+        return user.can(permission) && homeState.employee?.isAccounting == true
+    }
+
+    val canCreatePayout: Boolean get() = canUsePayout(AppPermissions.PayoutCreate)
+    val canApprovePayout: Boolean get() = canUsePayout(AppPermissions.PayoutApprove)
+    val canPayPayout: Boolean get() = canUsePayout(AppPermissions.PayoutPay)
+    /** Tương thích tên cũ: có ít nhất một thao tác nghiệp vụ tiền mặt. */
+    val isCashier: Boolean get() = canCreatePayout || canApprovePayout || canPayPayout
+
+    fun canCancelPayout(voucher: PayoutVoucher): Boolean = when (voucher.status) {
+        "AwaitingScan", "AwaitingApproval", "Confirmed" -> canCreatePayout || canApprovePayout
+        "Approved" -> canApprovePayout
+        else -> false
+    }
 
     /**
      * Tải sổ phiếu chi. Kế toán lấy thêm danh mục/nguồn/người nhận để lập phiếu ngay trên app; nhân viên
@@ -1961,12 +2013,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                             fresh == null -> Unit
                             fresh.status != "AwaitingScan" -> payoutState = payoutState.copy(
                                 qrVoucher = null,
-                                message = "${fresh.voucherNo} đã được người nhận ký nhận. Bạn có thể duyệt chi.",
+                                message = "${fresh.voucherNo} đã được người nhận ký nhận và chuyển sang chờ duyệt.",
                             )
                             fresh.qrValue != open.qrValue -> payoutState = payoutState.copy(qrVoucher = fresh)
                         }
                     }
-                    if (cashier) loadCashierPickers()
+                    if (canCreatePayout) loadCashierPickers()
                 }
                 .onFailure { payoutState = payoutState.copy(loading = false, error = readable(it)) }
         }
@@ -1983,6 +2035,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Lập phiếu rồi mở luôn mã QR để đưa người nhận quét. */
     fun createPayout(body: CreatePayoutBody, onDone: () -> Unit = {}) {
+        if (!canCreatePayout) { payoutState = payoutState.copy(error = "Tài khoản không có quyền lập phiếu chi."); return }
         viewModelScope.launch {
             payoutState = payoutState.copy(busy = true, error = null)
             runCatching { repo.createPayoutVoucher(body) }
@@ -2002,6 +2055,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openPayoutQr(voucher: PayoutVoucher) {
+        if (!canCreatePayout) { payoutState = payoutState.copy(error = "Tài khoản không có quyền tạo mã xác nhận."); return }
         // Mã hết hạn (người nhận tới muộn) thì xin mã mới ngay, khỏi bắt kế toán bấm hai lần.
         val expiresAt = voucher.qrExpiresAt?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() }
         val expired = voucher.qrValue.isNullOrBlank() || expiresAt == null || !expiresAt.isAfter(java.time.Instant.now())
@@ -2010,6 +2064,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshPayoutQr(voucher: PayoutVoucher) {
+        if (!canCreatePayout) { payoutState = payoutState.copy(error = "Tài khoản không có quyền tạo mã xác nhận."); return }
         viewModelScope.launch {
             payoutState = payoutState.copy(busy = true, error = null)
             runCatching { repo.refreshPayoutQr(voucher.id) }
@@ -2028,6 +2083,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun clearPayoutMessage() { payoutState = payoutState.copy(message = null, error = null) }
 
     fun approvePayout(voucher: PayoutVoucher) {
+        if (!canApprovePayout) { payoutState = payoutState.copy(error = "Tài khoản không có quyền duyệt chi."); return }
         viewModelScope.launch {
             payoutState = payoutState.copy(busy = true, error = null)
             runCatching { repo.approvePayoutVoucher(voucher.id) }
@@ -2039,7 +2095,34 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun completePayout(voucher: PayoutVoucher) {
+        if (!canPayPayout) { payoutState = payoutState.copy(error = "Tài khoản không có quyền xác nhận thực chi."); return }
+        viewModelScope.launch {
+            payoutState = payoutState.copy(busy = true, error = null)
+            runCatching { repo.completePayoutVoucher(voucher.id) }
+                .onSuccess {
+                    payoutState = payoutState.copy(busy = false, message = "Đã xác nhận thực chi ${voucher.voucherNo}.")
+                    loadPayouts(silent = true)
+                }
+                .onFailure { payoutState = payoutState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun rejectPayout(voucher: PayoutVoucher, reason: String) {
+        if (!canApprovePayout) { payoutState = payoutState.copy(error = "Tài khoản không có quyền từ chối phiếu chi."); return }
+        viewModelScope.launch {
+            payoutState = payoutState.copy(busy = true, error = null)
+            runCatching { repo.rejectPayoutVoucher(voucher.id, reason) }
+                .onSuccess {
+                    payoutState = payoutState.copy(busy = false, qrVoucher = null, message = "Đã từ chối ${voucher.voucherNo}.")
+                    loadPayouts(silent = true)
+                }
+                .onFailure { payoutState = payoutState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
     fun cancelPayout(voucher: PayoutVoucher, reason: String = "") {
+        if (!canCancelPayout(voucher)) { payoutState = payoutState.copy(error = "Tài khoản không có quyền hủy phiếu này."); return }
         viewModelScope.launch {
             payoutState = payoutState.copy(busy = true, error = null)
             runCatching { repo.cancelPayoutVoucher(voucher.id, reason) }
@@ -2218,7 +2301,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             loadTimesheet(currentMonthKey(), silent = restored)
         }
         loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
-        if (user.isAdmin) refreshManager(silent = true)
+        if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
         faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
         loadAppConfig(force = true)
         consumePendingTarget(user)
@@ -2240,8 +2323,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     val requests = async { runCatching { repo.requests("mine") }.getOrDefault(emptyList()) }
                     // Hộp thư duyệt cho MỌI người: máy chủ đã lọc theo người duyệt (quản lý trực tiếp) hoặc quản trị.
                     val inbox = async { runCatching { repo.requests("inbox") }.getOrDefault(emptyList()) }
-                    val penalties = async { runCatching { repo.penalties(if (user.isAdmin) "all" else "mine", if (user.isAdmin) month else null) }.getOrDefault(emptyList()) }
-                    val salaries = async { if (user.isAdmin) runCatching { repo.salaries() }.getOrDefault(emptyList()) else emptyList() }
+                    val canManagePenalties = user.can(AppPermissions.PenaltyManage)
+                    val penalties = async { runCatching { repo.penalties(if (canManagePenalties) "all" else "mine", if (canManagePenalties) month else null) }.getOrDefault(emptyList()) }
+                    val salaries = async { if (user.can(AppPermissions.PayrollRead)) runCatching { repo.salaries() }.getOrDefault(emptyList()) else emptyList() }
                     HomeUiState(
                         loading = false,
                         employee = employee.await(),
@@ -2292,6 +2376,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     summary = repo.managerSummary(todayKey(), currentMonthKey()),
                     employees = runCatching { repo.employees() }.getOrDefault(emptyList()),
                     departments = runCatching { repo.departments() }.getOrDefault(emptyList()),
+                    jobPositions = runCatching { repo.jobPositions() }.getOrDefault(emptyList()),
                 )
             }.onSuccess { managerState = it }
                 .onFailure { managerState = managerState.copy(loading = false, error = readable(it)) }
@@ -2343,11 +2428,27 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         val signedIn = authState as? AuthState.SignedIn ?: return
         startHeartbeat()        // bật lại nhịp tim (đã tắt lúc xuống nền để đỡ pin) — bắt ngay nếu bị thu hồi phiên
         pollLiveData()          // cập nhật ngay khi vừa mở lại app
+        refreshCurrentAccess()  // role/quyền có thể vừa được quản trị thay đổi khi app ở nền
         loadAppConfig()         // lấy remote config mới (tiết chế 60s)
         startForegroundPoll()
         CallManager.setSelfIdentity(signedIn.user.displayName) // tên thật (DB) gửi kèm lời mời gọi
         realtime.start(signedIn.user.username) // realtime + kênh tín hiệu gọi khi app đang mở
         syncMissedCalls() // cuộc gọi nhỡ đã lưu server (mỗi lần vào lại app)
+    }
+
+    /** Nạp lại UserDto do server tính; không suy quyền từ role/cached UI và đóng màn vừa bị thu quyền. */
+    private fun refreshCurrentAccess() {
+        val current = (authState as? AuthState.SignedIn)?.user ?: return
+        viewModelScope.launch {
+            runCatching { repo.me() }.onSuccess { fresh ->
+                val stillSameAccount = (authState as? AuthState.SignedIn)?.user?.username
+                    ?.equals(current.username, ignoreCase = true) == true
+                if (!stillSameAccount) return@onSuccess
+                authState = AuthState.SignedIn(fresh)
+                if (!selected.isAvailableTo(fresh)) resetToHome()
+                if (fresh.can(AppPermissions.HrRead)) refreshManager(silent = true)
+            }
+        }
     }
 
     /**

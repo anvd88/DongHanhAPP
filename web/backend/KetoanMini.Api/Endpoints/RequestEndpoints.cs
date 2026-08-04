@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Npgsql;
 
@@ -9,11 +10,20 @@ namespace KetoanMini.Api.Endpoints;
 /// <summary>
 /// Engine đơn từ &amp; phê duyệt dùng chung cho MỌI loại đơn (nghỉ phép, nghỉ ốm, tăng ca, thanh toán,
 /// tạm ứng, mua vật tư, điều chỉnh công, đổi ca, đăng ký xe/phòng họp…). Mỗi đơn giữ chi tiết linh hoạt
-/// trong cột jsonb; luồng duyệt nhiều cấp (nhân viên → quản lý trực tiếp → admin) lưu ở hr_request_approvals,
+/// trong cột jsonb; luồng duyệt nhiều cấp (nhân viên → quản lý trực tiếp → hàng đợi HR) lưu ở hr_request_approvals,
 /// hỗ trợ ký xác nhận điện tử và theo dõi trạng thái hồ sơ.
 /// </summary>
 public static class RequestEndpoints
 {
+    // The final approval queue belongs to a capability, not one concrete role.
+    // Legacy rows are still accepted while existing databases/clients roll forward.
+    internal const string FinalApprovalQueue = Permissions.RequestsManage;
+    internal const string LegacyFinalApprovalQueue = AppRoles.Admin;
+
+    internal static bool IsFinalApprovalQueue(string? value)
+        => string.Equals(value, FinalApprovalQueue, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(value, LegacyFinalApprovalQueue, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Danh mục loại đơn: type → (nhãn, nhóm). Frontend dựng form động từ đây.</summary>
     public static readonly (string Type, string Label, string Category)[] Types =
     {
@@ -211,6 +221,14 @@ public static class RequestEndpoints
             CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_request_approvals ON hr_request_approvals (request_id, step_no);
             CREATE INDEX IF NOT EXISTS ix_hr_request_approvals_approver ON hr_request_approvals (approver_username, status);
 
+            -- RBAC v2: final approval is shared by requests.manage holders (normally HR/Admin).
+            -- Runtime checks continue accepting the old value for rolling upgrades.
+            UPDATE hr_request_approvals
+            SET approver_role='requests.manage',
+                approver_name=CASE WHEN approver_name='' OR lower(approver_name) LIKE '%admin%'
+                                   THEN 'Nhân sự / quản trị' ELSE approver_name END
+            WHERE lower(approver_role)='admin';
+
             CREATE TABLE IF NOT EXISTS hr_request_attachments (
                 id bigserial PRIMARY KEY,
                 request_id uuid NOT NULL REFERENCES hr_requests(id) ON DELETE CASCADE,
@@ -227,7 +245,7 @@ public static class RequestEndpoints
 
     public static void MapRequests(this WebApplication app)
     {
-        var g = app.MapGroup("/api/requests").RequireAuthorization();
+        var g = app.MapGroup("/api/requests").RequirePermission(Permissions.RequestsSelf);
 
         g.MapGet("/types", () => Results.Ok(Array.ConvertAll(Types, t => new
         {
@@ -237,13 +255,17 @@ public static class RequestEndpoints
             fields = FieldsPayload(t.Type),
         })));
 
-        // scope: mine (mặc định) | inbox (chờ tôi duyệt) | all (admin)
+        // scope: mine (mặc định) | inbox (chờ tôi duyệt) | all (người có requests.manage)
         g.MapGet("/", async (ClaimsPrincipal u, Database db, string? scope, string? status) =>
         {
             await using var conn = await db.OpenAsync();
             var me = u.Username();
-            var admin = u.IsAdmin();
-            scope ??= "mine";
+            var canApprove = u.Can(Permissions.RequestsApprove);
+            var canManage = u.Can(Permissions.RequestsManage);
+            scope = string.IsNullOrWhiteSpace(scope) ? "mine" : scope.Trim().ToLowerInvariant();
+
+            if (scope == "all" && !canManage) return Results.Forbid();
+            if (scope == "inbox" && !canApprove && !canManage) return Results.Forbid();
 
             string where;
             if (scope == "inbox")
@@ -251,10 +273,11 @@ public static class RequestEndpoints
                     r.status='Pending' AND EXISTS (
                         SELECT 1 FROM hr_request_approvals a
                         WHERE a.request_id=r.id AND a.step_no=r.current_step AND a.status='Pending'
-                          AND (a.approver_username=@me OR (a.approver_role='Admin' AND @admin))
+                          AND ((lower(a.approver_username)=lower(@me) AND @canApprove)
+                               OR (lower(a.approver_role) IN (lower(@finalRole), lower(@legacyFinalRole)) AND @canManage))
                     )
                     """;
-            else if (scope == "all" && admin)
+            else if (scope == "all" && canManage)
                 where = "TRUE";
             else
                 where = "r.requester_username=@me";
@@ -269,7 +292,8 @@ public static class RequestEndpoints
                 FROM hr_requests r JOIN hr_employees e ON e.id=r.employee_id
                 WHERE {where}
                 ORDER BY r.created_at DESC
-                """).With("@me", me).With("@admin", admin);
+                """).With("@me", me).With("@canApprove", canApprove).With("@canManage", canManage)
+                .With("@finalRole", FinalApprovalQueue).With("@legacyFinalRole", LegacyFinalApprovalQueue);
             if (!string.IsNullOrWhiteSpace(status)) cmd.With("@status", status);
 
             var list = new List<object>();
@@ -297,14 +321,19 @@ public static class RequestEndpoints
         g.MapGet("/inbox-count", async (ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
+            var canApprove = u.Can(Permissions.RequestsApprove);
+            var canManage = u.Can(Permissions.RequestsManage);
             var count = await conn.Cmd("""
                 SELECT COUNT(*) FROM hr_requests r
                 WHERE r.status='Pending' AND EXISTS (
                     SELECT 1 FROM hr_request_approvals a
                     WHERE a.request_id=r.id AND a.step_no=r.current_step AND a.status='Pending'
-                      AND (a.approver_username=@me OR (a.approver_role='Admin' AND @admin))
+                      AND ((lower(a.approver_username)=lower(@me) AND @canApprove)
+                           OR (lower(a.approver_role) IN (lower(@finalRole), lower(@legacyFinalRole)) AND @canManage))
                 )
-                """).With("@me", u.Username()).With("@admin", u.IsAdmin()).ExecuteScalarAsync();
+                """).With("@me", u.Username()).With("@canApprove", canApprove).With("@canManage", canManage)
+                .With("@finalRole", FinalApprovalQueue).With("@legacyFinalRole", LegacyFinalApprovalQueue)
+                .ExecuteScalarAsync();
             return Results.Ok(new { count = Convert.ToInt32(count) });
         });
 
@@ -345,7 +374,8 @@ public static class RequestEndpoints
 
             // Chỉ người gửi, người duyệt liên quan, hoặc admin được xem chi tiết.
             var me = u.Username();
-            var admin = u.IsAdmin();
+            var canApprove = u.Can(Permissions.RequestsApprove);
+            var canManage = u.Can(Permissions.RequestsManage);
             var approvals = new List<object>();
             var iAmApprover = false;
             await using (var r = await conn.Cmd("""
@@ -358,7 +388,11 @@ public static class RequestEndpoints
                 {
                     var au = r.Str("approver_username");
                     var role = r.Str("approver_role");
-                    if (au == me || (role == "Admin" && admin)) iAmApprover = true;
+                    if ((!string.IsNullOrWhiteSpace(au)
+                         && string.Equals(au, me, StringComparison.OrdinalIgnoreCase)
+                         && canApprove)
+                        || (IsFinalApprovalQueue(role) && canManage))
+                        iAmApprover = true;
                     approvals.Add(new
                     {
                         stepNo = r.Int("step_no"),
@@ -374,7 +408,8 @@ public static class RequestEndpoints
                 }
             }
 
-            if (requester != me && admin == false && !iAmApprover) return Results.Forbid();
+            if (!string.Equals(requester, me, StringComparison.OrdinalIgnoreCase) && !canManage && !iAmApprover)
+                return Results.Forbid();
             var attachments = new List<object>();
             await using (var ar = await conn.Cmd("SELECT id, file_name, mime_type, file_size FROM hr_request_attachments WHERE request_id=@id ORDER BY id")
                 .With("@id", id).ExecuteReaderAsync())
@@ -412,10 +447,16 @@ public static class RequestEndpoints
         g.MapGet("/{id:guid}/attachments/{attachmentId:long}", async (Guid id, long attachmentId, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            var allowed = u.IsAdmin() || Convert.ToInt32(await conn.Cmd("""
+            var canApprove = u.Can(Permissions.RequestsApprove);
+            var canManage = u.Can(Permissions.RequestsManage);
+            var allowed = canManage || Convert.ToInt32(await conn.Cmd("""
                 SELECT COUNT(*) FROM hr_requests r LEFT JOIN hr_request_approvals a ON a.request_id=r.id
-                WHERE r.id=@id AND (r.requester_username=@u OR a.approver_username=@u)
-                """).With("@id", id).With("@u", u.Username()).ExecuteScalarAsync()) > 0;
+                WHERE r.id=@id AND (lower(r.requester_username)=lower(@u)
+                    OR (lower(a.approver_username)=lower(@u) AND @canApprove)
+                    OR (lower(a.approver_role) IN (lower(@finalRole), lower(@legacyFinalRole)) AND @canManage))
+                """).With("@id", id).With("@u", u.Username()).With("@canApprove", canApprove).With("@canManage", canManage)
+                .With("@finalRole", FinalApprovalQueue).With("@legacyFinalRole", LegacyFinalApprovalQueue)
+                .ExecuteScalarAsync()) > 0;
             if (!allowed) return Results.Forbid();
             await using var r = await conn.Cmd("SELECT file_name,mime_type,content FROM hr_request_attachments WHERE id=@a AND request_id=@id")
                 .With("@a", attachmentId).With("@id", id).ExecuteReaderAsync();
@@ -444,6 +485,14 @@ public static class RequestEndpoints
                     mgrUsername = r.Str("username");
                     mgrName = r.Str("full_name");
                 }
+            }
+            // A stale manager link must not create a step that no authorized account can process.
+            // If the manager lacks requests.approve, start at the shared final queue instead.
+            if (!string.IsNullOrWhiteSpace(mgrUsername)
+                && !await UserHasPermissionAsync(conn, null, mgrUsername, Permissions.RequestsApprove))
+            {
+                mgrUsername = "";
+                mgrName = "";
             }
 
             var reqId = Guid.NewGuid();
@@ -487,13 +536,13 @@ public static class RequestEndpoints
                     }
                 }.ExecuteNonQueryAsync();
 
-                // Chuỗi duyệt: có quản lý (khác người gửi) → B1 quản lý, B2 admin; ngược lại → B1 admin.
+                // Chuỗi duyệt: có quản lý hợp lệ → B1 quản lý, B2 hàng đợi HR; ngược lại → B1 hàng đợi HR.
                 var step = 1;
                 if (!string.IsNullOrWhiteSpace(mgrUsername) && !string.Equals(mgrUsername, me, StringComparison.OrdinalIgnoreCase))
                 {
                     await InsertStep(conn, tx, reqId, step++, "", mgrUsername, mgrName);
                 }
-                await InsertStep(conn, tx, reqId, step, "Admin", "", "Quản trị viên / HR");
+                await InsertStep(conn, tx, reqId, step, FinalApprovalQueue, "", "Nhân sự / quản trị");
 
                 await tx.CommitAsync();
             }
@@ -511,7 +560,8 @@ public static class RequestEndpoints
             if (!string.IsNullOrWhiteSpace(mgrUsername) && !string.Equals(mgrUsername, me, StringComparison.OrdinalIgnoreCase))
                 await push.SendToUserAsync(mgrUsername, "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
             else
-                await push.SendToAdminsAsync("Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
+                await SendToPermissionHoldersAsync(conn, push, Permissions.RequestsManage,
+                    "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
 
             return Results.Ok(new { id = reqId, requestNo = no });
         });
@@ -534,10 +584,12 @@ public static class RequestEndpoints
         });
 
         g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push) =>
-            await Decide(id, req, u, db, push, approve: true));
+            await Decide(id, req, u, db, push, approve: true))
+            .RequireAnyPermission(Permissions.RequestsApprove, Permissions.RequestsManage);
 
         g.MapPost("/{id:guid}/reject", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push) =>
-            await Decide(id, req, u, db, push, approve: false));
+            await Decide(id, req, u, db, push, approve: false))
+            .RequireAnyPermission(Permissions.RequestsApprove, Permissions.RequestsManage);
 
         g.MapPost("/{id:guid}/cancel", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
@@ -567,7 +619,8 @@ public static class RequestEndpoints
             }
             await conn.Cmd("UPDATE hr_requests SET last_reminded_at=CURRENT_TIMESTAMP WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (approver.Length > 0) await push.SendToUserAsync(approver, "Nhắc duyệt đơn", $"{no} đang chờ bạn xử lý.", $"inbox:{id}:remind", "Approval");
-            else await push.SendToAdminsAsync("Nhắc duyệt đơn", $"{no} đang chờ xử lý.", $"inbox:{id}:remind", "Approval");
+            else await SendToPermissionHoldersAsync(conn, push, Permissions.RequestsManage,
+                "Nhắc duyệt đơn", $"{no} đang chờ xử lý.", $"inbox:{id}:remind", "Approval");
             return Results.NoContent();
         });
 
@@ -579,26 +632,40 @@ public static class RequestEndpoints
             var exists = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM hr_employees WHERE username=@u AND status='Active'")
                 .With("@u", req.ToUsername.Trim()).ExecuteScalarAsync()) > 0;
             if (!exists) return Results.BadRequest(new { message = "Người được ủy quyền không tồn tại hoặc đã nghỉ." });
+            if (!await UserHasPermissionAsync(conn, null, req.ToUsername.Trim(), Permissions.RequestsApprove))
+                return Results.BadRequest(new { message = "Người được ủy quyền chưa có quyền duyệt đơn." });
             await conn.Cmd("""
                 INSERT INTO hr_approval_delegations(from_username,to_username,from_date,to_date,active)
                 VALUES (@f,@t,@d1,@d2,TRUE) ON CONFLICT(from_username) DO UPDATE
                 SET to_username=@t,from_date=@d1,to_date=@d2,active=TRUE,updated_at=CURRENT_TIMESTAMP
                 """).With("@f", u.Username()).With("@t", req.ToUsername.Trim()).With("@d1", req.FromDate).With("@d2", req.ToDate).ExecuteNonQueryAsync();
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.RequestsApprove);
     }
 
     private static async Task InsertStep(NpgsqlConnection conn, NpgsqlTransaction tx, Guid reqId, int step, string role, string username, string name)
     {
         if (username.Length > 0)
         {
+            string delegatedUsername = "", delegatedName = "";
             await using (var delegated = await new NpgsqlCommand("""
                     SELECT d.to_username, COALESCE(e.full_name,d.to_username) full_name
                     FROM hr_approval_delegations d LEFT JOIN hr_employees e ON e.username=d.to_username
                     WHERE d.from_username=@u AND d.active=TRUE AND CURRENT_DATE BETWEEN d.from_date AND d.to_date
                     """, conn, tx) { Parameters = { new("@u", username) } }.ExecuteReaderAsync())
             {
-                if (await delegated.ReadAsync()) { username = delegated.GetString(0); name = delegated.GetString(1) + " (được ủy quyền)"; }
+                if (await delegated.ReadAsync())
+                {
+                    delegatedUsername = delegated.GetString(0);
+                    delegatedName = delegated.GetString(1);
+                }
+            }
+            // Ignore invalid/stale delegations instead of creating an unreachable approval step.
+            if (delegatedUsername.Length > 0
+                && await UserHasPermissionAsync(conn, tx, delegatedUsername, Permissions.RequestsApprove))
+            {
+                username = delegatedUsername;
+                name = delegatedName + " (được ủy quyền)";
             }
         }
         await new NpgsqlCommand("""
@@ -610,11 +677,62 @@ public static class RequestEndpoints
         }.ExecuteNonQueryAsync();
     }
 
+    private static async Task<bool> UserHasPermissionAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string username, string permission)
+    {
+        await using var cmd = new NpgsqlCommand("""
+            SELECT u.role,
+                   COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
+                             FROM user_roles ur
+                             WHERE ur.username=u.username
+                               AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)), '') AS extra
+            FROM app_users u
+            WHERE lower(u.username)=lower(@u)
+              AND u.is_active=TRUE
+              AND COALESCE(u.is_deleted,FALSE)=FALSE
+              AND u.approval_status='Approved'
+            LIMIT 1
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("@u", username);
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return false;
+        var roles = AccessProfileService.Combine(r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? "" : r.GetString(1));
+        return Permissions.For(roles).Contains(permission);
+    }
+
+    private static async Task SendToPermissionHoldersAsync(
+        NpgsqlConnection conn, PushService push, string permission,
+        string title, string body, string notifId, string? target)
+    {
+        if (!push.Enabled) return;
+        var recipients = new List<string>();
+        await using (var r = await conn.Cmd("""
+            SELECT u.username, u.role,
+                   COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
+                             FROM user_roles ur
+                             WHERE ur.username=u.username
+                               AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)), '') AS extra
+            FROM app_users u
+            WHERE u.is_active=TRUE
+              AND COALESCE(u.is_deleted,FALSE)=FALSE
+              AND u.approval_status='Approved'
+            """).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+            {
+                var roles = AccessProfileService.Combine(r.Str("role"), r.Str("extra"));
+                if (Permissions.For(roles).Contains(permission)) recipients.Add(r.Str("username"));
+            }
+        }
+
+        foreach (var recipient in recipients.Distinct(StringComparer.OrdinalIgnoreCase))
+            await push.SendToUserAsync(recipient, title, body, notifId, target);
+    }
+
     private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push, bool approve)
     {
         await using var conn = await db.OpenAsync();
         var me = u.Username();
-        var admin = u.IsAdmin();
 
         // Nạp trạng thái đơn.
         string reqStatus = "", reqType = "", requester = "", requestNo = "", payloadJson = "{}";
@@ -656,7 +774,10 @@ public static class RequestEndpoints
             stepUser = r.Str("approver_username");
             stepStatus = r.Str("status");
         }
-        var canDecide = stepUser == me || (stepRole == "Admin" && admin);
+        var canDecide = (!string.IsNullOrWhiteSpace(stepUser)
+                         && string.Equals(stepUser, me, StringComparison.OrdinalIgnoreCase)
+                         && u.Can(Permissions.RequestsApprove))
+                        || (IsFinalApprovalQueue(stepRole) && u.Can(Permissions.RequestsManage));
         if (!canDecide) return Results.Forbid();
         if (stepStatus != "Pending")
             return Results.Conflict(new { message = "Bước duyệt này vừa được người khác xử lý. Vui lòng tải lại." });
@@ -702,8 +823,9 @@ public static class RequestEndpoints
                 var nextSig = $"inbox:{id}";
                 if (!string.IsNullOrWhiteSpace(nextUser))
                     await push.SendToUserAsync(nextUser, "Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
-                else if (nextRole == "Admin")
-                    await push.SendToAdminsAsync("Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
+                else if (IsFinalApprovalQueue(nextRole))
+                    await SendToPermissionHoldersAsync(conn, push, Permissions.RequestsManage,
+                        "Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
             }
             else
             {

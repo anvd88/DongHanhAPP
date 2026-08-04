@@ -132,6 +132,27 @@ internal fun ChatMessage.isVoiceMessage(): Boolean = !removed && (
     val clientMessageId: String? = null,
 )
 
+/**
+ * Khóa quyền chuẩn do backend cấp trong UserDto.permissions. Ứng dụng chỉ dùng để dựng UI; API vẫn
+ * kiểm tra lại quyền từ CSDL ở từng request. Không suy quyền từ tên role ở phía Android.
+ */
+object AppPermissions {
+    const val UsersManage = "users.manage"
+    const val CompanyScopeAll = "scope.company.all"
+    const val AuditRead = "audit.read"
+    const val PayrollRead = "payroll.read"
+    const val PayrollManage = "payroll.manage"
+    const val HrRead = "hr.read"
+    const val HrManage = "hr.manage"
+    const val RequestsApprove = "requests.approve"
+    const val PenaltyManage = "penalty.manage"
+    const val TasksAssign = "tasks.assign"
+    const val PayoutRead = "payout.read"
+    const val PayoutCreate = "payout.create"
+    const val PayoutApprove = "payout.approve"
+    const val PayoutPay = "payout.pay"
+}
+
 @Serializable
 data class HrUser(
     val id: String = "",
@@ -149,13 +170,30 @@ data class HrUser(
     val faceRegistered: Boolean = false,
     // MỌI vai trò (vai trò chính + vai trò phụ như "Warehouse"/Thủ kho).
     val roles: List<String> = emptyList(),
+    // Quyền hiệu lực do backend tính từ DB; thiếu/rỗng thì UI đặc quyền đóng mặc định.
+    val permissions: List<String> = emptyList(),
     // Có quyền giao việc & nghiệm thu (Admin hoặc Thủ kho) — server chốt quyền thật.
     val canAssignTasks: Boolean = false,
 ) {
     val isAdmin: Boolean get() = role.equals("admin", ignoreCase = true)
-    /** Là Thủ kho (hoặc Admin) → được giao việc & nghiệm thu. Chỉ để ẩn/hiện UI; server chốt quyền. */
+    fun can(permission: String): Boolean = permissions.any { it == permission }
+    fun canAny(vararg requested: String): Boolean = requested.any(::can)
+    /** Có quyền giao việc & nghiệm thu. Chỉ để ẩn/hiện UI; server chốt quyền. */
     val isWarehouse: Boolean
-        get() = isAdmin || canAssignTasks || roles.any { it.equals("warehouse", ignoreCase = true) }
+        get() = canAssignTasks || can(AppPermissions.TasksAssign)
+    val roleLabel: String
+        get() = when (role.lowercase()) {
+            "admin" -> "Quản trị hệ thống"
+            "executive" -> "Ban giám đốc"
+            "chiefaccountant" -> "Kế toán trưởng"
+            "accounting" -> "Kế toán viên"
+            "cashier" -> "Thủ quỹ"
+            "hr" -> "Quản lý nhân sự"
+            "manager" -> "Trưởng phòng"
+            "warehouse" -> "Thủ kho"
+            "kiosk" -> "Máy chấm công"
+            else -> "Nhân viên"
+        }
     val displayName: String get() = fullName.ifBlank { username }.ifBlank { "Nhân viên" }
 }
 
@@ -334,6 +372,10 @@ data class EmployeeCard(
     val username: String = "",
     val fullName: String = "",
     val position: String = "",
+    val positionId: String? = null,
+    val positionCode: String? = null,
+    val positionIds: List<String> = emptyList(),
+    val positions: List<EmployeePosition> = emptyList(),
     val status: String = "Active",
     val phone: String = "",
     val email: String = "",
@@ -350,12 +392,18 @@ data class EmployeeDetail(
     val username: String = "",
     val fullName: String = "",
     val position: String = "",
+    val positionId: String? = null,
+    val positionCode: String? = null,
+    val positionIds: List<String> = emptyList(),
+    val positions: List<EmployeePosition> = emptyList(),
     val status: String = "Active",
     val phone: String = "",
     val email: String = "",
     val avatar: String? = null,
     val departmentId: String? = null,
     val departmentName: String = "",
+    val locationId: String? = null,
+    val accessRole: String = "staff",
     val managerName: String = "",
     val dob: String? = null,
     val gender: String = "",
@@ -364,7 +412,32 @@ data class EmployeeDetail(
     val hireDate: String? = null,
     val isAccounting: Boolean = false,
 )
-@Serializable data class SaveEmployeeBody(val employeeCode:String,val username:String,val fullName:String,val dob:String?=null,val gender:String="",val phone:String="",val email:String="",val address:String="",val departmentId:String?=null,val position:String="",val managerId:String?=null,val hireDate:String?=null,val status:String="Active",val avatar:String?=null,val locationId:String?=null,val accessRole:String="staff")
+@Serializable data class SaveEmployeeBody(val employeeCode:String,val username:String,val fullName:String,val dob:String?=null,val gender:String="",val phone:String="",val email:String="",val address:String="",val departmentId:String?=null,val position:String="",val managerId:String?=null,val hireDate:String?=null,val status:String="Active",val avatar:String?=null,val locationId:String?=null,val accessRole:String="staff",val positionId:String?=null,val positionIds:List<String> = emptyList())
+
+/** Chức vụ chuẩn do máy chủ seed; quyền tài khoản được lấy từ defaultRole, không nhận role tự khai. */
+@Serializable
+data class JobPosition(
+    val id: String = "",
+    val code: String = "",
+    val name: String = "",
+    val defaultRole: String = "Employee",
+    val defaultRoleLabel: String = "Nhân viên",
+    val defaultAccessRole: String = "staff",
+    val isSystem: Boolean = true,
+    val isActive: Boolean = true,
+    val sortOrder: Int = 0,
+)
+
+/** Chức vụ gắn vào hồ sơ; isPrimary đánh dấu chức vụ chính, các mục còn lại là kiêm nhiệm. */
+@Serializable
+data class EmployeePosition(
+    val id: String = "",
+    val code: String = "",
+    val name: String = "",
+    val defaultRole: String = "Employee",
+    val defaultRoleLabel: String = "Nhân viên",
+    val isPrimary: Boolean = false,
+)
 
 /** Thư tri ân "tròn X năm gắn bó" đã điền sẵn (server tính mốc theo ngày vào làm). show=false → không hiện. */
 @Serializable
@@ -897,9 +970,19 @@ data class PayoutVoucher(
     val note: String = "",
     val status: String = "",
     val createdBy: String = "",
+    val requiresRecipientConfirmation: Boolean = true,
+    val confirmedBy: String = "",
     val confirmedAt: String? = null,
     val approvedBy: String = "",
+    val approvedAt: String? = null,
     val paidAt: String? = null,
+    val completedBy: String = "",
+    val completedAt: String? = null,
+    val rejectedBy: String = "",
+    val rejectedAt: String? = null,
+    val rejectReason: String = "",
+    val cancelledBy: String = "",
+    val cancelledAt: String? = null,
     val cancelReason: String = "",
     val createdAt: String = "",
     val qrValue: String? = null,
@@ -943,11 +1026,13 @@ data class CreatePayoutBody(
     val amount: Double = 0.0,
     val reason: String = "",
     val note: String = "",
+    val requiresRecipientConfirmation: Boolean = true,
 )
 
 @Serializable data class CreatedPayoutVoucher(val id: String = "", val voucherNo: String = "")
 @Serializable data class PayoutQrResponse(val qrValue: String = "", val qrExpiresAt: String = "")
 @Serializable data class CancelPayoutBody(val reason: String = "")
+@Serializable data class TransitionPayoutBody(val note: String = "")
 
 // ───────────────────────── Giao việc & nghiệm thu ─────────────────────────
 /** Một công việc được giao (khớp WorkTaskDto của backend). */

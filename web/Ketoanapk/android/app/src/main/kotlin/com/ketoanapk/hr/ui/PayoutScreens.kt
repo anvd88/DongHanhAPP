@@ -59,15 +59,22 @@ import com.ketoanapk.hr.data.PayoutVoucher
  * Phiếu chi tiền mặt trên app.
  * - Nhân viên thường: xem phiếu chi của chính mình. Việc KÝ NHẬN vẫn làm bằng nút quét QR có sẵn ở
  *   header (server điều khiển hộp thoại xác nhận), nên màn này cố tình không có nút quét riêng.
- * - Kế toán (role Accounting + phòng kế toán): lập phiếu, hiện QR ngay trên điện thoại cho người nhận
- *   quét, rồi bấm "Duyệt chi". Nút duyệt chi chỉ bật khi phiếu đã được ký nhận — server cũng chặn.
+ * - Quyền được tách theo máy chủ: Kế toán lập phiếu, Kế toán trưởng duyệt, Thủ quỹ xác nhận thực chi.
+ *   Android chỉ dựng nút từ permissions; server vẫn khóa hàng và chốt từng chuyển trạng thái.
  */
 @Composable
 fun PayoutScreen(vm: HrViewModel) {
     val state = vm.payoutState
-    val cashier = vm.isCashier
+    val manager = vm.isCashier
+    val canCreate = vm.canCreatePayout
+    val canApprove = vm.canApprovePayout
+    val canPay = vm.canPayPayout
     var creating by remember { mutableStateOf(false) }
     var confirmApprove by remember { mutableStateOf<PayoutVoucher?>(null) }
+    var confirmComplete by remember { mutableStateOf<PayoutVoucher?>(null) }
+    var rejectTarget by remember { mutableStateOf<PayoutVoucher?>(null) }
+    var cancelTarget by remember { mutableStateOf<PayoutVoucher?>(null) }
+    var decisionReason by remember { mutableStateOf("") }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -81,7 +88,7 @@ fun PayoutScreen(vm: HrViewModel) {
             item { NoticeCard(err, Tone.Danger) { vm.clearPayoutMessage() } }
         }
 
-        if (cashier) {
+        if (canCreate) {
             item {
                 Button(
                     onClick = { creating = true },
@@ -101,8 +108,8 @@ fun PayoutScreen(vm: HrViewModel) {
         if (state.items.isEmpty() && !state.loading) {
             item {
                 EmptyState(
-                    if (cashier) "Chưa có phiếu chi nào" else "Bạn chưa có phiếu chi nào",
-                    if (cashier) "Bấm “Lập phiếu chi” để tạo phiếu mới."
+                    if (manager) "Chưa có phiếu chi nào" else "Bạn chưa có phiếu chi nào",
+                    if (canCreate) "Bấm “Lập phiếu chi” để tạo phiếu mới."
                     else "Khi kế toán lập phiếu chi cho bạn, phiếu sẽ hiện ở đây.",
                 )
             }
@@ -110,11 +117,17 @@ fun PayoutScreen(vm: HrViewModel) {
             items(state.items, key = { it.id }) { v ->
                 PayoutCard(
                     v = v,
-                    cashier = cashier,
+                    manager = manager,
+                    canCreate = canCreate,
+                    canApprove = canApprove,
+                    canPay = canPay,
+                    canCancel = vm.canCancelPayout(v),
                     busy = state.busy,
                     onQr = { vm.openPayoutQr(v) },
                     onApprove = { confirmApprove = v },
-                    onCancel = { vm.cancelPayout(v) },
+                    onComplete = { confirmComplete = v },
+                    onReject = { decisionReason = ""; rejectTarget = v },
+                    onCancel = { decisionReason = ""; cancelTarget = v },
                 )
             }
         }
@@ -137,13 +150,68 @@ fun PayoutScreen(vm: HrViewModel) {
         AlertDialog(
             onDismissRequest = { confirmApprove = null },
             title = { Text("Duyệt chi phiếu này?") },
-            text = { Text("${v.voucherNo} · ${formatMoney(v.amount)} cho ${v.employeeName}. Người nhận đã ký nhận.") },
+            text = { Text("${v.voucherNo} · ${formatMoney(v.amount)} cho ${v.employeeName}. Sau khi duyệt, Thủ quỹ mới được xác nhận thực chi.") },
             confirmButton = {
                 TextButton(onClick = { vm.approvePayout(v); confirmApprove = null }) { Text("Duyệt chi") }
             },
             dismissButton = { TextButton(onClick = { confirmApprove = null }) { Text("Hủy") } },
         )
     }
+
+    confirmComplete?.let { v ->
+        AlertDialog(
+            onDismissRequest = { confirmComplete = null },
+            title = { Text("Xác nhận đã thực chi?") },
+            text = { Text("${v.voucherNo} · ${formatMoney(v.amount)} cho ${v.employeeName}. Thời điểm và tài khoản thực chi sẽ được lưu vào lịch sử.") },
+            confirmButton = {
+                TextButton(onClick = { vm.completePayout(v); confirmComplete = null }) { Text("Đã chi tiền") }
+            },
+            dismissButton = { TextButton(onClick = { confirmComplete = null }) { Text("Hủy") } },
+        )
+    }
+
+    rejectTarget?.let { v ->
+        PayoutReasonDialog(
+            title = "Từ chối ${v.voucherNo}",
+            label = "Lý do từ chối *",
+            value = decisionReason,
+            confirmLabel = "Từ chối",
+            onValueChange = { decisionReason = it },
+            onConfirm = { vm.rejectPayout(v, decisionReason); rejectTarget = null },
+            onClose = { rejectTarget = null },
+        )
+    }
+
+    cancelTarget?.let { v ->
+        PayoutReasonDialog(
+            title = "Hủy ${v.voucherNo}",
+            label = "Lý do hủy *",
+            value = decisionReason,
+            confirmLabel = "Hủy phiếu",
+            onValueChange = { decisionReason = it },
+            onConfirm = { vm.cancelPayout(v, decisionReason); cancelTarget = null },
+            onClose = { cancelTarget = null },
+        )
+    }
+}
+
+@Composable
+private fun PayoutReasonDialog(
+    title: String,
+    label: String,
+    value: String,
+    confirmLabel: String,
+    onValueChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onClose: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(title) },
+        text = { OutlinedTextField(value, onValueChange, label = { Text(label) }, modifier = Modifier.fillMaxWidth()) },
+        confirmButton = { TextButton(onClick = onConfirm, enabled = value.isNotBlank()) { Text(confirmLabel) } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Đóng") } },
+    )
 }
 
 @Composable
@@ -162,16 +230,21 @@ private fun NoticeCard(text: String, tone: Tone, onDismiss: () -> Unit) {
 }
 
 private fun statusTone(status: String): Tone = when (status) {
-    "AwaitingScan" -> Tone.Warning
+    "AwaitingScan", "AwaitingApproval" -> Tone.Warning
     "Confirmed" -> Tone.Info
+    "Approved" -> Tone.Info
     "Paid" -> Tone.Success
+    "Rejected", "Cancelled" -> Tone.Danger
     else -> Tone.Muted
 }
 
 private fun statusLabel(status: String): String = when (status) {
     "AwaitingScan" -> "Chờ quét QR"
-    "Confirmed" -> "Đã ký nhận"
-    "Paid" -> "Đã chi"
+    "AwaitingApproval" -> "Chờ duyệt"
+    "Confirmed" -> "Đã ký nhận · chờ duyệt"
+    "Approved" -> "Đã duyệt · chờ thực chi"
+    "Paid" -> "Đã thực chi"
+    "Rejected" -> "Đã từ chối"
     "Cancelled" -> "Đã hủy"
     else -> status
 }
@@ -179,24 +252,30 @@ private fun statusLabel(status: String): String = when (status) {
 @Composable
 private fun PayoutCard(
     v: PayoutVoucher,
-    cashier: Boolean,
+    manager: Boolean,
+    canCreate: Boolean,
+    canApprove: Boolean,
+    canPay: Boolean,
+    canCancel: Boolean,
     busy: Boolean,
     onQr: () -> Unit,
     onApprove: () -> Unit,
+    onComplete: () -> Unit,
+    onReject: () -> Unit,
     onCancel: () -> Unit,
 ) {
     HrCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    if (cashier) v.employeeName else v.categoryName,
+                    if (manager) v.employeeName else v.categoryName,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${v.voucherNo} · ${formatIsoDate(v.createdAt)}" + if (cashier) " · ${v.categoryName}" else "",
+                    "${v.voucherNo} · ${formatIsoDate(v.createdAt)}" + if (manager) " · ${v.categoryName}" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -215,31 +294,40 @@ private fun PayoutCard(
         )
         StatusChip(formatMoney(v.amount), Tone.Warning)
 
-        if (v.status == "AwaitingScan" && !cashier) {
+        if (v.status == "AwaitingScan" && !manager) {
             Text(
                 "Tới phòng kế toán nhận tiền, rồi bấm nút quét QR ở đầu màn hình để xác nhận đã nhận.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        v.confirmedAt?.takeIf { v.status == "Confirmed" }?.let {
+        v.confirmedAt?.let {
             Text(
                 "Đã ký nhận lúc ${formatIsoDateTime(it)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = toneColor(Tone.Success),
             )
         }
-        v.paidAt?.takeIf { v.status == "Paid" }?.let {
+        v.approvedAt?.let {
             Text(
-                "Đã chi lúc ${formatIsoDateTime(it)}",
+                "Đã duyệt lúc ${formatIsoDateTime(it)}${v.approvedBy.takeIf(String::isNotBlank)?.let { by -> " · $by" }.orEmpty()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = toneColor(Tone.Info),
+            )
+        }
+        (v.completedAt ?: v.paidAt)?.let {
+            Text(
+                "Đã thực chi lúc ${formatIsoDateTime(it)}${v.completedBy.takeIf(String::isNotBlank)?.let { by -> " · $by" }.orEmpty()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        v.rejectedAt?.let { Text("Từ chối lúc ${formatIsoDateTime(it)} · ${v.rejectReason}", style = MaterialTheme.typography.bodySmall, color = toneColor(Tone.Danger)) }
+        v.cancelledAt?.let { Text("Hủy lúc ${formatIsoDateTime(it)} · ${v.cancelReason}", style = MaterialTheme.typography.bodySmall, color = toneColor(Tone.Danger)) }
 
-        if (cashier && v.status != "Paid" && v.status != "Cancelled") {
+        if (manager && v.status !in setOf("Paid", "Rejected", "Cancelled")) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                if (v.status == "AwaitingScan") {
+                if (canCreate && v.status == "AwaitingScan") {
                     OutlinedButton(
                         onClick = onQr,
                         modifier = Modifier.weight(1f),
@@ -251,19 +339,29 @@ private fun PayoutCard(
                         Text("Mã QR")
                     }
                 }
-                Button(
-                    onClick = onApprove,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    // Chốt chống gian lận: chưa ký nhận thì không duyệt chi được (server cũng chặn).
-                    enabled = !busy && v.status == "Confirmed",
-                ) {
-                    Icon(Icons.Filled.Payments, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Duyệt chi")
+                if (canApprove && v.status in setOf("Confirmed", "AwaitingApproval")) {
+                    Button(
+                        onClick = onApprove,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !busy,
+                    ) {
+                        Icon(Icons.Filled.Payments, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Duyệt")
+                    }
+                }
+                if (canPay && v.status == "Approved") {
+                    Button(onClick = onComplete, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), enabled = !busy) {
+                        Icon(Icons.Filled.Payments, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Đã chi tiền")
+                    }
                 }
             }
-            TextButton(onClick = onCancel, enabled = !busy) { Text("Hủy phiếu") }
+            if (canApprove && v.status in setOf("AwaitingScan", "AwaitingApproval", "Confirmed"))
+                TextButton(onClick = onReject, enabled = !busy) { Text("Từ chối") }
+            if (canCancel) TextButton(onClick = onCancel, enabled = !busy) { Text("Hủy phiếu") }
         }
     }
 }

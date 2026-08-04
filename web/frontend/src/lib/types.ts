@@ -9,23 +9,14 @@ export interface User {
   createdAt?: string;
   /** Ảnh đại diện (data URL) lưu riêng cho bản web; rỗng/null → hiển thị chữ cái đầu. */
   avatarUrl?: string | null;
-  /** Tích xanh (giống Facebook): Admin luôn có, hoặc được admin cấp thủ công. */
+  /** Tích xanh của tài khoản, do máy chủ quyết định. */
   verified?: boolean;
   isDiamond?: boolean;
   /** MỌI vai trò (vai trò chính + vai trò phụ như "Warehouse"/Thủ kho). */
   roles?: string[];
-  /** Có quyền giao việc & nghiệm thu (Admin hoặc Thủ kho). Backend chốt quyền thật. */
+  /** Cờ tương thích API cũ; giao diện mới dùng permission tasks.assign từ access profile. */
   canAssignTasks?: boolean;
 }
-export const isAdmin = (u?: User | null) => u?.role?.toLowerCase() === "admin";
-/** Có vai trò Thủ kho (hoặc Admin) → được giao việc & nghiệm thu. Chỉ để ẩn/hiện UI; server chốt quyền. */
-export const canAssignTasks = (u?: User | null) =>
-  isAdmin(u) || Boolean(u?.canAssignTasks) || Boolean(u?.roles?.some((r) => r?.toLowerCase() === "warehouse"));
-/**
- * Chỉ là role kế toán — CHƯA đủ để lập/duyệt phiếu chi. Quyền thật còn đòi tài khoản thuộc phòng ban
- * có cờ is_accounting và luôn do server chốt lại; cờ này chỉ dùng để ẩn/hiện menu cho đỡ rối mắt.
- */
-export const isAccountingRole = (u?: User | null) => u?.role?.toLowerCase() === "accounting";
 
 export interface Dashboard {
   activeCustomers: number;
@@ -184,6 +175,8 @@ export interface UserAdmin {
   isDiamond: boolean;
   /** Vai trò phụ đã cấp thêm (vd "Warehouse" = Thủ kho). */
   secondaryRoles: string[];
+  /** Vai trò được đồng bộ từ chức vụ chính/kiêm nhiệm; client không được sửa vai trò trực tiếp. */
+  rolesManagedByPositions?: boolean;
 }
 
 export interface FeedbackItem {

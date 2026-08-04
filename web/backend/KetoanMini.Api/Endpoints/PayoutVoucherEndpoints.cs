@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text.Json;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
 using Npgsql;
@@ -12,18 +13,34 @@ namespace KetoanMini.Api.Endpoints;
 /// app để ký nhận đã cầm tiền, SAU ĐÓ kế toán mới bấm "Duyệt chi" chốt sổ. Chưa có chữ ký điện tử của
 /// người nhận thì không duyệt chi được — đây là chốt chống gian lận của cả luồng, xem <see cref="StatusConfirmed"/>.
 ///
-/// Quyền lập/duyệt (<see cref="IsCashierAsync"/>) bắt buộc CẢ HAI: tài khoản có role Accounting VÀ thuộc
-/// phòng ban có cờ is_accounting. Admin cố tình KHÔNG được lập/duyệt chi (chỉ quản trị danh mục + xem sổ)
-/// để tách bạch quyền quản trị hệ thống với quyền chi tiền.
+/// Server tách quyền lập, duyệt và hoàn tất chi bằng payout.create / payout.approve / payout.pay. Ngoài
+/// permission, mọi thao tác tiền đều buộc hồ sơ nhân viên thuộc phòng ban is_accounting; client không thể
+/// tự khai vai trò hoặc trạng thái để vượt luồng.
 /// </summary>
 public static class PayoutVoucherEndpoints
 {
+    public enum PayslipVoucherCancelResult { NotFound, Cancelled, Blocked }
+
     /// <summary>Tiền đã trao tay chưa? Phiếu mới lập luôn chờ người nhận quét QR ký nhận.</summary>
     public const string StatusAwaitingScan = "AwaitingScan";
+    /// <summary>Phiếu không yêu cầu người nhận ký QR và đang chờ cấp có thẩm quyền duyệt.</summary>
+    public const string StatusAwaitingApproval = "AwaitingApproval";
     /// <summary>Người nhận đã quét QR xác nhận cầm tiền — điều kiện BẮT BUỘC để duyệt chi.</summary>
     public const string StatusConfirmed = "Confirmed";
+    /// <summary>Đã được kế toán trưởng duyệt, đang chờ thủ quỹ thực chi/hoàn tất.</summary>
+    public const string StatusApproved = "Approved";
     public const string StatusPaid = "Paid";
+    public const string StatusRejected = "Rejected";
     public const string StatusCancelled = "Cancelled";
+
+    private const string EventCreated = "created";
+    private const string EventQrRegenerated = "qr_regenerated";
+    private const string EventRecipientConfirmed = "recipient_confirmed";
+    private const string EventApproved = "approved";
+    private const string EventRejected = "rejected";
+    private const string EventCancelled = "cancelled";
+    private const string EventCompleted = "completed";
+    private const string EventAmountUpdated = "amount_updated";
 
     public const string SourceManual = "manual";
     public const string SourceRefund = "refund";
@@ -78,13 +95,137 @@ public static class PayoutVoucherEndpoints
                 qr_code varchar(64) NOT NULL DEFAULT '',
                 qr_expires_at timestamptz NULL,
                 created_by varchar(128) NOT NULL DEFAULT '',
+                requires_recipient_confirmation boolean NOT NULL DEFAULT TRUE,
                 confirmed_at timestamptz NULL,
+                confirmed_by varchar(128) NOT NULL DEFAULT '',
                 approved_by varchar(128) NOT NULL DEFAULT '',
+                approved_at timestamptz NULL,
                 paid_at timestamptz NULL,
+                completed_by varchar(128) NOT NULL DEFAULT '',
+                completed_at timestamptz NULL,
+                rejected_by varchar(128) NOT NULL DEFAULT '',
+                rejected_at timestamptz NULL,
+                reject_reason text NOT NULL DEFAULT '',
+                cancelled_by varchar(128) NOT NULL DEFAULT '',
+                cancelled_at timestamptz NULL,
                 cancel_reason text NOT NULL DEFAULT '',
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            ALTER TABLE hr_payout_vouchers
+                ADD COLUMN IF NOT EXISTS requires_recipient_confirmation boolean NOT NULL DEFAULT TRUE,
+                ADD COLUMN IF NOT EXISTS confirmed_by varchar(128) NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS approved_at timestamptz NULL,
+                ADD COLUMN IF NOT EXISTS completed_by varchar(128) NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS completed_at timestamptz NULL,
+                ADD COLUMN IF NOT EXISTS rejected_by varchar(128) NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS rejected_at timestamptz NULL,
+                ADD COLUMN IF NOT EXISTS reject_reason text NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS cancelled_by varchar(128) NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS cancelled_at timestamptz NULL;
+
+            -- Các cột mốc mới phải có nghĩa ngay cả với dữ liệu đã phát sinh trước bản nâng cấp.
+            UPDATE hr_payout_vouchers v SET confirmed_by=e.username
+            FROM hr_employees e
+            WHERE v.employee_id=e.id AND v.confirmed_at IS NOT NULL AND v.confirmed_by='';
+            UPDATE hr_payout_vouchers
+            SET approved_at=paid_at
+            WHERE status='Paid' AND approved_at IS NULL;
+            UPDATE hr_payout_vouchers
+            SET completed_at=paid_at, completed_by=approved_by
+            WHERE status='Paid' AND completed_at IS NULL;
+            UPDATE hr_payout_vouchers
+            SET cancelled_at=updated_at
+            WHERE status='Cancelled' AND cancelled_at IS NULL;
+
+            -- Nhật ký riêng của phiếu chi: ứng dụng chỉ INSERT, không có API sửa/xóa. before_data/after_data
+            -- là snapshot nghiệp vụ (không bao giờ chứa mã QR), nên lịch sử vẫn đọc được khi schema phiếu đổi.
+            CREATE TABLE IF NOT EXISTS hr_payout_voucher_events (
+                id uuid PRIMARY KEY,
+                voucher_id uuid NOT NULL,
+                action varchar(48) NOT NULL,
+                actor_username varchar(128) NOT NULL DEFAULT '',
+                before_status varchar(32) NULL,
+                after_status varchar(32) NULL,
+                note text NOT NULL DEFAULT '',
+                before_data jsonb NULL,
+                after_data jsonb NULL,
+                occurred_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            -- Không FK có chủ ý: lịch sử tài chính phải còn lại nếu hồ sơ nhân viên/chứng từ nguồn bị xóa.
+            ALTER TABLE hr_payout_voucher_events
+                DROP CONSTRAINT IF EXISTS hr_payout_voucher_events_voucher_id_fkey;
+            CREATE INDEX IF NOT EXISTS ix_hr_payout_voucher_events_voucher
+                ON hr_payout_voucher_events (voucher_id, occurred_at, id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_payout_voucher_events_lifecycle
+                ON hr_payout_voucher_events (voucher_id, action)
+                WHERE action IN ('created','recipient_confirmed','approved','rejected','cancelled','completed');
+
+            -- Chặn sửa/xóa ở tầng DB, không chỉ ở API. Muốn đính chính phải thêm sự kiện mới.
+            CREATE OR REPLACE FUNCTION prevent_hr_payout_voucher_event_mutation()
+            RETURNS trigger LANGUAGE plpgsql AS $fn$
+            BEGIN
+                RAISE EXCEPTION 'hr_payout_voucher_events is append-only';
+            END;
+            $fn$;
+            DROP TRIGGER IF EXISTS trg_hr_payout_voucher_events_immutable ON hr_payout_voucher_events;
+            CREATE TRIGGER trg_hr_payout_voucher_events_immutable
+                BEFORE UPDATE OR DELETE ON hr_payout_voucher_events
+                FOR EACH ROW EXECUTE FUNCTION prevent_hr_payout_voucher_event_mutation();
+
+            -- Dựng lịch sử tối thiểu cho phiếu cũ. ID xác định từ voucher/action giúp migration chạy lặp an toàn.
+            INSERT INTO hr_payout_voucher_events
+                (id, voucher_id, action, actor_username, before_status, after_status, note,
+                 before_data, after_data, occurred_at)
+            SELECT md5(v.id::text || ':created')::uuid, v.id, 'created', v.created_by, NULL,
+                   CASE WHEN v.requires_recipient_confirmation THEN 'AwaitingScan' ELSE 'AwaitingApproval' END,
+                   v.reason, NULL,
+                   jsonb_build_object('status', CASE WHEN v.requires_recipient_confirmation THEN 'AwaitingScan' ELSE 'AwaitingApproval' END),
+                   v.created_at
+            FROM hr_payout_vouchers v
+            WHERE NOT EXISTS (SELECT 1 FROM hr_payout_voucher_events e
+                              WHERE e.voucher_id=v.id AND e.action='created');
+            INSERT INTO hr_payout_voucher_events
+                (id, voucher_id, action, actor_username, before_status, after_status, note,
+                 before_data, after_data, occurred_at)
+            SELECT md5(v.id::text || ':recipient_confirmed')::uuid, v.id, 'recipient_confirmed',
+                   v.confirmed_by, 'AwaitingScan', 'Confirmed', '',
+                   jsonb_build_object('status','AwaitingScan'), jsonb_build_object('status','Confirmed'), v.confirmed_at
+            FROM hr_payout_vouchers v
+            WHERE v.confirmed_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM hr_payout_voucher_events e
+                              WHERE e.voucher_id=v.id AND e.action='recipient_confirmed');
+            INSERT INTO hr_payout_voucher_events
+                (id, voucher_id, action, actor_username, before_status, after_status, note,
+                 before_data, after_data, occurred_at)
+            SELECT md5(v.id::text || ':approved')::uuid, v.id, 'approved', v.approved_by,
+                   CASE WHEN v.confirmed_at IS NULL THEN 'AwaitingApproval' ELSE 'Confirmed' END,
+                   'Approved', '',
+                   jsonb_build_object('status', CASE WHEN v.confirmed_at IS NULL THEN 'AwaitingApproval' ELSE 'Confirmed' END),
+                   jsonb_build_object('status','Approved'), v.approved_at
+            FROM hr_payout_vouchers v
+            WHERE v.approved_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM hr_payout_voucher_events e
+                              WHERE e.voucher_id=v.id AND e.action='approved');
+            INSERT INTO hr_payout_voucher_events
+                (id, voucher_id, action, actor_username, before_status, after_status, note,
+                 before_data, after_data, occurred_at)
+            SELECT md5(v.id::text || ':completed')::uuid, v.id, 'completed', v.completed_by,
+                   'Approved', 'Paid', '', jsonb_build_object('status','Approved'),
+                   jsonb_build_object('status','Paid'), v.completed_at
+            FROM hr_payout_vouchers v
+            WHERE v.completed_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM hr_payout_voucher_events e
+                              WHERE e.voucher_id=v.id AND e.action='completed');
+            INSERT INTO hr_payout_voucher_events
+                (id, voucher_id, action, actor_username, before_status, after_status, note,
+                 before_data, after_data, occurred_at)
+            SELECT md5(v.id::text || ':cancelled')::uuid, v.id, 'cancelled', v.cancelled_by,
+                   NULL, 'Cancelled', v.cancel_reason, NULL, jsonb_build_object('status','Cancelled'), v.cancelled_at
+            FROM hr_payout_vouchers v
+            WHERE v.cancelled_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM hr_payout_voucher_events e
+                              WHERE e.voucher_id=v.id AND e.action='cancelled');
             CREATE INDEX IF NOT EXISTS ix_hr_payout_vouchers_emp ON hr_payout_vouchers (employee_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_hr_payout_vouchers_status ON hr_payout_vouchers (status, created_at DESC);
             -- Sổ chi luôn xem theo tháng/mới nhất trước mà KHÔNG lọc nhân viên hay trạng thái, nên cần
@@ -93,8 +234,10 @@ public static class PayoutVoucherEndpoints
             CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_payout_vouchers_qr ON hr_payout_vouchers (qr_code)
                 WHERE qr_code <> '';
             -- Một chứng từ gốc (khoản hoàn / phiếu lương) chỉ đẻ ra đúng một phiếu chi còn hiệu lực.
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_payout_vouchers_source ON hr_payout_vouchers (source_kind, source_id)
-                WHERE source_id IS NOT NULL AND status <> 'Cancelled';
+            DROP INDEX IF EXISTS ux_hr_payout_vouchers_source;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_payout_vouchers_source_v2
+                ON hr_payout_vouchers (source_kind, source_id)
+                WHERE source_id IS NOT NULL AND status NOT IN ('Cancelled','Rejected');
             """).ExecuteNonQueryAsync(ct);
 
         await SeedCategories(conn, ct);
@@ -127,17 +270,22 @@ public static class PayoutVoucherEndpoints
     // ---------------- Quyền ----------------
 
     /// <summary>
-    /// Thủ quỹ = role Accounting VÀ thuộc phòng ban is_accounting. Cố ý KHÔNG cho Admin qua cửa này:
-    /// người quản trị hệ thống không đồng thời là người được chi tiền mặt.
+    /// Giữ tên hàm để tương thích AuditEndpoints: người được xem phần tiền phải có payout.read VÀ hồ sơ
+    /// đang hoạt động thuộc phòng kế toán. Không kiểm tên role để Kế toán trưởng/Thủ quỹ kế thừa đúng matrix.
     /// </summary>
     public static async Task<bool> IsCashierAsync(NpgsqlConnection conn, ClaimsPrincipal u)
     {
-        if (!u.IsInRole(AppRoles.Accounting)) return false;
+        if (!u.Can(Permissions.PayoutRead)) return false;
+        return await IsAccountingDepartmentMemberAsync(conn, u);
+    }
+
+    private static async Task<bool> IsAccountingDepartmentMemberAsync(NpgsqlConnection conn, ClaimsPrincipal u)
+    {
         var v = await conn.Cmd("""
             SELECT EXISTS(
                 SELECT 1 FROM hr_employees e
                 JOIN hr_departments d ON d.id = e.department_id
-                WHERE e.username = @u AND d.is_accounting = true
+                WHERE lower(e.username) = lower(@u) AND e.status='Active' AND d.is_accounting = true
             )
             """).With("@u", u.Username()).ExecuteScalarAsync();
         return v is bool b && b;
@@ -176,7 +324,6 @@ public static class PayoutVoucherEndpoints
 
         g.MapPost("/categories", async (SaveCategoryReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             var name = (req.Name ?? "").Trim();
             if (name.Length == 0) return Results.BadRequest(new { message = "Vui lòng nhập tên loại chi." });
             var code = NormCode(req.Code, name);
@@ -197,11 +344,10 @@ public static class PayoutVoucherEndpoints
                 .With("@sort", NormSort(req.SortOrder)).ExecuteNonQueryAsync();
             await Signal(db, u, "Thêm loại chi", code);
             return Results.Ok(new { id, code });
-        });
+        }).RequirePermission(Permissions.SystemSettingsManage);
 
         g.MapPut("/categories/{id:guid}", async (Guid id, SaveCategoryReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             var name = (req.Name ?? "").Trim();
             if (name.Length == 0) return Results.BadRequest(new { message = "Vui lòng nhập tên loại chi." });
 
@@ -226,11 +372,10 @@ public static class PayoutVoucherEndpoints
 
             await Signal(db, u, "Cập nhật loại chi", id.ToString());
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.SystemSettingsManage);
 
         g.MapDelete("/categories/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var isSystem = await conn.Cmd("SELECT is_system FROM hr_payout_categories WHERE id=@id")
                 .With("@id", id).ExecuteScalarAsync();
@@ -247,7 +392,7 @@ public static class PayoutVoucherEndpoints
             await conn.Cmd("DELETE FROM hr_payout_categories WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             await Signal(db, u, "Xóa loại chi", id.ToString());
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.SystemSettingsManage);
 
         // ---------------- Nguồn để lập phiếu ----------------
 
@@ -257,7 +402,7 @@ public static class PayoutVoucherEndpoints
         g.MapGet("/recipients", async (ClaimsPrincipal u, Database db, string? search) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!await IsCashierAsync(conn, u)) return Results.Forbid();
+            if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
 
             var cmd = conn.Cmd($"""
                 SELECT e.id, e.employee_code, e.full_name, COALESCE(d.name, '') AS department_name
@@ -280,14 +425,14 @@ public static class PayoutVoucherEndpoints
                     departmentName = r.Str("department_name"),
                 });
             return Results.Ok(list);
-        });
+        }).RequirePermission(Permissions.PayoutCreate);
 
         // Các khoản hoàn tiền phạt (khiếu nại đã được duyệt) đang chờ kế toán chi — kế toán chọn một
         // khoản là ra đúng số tiền phải chi, không phải gõ tay.
         g.MapGet("/sources/refunds", async (ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!await IsCashierAsync(conn, u)) return Results.Forbid();
+            if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
 
             var list = new List<object>();
             await using var r = await conn.Cmd("""
@@ -296,7 +441,8 @@ public static class PayoutVoucherEndpoints
                 FROM hr_penalty_refunds r JOIN hr_employees e ON e.id = r.employee_id
                 WHERE r.status = 'PendingAccounting'
                   AND NOT EXISTS (SELECT 1 FROM hr_payout_vouchers v
-                                  WHERE v.source_kind = 'refund' AND v.source_id = r.id AND v.status <> 'Cancelled')
+                                  WHERE v.source_kind = 'refund' AND v.source_id = r.id
+                                    AND v.status NOT IN ('Cancelled','Rejected'))
                 ORDER BY r.created_at
                 """).ExecuteReaderAsync();
             while (await r.ReadAsync())
@@ -314,7 +460,7 @@ public static class PayoutVoucherEndpoints
                     createdAt = r.Dt("created_at"),
                 });
             return Results.Ok(list);
-        });
+        }).RequirePermission(Permissions.PayoutCreate);
 
         // ---------------- Sổ phiếu chi ----------------
 
@@ -323,10 +469,10 @@ public static class PayoutVoucherEndpoints
             Guid? categoryId, Guid? employeeId, string? month) =>
         {
             await using var conn = await db.OpenAsync();
-            var cashier = await IsCashierAsync(conn, u);
-            // Admin xem được toàn sổ (báo cáo), nhưng không lập/duyệt chi được.
-            var canSeeAll = cashier || u.IsAdmin();
-            scope ??= canSeeAll ? "all" : "mine";
+            var canExposeQr = u.Can(Permissions.PayoutCreate)
+                              && await IsAccountingDepartmentMemberAsync(conn, u);
+            var canSeeAll = u.Can(Permissions.PayoutRead);
+            scope ??= "all";
 
             var where = new List<string>();
             var cmdParams = new List<(string, object)>();
@@ -361,15 +507,52 @@ public static class PayoutVoucherEndpoints
 
             var list = new List<object>();
             await using var r = await cmd.ExecuteReaderAsync();
-            while (await r.ReadAsync()) list.Add(ReadVoucher(r, cashier));
+            while (await r.ReadAsync()) list.Add(ReadVoucher(r, canExposeQr));
             return Results.Ok(list);
-        });
+        }).RequirePermission(Permissions.PayoutRead);
+
+        // Timeline bất biến của một phiếu. Không nhận scope/trạng thái từ client; quyền payout.read ở
+        // policy là cửa duy nhất, và API không hề có PUT/DELETE cho bảng sự kiện.
+        g.MapGet("/{id:guid}/history", async (Guid id, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var exists = await conn.Cmd("SELECT EXISTS(SELECT 1 FROM hr_payout_vouchers WHERE id=@id)")
+                .With("@id", id).ExecuteScalarAsync();
+            if (exists is not true) return Results.NotFound();
+
+            var events = new List<object>();
+            await using var r = await conn.Cmd("""
+                SELECT e.id, e.action, e.actor_username,
+                       COALESCE(NULLIF(u.full_name,''), e.actor_username) AS actor_name,
+                       e.before_status, e.after_status, e.note,
+                       e.before_data::text AS before_data, e.after_data::text AS after_data,
+                       e.occurred_at
+                FROM hr_payout_voucher_events e
+                LEFT JOIN app_users u ON lower(u.username)=lower(e.actor_username) AND u.is_deleted=FALSE
+                WHERE e.voucher_id=@id
+                ORDER BY e.occurred_at, e.id
+                """).With("@id", id).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                events.Add(new
+                {
+                    id = r.Guid("id"),
+                    action = r.Str("action"),
+                    actor = r.Str("actor_username"),
+                    actorName = r.Str("actor_name"),
+                    beforeStatus = r.IsDBNull(r.GetOrdinal("before_status")) ? null : r.Str("before_status"),
+                    afterStatus = r.IsDBNull(r.GetOrdinal("after_status")) ? null : r.Str("after_status"),
+                    note = r.Str("note"),
+                    before = ReadJsonSnapshot(r, "before_data"),
+                    after = ReadJsonSnapshot(r, "after_data"),
+                    occurredAt = r.Dt("occurred_at"),
+                });
+            return Results.Ok(events);
+        }).RequirePermission(Permissions.PayoutRead);
 
         // Tổng hợp sổ chi theo loại cho một tháng (yyyy-MM) — phần "chi tiết các khoản chi" của trang.
         g.MapGet("/summary", async (ClaimsPrincipal u, Database db, string? month) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!(await IsCashierAsync(conn, u) || u.IsAdmin())) return Results.Forbid();
             var period = string.IsNullOrWhiteSpace(month)
                 ? DateTime.Now.ToString("yyyy-MM")
                 : month.Trim();
@@ -383,7 +566,7 @@ public static class PayoutVoucherEndpoints
                 SELECT COALESCE(c.name, 'Không rõ') AS cat_name, c.id AS cat_id,
                        COUNT(*) AS cnt,
                        SUM(CASE WHEN v.status='Paid' THEN v.amount ELSE 0 END) AS paid_amount,
-                       SUM(CASE WHEN v.status IN ('AwaitingScan','Confirmed') THEN v.amount ELSE 0 END) AS pending_amount
+                       SUM(CASE WHEN v.status IN ('AwaitingScan','AwaitingApproval','Confirmed','Approved') THEN v.amount ELSE 0 END) AS pending_amount
                 FROM hr_payout_vouchers v LEFT JOIN hr_payout_categories c ON c.id = v.category_id
                 WHERE v.created_at >= @from AND v.created_at < @to AND v.status <> 'Cancelled'
                 GROUP BY c.id, c.name, c.sort_order
@@ -407,18 +590,20 @@ public static class PayoutVoucherEndpoints
                 }
             }
             return Results.Ok(new { month = period, totalPaid = paid, totalPending = pending, byCategory });
-        });
+        }).RequirePermission(Permissions.PayoutRead);
 
-        // ---------------- Lập / duyệt phiếu ----------------
+        // ---------------- Lập / xác nhận / duyệt / thực chi ----------------
 
         g.MapPost("/", async (CreateVoucherReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!await IsCashierAsync(conn, u))
-                return Results.Json(new { message = "Chỉ tài khoản kế toán thuộc phòng kế toán mới được lập phiếu chi." }, statusCode: 403);
+            if (!await IsAccountingDepartmentMemberAsync(conn, u))
+                return Results.Json(new { message = "Chỉ nhân viên thuộc phòng kế toán và có quyền lập phiếu chi mới được thao tác." }, statusCode: 403);
+            await using var tx = await conn.BeginTransactionAsync();
 
             var kind = (req.SourceKind ?? SourceManual).Trim();
             var reason = (req.Reason ?? "").Trim();
+            var requiresConfirmation = req.RequiresRecipientConfirmation ?? true;
             Guid employeeId;
             decimal amount;
             Guid? sourceId = null;
@@ -431,7 +616,7 @@ public static class PayoutVoucherEndpoints
                 if (req.SourceId is not { } rid) return Results.BadRequest(new { message = "Thiếu khoản hoàn cần chi." });
                 await using var rr = await conn.Cmd("""
                     SELECT r.employee_id, r.amount, r.refund_no, r.penalty_no, r.status
-                    FROM hr_penalty_refunds r WHERE r.id=@id
+                    FROM hr_penalty_refunds r WHERE r.id=@id FOR UPDATE
                     """).With("@id", rid).ExecuteReaderAsync();
                 if (!await rr.ReadAsync()) return Results.BadRequest(new { message = "Khoản hoàn không tồn tại." });
                 if (rr.Str("status") != "PendingAccounting")
@@ -443,6 +628,8 @@ public static class PayoutVoucherEndpoints
                 if (reason.Length == 0) reason = $"Hoàn tiền phạt {rr.Str("penalty_no")} theo khiếu nại được duyệt";
                 await rr.CloseAsync();
                 categoryId = await CategoryIdByCode(conn, CategoryPenaltyRefund);
+                // Khoản hoàn/lương luôn cần chính người nhận ký; client không được hạ chốt kiểm soát này.
+                requiresConfirmation = true;
             }
             else
             {
@@ -457,10 +644,14 @@ public static class PayoutVoucherEndpoints
                 employeeId = req.EmployeeId;
                 amount = decimal.Round(req.Amount, 2);
                 categoryId = req.CategoryId;
+                var activeRecipient = await conn.Cmd("SELECT EXISTS(SELECT 1 FROM hr_employees WHERE id=@id AND status='Active')")
+                    .With("@id", employeeId).ExecuteScalarAsync();
+                if (activeRecipient is not true)
+                    return Results.BadRequest(new { message = "Người nhận không tồn tại hoặc đã nghỉ việc." });
             }
 
             var (id, no) = await InsertVoucher(conn, categoryId, employeeId, amount, kind, sourceId, sourceNo,
-                reason, (req.Note ?? "").Trim(), u.Username());
+                reason, (req.Note ?? "").Trim(), u.Username(), requiresConfirmation);
 
             // Lập phiếu chi cho khoản hoàn = chốt luôn hình thức "chi tiền mặt" cho khoản đó.
             if (kind == SourceRefund && sourceId is { } refundId)
@@ -470,15 +661,21 @@ public static class PayoutVoucherEndpoints
                     WHERE id=@id AND status='PendingAccounting'
                     """).With("@id", refundId).With("@by", u.Username()).ExecuteNonQueryAsync();
 
+            await tx.CommitAsync();
             await Signal(db, u, "Lập phiếu chi", no);
             return Results.Ok(new { id, voucherNo = no });
-        });
+        }).RequirePermission(Permissions.PayoutCreate);
 
         // Tạo lại mã QR khi mã cũ hết hạn (người nhận tới muộn) — chỉ khi phiếu còn chờ ký nhận.
         g.MapPost("/{id:guid}/qr", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!await IsCashierAsync(conn, u)) return Results.Forbid();
+            if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
+            await using var tx = await conn.BeginTransactionAsync();
+            var before = await LoadVoucherStateAsync(conn, id, forUpdate: true);
+            if (before is null) return Results.NotFound();
+            if (before.Status != StatusAwaitingScan || !before.RequiresRecipientConfirmation)
+                return Results.BadRequest(new { message = "Phiếu không còn chờ người nhận quét mã." });
             var expires = DateTime.UtcNow.Add(QrLifetime);
             var code = NewQrCode();
             var n = await conn.Cmd("""
@@ -487,66 +684,129 @@ public static class PayoutVoucherEndpoints
                 """).With("@id", id).With("@code", code).With("@exp", expires)
                 .With("@st", StatusAwaitingScan).ExecuteNonQueryAsync();
             if (n == 0) return Results.BadRequest(new { message = "Phiếu không còn chờ người nhận quét mã." });
+            var after = await LoadVoucherStateAsync(conn, id);
+            await AppendEventAsync(conn, id, EventQrRegenerated, u.Username(),
+                $"Mã xác nhận mới có hiệu lực đến {expires:O}.", before, after);
+            await tx.CommitAsync();
+            await Signal(db, u, "Tạo lại mã xác nhận phiếu chi", before.VoucherNo);
             return Results.Ok(new { qrValue = QrPrefix + code, qrExpiresAt = expires });
-        });
+        }).RequirePermission(Permissions.PayoutCreate);
 
-        // Duyệt chi — CHẶN CỨNG nếu người nhận chưa quét QR ký nhận.
-        g.MapPost("/{id:guid}/approve", async (Guid id, ClaimsPrincipal u, Database db) =>
+        // Kế toán trưởng duyệt về mặt thẩm quyền. Đây CHƯA phải thực chi; thủ quỹ hoàn tất ở /complete.
+        g.MapPost("/{id:guid}/approve", async (Guid id, TransitionVoucherReq req, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            if (!await IsCashierAsync(conn, u)) return Results.Forbid();
-
-            var status = await conn.Cmd("SELECT status FROM hr_payout_vouchers WHERE id=@id")
-                .With("@id", id).ExecuteScalarAsync() as string;
-            if (status is null) return Results.NotFound();
-            if (status == StatusAwaitingScan)
+            if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
+            await using var tx = await conn.BeginTransactionAsync();
+            var before = await LoadVoucherStateAsync(conn, id, forUpdate: true);
+            if (before is null) return Results.NotFound();
+            if (before.Status == StatusAwaitingScan)
                 return Results.BadRequest(new { message = "Người nhận chưa quét mã QR xác nhận đã nhận tiền." });
-            if (status != StatusConfirmed)
+            if (before.Status is not (StatusConfirmed or StatusAwaitingApproval))
                 return Results.BadRequest(new { message = "Phiếu này không ở trạng thái chờ duyệt chi." });
 
             await conn.Cmd("""
-                UPDATE hr_payout_vouchers SET status=@paid, approved_by=@by, paid_at=CURRENT_TIMESTAMP,
+                UPDATE hr_payout_vouchers SET status=@approved, approved_by=@by, approved_at=CURRENT_TIMESTAMP,
                     qr_code='', qr_expires_at=NULL, updated_at=CURRENT_TIMESTAMP
-                WHERE id=@id AND status=@confirmed
-                """).With("@id", id).With("@paid", StatusPaid).With("@confirmed", StatusConfirmed)
+                WHERE id=@id AND status=@before
+                """).With("@id", id).With("@approved", StatusApproved).With("@before", before.Status)
+                .With("@by", u.Username()).ExecuteNonQueryAsync();
+            var after = await LoadVoucherStateAsync(conn, id);
+            await AppendEventAsync(conn, id, EventApproved, u.Username(), (req.Note ?? "").Trim(), before, after,
+                after?.ApprovedAt);
+            await tx.CommitAsync();
+            await Signal(db, u, "Duyệt phiếu chi", before.VoucherNo);
+            return Results.NoContent();
+        }).RequirePermission(Permissions.PayoutApprove);
+
+        // Thủ quỹ xác nhận tiền đã thực chi. Trạng thái client gửi lên bị bỏ qua; server khóa hàng và chỉ
+        // chấp nhận đúng Approved → Paid.
+        g.MapPost("/{id:guid}/complete", async (Guid id, TransitionVoucherReq req, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
+            await using var tx = await conn.BeginTransactionAsync();
+            var before = await LoadVoucherStateAsync(conn, id, forUpdate: true);
+            if (before is null) return Results.NotFound();
+            if (before.Status != StatusApproved)
+                return Results.BadRequest(new { message = "Phiếu chưa được duyệt hoặc đã hoàn tất." });
+
+            await conn.Cmd("""
+                UPDATE hr_payout_vouchers
+                SET status=@paid, paid_at=CURRENT_TIMESTAMP, completed_at=CURRENT_TIMESTAMP,
+                    completed_by=@by, updated_at=CURRENT_TIMESTAMP
+                WHERE id=@id AND status=@approved
+                """).With("@id", id).With("@paid", StatusPaid).With("@approved", StatusApproved)
                 .With("@by", u.Username()).ExecuteNonQueryAsync();
 
-            var (employeeId, kind, sourceId, no) = await VoucherSource(conn, id);
-            // Khoản hoàn tiền phạt coi như đã trả xong khi phiếu chi được duyệt.
-            if (kind == SourceRefund && sourceId is { } refundId)
-                await conn.Cmd("UPDATE hr_penalty_refunds SET status='Paid', decided_at=CURRENT_TIMESTAMP WHERE id=@id")
+            if (before.SourceKind == SourceRefund && before.SourceId is { } refundId)
+                await conn.Cmd("UPDATE hr_penalty_refunds SET status='Paid', decided_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Approved'")
                     .With("@id", refundId).ExecuteNonQueryAsync();
 
-            await Signal(db, u, "Duyệt chi phiếu chi", no ?? id.ToString());
+            var after = await LoadVoucherStateAsync(conn, id);
+            await AppendEventAsync(conn, id, EventCompleted, u.Username(), (req.Note ?? "").Trim(), before, after,
+                after?.CompletedAt);
+            await tx.CommitAsync();
+            await Signal(db, u, "Hoàn tất chi phiếu chi", before.VoucherNo);
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.PayoutPay);
+
+        // Người duyệt có thể từ chối từ bất kỳ trạng thái tiền duyệt nào; lý do là bắt buộc để tra soát.
+        g.MapPost("/{id:guid}/reject", async (Guid id, CancelVoucherReq req, ClaimsPrincipal u, Database db) =>
+        {
+            var reason = (req.Reason ?? "").Trim();
+            if (reason.Length == 0) return Results.BadRequest(new { message = "Vui lòng nhập lý do từ chối." });
+            await using var conn = await db.OpenAsync();
+            if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
+            await using var tx = await conn.BeginTransactionAsync();
+            var before = await LoadVoucherStateAsync(conn, id, forUpdate: true);
+            if (before is null) return Results.NotFound();
+            if (before.Status is not (StatusAwaitingScan or StatusAwaitingApproval or StatusConfirmed))
+                return Results.BadRequest(new { message = "Phiếu không còn ở trạng thái có thể từ chối." });
+
+            await conn.Cmd("""
+                UPDATE hr_payout_vouchers
+                SET status=@rejected, rejected_by=@by, rejected_at=CURRENT_TIMESTAMP, reject_reason=@reason,
+                    qr_code='', qr_expires_at=NULL, updated_at=CURRENT_TIMESTAMP
+                WHERE id=@id AND status=@before
+                """).With("@id", id).With("@rejected", StatusRejected).With("@before", before.Status)
+                .With("@by", u.Username()).With("@reason", reason).ExecuteNonQueryAsync();
+            await ReturnRefundToQueueAsync(conn, before);
+            var after = await LoadVoucherStateAsync(conn, id);
+            await AppendEventAsync(conn, id, EventRejected, u.Username(), reason, before, after, after?.RejectedAt);
+            await tx.CommitAsync();
+            await Signal(db, u, "Từ chối phiếu chi", before.VoucherNo);
+            return Results.NoContent();
+        }).RequirePermission(Permissions.PayoutApprove);
 
         g.MapPost("/{id:guid}/cancel", async (Guid id, CancelVoucherReq req, ClaimsPrincipal u, Database db) =>
         {
+            var reason = (req.Reason ?? "").Trim();
+            if (reason.Length == 0) return Results.BadRequest(new { message = "Vui lòng nhập lý do hủy phiếu." });
             await using var conn = await db.OpenAsync();
-            if (!await IsCashierAsync(conn, u)) return Results.Forbid();
-            var (employeeId, kind, sourceId, no) = await VoucherSource(conn, id);
-            if (no is null) return Results.NotFound();
+            if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
+            await using var tx = await conn.BeginTransactionAsync();
+            var before = await LoadVoucherStateAsync(conn, id, forUpdate: true);
+            if (before is null) return Results.NotFound();
+            var beforeApproval = before.Status is StatusAwaitingScan or StatusAwaitingApproval or StatusConfirmed;
+            var approvedWithAuthority = before.Status == StatusApproved && u.Can(Permissions.PayoutApprove);
+            if (!beforeApproval && !approvedWithAuthority)
+                return Results.BadRequest(new { message = "Phiếu đã hoàn tất hoặc đã kết thúc nên không hủy được." });
 
-            var n = await conn.Cmd("""
-                UPDATE hr_payout_vouchers SET status=@cancelled, cancel_reason=@reason, qr_code='',
-                    qr_expires_at=NULL, updated_at=CURRENT_TIMESTAMP
-                WHERE id=@id AND status <> @paid AND status <> @cancelled
-                """).With("@id", id).With("@cancelled", StatusCancelled).With("@paid", StatusPaid)
-                .With("@reason", (req.Reason ?? "").Trim()).ExecuteNonQueryAsync();
-            if (n == 0) return Results.BadRequest(new { message = "Phiếu đã duyệt chi hoặc đã hủy nên không hủy được." });
-
-            // Trả khoản hoàn về hàng chờ để kế toán lập lại phiếu (hoặc chuyển sang cộng vào lương).
-            if (kind == SourceRefund && sourceId is { } refundId)
-                await conn.Cmd("""
-                    UPDATE hr_penalty_refunds SET status='PendingAccounting', payout_method='', approved_by='',
-                        decided_at=NULL
-                    WHERE id=@id AND status='Approved'
-                    """).With("@id", refundId).ExecuteNonQueryAsync();
-
-            await Signal(db, u, "Hủy phiếu chi", no);
+            await conn.Cmd("""
+                UPDATE hr_payout_vouchers
+                SET status=@cancelled, cancel_reason=@reason, cancelled_by=@by,
+                    cancelled_at=CURRENT_TIMESTAMP, qr_code='', qr_expires_at=NULL, updated_at=CURRENT_TIMESTAMP
+                WHERE id=@id AND status=@before
+                """).With("@id", id).With("@cancelled", StatusCancelled).With("@before", before.Status)
+                .With("@reason", reason).With("@by", u.Username()).ExecuteNonQueryAsync();
+            await ReturnRefundToQueueAsync(conn, before);
+            var after = await LoadVoucherStateAsync(conn, id);
+            await AppendEventAsync(conn, id, EventCancelled, u.Username(), reason, before, after, after?.CancelledAt);
+            await tx.CommitAsync();
+            await Signal(db, u, "Hủy phiếu chi", before.VoucherNo);
             return Results.NoContent();
-        });
+        }).RequireAnyPermission(Permissions.PayoutCreate, Permissions.PayoutApprove);
     }
 
     // ---------------- Dùng chung với module khác ----------------
@@ -561,8 +821,9 @@ public static class PayoutVoucherEndpoints
         if (netPay <= 0) return;
         var existing = await conn.Cmd("""
             SELECT id, status FROM hr_payout_vouchers
-            WHERE source_kind=@kind AND source_id=@id AND status <> @cancelled
+            WHERE source_kind=@kind AND source_id=@id AND status NOT IN (@cancelled,@rejected)
             """).With("@kind", SourcePayslip).With("@id", payslipId).With("@cancelled", StatusCancelled)
+            .With("@rejected", StatusRejected)
             .ExecuteReaderAsync();
         string? status = null;
         Guid voucherId = default;
@@ -571,16 +832,58 @@ public static class PayoutVoucherEndpoints
 
         if (status == StatusAwaitingScan)
         {
+            var before = await LoadVoucherStateAsync(conn, voucherId);
             await conn.Cmd("""
                 UPDATE hr_payout_vouchers SET amount=@amt, updated_at=CURRENT_TIMESTAMP WHERE id=@id
                 """).With("@id", voucherId).With("@amt", netPay).ExecuteNonQueryAsync();
+            if (before is not null && before.Amount != netPay)
+            {
+                var after = await LoadVoucherStateAsync(conn, voucherId);
+                await AppendEventAsync(conn, voucherId, EventAmountUpdated, createdBy,
+                    $"Cập nhật thực lĩnh kỳ {period}: {before.Amount} → {netPay}.", before, after);
+            }
             return;
         }
         if (status is not null) return; // đã ký nhận / đã chi → không đụng vào nữa
 
         var categoryId = await CategoryIdByCode(conn, CategorySalary);
         await InsertVoucher(conn, categoryId, employeeId, netPay, SourcePayslip, payslipId, period,
-            $"Lương kỳ {period}", "", createdBy);
+            $"Lương kỳ {period}", "", createdBy, requiresRecipientConfirmation: true);
+    }
+
+    /// <summary>
+    /// Payroll gọi helper này TRONG transaction của nó khi đưa phiếu lương về nháp. Phiếu chi chưa duyệt
+    /// được hủy và ghi history cùng transaction; đã Approved/Paid thì chặn để không âm thầm đảo một khoản
+    /// đã được cấp thẩm quyền duyệt hoặc đã thực chi. Helper không tự commit/rollback.
+    /// </summary>
+    public static async Task<PayslipVoucherCancelResult> CancelPayslipVoucherForUnpublishAsync(
+        NpgsqlConnection conn, Guid payslipId, string actor, string reason = "Phiếu lương trả về nháp")
+    {
+        var raw = await conn.Cmd("""
+            SELECT id FROM hr_payout_vouchers
+            WHERE source_kind=@kind AND source_id=@source
+            ORDER BY created_at DESC LIMIT 1
+            """).With("@kind", SourcePayslip).With("@source", payslipId).ExecuteScalarAsync();
+        if (raw is not Guid voucherId) return PayslipVoucherCancelResult.NotFound;
+
+        var before = await LoadVoucherStateAsync(conn, voucherId, forUpdate: true);
+        if (before is null || before.Status is StatusCancelled or StatusRejected)
+            return PayslipVoucherCancelResult.NotFound;
+        if (before.Status is StatusApproved or StatusPaid)
+            return PayslipVoucherCancelResult.Blocked;
+        if (before.Status is not (StatusAwaitingScan or StatusAwaitingApproval or StatusConfirmed))
+            return PayslipVoucherCancelResult.Blocked;
+
+        await conn.Cmd("""
+            UPDATE hr_payout_vouchers
+            SET status=@cancelled, cancel_reason=@reason, cancelled_by=@actor,
+                cancelled_at=CURRENT_TIMESTAMP, qr_code='', qr_expires_at=NULL, updated_at=CURRENT_TIMESTAMP
+            WHERE id=@id AND status=@before
+            """).With("@id", voucherId).With("@cancelled", StatusCancelled).With("@before", before.Status)
+            .With("@reason", reason).With("@actor", actor).ExecuteNonQueryAsync();
+        var after = await LoadVoucherStateAsync(conn, voucherId);
+        await AppendEventAsync(conn, voucherId, EventCancelled, actor, reason, before, after, after?.CancelledAt);
+        return PayslipVoucherCancelResult.Cancelled;
     }
 
     public static bool LooksLikePayoutQr(string? value)
@@ -628,14 +931,32 @@ public static class PayoutVoucherEndpoints
     {
         if (!LooksLikePayoutQr(qrValue)) return null;
         var code = qrValue.Trim()[QrPrefix.Length..];
-        await using var r = await conn.Cmd($"""
-            UPDATE hr_payout_vouchers v SET status=@confirmed, confirmed_at=CURRENT_TIMESTAMP,
-                qr_code='', qr_expires_at=NULL, updated_at=CURRENT_TIMESTAMP
-            FROM hr_employees e
-            WHERE v.employee_id = e.id AND v.qr_code=@code AND v.status=@awaiting
-              AND v.qr_expires_at > CURRENT_TIMESTAMP AND lower(e.username)=lower(@u)
-            RETURNING v.id, v.employee_id, v.voucher_no
+        await using var r = await conn.Cmd("""
+            WITH changed AS (
+                UPDATE hr_payout_vouchers v SET status=@confirmed, confirmed_at=CURRENT_TIMESTAMP,
+                    confirmed_by=@u, qr_code='', qr_expires_at=NULL, updated_at=CURRENT_TIMESTAMP
+                FROM hr_employees e
+                WHERE v.employee_id = e.id AND v.qr_code=@code AND v.status=@awaiting
+                  AND v.requires_recipient_confirmation=TRUE
+                  AND v.qr_expires_at > CURRENT_TIMESTAMP AND lower(e.username)=lower(@u)
+                RETURNING v.id, v.employee_id, v.voucher_no, v.amount, v.reason, v.confirmed_at
+            ), logged AS (
+                INSERT INTO hr_payout_voucher_events
+                    (id, voucher_id, action, actor_username, before_status, after_status, note,
+                     before_data, after_data, occurred_at)
+                SELECT @eventId, c.id, @action, @u, @awaiting, @confirmed, '',
+                       jsonb_build_object('status', @awaiting),
+                       jsonb_build_object('status', @confirmed, 'amount', c.amount,
+                                          'reason', c.reason, 'confirmedAt', c.confirmed_at,
+                                          'confirmedBy', @u),
+                       c.confirmed_at
+                FROM changed c
+                RETURNING voucher_id
+            )
+            SELECT c.id, c.employee_id, c.voucher_no
+            FROM changed c JOIN logged l ON l.voucher_id=c.id
             """).With("@code", code).With("@confirmed", StatusConfirmed).With("@awaiting", StatusAwaitingScan)
+            .With("@action", EventRecipientConfirmed).With("@eventId", Guid.NewGuid())
             .With("@u", username).ExecuteReaderAsync();
         if (!await r.ReadAsync()) return null;
         return (r.Guid("id"), r.Guid("employee_id"), r.Str("voucher_no"));
@@ -649,7 +970,10 @@ public static class PayoutVoucherEndpoints
     private const string VoucherSelect = """
         SELECT v.id, v.voucher_no, v.category_id, v.employee_id, v.amount, v.source_kind, v.source_id,
                v.source_no, v.reason, v.note, v.status, v.qr_code, v.qr_expires_at, v.created_by,
-               v.confirmed_at, v.approved_by, v.paid_at, v.cancel_reason, v.created_at,
+               v.requires_recipient_confirmation, v.confirmed_at, v.confirmed_by,
+               v.approved_by, v.approved_at, v.paid_at, v.completed_by, v.completed_at,
+               v.rejected_by, v.rejected_at, v.reject_reason,
+               v.cancelled_by, v.cancelled_at, v.cancel_reason, v.created_at,
                COALESCE(c.name, '') AS cat_name, COALESCE(c.code, '') AS cat_code,
                e.full_name AS emp_name, e.employee_code
         FROM hr_payout_vouchers v
@@ -659,21 +983,29 @@ public static class PayoutVoucherEndpoints
 
     private static async Task<(Guid Id, string No)> InsertVoucher(NpgsqlConnection conn, Guid categoryId,
         Guid employeeId, decimal amount, string sourceKind, Guid? sourceId, string sourceNo, string reason,
-        string note, string createdBy)
+        string note, string createdBy, bool requiresRecipientConfirmation = true)
     {
         var id = Guid.NewGuid();
         var no = $"PC{Convert.ToInt64(await conn.Cmd("SELECT nextval('hr_payout_voucher_seq')").ExecuteScalarAsync()):D5}";
+        var status = requiresRecipientConfirmation ? StatusAwaitingScan : StatusAwaitingApproval;
+        var qr = requiresRecipientConfirmation ? NewQrCode() : "";
+        var expires = requiresRecipientConfirmation ? DateTime.UtcNow.Add(QrLifetime) : (DateTime?)null;
         await conn.Cmd("""
             INSERT INTO hr_payout_vouchers (id, voucher_no, category_id, employee_id, amount, source_kind,
-                source_id, source_no, reason, note, status, qr_code, qr_expires_at, created_by)
-            VALUES (@id, @no, @cat, @emp, @amt, @kind, @sid, @sno, @reason, @note, @st, @qr, @exp, @by)
+                source_id, source_no, reason, note, status, qr_code, qr_expires_at, created_by,
+                requires_recipient_confirmation)
+            VALUES (@id, @no, @cat, @emp, @amt, @kind, @sid, @sno, @reason, @note, @st, @qr, @exp, @by, @confirm)
             """)
             .With("@id", id).With("@no", no).With("@cat", categoryId).With("@emp", employeeId)
             .With("@amt", amount).With("@kind", sourceKind)
             .With("@sid", (object?)sourceId ?? DBNull.Value).With("@sno", sourceNo)
-            .With("@reason", reason).With("@note", note).With("@st", StatusAwaitingScan)
-            .With("@qr", NewQrCode()).With("@exp", DateTime.UtcNow.Add(QrLifetime)).With("@by", createdBy)
+            .With("@reason", reason).With("@note", note).With("@st", status)
+            .With("@qr", qr).With("@exp", (object?)expires ?? DBNull.Value).With("@by", createdBy)
+            .With("@confirm", requiresRecipientConfirmation)
             .ExecuteNonQueryAsync();
+        var after = await LoadVoucherStateAsync(conn, id);
+        await AppendEventAsync(conn, id, EventCreated, createdBy, note.Length > 0 ? note : reason,
+            null, after, after?.CreatedAt);
         return (id, no);
     }
 
@@ -692,15 +1024,98 @@ public static class PayoutVoucherEndpoints
             .ExecuteScalarAsync() is Guid g2 ? g2 : newId;
     }
 
-    private static async Task<(Guid EmployeeId, string Kind, Guid? SourceId, string? No)> VoucherSource(
-        NpgsqlConnection conn, Guid id)
+    private sealed record VoucherState(
+        Guid Id, string VoucherNo, Guid EmployeeId, decimal Amount, string SourceKind, Guid? SourceId,
+        string SourceNo, string Reason, string Note, string Status, bool RequiresRecipientConfirmation,
+        string CreatedBy, DateTime CreatedAt, string ConfirmedBy, DateTime? ConfirmedAt,
+        string ApprovedBy, DateTime? ApprovedAt, string CompletedBy, DateTime? CompletedAt,
+        string RejectedBy, DateTime? RejectedAt, string RejectReason,
+        string CancelledBy, DateTime? CancelledAt, string CancelReason);
+
+    private static async Task<VoucherState?> LoadVoucherStateAsync(NpgsqlConnection conn, Guid id,
+        bool forUpdate = false)
     {
-        await using var r = await conn.Cmd("""
-            SELECT employee_id, source_kind, source_id, voucher_no FROM hr_payout_vouchers WHERE id=@id
+        await using var r = await conn.Cmd($"""
+            SELECT id, voucher_no, employee_id, amount, source_kind, source_id, source_no, reason, note,
+                   status, requires_recipient_confirmation, created_by, created_at,
+                   confirmed_by, confirmed_at, approved_by, approved_at, completed_by, completed_at,
+                   rejected_by, rejected_at, reject_reason, cancelled_by, cancelled_at, cancel_reason
+            FROM hr_payout_vouchers WHERE id=@id {(forUpdate ? "FOR UPDATE" : "")}
             """).With("@id", id).ExecuteReaderAsync();
-        if (!await r.ReadAsync()) return (default, "", null, null);
-        return (r.Guid("employee_id"), r.Str("source_kind"),
-            r.IsDBNull(r.GetOrdinal("source_id")) ? null : r.Guid("source_id"), r.Str("voucher_no"));
+        if (!await r.ReadAsync()) return null;
+        return new VoucherState(
+            r.Guid("id"), r.Str("voucher_no"), r.Guid("employee_id"), r.Dec("amount"),
+            r.Str("source_kind"), r.IsDBNull(r.GetOrdinal("source_id")) ? null : r.Guid("source_id"),
+            r.Str("source_no"), r.Str("reason"), r.Str("note"), r.Str("status"),
+            r.Bool("requires_recipient_confirmation"), r.Str("created_by"), r.Dt("created_at"),
+            r.Str("confirmed_by"), r.DtNull("confirmed_at"), r.Str("approved_by"), r.DtNull("approved_at"),
+            r.Str("completed_by"), r.DtNull("completed_at"), r.Str("rejected_by"), r.DtNull("rejected_at"),
+            r.Str("reject_reason"), r.Str("cancelled_by"), r.DtNull("cancelled_at"), r.Str("cancel_reason"));
+    }
+
+    private static object VoucherSnapshot(VoucherState s) => new
+    {
+        s.VoucherNo,
+        s.EmployeeId,
+        s.Amount,
+        s.SourceKind,
+        s.SourceNo,
+        s.Reason,
+        s.Note,
+        s.Status,
+        s.RequiresRecipientConfirmation,
+        s.CreatedBy,
+        s.CreatedAt,
+        s.ConfirmedBy,
+        s.ConfirmedAt,
+        s.ApprovedBy,
+        s.ApprovedAt,
+        s.CompletedBy,
+        s.CompletedAt,
+        s.RejectedBy,
+        s.RejectedAt,
+        s.RejectReason,
+        s.CancelledBy,
+        s.CancelledAt,
+        s.CancelReason,
+    };
+
+    private static async Task AppendEventAsync(NpgsqlConnection conn, Guid voucherId, string action,
+        string actor, string note, VoucherState? before, VoucherState? after, DateTime? occurredAt = null)
+    {
+        var beforeJson = before is null ? null : JsonSerializer.Serialize(VoucherSnapshot(before));
+        var afterJson = after is null ? null : JsonSerializer.Serialize(VoucherSnapshot(after));
+        await conn.Cmd("""
+            INSERT INTO hr_payout_voucher_events
+                (id, voucher_id, action, actor_username, before_status, after_status, note,
+                 before_data, after_data, occurred_at)
+            VALUES (@id, @voucher, @action, @actor, @beforeStatus, @afterStatus, @note,
+                    CAST(@beforeData AS jsonb), CAST(@afterData AS jsonb), @occurred)
+            """)
+            .With("@id", Guid.NewGuid()).With("@voucher", voucherId).With("@action", action)
+            .With("@actor", actor).With("@beforeStatus", (object?)before?.Status ?? DBNull.Value)
+            .With("@afterStatus", (object?)after?.Status ?? DBNull.Value).With("@note", note)
+            .With("@beforeData", (object?)beforeJson ?? DBNull.Value)
+            .With("@afterData", (object?)afterJson ?? DBNull.Value)
+            .With("@occurred", occurredAt ?? DateTime.UtcNow)
+            .ExecuteNonQueryAsync();
+    }
+
+    private static async Task ReturnRefundToQueueAsync(NpgsqlConnection conn, VoucherState voucher)
+    {
+        if (voucher.SourceKind != SourceRefund || voucher.SourceId is not { } refundId) return;
+        await conn.Cmd("""
+            UPDATE hr_penalty_refunds SET status='PendingAccounting', payout_method='', approved_by='',
+                decided_at=NULL
+            WHERE id=@id AND status='Approved'
+            """).With("@id", refundId).ExecuteNonQueryAsync();
+    }
+
+    private static JsonElement ReadJsonSnapshot(NpgsqlDataReader r, string column)
+    {
+        if (r.IsDBNull(r.GetOrdinal(column))) return JsonSerializer.SerializeToElement<object?>(null);
+        using var doc = JsonDocument.Parse(r.Str(column));
+        return doc.RootElement.Clone();
     }
 
     /// <summary>
@@ -755,9 +1170,19 @@ public static class PayoutVoucherEndpoints
             note = r.Str("note"),
             status = r.Str("status"),
             createdBy = r.Str("created_by"),
+            requiresRecipientConfirmation = r.Bool("requires_recipient_confirmation"),
             confirmedAt = r.DtNull("confirmed_at"),
+            confirmedBy = r.Str("confirmed_by"),
             approvedBy = r.Str("approved_by"),
+            approvedAt = r.DtNull("approved_at"),
             paidAt = r.DtNull("paid_at"),
+            completedBy = r.Str("completed_by"),
+            completedAt = r.DtNull("completed_at"),
+            rejectedBy = r.Str("rejected_by"),
+            rejectedAt = r.DtNull("rejected_at"),
+            rejectReason = r.Str("reject_reason"),
+            cancelledBy = r.Str("cancelled_by"),
+            cancelledAt = r.DtNull("cancelled_at"),
             cancelReason = r.Str("cancel_reason"),
             createdAt = r.Dt("created_at"),
             // Chỉ kế toán mới nhận được nội dung mã QR để hiển thị; sổ của nhân viên không cần nó.
@@ -775,6 +1200,7 @@ public static class PayoutVoucherEndpoints
 
     public record SaveCategoryReq(string? Code, string? Name, string? Description, bool IsActive, int SortOrder);
     public record CreateVoucherReq(Guid CategoryId, Guid EmployeeId, decimal Amount, string? Reason,
-        string? Note, string? SourceKind, Guid? SourceId);
+        string? Note, string? SourceKind, Guid? SourceId, bool? RequiresRecipientConfirmation);
+    public record TransitionVoucherReq(string? Note);
     public record CancelVoucherReq(string? Reason);
 }

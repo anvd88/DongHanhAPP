@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Npgsql;
 
@@ -298,7 +299,7 @@ public static class PenaltyEndpoints
 
     public static void MapPenalties(this WebApplication app)
     {
-        var g = app.MapGroup("/api/penalties").RequireAuthorization();
+        var g = app.MapGroup("/api/penalties").RequirePermission(Permissions.PenaltyRead);
 
         g.MapGet("/types", () => Results.Ok(Array.ConvertAll(Types, t => new { type = t.Type, label = t.Label })));
 
@@ -306,7 +307,6 @@ public static class PenaltyEndpoints
         // Dùng khi lập phiếu lương để tự cộng vào khấu trừ.
         g.MapGet("/deductions", async (ClaimsPrincipal u, Database db, Guid employeeId, string period, decimal? available) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             if (employeeId == Guid.Empty || string.IsNullOrWhiteSpace(period))
                 return Results.BadRequest(new { message = "Thiếu nhân viên hoặc kỳ lương." });
 
@@ -327,16 +327,21 @@ public static class PenaltyEndpoints
                     monthAmount = it.MonthAmount,
                 }),
             });
-        });
+        }).RequireAnyPermission(Permissions.PenaltyManage, Permissions.PayrollManage);
 
-        // scope: mine (mặc định – chỉ của tôi) | all (admin – toàn công ty, lọc theo employeeId/month tùy chọn).
+        // scope: mine (mặc định – chỉ của tôi) | all (người có penalty.manage – toàn công ty).
         g.MapGet("/", async (ClaimsPrincipal u, Database db, string? scope, Guid? employeeId, string? month) =>
         {
             await using var conn = await db.OpenAsync();
-            var admin = u.IsAdmin();
-            scope ??= admin ? "all" : "mine";
+            var canManage = u.Can(Permissions.PenaltyManage);
+            scope = string.IsNullOrWhiteSpace(scope)
+                ? (canManage ? "all" : "mine")
+                : scope.Trim().ToLowerInvariant();
+            if (scope is not ("mine" or "all"))
+                return Results.BadRequest(new { message = "Phạm vi danh sách không hợp lệ." });
+            if (scope == "all" && !canManage) return Results.Forbid();
 
-            var isAll = scope == "all" && admin;
+            var isAll = scope == "all";
             var where = new List<string>();
             Guid myId = default;
             if (isAll)
@@ -384,7 +389,6 @@ public static class PenaltyEndpoints
 
         g.MapPost("/", async (SavePenaltyReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             if (req.EmployeeId == Guid.Empty) return Results.BadRequest(new { message = "Vui lòng chọn nhân viên." });
             if (string.IsNullOrWhiteSpace(req.Reason)) return Results.BadRequest(new { message = "Vui lòng nhập lý do phạt." });
 
@@ -409,11 +413,10 @@ public static class PenaltyEndpoints
             await push.SendToEmployeeAsync(conn, req.EmployeeId, "Quyết định phạt mới",
                 $"{no} · {req.Reason!.Trim()}", $"pen:{id}", "Penalty");
             return Results.Ok(new { id, penaltyNo = no });
-        });
+        }).RequirePermission(Permissions.PenaltyManage);
 
         g.MapPut("/{id:guid}", async (Guid id, SavePenaltyReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("""
                 UPDATE hr_penalties SET penalty_type=@type, penalty_date=@date, amount=@amount,
@@ -432,29 +435,27 @@ public static class PenaltyEndpoints
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Cập nhật quyết định phạt", id.ToString());
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.PenaltyManage);
 
         // Miễn / hủy hiệu lực phạt (không xóa để giữ lịch sử).
         g.MapPost("/{id:guid}/waive", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("UPDATE hr_penalties SET status='Waived', updated_at=CURRENT_TIMESTAMP WHERE id=@id")
                 .With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Miễn phạt", id.ToString());
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.PenaltyManage);
 
         g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM hr_penalties WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Xóa quyết định phạt", id.ToString());
             return Results.NoContent();
-        });
+        }).RequirePermission(Permissions.PenaltyManage);
     }
 
     private sealed record PenaltyRec(Guid Id, string PenaltyNo, Guid EmployeeId, string EmployeeName,

@@ -143,6 +143,7 @@ public sealed class RealtimeCoverageTests
             // nạp lại hồ sơ truy cập mỗi lần admin sửa quyền của một ai đó — đúng thứ "realtime scoping"
             // muốn tránh. Quyền mới vẫn có hiệu lực ngay dù tín hiệu này không tới (server chốt theo DB).
             ("UserEndpoints.cs", "\"access\""),
+            ("HrEndpoints.cs", "\"access\""), // đổi chức vụ làm đổi quyền, nhắm đúng nhân viên
         };
 
         var offenders = new List<string>();

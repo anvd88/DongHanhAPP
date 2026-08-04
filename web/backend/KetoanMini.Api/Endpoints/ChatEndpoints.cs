@@ -5,6 +5,7 @@ using System.Text.Json;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Realtime;
+using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.SignalR;
@@ -33,7 +34,7 @@ public static class ChatEndpoints
 
     public static void MapChat(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/chat").RequireAuthorization();
+        var g = app.MapGroup("/api/chat").RequirePermission(Permissions.ChatAccess);
 
         // Đổ chuông cuộc gọi qua FCM: để máy người nhận reo KỂ CẢ khi app đóng/nền (SignalR chỉ chạy khi
         // app mở). Đây chỉ là "chuông" — bắt tay + media của cuộc gọi vẫn P2P WebRTC (mã hóa DTLS-SRTP).
@@ -238,8 +239,8 @@ public static class ChatEndpoints
                     username, string.IsNullOrWhiteSpace(name) ? username : name,
                     NullIfEmpty(r.Str("avatar")), r.Bool("is_online"), r.Bool("verified"), r.Bool("is_diamond"), r.Str("role"),
                     r.Str("employee_id"), r.Str("employee_code"), r.Str("department_id"), r.Str("department_name"), r.Str("position"),
-                    principal.IsAdmin() || r.Bool("show_phone_in_directory") ? r.Str("phone") : "",
-                    principal.IsAdmin() || r.Bool("show_email_in_directory") ? r.Str("email") : "",
+                    principal.Can(Permissions.UsersManage) || r.Bool("show_phone_in_directory") ? r.Str("phone") : "",
+                    principal.Can(Permissions.UsersManage) || r.Bool("show_email_in_directory") ? r.Str("email") : "",
                     r.Str("manager_username"), r.Str("manager_name"), r.Bool("is_direct_manager"), r.Bool("same_department")));
             }
             if (!string.Equals(me, SupportUsername, StringComparison.OrdinalIgnoreCase) &&
@@ -257,7 +258,7 @@ public static class ChatEndpoints
         {
             var me = principal.Username();
             await using var conn = await db.OpenAsync();
-            var list = await ReadConversations(conn, me, null, principal.IsAdmin());
+            var list = await ReadConversations(conn, me, null, principal.Can(Permissions.UsersManage));
             return Results.Ok(list);
         });
 
@@ -287,7 +288,7 @@ public static class ChatEndpoints
         // sẽ nằm ở hội thoại này, không trộn vào chat cá nhân admin ↔ nhân viên.
         g.MapPost("/support/{username}", async (string username, ClaimsPrincipal principal, Database db) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.UsersManage)) return Results.Forbid();
             var employee = (username ?? "").Trim();
             if (string.IsNullOrWhiteSpace(employee) || IsSupportUser(employee))
                 return Results.BadRequest(new { message = "Người nhận không hợp lệ." });
@@ -307,7 +308,7 @@ public static class ChatEndpoints
         g.MapGet("/conversations/{id:guid}/messages", async (Guid id, ClaimsPrincipal principal, Database db, long? beforeId, int? take, string? search) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
             if (!await CanAccessConversation(conn, id, me, admin)) return Results.Forbid();
             var viewerMember = await ViewerMemberUsername(conn, id, me, admin) ?? me;
@@ -367,7 +368,7 @@ public static class ChatEndpoints
         g.MapPost("/conversations/{id:guid}/messages", async (Guid id, SendMessageRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub, PushService push) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             var body = (req?.Body ?? "").Trim();
             if (string.IsNullOrWhiteSpace(body))
                 return Results.BadRequest(new { message = "Tin nhắn trống." });
@@ -641,7 +642,7 @@ public static class ChatEndpoints
         g.MapPut("/conversations/{id:guid}/messages/{msgId:long}", async (Guid id, long msgId, EditMessageRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             var body = (req?.Body ?? "").Trim();
             if (string.IsNullOrWhiteSpace(body))
                 return Results.BadRequest(new { message = "Tin nhắn trống." });
@@ -672,7 +673,7 @@ public static class ChatEndpoints
         g.MapDelete("/conversations/{id:guid}/messages/{msgId:long}", async (Guid id, long msgId, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
             if (!await CanAccessConversation(conn, id, me, admin)) return Results.Forbid();
             // Gỡ luôn xóa nội dung tệp đang giữ tạm (nếu có) khỏi server + bỏ cờ has_blob.
@@ -702,7 +703,7 @@ public static class ChatEndpoints
         g.MapPost("/conversations/{id:guid}/messages/{msgId:long}/react", async (Guid id, long msgId, ReactRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             var emoji = (req?.Emoji ?? "").Trim();
             if (string.IsNullOrWhiteSpace(emoji) || emoji.Length > 16)
                 return Results.BadRequest(new { message = "Biểu cảm không hợp lệ." });
@@ -743,7 +744,7 @@ public static class ChatEndpoints
         g.MapPost("/conversations/{id:guid}/read", async (Guid id, ClaimsPrincipal principal, Database db) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
             if (!await CanAccessConversation(conn, id, me, admin)) return Results.Forbid();
             await MarkReadForViewer(conn, id, me, admin);
@@ -754,7 +755,7 @@ public static class ChatEndpoints
         g.MapPost("/conversations/{id:guid}/pin", async (Guid id, SetConversationPinnedRequest req, ClaimsPrincipal principal, Database db) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
             var viewerMember = await ViewerMemberUsername(conn, id, me, admin);
             if (viewerMember is null) return Results.Forbid();
@@ -768,7 +769,7 @@ public static class ChatEndpoints
         g.MapPost("/conversations/{id:guid}/hide", async (Guid id, ClaimsPrincipal principal, Database db) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
             var viewerMember = await ViewerMemberUsername(conn, id, me, admin);
             if (viewerMember is null) return Results.Forbid();
@@ -782,7 +783,7 @@ public static class ChatEndpoints
         g.MapDelete("/conversations/{id:guid}", async (Guid id, ClaimsPrincipal principal, Database db) =>
         {
             var me = principal.Username();
-            var admin = principal.IsAdmin();
+            var admin = principal.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
             var viewerMember = await ViewerMemberUsername(conn, id, me, admin);
             if (viewerMember is null) return Results.Forbid();
@@ -834,7 +835,7 @@ public static class ChatEndpoints
         // Dung lượng DB của mục Trò chuyện (chỉ admin) — phục vụ trang Hệ thống → tab Cơ sở dữ liệu.
         g.MapGet("/db-usage", async (ClaimsPrincipal principal, Database db) =>
         {
-            if (!principal.IsAdmin()) return Results.Forbid();
+            if (!principal.Can(Permissions.UsersManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var usage = await ReadChatDbUsage(conn);
             return Results.Ok(usage);

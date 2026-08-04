@@ -4,29 +4,36 @@
 
 /* =========================================================================
    KetoanMini Web — Hệ thiết kế "Liquid Glass"
-   Bảng màu lấy từ app desktop (WpfTheme.cs): accent sáng #2563EB, tối #11C5BF.
+   Sapphire Ledger: sapphire chủ đạo, jade bổ trợ và nền mực xanh trung tính.
    ========================================================================= */
 
 :root {
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-soft: rgba(37, 99, 235, 0.14);
-  --accent-rgb: 37, 99, 235;
+  --brand-sapphire: #3457d5;
+  --brand-jade: #129887;
+  --brand-jade-bright: #21b5a3;
+  --brand-indigo: #7259d6;
+  --brand-navy: #102f66;
+  --brand-ink: #10233f;
+
+  --accent: var(--brand-sapphire);
+  --accent-hover: #2946b5;
+  --accent-soft: rgba(52, 87, 213, 0.14);
+  --accent-rgb: 52, 87, 213;
 
   /* Nút chính: sáng = nền accent đặc; tối = nền tối + viền/chữ accent (ghi đè ở khối dark) */
   --btn-primary-bg: var(--accent);
   --btn-primary-text: #ffffff;
   --btn-primary-border: transparent;
 
-  --bg: #eef2f9;
-  --text: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #7c899c;
+  --bg: #eef3fa;
+  --text: var(--brand-ink);
+  --text-secondary: #52647f;
+  --text-muted: #7a8ba4;
 
   --km-control-bg: #ffffff;
-  --km-control-border: #d3ddec;
-  --km-control-file-bg: rgba(37, 99, 235, 0.1);
-  --km-control-file-text: #1d4ed8;
+  --km-control-border: #d2ddec;
+  --km-control-file-bg: rgba(52, 87, 213, 0.1);
+  --km-control-file-text: #2946b5;
   --km-select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23647589' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* Tấm kính */
@@ -36,50 +43,57 @@
   --glass-shadow: 0 10px 40px -12px rgba(15, 23, 42, 0.28);
   --glass-highlight: rgba(255, 255, 255, 0.9);
 
-  --sidebar-bg: rgba(13, 21, 40, 0.82);
-  --sidebar-text: #aeb8c8;
-  --sidebar-active: #2563eb;
+  --sidebar-bg: rgba(8, 26, 54, 0.86);
+  --sidebar-text: #b7c4d8;
+  --sidebar-active: var(--brand-sapphire);
 
   --success: #10b981;
   --warning: #f59e0b;
   --danger: #ef4444;
-  --purple: #8b5cf6;
+  --purple: var(--brand-indigo);
 
   color-scheme: light;
 }
 
 html[data-theme="dark"] {
-  --accent: #11c5bf;
-  --accent-hover: #18d7d0;
-  --accent-soft: rgba(17, 197, 191, 0.16);
-  --accent-rgb: 17, 197, 191;
+  --brand-sapphire: #6f88ee;
+  --brand-jade: #2ac1b1;
+  --brand-jade-bright: #3dd2c1;
+  --brand-indigo: #917be7;
+  --brand-navy: #152e5d;
+  --brand-ink: #f0f5fb;
+
+  --accent: var(--brand-jade);
+  --accent-hover: var(--brand-jade-bright);
+  --accent-soft: rgba(42, 193, 177, 0.16);
+  --accent-rgb: 42, 193, 177;
 
   --btn-primary-bg:
-    linear-gradient(180deg, rgba(17, 197, 191, 0.16), rgba(17, 197, 191, 0.07)),
-    rgba(18, 25, 36, 0.92);
+    linear-gradient(180deg, rgba(42, 193, 177, 0.16), rgba(42, 193, 177, 0.07)),
+    rgba(15, 25, 39, 0.94);
   --btn-primary-text: #eaf6fb;
-  --btn-primary-border: rgba(17, 197, 191, 0.42);
+  --btn-primary-border: rgba(42, 193, 177, 0.42);
 
-  --bg: #050709;
-  --text: #f5f7fa;
-  --text-secondary: #b4bcc9;
-  --text-muted: #8a95a6;
+  --bg: #070b12;
+  --text: #f0f5fb;
+  --text-secondary: #b9c5d6;
+  --text-muted: #8e9bb0;
 
-  --km-control-bg: #141d2c;
+  --km-control-bg: #111b2a;
   --km-control-border: rgba(255, 255, 255, 0.12);
   --km-control-file-bg: rgba(255, 255, 255, 0.09);
   --km-control-file-text: #f1f5fc;
   --km-select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-  --glass-bg: rgba(15, 20, 28, 0.82);
-  --glass-bg-strong: rgba(18, 24, 33, 0.9);
+  --glass-bg: rgba(12, 19, 30, 0.84);
+  --glass-bg-strong: rgba(16, 25, 39, 0.92);
   --glass-border: rgba(255, 255, 255, 0.11);
   --glass-shadow: 0 14px 48px -14px rgba(0, 0, 0, 0.8);
   --glass-highlight: rgba(255, 255, 255, 0.1);
 
-  --sidebar-bg: rgba(5, 7, 11, 0.86);
-  --sidebar-text: #9aa3af;
-  --sidebar-active: #11c5bf;
+  --sidebar-bg: rgba(4, 10, 18, 0.9);
+  --sidebar-text: #9eabba;
+  --sidebar-active: var(--brand-jade);
 
   --success: #22c55e;
   color-scheme: dark;
@@ -109,7 +123,7 @@ body {
 select option,
 select optgroup {
   background-color: #ffffff;
-  color: #0f172a;
+  color: #10233f;
 }
 
 html[data-theme="dark"] select {
@@ -118,7 +132,7 @@ html[data-theme="dark"] select {
 
 html[data-theme="dark"] select option,
 html[data-theme="dark"] select optgroup {
-  background-color: #161f2e;
+  background-color: #182437;
   color: #f1f5fc;
 }
 
@@ -136,7 +150,7 @@ html[data-theme="dark"] input[list] {
   background: var(--bg);
 }
 .liquid-bg--plain {
-  background: #f5f6f8;
+  background: #eef3fa;
 }
 .liquid-bg--plain::before,
 .liquid-bg--plain::after,
@@ -309,9 +323,9 @@ html[data-theme="dark"] .chat-id-trigger:hover { background: rgba(148, 163, 184,
 .chat-home-button { display: none; }
 
 .chat-mobile-shell {
-  --text: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
+  --text: #10233f;
+  --text-secondary: #52647f;
+  --text-muted: #7a8ba4;
   --glass-bg-strong: #ffffff;
   --glass-border: rgba(148, 163, 184, 0.32);
 }
@@ -319,7 +333,7 @@ html[data-theme="dark"] .chat-id-trigger:hover { background: rgba(148, 163, 184,
 .chat-mobile-shell .gc-panel,
 .chat-profile-shell > .gc-panel {
   border-color: rgba(148, 163, 184, 0.34);
-  background: #f1f5f9;
+  background: #eef3fa;
   box-shadow:
     0 18px 48px -28px rgba(15, 23, 42, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.95);
@@ -339,17 +353,17 @@ html[data-theme="dark"] .chat-id-trigger:hover { background: rgba(148, 163, 184,
 }
 
 html[data-theme="dark"] .chat-mobile-shell {
-  --text: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
-  --glass-bg-strong: rgba(15, 23, 42, 0.96);
+  --text: #f0f5fb;
+  --text-secondary: #b9c5d6;
+  --text-muted: #8e9bb0;
+  --glass-bg-strong: rgba(16, 25, 39, 0.96);
   --glass-border: rgba(148, 163, 184, 0.24);
 }
 
 html[data-theme="dark"] .chat-mobile-shell .gc-panel,
 html[data-theme="dark"] .chat-profile-shell > .gc-panel {
   border-color: rgba(148, 163, 184, 0.24);
-  background: #111827;
+  background: #111b2a;
   box-shadow:
     0 18px 48px -28px rgba(0, 0, 0, 0.8),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -511,11 +525,11 @@ html[data-theme="dark"] .chat-conversation-list .chat-conversation-menu-button:f
     flex: 0 0 auto;
     gap: 8px;
     padding: 10px;
-    background: #f1f5f9;
+    background: #eef3fa;
   }
 
   html[data-theme="dark"] .chat-thread-panel > header {
-    background: #111827;
+    background: #111b2a;
   }
 
   .chat-thread-panel > header .chat-id-trigger {
@@ -1028,27 +1042,43 @@ html[data-theme="dark"] .giacong-liquid-search-input::placeholder {
    KetoanMini reference shell - iOS Liquid Glass dashboard
    ========================================================================= */
 :root {
-  --background-start: #dceaff;
-  --background-middle: #eef5ff;
-  --background-end: #eee8ff;
-  --sidebar-start: #061a3c;
-  --sidebar-middle: #08275a;
-  --sidebar-end: #071b42;
+  --background-start: #dfe9f7;
+  --background-middle: #eff4fa;
+  --background-end: #eeeaf8;
+  --sidebar-start: #081a36;
+  --sidebar-middle: #102f5a;
+  --sidebar-end: #0d2348;
   --glass-light: rgba(255, 255, 255, 0.34);
   --glass-medium: rgba(224, 238, 255, 0.24);
   --glass-dark: rgba(7, 27, 66, 0.58);
   --glass-border: rgba(255, 255, 255, 0.5);
   --glass-highlight: rgba(255, 255, 255, 0.78);
-  --blue-glow: rgba(44, 154, 255, 0.6);
-  --cyan-glow: rgba(87, 224, 255, 0.48);
-  --violet-glow: rgba(139, 105, 255, 0.34);
-  --text-primary: #071a3f;
-  --text-secondary: #587098;
+  --blue-glow: rgba(52, 87, 213, 0.48);
+  --cyan-glow: rgba(18, 152, 135, 0.36);
+  --violet-glow: rgba(114, 89, 214, 0.28);
+  --text-primary: #10233f;
+  --text-secondary: #5d6f8c;
   --bg: linear-gradient(135deg, var(--background-start), var(--background-middle) 47%, var(--background-end));
   --text: var(--text-primary);
-  --text-muted: #7890b8;
-  --sidebar-bg: linear-gradient(180deg, rgba(6, 26, 60, 0.94), rgba(8, 39, 90, 0.9) 46%, rgba(7, 27, 66, 0.94));
-  --sidebar-text: rgba(220, 232, 255, 0.74);
+  --text-muted: #7b8da8;
+  --sidebar-bg: linear-gradient(180deg, rgba(8, 26, 54, 0.96), rgba(16, 47, 90, 0.92) 46%, rgba(13, 35, 72, 0.96));
+  --sidebar-text: rgba(222, 233, 249, 0.76);
+}
+
+html[data-theme="dark"] {
+  --background-start: #070b12;
+  --background-middle: #0b1320;
+  --background-end: #111126;
+  --sidebar-start: #040a12;
+  --sidebar-middle: #09172b;
+  --sidebar-end: #07111f;
+  --glass-light: rgba(255, 255, 255, 0.055);
+  --glass-medium: rgba(42, 193, 177, 0.035);
+  --glass-dark: rgba(3, 9, 17, 0.72);
+  --text-primary: #f0f5fb;
+  --text-secondary: #b9c5d6;
+  --text-muted: #8e9bb0;
+  --sidebar-bg: linear-gradient(180deg, rgba(4, 10, 18, 0.98), rgba(9, 23, 43, 0.96) 46%, rgba(7, 17, 31, 0.98));
 }
 
 html {
@@ -1057,14 +1087,27 @@ html {
 
 body {
   background:
-    radial-gradient(circle at 8% 6%, rgba(38, 132, 255, 0.34), transparent 32%),
-    radial-gradient(circle at 88% 12%, rgba(185, 162, 255, 0.34), transparent 34%),
+    radial-gradient(circle at 8% 6%, rgba(52, 87, 213, 0.26), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(114, 89, 214, 0.22), transparent 34%),
+    linear-gradient(135deg, var(--background-start), var(--background-middle) 48%, var(--background-end));
+}
+
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 8% 6%, rgba(42, 193, 177, 0.1), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(114, 89, 214, 0.09), transparent 34%),
     linear-gradient(135deg, var(--background-start), var(--background-middle) 48%, var(--background-end));
 }
 
 .liquid-bg {
   background:
-    linear-gradient(135deg, rgba(220, 234, 255, 0.9), rgba(245, 250, 255, 0.75) 45%, rgba(238, 232, 255, 0.85)),
+    linear-gradient(135deg, rgba(223, 233, 247, 0.92), rgba(248, 251, 255, 0.78) 45%, rgba(238, 234, 248, 0.88)),
+    var(--bg);
+}
+
+html[data-theme="dark"] .liquid-bg {
+  background:
+    linear-gradient(135deg, rgba(7, 11, 18, 0.96), rgba(11, 19, 32, 0.9) 45%, rgba(17, 17, 38, 0.92)),
     var(--bg);
 }
 
@@ -1074,7 +1117,7 @@ body {
   left: -20vw;
   top: -16vw;
   background:
-    radial-gradient(circle at 42% 42%, rgba(39, 133, 255, 0.45), transparent 58%),
+    radial-gradient(circle at 42% 42%, rgba(52, 87, 213, 0.38), transparent 58%),
     radial-gradient(circle at 68% 32%, rgba(255, 255, 255, 0.42), transparent 48%);
   opacity: 0.75;
 }
@@ -1236,9 +1279,9 @@ html[data-theme="dark"] .glass-strong {
   border: 1px solid rgba(117, 207, 255, 0.58);
   background:
     radial-gradient(circle at 32% 24%, rgba(255,255,255,0.46), transparent 28%),
-    linear-gradient(135deg, #14a8ff, #1b5dff 52%, #704dff);
+    linear-gradient(135deg, #21b5a3, #3457d5 52%, #7259d6);
   box-shadow:
-    0 0 30px rgba(42, 148, 255, 0.62),
+    0 0 30px rgba(52, 87, 213, 0.5),
     inset 0 1px 0 rgba(255,255,255,0.45);
   color: white;
   font-size: 0.95rem;
@@ -1521,7 +1564,7 @@ html[data-theme="dark"] .glass-strong {
   border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.82);
   background: linear-gradient(150deg, rgba(255, 255, 255, 0.94), rgba(241, 248, 255, 0.82));
-  box-shadow: 0 24px 54px rgba(37, 99, 235, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  box-shadow: 0 24px 54px rgba(52, 87, 213, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.92);
   padding: 1rem 1.05rem;
   color: var(--text);
   text-align: left;
@@ -1547,7 +1590,7 @@ html[data-theme="dark"] .km-chat-toast {
   color: #fff;
   font-size: 0.82rem;
   font-weight: 900;
-  background: linear-gradient(145deg, #2f6df6, #56b1ff);
+  background: linear-gradient(145deg, #3457d5, #6f88ee);
   box-shadow: 0 10px 22px rgba(47, 109, 246, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 
@@ -1613,7 +1656,7 @@ html[data-theme="dark"] .km-chat-toast {
   height: 4px;
   overflow: hidden;
   border-radius: 20px 20px 0 0;
-  background: rgba(37, 99, 235, 0.14);
+  background: rgba(52, 87, 213, 0.14);
 }
 
 .km-chat-toast-bars span::after {
@@ -1621,7 +1664,7 @@ html[data-theme="dark"] .km-chat-toast {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(90deg, #2563eb, #06b6d4);
+  background: linear-gradient(90deg, var(--brand-sapphire), var(--brand-jade));
   transform-origin: left center;
   animation: kmChatToastBar 6.5s linear forwards;
 }
@@ -1748,7 +1791,7 @@ html[data-theme="dark"] .km-chat-toast {
   border: 1px solid rgba(142, 221, 255, 0.72);
   background:
     radial-gradient(circle at 32% 24%, rgba(255,255,255,0.58), transparent 30%),
-    linear-gradient(135deg, #13b8ff, #1b63ff 58%, #7257ff);
+    linear-gradient(135deg, #21b5a3, #3457d5 58%, #7259d6);
   box-shadow:
     0 0 18px rgba(42, 171, 255, 0.52),
     inset 0 1px 0 rgba(255,255,255,0.42);
@@ -2219,7 +2262,7 @@ html[data-theme="dark"] .km-chat-toast {
   width: 30px;
   place-items: center;
   border-radius: 9999px;
-  background: linear-gradient(135deg, #0d7dff, #184cff 64%, #7257ff);
+  background: linear-gradient(135deg, #129887, #3457d5 64%, #7259d6);
   color: white;
   font-weight: 900;
 }
@@ -2323,7 +2366,7 @@ html[data-theme="dark"] .km-chat-toast {
 
 .km-stat-value {
   margin-top: 4px;
-  color: #071a4a;
+  color: #10233f;
   font-size: clamp(1.15rem, 1.4vw, 1.45rem);
   font-weight: 900;
   line-height: 1;
@@ -2359,7 +2402,7 @@ html[data-theme="dark"] .km-chat-toast {
 }
 
 .km-activity-header h2 {
-  color: #173b74;
+  color: #2946b5;
   font-size: 0.95rem;
   font-weight: 850;
 }
@@ -2501,20 +2544,20 @@ html.perf-lite .liquid-bg .orb {
 
 /* Kính → đục để bù cho việc bỏ blur */
 html.perf-lite {
-  --glass-bg: #eef2f8 !important;
+  --glass-bg: #eef3fa !important;
   --glass-bg-strong: #ffffff !important;
 }
 html.perf-lite .gc-root {
-  --gc-surface: #eef2f8 !important;
+  --gc-surface: #eef3fa !important;
   --gc-surface-strong: #ffffff !important;
 }
 html[data-theme="dark"].perf-lite {
-  --glass-bg: #141c28 !important;
-  --glass-bg-strong: #18212f !important;
+  --glass-bg: #111b2a !important;
+  --glass-bg-strong: #182437 !important;
 }
 html[data-theme="dark"].perf-lite .gc-root {
-  --gc-surface: #141c28 !important;
-  --gc-surface-strong: #18212f !important;
+  --gc-surface: #111b2a !important;
+  --gc-surface-strong: #182437 !important;
 }
 
 /* Tắt animation trang trí lặp vô hạn (glint/sheen); giữ chuyển động chức năng */
@@ -2824,7 +2867,7 @@ html[data-theme="dark"] .km-stat-icon {
 
 html[data-theme="dark"] .km-trend-badge {
   background: rgba(40, 200, 160, 0.18);
-  color: #4ee0b0;
+  color: #21b5a3;
 }
 
 html[data-theme="dark"] .km-activity-header h2 {
@@ -2859,7 +2902,7 @@ html[data-theme="dark"] .km-type-badge {
 
 html[data-theme="dark"] .km-type-badge.is-income {
   background: rgba(40, 200, 160, 0.2);
-  color: #4ee0b0;
+  color: #21b5a3;
 }
 
 html[data-theme="dark"] .km-type-badge.is-expense {
@@ -2874,7 +2917,7 @@ html[data-theme="dark"] .km-see-more {
 /* Nút gạt theme: trong dark dùng accent ngọc thay vì xanh dương chói */
 html[data-theme="dark"] .km-theme-knob {
   background: linear-gradient(135deg, #19d3cb, #0e8f97);
-  box-shadow: 0 8px 20px -10px rgba(17, 197, 191, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  box-shadow: 0 8px 20px -10px rgba(42, 193, 177, 0.64), inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 /* =========================================================================

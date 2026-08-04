@@ -137,7 +137,7 @@ function buildExcelHtml(items: PrintableDocument[], companyName: string, dateFro
     th {
       background: #eaf2f8;
       border-color: #b7c9d6;
-      color: #0f172a;
+      color: #10233f;
       font-weight: 700;
       text-align: center;
     }
@@ -159,7 +159,7 @@ function buildExcelHtml(items: PrintableDocument[], companyName: string, dateFro
     }
     .subtitle {
       background: #f8fafc;
-      color: #475569;
+      color: #52647f;
       font-style: italic;
       text-align: center;
     }

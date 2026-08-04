@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -24,13 +25,14 @@ public static class WorklistEndpoints
 
     public static void MapWorklist(this WebApplication app)
     {
-        // Ai đăng nhập cũng lấy được worklist CỦA CHÍNH MÌNH.
-        var g = app.MapGroup("/api/worklist").RequireAuthorization();
+        // Mọi tài khoản nhân viên lấy được worklist CỦA CHÍNH MÌNH; danh tính kiosk bị tách biệt.
+        var g = app.MapGroup("/api/worklist").RequirePermission(Permissions.RequestsSelf);
 
         g.MapGet("/", async (ClaimsPrincipal u, Database db) =>
         {
             var me = u.Username();
-            var admin = u.IsAdmin();
+            var canApprove = u.Can(Permissions.RequestsApprove);
+            var canManage = u.Can(Permissions.RequestsManage);
             var now = DateTime.UtcNow;
             var today = DateOnly.FromDateTime(now);
             var items = new List<WorklistItem>();
@@ -44,11 +46,15 @@ public static class WorklistEndpoints
                 WHERE r.status='Pending' AND EXISTS (
                     SELECT 1 FROM hr_request_approvals a
                     WHERE a.request_id=r.id AND a.step_no=r.current_step AND a.status='Pending'
-                      AND (a.approver_username=@me OR (a.approver_role='Admin' AND @admin))
+                      AND ((lower(a.approver_username)=lower(@me) AND @canApprove)
+                           OR (lower(a.approver_role) IN (lower(@finalRole), lower(@legacyFinalRole)) AND @canManage))
                 )
                 ORDER BY r.due_at NULLS LAST, r.created_at
                 LIMIT 100
-                """).With("@me", me).With("@admin", admin).ExecuteReaderAsync())
+                """).With("@me", me).With("@canApprove", canApprove).With("@canManage", canManage)
+                .With("@finalRole", RequestEndpoints.FinalApprovalQueue)
+                .With("@legacyFinalRole", RequestEndpoints.LegacyFinalApprovalQueue)
+                .ExecuteReaderAsync())
             {
                 while (await r.ReadAsync())
                 {

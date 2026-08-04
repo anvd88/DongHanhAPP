@@ -37,8 +37,8 @@ public sealed class WorklistTests : IAsyncLifetime
         await conn.Cmd(
             @"INSERT INTO app_users
                  (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at, is_deleted)
-              VALUES (@id, @u, @u, '', 'Employee', @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, FALSE)
-              ON CONFLICT (username) DO UPDATE SET is_active=TRUE, is_deleted=FALSE, role='Employee', approval_status='Approved'")
+              VALUES (@id, @u, @u, '', 'Manager', @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, FALSE)
+              ON CONFLICT (username) DO UPDATE SET is_active=TRUE, is_deleted=FALSE, role='Manager', approval_status='Approved'")
             .With("@id", Guid.NewGuid()).With("@u", User).With("@ph", PasswordHasher.Hash("test-pass")).ExecuteNonQueryAsync();
 
         _employeeId = Guid.NewGuid();
@@ -96,7 +96,7 @@ public sealed class WorklistTests : IAsyncLifetime
         await using var conn = await db.OpenAsync();
         var id = (Guid)(await conn.Cmd("SELECT id FROM app_users WHERE username=@u").With("@u", User).ExecuteScalarAsync())!;
         var tokens = scope.ServiceProvider.GetRequiredService<TokenService>();
-        var token = tokens.CreateToken(new UserDto(id, User, User, "", "Employee", true, "Approved", DateTime.UtcNow));
+        var token = tokens.CreateToken(new UserDto(id, User, User, "", AppRoles.Manager, true, "Approved", DateTime.UtcNow));
 
         var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);

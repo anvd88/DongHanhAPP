@@ -4,14 +4,14 @@
 }
 
 .hr-app-shell {
-  --hr-bg: #f4f6f8;
+  --hr-bg: #eef3fa;
   --hr-surface: #ffffff;
-  --hr-surface-2: #eef2f5;
-  --hr-border: #d9e0e8;
-  --hr-text: #172033;
-  --hr-muted: #667085;
-  --hr-primary: #1f5f4a;
-  --hr-primary-dark: #164733;
+  --hr-surface-2: #e8eef7;
+  --hr-border: #d2ddec;
+  --hr-text: #10233f;
+  --hr-muted: #65758d;
+  --hr-primary: #129887;
+  --hr-primary-dark: #0b7668;
   --hr-danger: #b42318;
   --hr-warning: #b7791f;
   --hr-success: #14804a;
@@ -23,14 +23,14 @@
 }
 
 html[data-theme="dark"] .hr-app-shell {
-  --hr-bg: #0f141b;
-  --hr-surface: #171d26;
-  --hr-surface-2: #222b36;
-  --hr-border: #2b3442;
-  --hr-text: #f2f4f7;
-  --hr-muted: #a6afbd;
-  --hr-primary: #3e8f70;
-  --hr-primary-dark: #8ed8b8;
+  --hr-bg: #070b12;
+  --hr-surface: #111b2a;
+  --hr-surface-2: #182437;
+  --hr-border: #2a384c;
+  --hr-text: #f0f5fb;
+  --hr-muted: #9eabba;
+  --hr-primary: #2ac1b1;
+  --hr-primary-dark: #78ddd2;
 }
 
 .hr-app-topbar {
@@ -159,7 +159,7 @@ html[data-theme="dark"] .hr-app-shell {
 }
 
 html[data-theme="dark"] .hr-bottom-link.is-active {
-  background: #20342c;
+  background: #0a3438;
 }
 
 .hr-drawer-layer {
@@ -253,7 +253,7 @@ html[data-theme="dark"] .hr-bottom-link.is-active {
 }
 
 html[data-theme="dark"] .hr-drawer-link.is-active {
-  background: #20342c;
+  background: #0a3438;
 }
 
 .hr-logout {

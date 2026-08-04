@@ -16,8 +16,38 @@ public static class AuthEndpoints
     {
         var g = app.MapGroup("/api/auth");
 
-        g.MapPost("/login", async (LoginRequest req, Database db, TokenService tokens, HttpContext http, IHubContext<ChangesHub> hub, PushService push) =>
+        // Handshake tiền xác thực thật: máy chủ phát vé ngắn hạn trong cookie HttpOnly, ràng buộc với
+        // sid + User-Agent. Nó không phải phiên tài khoản và không cấp bất kỳ quyền nào.
+        g.MapPost("/bootstrap", (LoginBootstrapRequest req, LoginBootstrapService bootstraps, HttpContext http) =>
         {
+            NoStore(http);
+            var sid = LoginBootstrapService.NormalizeSessionId(req.Sid);
+            if (sid is null)
+                return Results.BadRequest(new { message = "Không thể tạo mã phiên trình duyệt hợp lệ." });
+
+            var issued = bootstraps.IssueCookie(http, sid);
+            return Results.Ok(new LoginBootstrapResponse(
+                Ready: true,
+                ExpiresAt: issued.ExpiresAt,
+                Protocol: LoginBootstrapService.Protocol,
+                SecureTransport: http.Request.IsHttps));
+        }).AllowAnonymous().RequireRateLimiting("login-bootstrap");
+
+        g.MapPost("/login", async (LoginRequest req, Database db, TokenService tokens,
+            LoginBootstrapService bootstraps, HttpContext http, IHubContext<ChangesHub> hub, PushService push) =>
+        {
+            var isNative = IsNativeClient(req.Client);
+            if (!isNative && !bootstraps.ValidateCookie(http, req.Sid))
+            {
+                LoginBootstrapService.ClearCookie(http);
+                NoStore(http);
+                return Results.Json(new
+                {
+                    message = "Phiên bảo mật chưa sẵn sàng hoặc đã hết hạn. Vui lòng khởi tạo lại.",
+                    code = "login_bootstrap_required"
+                }, statusCode: StatusCodes.Status428PreconditionRequired);
+            }
+
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mật khẩu." });
 
@@ -63,7 +93,7 @@ public static class AuthEndpoints
             }
 
             // Cờ "tắt đăng nhập trên web": chỉ áp cho trình duyệt web, app native vẫn đăng nhập được.
-            if (!IsNativeClient(req.Client) && !await IsWebLoginEnabledAsync(conn, user.Username))
+            if (!isNative && !await IsWebLoginEnabledAsync(conn, user.Username))
                 return Results.Json(new { message = "Đăng nhập trên web đã bị tắt cho tài khoản này. Hãy dùng ứng dụng để đăng nhập." }, statusCode: 403);
 
             user = user with
@@ -76,7 +106,6 @@ public static class AuthEndpoints
             };
             // Ghi nhận thiết bị đăng nhập ngay để hiện trong "Quản lý thiết bị" + gắn sid vào token
             // (phục vụ thu hồi từ xa). Đăng nhập mới luôn gỡ cờ thu hồi cũ của chính thiết bị đó.
-            var isNative = IsNativeClient(req.Client);
             var clientKind = isNative ? "App" : "Web";
             var sid = WebSessionId(req.Sid, user.Username);
             var knownDevice = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM user_sessions WHERE username=@u AND session_token=@sid")
@@ -924,7 +953,10 @@ public static class AuthEndpoints
     private static IResult IssueSession(HttpContext http, TokenService tokens, UserDto user, string sid, bool isNative)
     {
         var config = http.RequestServices.GetRequiredService<IConfiguration>();
-        if (isNative || !AuthCookies.Enabled(config))
+        if (isNative)
+            return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
+        LoginBootstrapService.ClearCookie(http);
+        if (!AuthCookies.Enabled(config))
             return Results.Ok(new LoginResponse(tokens.CreateToken(user, sid), user));
 
         var expiresAt = tokens.WebExpiresAt();
@@ -937,6 +969,7 @@ public static class AuthEndpoints
     private static string? IssueBrowserSession(HttpContext http, TokenService tokens, UserDto user, string sid)
     {
         var config = http.RequestServices.GetRequiredService<IConfiguration>();
+        LoginBootstrapService.ClearCookie(http);
         if (!AuthCookies.Enabled(config)) return tokens.CreateToken(user, sid);
         AuthCookies.Issue(http, tokens.CreateWebToken(user, sid), tokens.WebExpiresAt());
         return null;

@@ -27,11 +27,13 @@ public sealed class PayoutVoucherTests
         var world = await SetupAsync();
         try
         {
-            var cashier = Client(world.CashierToken);
+            var creator = Client(world.CreatorToken);
+            var approver = Client(world.ApproverToken);
+            var payer = Client(world.PayerToken);
             var worker = Client(world.WorkerToken);
 
             // --- Lập phiếu chi tay (VD: đưa tiền cho nhân viên đi mua dầu) ---
-            var created = await cashier.PostAsJsonAsync("/api/payout-vouchers", new
+            var created = await creator.PostAsJsonAsync("/api/payout-vouchers", new
             {
                 sourceKind = "manual",
                 categoryId = world.FuelCategoryId,
@@ -43,17 +45,17 @@ public sealed class PayoutVoucherTests
             Assert.Equal(HttpStatusCode.OK, created.StatusCode);
             var voucherId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
 
-            var fresh = await FindVoucherAsync(cashier, voucherId);
+            var fresh = await FindVoucherAsync(creator, voucherId);
             Assert.Equal("AwaitingScan", fresh.GetProperty("status").GetString());
             var qrValue = fresh.GetProperty("qrValue").GetString()!;
             Assert.StartsWith("ketoanmini-payout:", qrValue, StringComparison.Ordinal);
 
             // --- CHỐT CHỐNG GIAN LẬN: chưa ai ký nhận thì không duyệt chi được ---
-            var tooEarly = await cashier.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/approve", new { });
+            var tooEarly = await approver.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/approve", new { });
             Assert.Equal(HttpStatusCode.BadRequest, tooEarly.StatusCode);
 
             // --- Người khác quét hộ: bị từ chối và KHÔNG lộ số tiền/tên người nhận ---
-            var stranger = await cashier.PostAsJsonAsync("/api/qr/resolve", ResolveBody(qrValue));
+            var stranger = await creator.PostAsJsonAsync("/api/qr/resolve", ResolveBody(qrValue));
             Assert.Equal(HttpStatusCode.OK, stranger.StatusCode);
             var strangerEnvelope = await stranger.Content.ReadFromJsonAsync<JsonElement>();
             Assert.Empty(strangerEnvelope.GetProperty("actions").EnumerateArray());
@@ -63,39 +65,87 @@ public sealed class PayoutVoucherTests
 
             // --- Đúng người nhận quét: server trả hộp thoại xác nhận kèm vé quyết định ---
             var resolved = await worker.PostAsJsonAsync("/api/qr/resolve", ResolveBody(qrValue));
-            Assert.Equal(HttpStatusCode.OK, resolved.StatusCode);
+            Assert.True(resolved.StatusCode == HttpStatusCode.OK,
+                $"QR resolve trả {resolved.StatusCode}: {await resolved.Content.ReadAsStringAsync()}");
             var envelope = await resolved.Content.ReadFromJsonAsync<JsonElement>();
             Assert.False(envelope.GetProperty("unhandled").GetBoolean());
             var decisionToken = envelope.GetProperty("decisionToken").GetString()!;
-            Assert.Contains("500.000", envelope.GetProperty("presentation").GetProperty("message").GetString()!,
-                StringComparison.Ordinal);
+            var payoutMessage = envelope.GetProperty("presentation").GetProperty("message").GetString()!;
+            Assert.Contains("500", payoutMessage, StringComparison.Ordinal);
+            Assert.Contains("₫", payoutMessage, StringComparison.Ordinal);
             Assert.Contains(envelope.GetProperty("actions").EnumerateArray(),
                 a => a.GetProperty("id").GetString() == "payout_confirm" &&
                      a.GetProperty("type").GetString() == "server_decision");
 
             // Vé của người này không dùng được ở tài khoản khác.
             Assert.Equal(HttpStatusCode.BadRequest,
-                (await cashier.PostAsJsonAsync("/api/qr/decision",
+                (await creator.PostAsJsonAsync("/api/qr/decision",
                     new { decisionToken, actionId = "payout_confirm" })).StatusCode);
 
             // --- Người nhận ký nhận ---
             var confirm = await worker.PostAsJsonAsync("/api/qr/decision", new { decisionToken, actionId = "payout_confirm" });
             Assert.Equal(HttpStatusCode.OK, confirm.StatusCode);
-            Assert.Equal("Confirmed", (await FindVoucherAsync(cashier, voucherId)).GetProperty("status").GetString());
+            Assert.Equal("Confirmed", (await FindVoucherAsync(creator, voucherId)).GetProperty("status").GetString());
 
             // Ký nhận lần hai bằng vé cũ không đổi được gì (mã QR đã bị thu hồi).
             Assert.Equal(HttpStatusCode.BadRequest,
                 (await worker.PostAsJsonAsync("/api/qr/decision",
                     new { decisionToken, actionId = "payout_confirm" })).StatusCode);
 
-            // --- Giờ mới duyệt chi được ---
+            // Người lập không tự duyệt được; kế toán trưởng duyệt nhưng CHƯA được coi là đã chi.
+            Assert.Equal(HttpStatusCode.Forbidden,
+                (await creator.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/approve", new { })).StatusCode);
             Assert.Equal(HttpStatusCode.NoContent,
-                (await cashier.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/approve", new { })).StatusCode);
-            var paid = await FindVoucherAsync(cashier, voucherId);
+                (await approver.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/approve", new { note = "Đủ chứng từ" })).StatusCode);
+            var approved = await FindVoucherAsync(creator, voucherId);
+            Assert.Equal("Approved", approved.GetProperty("status").GetString());
+            Assert.Equal(world.ApproverUsername, approved.GetProperty("approvedBy").GetString());
+            Assert.True(approved.TryGetProperty("approvedAt", out var approvedAt) && approvedAt.ValueKind == JsonValueKind.String);
+
+            // Chỉ thủ quỹ có payout.pay mới hoàn tất thực chi.
+            Assert.Equal(HttpStatusCode.Forbidden,
+                (await approver.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/complete", new { })).StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent,
+                (await payer.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/complete", new { note = "Đã giao đủ tiền" })).StatusCode);
+            var paid = await FindVoucherAsync(creator, voucherId);
             Assert.Equal("Paid", paid.GetProperty("status").GetString());
+            Assert.Equal(world.PayerUsername, paid.GetProperty("completedBy").GetString());
+            Assert.True(paid.TryGetProperty("completedAt", out var completedAt) && completedAt.ValueKind == JsonValueKind.String);
             // Chi xong thì mã QR phải biến mất khỏi phiếu (API bỏ hẳn trường null — xem DefaultIgnoreCondition).
             Assert.True(!paid.TryGetProperty("qrValue", out var leftoverQr) ||
                         leftoverQr.ValueKind is JsonValueKind.Null);
+
+            // Lịch sử là chuỗi append-only đầy đủ actor/action/before/after/note.
+            var history = await (await creator.GetAsync($"/api/payout-vouchers/{voucherId}/history"))
+                .Content.ReadFromJsonAsync<JsonElement>();
+            var events = history.EnumerateArray().ToArray();
+            Assert.Equal(new[] { "created", "recipient_confirmed", "approved", "completed" },
+                events.Select(e => e.GetProperty("action").GetString()).ToArray());
+            Assert.Equal(world.CreatorUsername, events[0].GetProperty("actor").GetString());
+            Assert.Equal(world.WorkerUsername, events[1].GetProperty("actor").GetString());
+            Assert.Equal("Confirmed", events[2].GetProperty("beforeStatus").GetString());
+            Assert.Equal("Approved", events[2].GetProperty("afterStatus").GetString());
+            Assert.Equal("Đủ chứng từ", events[2].GetProperty("note").GetString());
+            Assert.Equal("Approved", events[3].GetProperty("beforeStatus").GetString());
+            Assert.Equal("Paid", events[3].GetProperty("afterStatus").GetString());
+            Assert.All(events, e =>
+            {
+                Assert.True(e.TryGetProperty("before", out _));
+                Assert.True(e.TryGetProperty("after", out _));
+                Assert.Equal(JsonValueKind.String, e.GetProperty("occurredAt").ValueKind);
+            });
+            using (var scope = _factory.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<Database>();
+                await using var conn = await db.OpenAsync();
+                var eventId = events[0].GetProperty("id").GetGuid();
+                var ex = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => conn.Cmd(
+                        "UPDATE hr_payout_voucher_events SET note='tampered' WHERE id=@id")
+                    .With("@id", eventId).ExecuteNonQueryAsync());
+                Assert.Contains("append-only", ex.MessageText, StringComparison.OrdinalIgnoreCase);
+            }
+            Assert.Equal(HttpStatusCode.Forbidden,
+                (await worker.GetAsync($"/api/payout-vouchers/{voucherId}/history")).StatusCode);
         }
         finally
         {
@@ -118,13 +168,13 @@ public sealed class PayoutVoucherTests
                 reason = "Thử quyền",
             };
 
-            // Nhân viên thường (dù NGỒI ở phòng kế toán) → không được.
+            // Nhân viên thường không có payout.create → không được.
             Assert.Equal(HttpStatusCode.Forbidden,
                 (await Client(world.WorkerToken).PostAsJsonAsync("/api/payout-vouchers", body)).StatusCode);
 
-            // Admin → cố ý KHÔNG được chi tiền (tách quyền quản trị với quyền chi).
+            // Thủ quỹ chỉ có payout.pay, không có quyền tự lập phiếu.
             Assert.Equal(HttpStatusCode.Forbidden,
-                (await Client(world.AdminToken).PostAsJsonAsync("/api/payout-vouchers", body)).StatusCode);
+                (await Client(world.PayerToken).PostAsJsonAsync("/api/payout-vouchers", body)).StatusCode);
 
             // Có role Accounting nhưng KHÔNG thuộc phòng kế toán → không được.
             Assert.Equal(HttpStatusCode.Forbidden,
@@ -132,7 +182,60 @@ public sealed class PayoutVoucherTests
 
             // Đủ cả hai điều kiện → được.
             Assert.Equal(HttpStatusCode.OK,
-                (await Client(world.CashierToken).PostAsJsonAsync("/api/payout-vouchers", body)).StatusCode);
+                (await Client(world.CreatorToken).PostAsJsonAsync("/api/payout-vouchers", body)).StatusCode);
+
+            // Admin nhận toàn bộ permission theo matrix, nhưng vẫn phải có hồ sơ ở phòng kế toán.
+            Assert.Equal(HttpStatusCode.OK,
+                (await Client(world.AdminToken).PostAsJsonAsync("/api/payout-vouchers", body)).StatusCode);
+        }
+        finally
+        {
+            await CleanupAsync(world);
+        }
+    }
+
+    [Fact]
+    public async Task VoucherWithoutRecipientConfirmation_CanBeRejected_WithImmutableReasonAndMilestone()
+    {
+        var world = await SetupAsync();
+        try
+        {
+            var creator = Client(world.CreatorToken);
+            var response = await creator.PostAsJsonAsync("/api/payout-vouchers", new
+            {
+                sourceKind = "manual",
+                categoryId = world.FuelCategoryId,
+                employeeId = world.WorkerEmployeeId,
+                amount = 320_000,
+                reason = "Mua vật tư không cần người nhận ký",
+                requiresRecipientConfirmation = false,
+            });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var id = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+            var pending = await FindVoucherAsync(creator, id);
+            Assert.Equal("AwaitingApproval", pending.GetProperty("status").GetString());
+            Assert.False(pending.GetProperty("requiresRecipientConfirmation").GetBoolean());
+            Assert.False(pending.TryGetProperty("qrValue", out var qr) && qr.ValueKind == JsonValueKind.String);
+
+            const string rejection = "Thiếu hóa đơn gốc";
+            Assert.Equal(HttpStatusCode.NoContent,
+                (await Client(world.ApproverToken).PostAsJsonAsync($"/api/payout-vouchers/{id}/reject",
+                    new { reason = rejection })).StatusCode);
+            var rejected = await FindVoucherAsync(creator, id);
+            Assert.Equal("Rejected", rejected.GetProperty("status").GetString());
+            Assert.Equal(world.ApproverUsername, rejected.GetProperty("rejectedBy").GetString());
+            Assert.Equal(rejection, rejected.GetProperty("rejectReason").GetString());
+            Assert.Equal(HttpStatusCode.BadRequest,
+                (await Client(world.PayerToken).PostAsJsonAsync($"/api/payout-vouchers/{id}/complete", new { })).StatusCode);
+
+            var history = await (await creator.GetAsync($"/api/payout-vouchers/{id}/history"))
+                .Content.ReadFromJsonAsync<JsonElement>();
+            var events = history.EnumerateArray().ToArray();
+            Assert.Equal(new[] { "created", "rejected" },
+                events.Select(e => e.GetProperty("action").GetString()).ToArray());
+            Assert.Equal("AwaitingApproval", events[1].GetProperty("beforeStatus").GetString());
+            Assert.Equal("Rejected", events[1].GetProperty("afterStatus").GetString());
+            Assert.Equal(rejection, events[1].GetProperty("note").GetString());
         }
         finally
         {
@@ -161,15 +264,15 @@ public sealed class PayoutVoucherTests
                     .With("@emp", world.WorkerEmployeeId).ExecuteNonQueryAsync();
             }
 
-            var cashier = Client(world.CashierToken);
+            var creator = Client(world.CreatorToken);
 
             // Khoản hoàn phải xuất hiện trong danh sách nguồn để kế toán chọn.
-            var sources = await (await cashier.GetAsync("/api/payout-vouchers/sources/refunds"))
+            var sources = await (await creator.GetAsync("/api/payout-vouchers/sources/refunds"))
                 .Content.ReadFromJsonAsync<JsonElement>();
             Assert.Contains(sources.EnumerateArray(), s => s.GetProperty("id").GetGuid() == refundId);
 
             // Chọn đơn → số tiền LẤY TỪ ĐƠN, không tin số client gửi lên.
-            var created = await cashier.PostAsJsonAsync("/api/payout-vouchers", new
+            var created = await creator.PostAsJsonAsync("/api/payout-vouchers", new
             {
                 sourceKind = "refund",
                 sourceId = refundId,
@@ -178,7 +281,7 @@ public sealed class PayoutVoucherTests
             Assert.Equal(HttpStatusCode.OK, created.StatusCode);
             var voucherId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
 
-            var voucher = await FindVoucherAsync(cashier, voucherId);
+            var voucher = await FindVoucherAsync(creator, voucherId);
             Assert.Equal(1234500m, voucher.GetProperty("amount").GetDecimal());
             Assert.Equal("penalty-refund", voucher.GetProperty("categoryCode").GetString());
 
@@ -187,7 +290,7 @@ public sealed class PayoutVoucherTests
 
             // Cùng một khoản hoàn không lập được hai phiếu.
             Assert.Equal(HttpStatusCode.BadRequest,
-                (await cashier.PostAsJsonAsync("/api/payout-vouchers",
+                (await creator.PostAsJsonAsync("/api/payout-vouchers",
                     new { sourceKind = "refund", sourceId = refundId })).StatusCode);
 
             // Người nhận ký nhận rồi kế toán duyệt chi → khoản hoàn coi như đã trả xong.
@@ -201,7 +304,10 @@ public sealed class PayoutVoucherTests
                 actionId = "payout_confirm",
             });
             Assert.Equal(HttpStatusCode.NoContent,
-                (await cashier.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/approve", new { })).StatusCode);
+                (await Client(world.ApproverToken).PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/approve", new { })).StatusCode);
+            Assert.Equal("Approved", (await FindVoucherAsync(creator, voucherId)).GetProperty("status").GetString());
+            Assert.Equal(HttpStatusCode.NoContent,
+                (await Client(world.PayerToken).PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/complete", new { })).StatusCode);
             Assert.Equal(("Paid", "cash"), await RefundStateAsync(refundId));
         }
         finally
@@ -236,19 +342,22 @@ public sealed class PayoutVoucherTests
                     .With("@emp", world.WorkerEmployeeId).ExecuteNonQueryAsync();
             }
 
-            var cashier = Client(world.CashierToken);
-            var created = await cashier.PostAsJsonAsync("/api/payout-vouchers",
+            var creator = Client(world.CreatorToken);
+            var created = await creator.PostAsJsonAsync("/api/payout-vouchers",
                 new { sourceKind = "refund", sourceId = refundId });
             var voucherId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
             Assert.Equal(("Approved", "cash"), await RefundStateAsync(refundId));
 
             Assert.Equal(HttpStatusCode.NoContent,
-                (await cashier.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/cancel",
+                (await creator.PostAsJsonAsync($"/api/payout-vouchers/{voucherId}/cancel",
                     new { reason = "Nhân viên chọn cộng vào lương" })).StatusCode);
 
             // Hủy phiếu phải trả khoản hoàn về hàng chờ, nếu không tiền của nhân viên sẽ kẹt vĩnh viễn.
             Assert.Equal(("PendingAccounting", ""), await RefundStateAsync(refundId));
-            Assert.Equal("Cancelled", (await FindVoucherAsync(cashier, voucherId)).GetProperty("status").GetString());
+            var cancelled = await FindVoucherAsync(creator, voucherId);
+            Assert.Equal("Cancelled", cancelled.GetProperty("status").GetString());
+            Assert.Equal(world.CreatorUsername, cancelled.GetProperty("cancelledBy").GetString());
+            Assert.Equal("Nhân viên chọn cộng vào lương", cancelled.GetProperty("cancelReason").GetString());
         }
         finally
         {
@@ -266,7 +375,10 @@ public sealed class PayoutVoucherTests
 
     private sealed record World(
         string Suffix, Guid AccountingDeptId, Guid OtherDeptId, Guid WorkerEmployeeId, string WorkerFullName,
-        Guid FuelCategoryId, string CashierToken, string WorkerToken, string AdminToken, string OutsiderAccountantToken,
+        Guid FuelCategoryId,
+        string CreatorUsername, string ApproverUsername, string PayerUsername, string WorkerUsername,
+        string CreatorToken, string ApproverToken, string PayerToken, string WorkerToken,
+        string AdminToken, string OutsiderAccountantToken,
         string[] Usernames);
 
     private async Task<World> SetupAsync()
@@ -277,7 +389,9 @@ public sealed class PayoutVoucherTests
         var workerEmployeeId = Guid.NewGuid();
         var workerName = "NV Kho " + suffix;
 
-        var cashierUser = $"__pv_cashier_{suffix}";
+        var creatorUser = $"__pv_creator_{suffix}";
+        var approverUser = $"__pv_approver_{suffix}";
+        var payerUser = $"__pv_payer_{suffix}";
         var workerUser = $"__pv_worker_{suffix}";
         var adminUser = $"__pv_admin_{suffix}";
         var outsiderUser = $"__pv_outsider_{suffix}";
@@ -294,7 +408,12 @@ public sealed class PayoutVoucherTests
             .With("@id", otherDeptId).With("@c", "KHO" + suffix[..4]).With("@n", "Phòng Kho " + suffix)
             .ExecuteNonQueryAsync();
 
-        var cashierToken = await MakeUserAsync(conn, tokens, cashierUser, AppRoles.Accounting, accountingDeptId, "KT " + suffix, Guid.NewGuid());
+        var creatorToken = await MakeUserAsync(conn, tokens, creatorUser, AppRoles.Accounting,
+            accountingDeptId, "Kế toán " + suffix, Guid.NewGuid());
+        var approverToken = await MakeUserAsync(conn, tokens, approverUser, AppRoles.ChiefAccountant,
+            accountingDeptId, "Kế toán trưởng " + suffix, Guid.NewGuid());
+        var payerToken = await MakeUserAsync(conn, tokens, payerUser, AppRoles.Cashier,
+            accountingDeptId, "Thủ quỹ " + suffix, Guid.NewGuid());
         // Nhân viên nhận tiền: ngồi ở phòng kho, KHÔNG có quyền kế toán.
         var workerToken = await MakeUserAsync(conn, tokens, workerUser, AppRoles.Employee, otherDeptId, workerName, workerEmployeeId);
         var adminToken = await MakeUserAsync(conn, tokens, adminUser, AppRoles.Admin, accountingDeptId, "Admin " + suffix, Guid.NewGuid());
@@ -304,8 +423,9 @@ public sealed class PayoutVoucherTests
             .ExecuteScalarAsync())!;
 
         return new World(suffix, accountingDeptId, otherDeptId, workerEmployeeId, workerName, fuelCategoryId,
-            cashierToken, workerToken, adminToken, outsiderToken,
-            [cashierUser, workerUser, adminUser, outsiderUser]);
+            creatorUser, approverUser, payerUser, workerUser,
+            creatorToken, approverToken, payerToken, workerToken, adminToken, outsiderToken,
+            [creatorUser, approverUser, payerUser, workerUser, adminUser, outsiderUser]);
     }
 
     private static async Task<string> MakeUserAsync(Npgsql.NpgsqlConnection conn, TokenService tokens,

@@ -25,6 +25,7 @@ public sealed class RequestApprovalTests : IAsyncLifetime
 
     // Tài khoản dùng riêng cho bộ test này (dọn sạch ở DisposeAsync).
     private const string Approver = "__test_approver__";
+    private const string HrApprover = "__test_hr_approver__";
     private const string Requester = "__test_requester__";
     private const string Outsider = "__test_outsider__";
 
@@ -47,14 +48,21 @@ public sealed class RequestApprovalTests : IAsyncLifetime
         // Bắt đầu từ trạng thái sạch: lần chạy trước có thể bị ngắt giữa chừng và để sót hàng cũ.
         await CleanupAsync(conn);
 
-        foreach (var u in new[] { Approver, Requester, Outsider })
+        foreach (var (username, role) in new[]
+                 {
+                     (Approver, AppRoles.Manager),
+                     (HrApprover, AppRoles.Hr),
+                     (Requester, AppRoles.Employee),
+                     (Outsider, AppRoles.Employee),
+                 })
             await conn.Cmd(
                 @"INSERT INTO app_users
                      (id, username, full_name, email, role, password_hash, is_active, approval_status, approved_at, approved_by, created_at, is_deleted)
                   VALUES
-                     (@id, @u, @u, '', 'Employee', @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, FALSE)
-                  ON CONFLICT (username) DO UPDATE SET is_active=TRUE, is_deleted=FALSE, role='Employee', approval_status='Approved'")
-                .With("@id", Guid.NewGuid()).With("@u", u).With("@ph", PasswordHasher.Hash("test-pass"))
+                     (@id, @u, @u, '', @role, @ph, TRUE, 'Approved', CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, FALSE)
+                  ON CONFLICT (username) DO UPDATE SET is_active=TRUE, is_deleted=FALSE, role=@role, approval_status='Approved'")
+                .With("@id", Guid.NewGuid()).With("@u", username).With("@role", role)
+                .With("@ph", PasswordHasher.Hash("test-pass"))
                 .ExecuteNonQueryAsync();
 
         // Một hồ sơ nhân sự để hr_requests.employee_id tham chiếu (chỉ id là bắt buộc, còn lại có mặc định).
@@ -79,9 +87,9 @@ public sealed class RequestApprovalTests : IAsyncLifetime
     private static async Task CleanupAsync(Npgsql.NpgsqlConnection conn)
     {
         await conn.Cmd("DELETE FROM hr_employees WHERE username = ANY(@u)")
-            .With("@u", new[] { Approver, Requester, Outsider }).ExecuteNonQueryAsync();
+            .With("@u", new[] { Approver, HrApprover, Requester, Outsider }).ExecuteNonQueryAsync();
         await conn.Cmd("DELETE FROM app_users WHERE username = ANY(@u)")
-            .With("@u", new[] { Approver, Requester, Outsider }).ExecuteNonQueryAsync();
+            .With("@u", new[] { Approver, HrApprover, Requester, Outsider }).ExecuteNonQueryAsync();
     }
 
     /// <summary>
@@ -107,14 +115,41 @@ public sealed class RequestApprovalTests : IAsyncLifetime
         return id;
     }
 
+    private async Task<Guid> SeedFinalQueueRequestAsync(string approverRole)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Database>();
+        await using var conn = await db.OpenAsync();
+        var id = Guid.NewGuid();
+        await conn.Cmd(
+            @"INSERT INTO hr_requests (id, request_no, req_type, title, employee_id, requester_username, payload, status, current_step)
+              VALUES (@id, @no, 'booking', 'Final queue test', @emp, @req, '{}'::jsonb, 'Pending', 1)")
+            .With("@id", id).With("@no", $"TEST-{id.ToString()[..8]}")
+            .With("@emp", _employeeId).With("@req", Requester).ExecuteNonQueryAsync();
+        await conn.Cmd(
+            @"INSERT INTO hr_request_approvals (request_id, step_no, approver_role, approver_username, approver_name, status)
+              VALUES (@id, 1, @role, '', 'Shared queue', 'Pending')")
+            .With("@id", id).With("@role", approverRole).ExecuteNonQueryAsync();
+        _requestIds.Add(id);
+        return id;
+    }
+
     private async Task<string> TokenForAsync(string username)
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Database>();
         await using var conn = await db.OpenAsync();
-        var id = (Guid)(await conn.Cmd("SELECT id FROM app_users WHERE username=@u").With("@u", username).ExecuteScalarAsync())!;
+        Guid id;
+        string role;
+        await using (var r = await conn.Cmd("SELECT id, role FROM app_users WHERE username=@u")
+            .With("@u", username).ExecuteReaderAsync())
+        {
+            Assert.True(await r.ReadAsync());
+            id = r.Guid("id");
+            role = r.Str("role");
+        }
         var tokens = scope.ServiceProvider.GetRequiredService<TokenService>();
-        return tokens.CreateToken(new UserDto(id, username, username, "", "Employee", true, "Approved", DateTime.UtcNow));
+        return tokens.CreateToken(new UserDto(id, username, username, "", role, true, "Approved", DateTime.UtcNow));
     }
 
     private async Task<HttpClient> ClientAsAsync(string username)
@@ -177,5 +212,27 @@ public sealed class RequestApprovalTests : IAsyncLifetime
         Assert.All(results.Where(s => s != HttpStatusCode.NoContent),
             s => Assert.True(s is HttpStatusCode.Conflict or HttpStatusCode.BadRequest,
                 $"Lần duyệt trùng phải bị chặn bằng 409/400 nhưng nhận {(int)s}."));
+    }
+
+    [Theory]
+    [InlineData("Admin")]
+    [InlineData("requests.manage")]
+    public async Task Hr_CanApprove_FinalQueue_IncludingLegacyAdminRows(string storedRole)
+    {
+        var id = await SeedFinalQueueRequestAsync(storedRole);
+        var client = await ClientAsAsync(HrApprover);
+
+        var detail = await client.GetAsync($"/api/requests/{id}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+        var approve = await client.PostAsJsonAsync($"/api/requests/{id}/approve", new { });
+        Assert.Equal(HttpStatusCode.NoContent, approve.StatusCode);
+    }
+
+    [Fact]
+    public async Task Employee_CannotUse_AllScope()
+    {
+        var client = await ClientAsAsync(Outsider);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await client.GetAsync("/api/requests?scope=all")).StatusCode);
     }
 }

@@ -190,7 +190,9 @@ public static class ChamCongEndpoints
 
     public static void MapChamCong(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/chamcong").RequireAuthorization().RequireRateLimiting("attendance");
+        var g = app.MapGroup("/api/chamcong")
+            .RequirePermission(Permissions.AttendanceSelf)
+            .RequireRateLimiting("attendance");
 
         // Cho frontend/kiosk biết tên engine + ngưỡng khớp.
         // Ẩn danh: màn hình kiosk (ngoài trang đăng nhập) cần đọc trạng thái này.
@@ -245,7 +247,6 @@ public static class ChamCongEndpoints
 
         g.MapPost("/qr-sites", async (CreateQrSiteRequest req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { message = "Tên địa điểm là bắt buộc." });
             var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
             await using var conn = await db.OpenAsync();
@@ -253,7 +254,7 @@ public static class ChamCongEndpoints
             await conn.Cmd("INSERT INTO cham_cong_qr_sites (id,name,project_name,qr_token) VALUES (@id,@n,@p,@t)")
                 .With("@id", id).With("@n", req.Name.Trim()).With("@p", req.ProjectName?.Trim() ?? "").With("@t", token).ExecuteNonQueryAsync();
             return Results.Ok(new { id, token });
-        });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         g.MapPut("/motion-config", async (MotionConfigDto cfg, ClaimsPrincipal u, Database db) =>
         {
@@ -640,11 +641,10 @@ public static class ChamCongEndpoints
                 return Results.BadRequest(new { message = $"Mỗi ảnh phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
 
             // CHẶN CỨNG chế độ "chỉ chấm cho chính mình": xác định TỪ TOKEN phía server, KHÔNG tin cờ
-            // client (req.SelfOnly). Mọi tài khoản ĐÃ đăng nhập không phải admin đều bắt buộc chỉ chấm
-            // cho CHÍNH MÌNH — không thể gọi thẳng API với selfOnly=false để chấm công hộ. Admin được
-            // miễn (chấm hộ mọi người). Kiosk ẩn danh (không có token) → currentUser rỗng → so khớp mở.
+            // client (req.SelfOnly). Mọi tài khoản ĐÃ đăng nhập không có attendance.manage đều bắt buộc
+            // chỉ chấm cho CHÍNH MÌNH. Người quản lý chấm công được chấm hộ; kiosk ẩn danh vẫn so khớp mở.
             var currentUser = u.Username();
-            var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.IsAdmin();
+            var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.Can(Permissions.AttendanceManage);
             // Ẩn danh (kiosk, chưa đăng nhập) ⇒ che username/họ tên trong phản hồi để tránh thu thập danh tính.
             var anon = string.IsNullOrWhiteSpace(currentUser);
 

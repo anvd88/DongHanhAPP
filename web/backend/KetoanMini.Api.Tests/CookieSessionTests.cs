@@ -87,9 +87,18 @@ public sealed class CookieSessionTests : IDisposable
     {
         await EnsureAccountAsync();
         var http = _factory.CreateBrowserClient();
+        var sid = $"cookie-{Guid.NewGuid():N}";
+        if (client is null) await BootstrapAsync(http, sid);
         var res = await http.PostAsJsonAsync("/api/auth/login",
-            new { username = _user, password = Password, sid = $"cookie-{Guid.NewGuid():N}", client });
+            new { username = _user, password = Password, sid, client });
         return (http, res);
+    }
+
+    private static async Task<HttpResponseMessage> BootstrapAsync(HttpClient http, string sid)
+    {
+        var response = await http.PostAsJsonAsync("/api/auth/bootstrap", new { sid });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return response;
     }
 
     private async Task EnsureAccountAsync()
@@ -112,6 +121,65 @@ public sealed class CookieSessionTests : IDisposable
         => res.Headers.TryGetValues("Set-Cookie", out var v) ? v.ToArray() : [];
 
     [Fact]
+    public async Task Bootstrap_PhatCookieHttpOnlyNganHan_VaKhongTaoPhienTaiKhoan()
+    {
+        var http = _factory.CreateBrowserClient();
+        var response = await BootstrapAsync(http, $"bootstrap-{Guid.NewGuid():N}");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(body.GetProperty("ready").GetBoolean());
+        Assert.Equal(LoginBootstrapService.Protocol, body.GetProperty("protocol").GetString());
+        Assert.True(body.GetProperty("expiresAt").GetDateTime() > DateTime.UtcNow);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+
+        var cookies = SetCookies(response);
+        var bootstrap = Assert.Single(cookies,
+            c => c.StartsWith($"{LoginBootstrapService.CookieName}=", StringComparison.Ordinal));
+        Assert.Contains("httponly", bootstrap, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", bootstrap, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("path=/api/auth", bootstrap, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(cookies, c => c.StartsWith($"{AuthCookies.AuthCookie}=", StringComparison.Ordinal));
+        Assert.DoesNotContain(cookies, c => c.StartsWith($"{AuthCookies.CsrfCookie}=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DangNhapWeb_ThieuHoacSaiBootstrap_BiTuChoiCungMotCach()
+    {
+        await EnsureAccountAsync();
+        var missing = _factory.CreateBrowserClient();
+        var without = await missing.PostAsJsonAsync("/api/auth/login",
+            new { username = _user, password = Password, sid = "sid-without-bootstrap" });
+        Assert.Equal((HttpStatusCode)428, without.StatusCode);
+        Assert.Equal("login_bootstrap_required",
+            (await without.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+
+        var wrongSid = _factory.CreateBrowserClient();
+        await BootstrapAsync(wrongSid, "sid-a");
+        var mismatched = await wrongSid.PostAsJsonAsync("/api/auth/login",
+            new { username = _user, password = Password, sid = "sid-b" });
+        Assert.Equal((HttpStatusCode)428, mismatched.StatusCode);
+        Assert.Equal("login_bootstrap_required",
+            (await mismatched.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task SaiMatKhau_KhongLamMatVeBootstrapConHan()
+    {
+        await EnsureAccountAsync();
+        var http = _factory.CreateBrowserClient();
+        var sid = $"retry-{Guid.NewGuid():N}";
+        await BootstrapAsync(http, sid);
+
+        var wrong = await http.PostAsJsonAsync("/api/auth/login",
+            new { username = _user, password = "sai-mat-khau", sid });
+        Assert.Equal(HttpStatusCode.Unauthorized, wrong.StatusCode);
+
+        var correct = await http.PostAsJsonAsync("/api/auth/login",
+            new { username = _user, password = Password, sid });
+        Assert.Equal(HttpStatusCode.OK, correct.StatusCode);
+    }
+
+    [Fact]
     public async Task DangNhapWeb_DatCookieHttpOnly_VaKhongTraTokenRaThanPhanHoi()
     {
         var (_, res) = await LoginAsync();
@@ -129,6 +197,8 @@ public sealed class CookieSessionTests : IDisposable
         // Cookie CSRF thì CỐ Ý đọc được từ JavaScript — frontend phải gắn lại nó vào header.
         var csrf = Assert.Single(cookies, c => c.StartsWith($"{AuthCookies.CsrfCookie}=", StringComparison.Ordinal));
         Assert.DoesNotContain("httponly", csrf, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(cookies,
+            c => c.StartsWith($"{LoginBootstrapService.CookieName}=;", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -252,6 +322,7 @@ public sealed class CookieSessionTests : IDisposable
         await EnsureAccountAsync();
         var sid = $"web-{Guid.NewGuid():N}";
         var http = _factory.CreateBrowserClient();
+        await BootstrapAsync(http, sid);
         var res = await http.PostAsJsonAsync("/api/auth/login",
             new { username = _user, password = Password, sid });
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
@@ -345,6 +416,7 @@ public sealed class CookieSessionTests : IDisposable
         var otherSid = $"other-{Guid.NewGuid():N}";
         var other = _factory.CreateBrowserClient();
         await _factory.EmployeeTokenAsync(); // đảm bảo tài khoản kia tồn tại
+        await BootstrapAsync(other, otherSid);
         var otherLogin = await other.PostAsJsonAsync("/api/auth/login",
             new { username = _factory.EmpUser, password = "test-pass", sid = otherSid });
         // Nếu lần đăng nhập này hỏng thì chẳng có phiên nào của người khác để mà lọt vào danh sách,

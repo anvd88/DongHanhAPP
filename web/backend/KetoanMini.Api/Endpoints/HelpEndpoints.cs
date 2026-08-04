@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -30,12 +31,12 @@ public static class HelpEndpoints
 
     public static void MapHelp(this WebApplication app)
     {
-        var g = app.MapGroup("/api/help").RequireAuthorization();
+        var g = app.MapGroup("/api/help").RequirePermission(Permissions.PortalRead);
 
         // FAQ: Admin thấy tất cả; người khác chỉ thấy mục đã xuất bản.
         g.MapGet("/faqs", async (ClaimsPrincipal u, Database db) =>
         {
-            var admin = u.IsAdmin();
+            var admin = u.Can(Permissions.PortalManage);
             await using var conn = await db.OpenAsync();
             var list = new List<object>();
             await using var r = await conn.Cmd($"""
@@ -54,7 +55,7 @@ public static class HelpEndpoints
 
         g.MapPost("/faqs", async (FaqReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.Question)) return Results.BadRequest(new { message = "Thiếu câu hỏi." });
             var id = Guid.NewGuid();
             await using var conn = await db.OpenAsync();
@@ -71,7 +72,7 @@ public static class HelpEndpoints
 
         g.MapPut("/faqs/{id:guid}", async (Guid id, FaqReq req, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("""
                 UPDATE help_faqs SET category=@cat, question=@q, answer=@a, order_no=@ord, is_published=@pub,
@@ -87,7 +88,7 @@ public static class HelpEndpoints
 
         g.MapDelete("/faqs/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
-            if (!u.IsAdmin()) return Results.Forbid();
+            if (!u.Can(Permissions.PortalManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("DELETE FROM help_faqs WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();

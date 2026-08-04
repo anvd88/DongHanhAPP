@@ -78,8 +78,8 @@ function EyeReminderArtwork() {
       <defs>
         <radialGradient id="er-iris" cx="0" cy="0" r="1" gradientTransform="matrix(25 0 0 25 134 88)" gradientUnits="userSpaceOnUse">
           <stop stopColor="#dffdf7" />
-          <stop offset="0.48" stopColor="#22c3aa" />
-          <stop offset="1" stopColor="#2457d6" />
+          <stop offset="0.48" stopColor="#129887" />
+          <stop offset="1" stopColor="#3457d5" />
         </radialGradient>
         <linearGradient id="er-lid" x1="42" x2="226" y1="52" y2="122" gradientUnits="userSpaceOnUse">
           <stop stopColor="#ffffff" stopOpacity="0.9" />
@@ -87,9 +87,9 @@ function EyeReminderArtwork() {
           <stop offset="1" stopColor="#b8d8ff" stopOpacity="0.62" />
         </linearGradient>
         <linearGradient id="er-horizon" x1="54" x2="214" y1="142" y2="142" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#17b790" stopOpacity="0.18" />
-          <stop offset="0.5" stopColor="#2a6bff" stopOpacity="0.3" />
-          <stop offset="1" stopColor="#17b790" stopOpacity="0.18" />
+          <stop stopColor="#129887" stopOpacity="0.18" />
+          <stop offset="0.5" stopColor="#3457d5" stopOpacity="0.3" />
+          <stop offset="1" stopColor="#129887" stopOpacity="0.18" />
         </linearGradient>
       </defs>
 

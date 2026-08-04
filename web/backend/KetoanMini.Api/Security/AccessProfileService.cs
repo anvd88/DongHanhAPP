@@ -113,14 +113,25 @@ public sealed class AccessProfileService(Database db, ILogger<AccessProfileServi
     private static async Task<AccessScope> ResolveScopeAsync(
         NpgsqlConnection conn, string username, IReadOnlySet<string> permissions, CancellationToken ct)
     {
-        if (permissions.Contains(Permissions.UsersManage) || permissions.Contains(Permissions.HrManage))
+        if (permissions.Contains(Permissions.UsersManage)
+            || permissions.Contains(Permissions.HrManage))
             return new AccessScope(ScopeKind.All, null, null);
+        var companyWide = permissions.Contains(Permissions.CompanyScopeAll);
         try
         {
             await using var r = await conn.Cmd(
-                "SELECT access_role, department_id, location_id FROM hr_employees WHERE username = @u LIMIT 1")
+                """
+                SELECT e.access_role, e.department_id, e.location_id
+                FROM app_users u
+                JOIN hr_employees e
+                  ON e.user_id=u.id OR (e.user_id IS NULL AND lower(e.username)=lower(u.username))
+                WHERE lower(u.username)=lower(@u) AND u.is_deleted=FALSE
+                ORDER BY (e.user_id=u.id) DESC
+                LIMIT 1
+                """)
                 .With("@u", username).ExecuteReaderAsync(ct);
-            if (!await r.ReadAsync(ct)) return AccessScope.SelfOnly;
+            if (!await r.ReadAsync(ct))
+                return companyWide ? new AccessScope(ScopeKind.All, null, null) : AccessScope.SelfOnly;
             var accessRole = r.IsDBNull(0) ? "" : r.GetString(0);
             Guid? dept = r.IsDBNull(1) ? null : r.GetGuid(1);
             Guid? loc = r.IsDBNull(2) ? null : r.GetGuid(2);
@@ -128,6 +139,7 @@ public sealed class AccessProfileService(Database db, ILogger<AccessProfileServi
             {
                 "dept_manager" when dept is not null => new AccessScope(ScopeKind.Department, dept, loc),
                 "location_manager" when loc is not null => new AccessScope(ScopeKind.Branch, dept, loc),
+                _ when companyWide => new AccessScope(ScopeKind.All, null, null),
                 _ => new AccessScope(ScopeKind.Self, dept, loc),
             };
         }
@@ -141,6 +153,7 @@ public sealed class AccessProfileService(Database db, ILogger<AccessProfileServi
     public static string UiProfileFor(IReadOnlySet<string> permissions)
     {
         if (permissions.Contains(Permissions.UsersManage)) return "admin";
+        if (permissions.Contains(Permissions.CompanyScopeAll)) return "executive";
         if (permissions.Contains(Permissions.AttendanceKiosk) && permissions.Count == 1) return "kiosk";
         if (permissions.Contains(Permissions.HrManage)) return "hr";
         if (permissions.Contains(Permissions.AccountingAccess)) return "accounting";
@@ -154,6 +167,7 @@ public sealed class AccessProfileService(Database db, ILogger<AccessProfileServi
     public static string LandingPathFor(string uiProfile, IReadOnlySet<string> permissions) => uiProfile switch
     {
         "admin" => "/dashboard",
+        "executive" => "/dashboard",
         "kiosk" => "/kiosk",
         "hr" => "/quanly-nhansu",
         "accounting" => "/ketoan",

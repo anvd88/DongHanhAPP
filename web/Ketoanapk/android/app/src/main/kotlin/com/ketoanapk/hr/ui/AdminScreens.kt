@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ketoanapk.hr.data.EmployeeCard
+import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerDepartmentStatus
 import com.ketoanapk.hr.data.Penalty
@@ -123,7 +124,7 @@ fun PenaltyScreen(user: HrUser, state: HomeUiState, onAppeal: (Penalty) -> Unit)
             items(state.penalties, key = { it.id }) { p ->
                 // Chỉ nhân viên mới khiếu nại/đề nghị trên án phạt TIỀN còn hiệu lực của chính mình.
                 // Admin xem toàn công ty (không phải của mình) nên không hiện nút này; họ xử lý trên web.
-                val canAppeal = !user.isAdmin && p.status == "Active" && p.penaltyType == "fine"
+                val canAppeal = !user.can(AppPermissions.PenaltyManage) && p.status == "Active" && p.penaltyType == "fine"
                 PenaltyCard(p, canAppeal = canAppeal, onAppeal = { onAppeal(p) })
             }
         }

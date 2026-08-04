@@ -48,7 +48,7 @@ public static class AuditEndpoints
     /// <summary>Ai được xem gì. Kế toán chỉ tra cứu được phần tiền; ngoài admin & kế toán thì cấm.</summary>
     private static async Task<AuditScope> ResolveScopeAsync(NpgsqlConnection conn, ClaimsPrincipal u)
     {
-        if (u.IsAdmin()) return AuditScope.Full;
+        if (u.Can(Permissions.CompanyScopeAll)) return AuditScope.Full;
         if (await PayoutVoucherEndpoints.IsCashierAsync(conn, u)) return AuditScope.MoneyOnly;
         return AuditScope.Denied;
     }

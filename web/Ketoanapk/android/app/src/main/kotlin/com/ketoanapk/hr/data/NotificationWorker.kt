@@ -37,13 +37,15 @@ class NotificationWorker(
         val month = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM"))
 
         val myRequests = runCatching { repo.requests("mine") }.getOrDefault(emptyList())
-        val inbox = if (user.isAdmin) runCatching { repo.requests("inbox") }.getOrDefault(emptyList()) else emptyList()
+        val canApproveRequests = user.can(AppPermissions.RequestsApprove)
+        val canManagePenalties = user.can(AppPermissions.PenaltyManage)
+        val inbox = if (canApproveRequests) runCatching { repo.requests("inbox") }.getOrDefault(emptyList()) else emptyList()
         val penalties = runCatching {
-            repo.penalties(if (user.isAdmin) "all" else "mine", if (user.isAdmin) month else null)
+            repo.penalties(if (canManagePenalties) "all" else "mine", if (canManagePenalties) month else null)
         }.getOrDefault(emptyList())
 
         val center = NotificationCenter(applicationContext)
-        val fresh = center.sync(myRequests, inbox, penalties, user.isAdmin)
+        val fresh = center.sync(myRequests, inbox, penalties, canManagePenalties)
         fresh.forEach { AppNotifier.show(applicationContext, it) }
         runCatching { notifyShiftIfNeeded(repo, center) }
         return Result.success()
