@@ -629,23 +629,17 @@ public static class PayrollEndpoints
 
     private sealed record PayLine(string Label, decimal Amount);
 
-    /// <summary>Một ngày có tăng ca (giờ ra sau 17:20) — để admin duyệt từng ngày khi lập phiếu.</summary>
-    private sealed record OtDay(DateOnly Date, string CheckOut, int Minutes);
+    /// <summary>Một ngày có tăng ca trước 08:00 hoặc sau 17:00 — để admin duyệt khi lập phiếu.</summary>
+    private sealed record OtDay(DateOnly Date, string CheckIn, string? CheckOut, int Minutes);
 
-    // Quy tắc tăng ca theo giờ RA: tính từ 17:00, nhưng chỉ tính khi tan làm SAU 17:20 (đệm 20').
-    private static readonly TimeOnly OtStart = new(17, 0);
-    private static readonly TimeOnly OtQualify = new(17, 20);
-
+    // Sử dụng số phút đã được bảng công tính theo cùng một quy tắc để bảng công và bảng lương không lệch nhau.
     private static List<OtDay> DetectOvertimeDays(List<ShiftEndpoints.TimesheetDayInfo> days)
     {
         var list = new List<OtDay>();
         foreach (var d in days)
         {
-            if (string.IsNullOrWhiteSpace(d.CheckOut)) continue;
-            if (!TimeOnly.TryParse(d.CheckOut, out var outTod)) continue;
-            if (outTod <= OtQualify) continue; // ra ≤ 17:20 → không tính tăng ca
-            var minutes = (int)(outTod - OtStart).TotalMinutes; // tính từ 17:00
-            if (minutes > 0) list.Add(new OtDay(d.Date, d.CheckOut!, minutes));
+            if (d.OvertimeMinutes <= 0 || string.IsNullOrWhiteSpace(d.CheckIn)) continue;
+            list.Add(new OtDay(d.Date, d.CheckIn, d.CheckOut, d.OvertimeMinutes));
         }
         return list;
     }
@@ -680,7 +674,8 @@ public static class PayrollEndpoints
         var salary = await ReadSalary(conn, employeeId);
         var (ts, tsDays) = await ShiftEndpoints.ComputeDaysAsync(conn, employeeId, period);
 
-        // Tăng ca theo giờ ra (17:00, đệm tới 17:20). null = tính tất cả; ngược lại chỉ các ngày đã duyệt.
+        // Tăng ca trước 08:00 và sau 17:00, mỗi khoảng tối thiểu 15 phút.
+        // null = tính tất cả; ngược lại chỉ các ngày đã duyệt.
         var otCandidates = DetectOvertimeDays(tsDays);
         var otMinutes = otCandidates
             .Where(o => approvedOtDates is null || approvedOtDates.Contains(o.Date))
@@ -761,7 +756,7 @@ public static class PayrollEndpoints
                 overtimeHours,
                 totalWorkedHours = ts.TotalWorkedHours,
             },
-            overtimeDays = otCandidates.ConvertAll(o => new { date = o.Date, checkOut = o.CheckOut, minutes = o.Minutes }),
+            overtimeDays = otCandidates.ConvertAll(o => new { date = o.Date, checkIn = o.CheckIn, checkOut = o.CheckOut, minutes = o.Minutes }),
             overtimeRate = salary.OvertimeRate,
             penaltyTotal,
             totalEarnings,

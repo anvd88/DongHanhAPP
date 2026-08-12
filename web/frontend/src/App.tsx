@@ -20,7 +20,7 @@ import { EyeReminderPopup } from "./components/EyeReminderPopup";
 // Suspense fallback bên dưới hiển thị skeleton trong lúc chunk đang tải.
 // ─────────────────────────────────────────────────────────────────────────────
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
-const KioskPage = lazy(() => import("./pages/KioskPage").then((m) => ({ default: m.KioskPage })));
+// Kiosk tạm ngừng phát triển: giữ nguyên pages/KioskPage.tsx nhưng không đưa vào route/bundle.
 const FarewellPage = lazy(() => import("./pages/FarewellPage").then((m) => ({ default: m.FarewellPage })));
 const TinhToan = lazy(() => import("./pages/TinhToan").then((m) => ({ default: m.TinhToan })));
 const ApkDownload = lazy(() => import("./pages/ApkDownload").then((m) => ({ default: m.ApkDownload })));
@@ -67,7 +67,6 @@ const APP_TITLE = "KetoanMini";
 
 const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/": "Đăng nhập",
-  "/kiosk": "Kiosk chấm công",
   "/tam-biet": "Tạm biệt",
   "/tinh-toan": "Tính toán",
   "/tai-apk": "Tải APK",
@@ -380,7 +379,7 @@ export default function App() {
           <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<RootGate />} />
-            <Route path="/kiosk" element={<KioskPage />} />
+            {/* Kiosk tạm ẩn. Mã nguồn vẫn được giữ để có thể bật lại khi tiếp tục phát triển. */}
             <Route path="/tam-biet" element={<FarewellPage />} />
             <Route path="/tinh-toan" element={<TinhToan />} />
             {/* ── Trang ai đăng nhập cũng vào được ────────────────────────────────────── */}

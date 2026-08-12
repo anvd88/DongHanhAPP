@@ -9,7 +9,7 @@ export interface GlassCardProps extends Omit<HTMLMotionProps<"div">, "children">
   interactive?: boolean;
 }
 
-const iosSpring = { type: "spring", stiffness: 330, damping: 25, mass: 0.82 } as const;
+const enterpriseSpring = { type: "spring", stiffness: 420, damping: 34, mass: 0.7 } as const;
 
 /**
  * Thẻ kính có ánh sáng bám theo con trỏ (ghi CSS var qua ref, không re-render),
@@ -22,9 +22,9 @@ export function GlassCard({ className, interactive = true, children, ...rest }: 
       ref={ref}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
-      whileHover={interactive ? { y: -7, scale: 1.018 } : undefined}
-      whileTap={interactive ? { y: -2, scale: 0.985 } : undefined}
-      transition={iosSpring}
+      whileHover={interactive ? { y: -2 } : undefined}
+      whileTap={interactive ? { y: 0, scale: 0.99 } : undefined}
+      transition={enterpriseSpring}
       className={cn("gc-card", className)}
       {...rest}
     >

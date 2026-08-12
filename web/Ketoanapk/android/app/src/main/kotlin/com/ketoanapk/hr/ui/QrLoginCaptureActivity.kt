@@ -11,16 +11,17 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
+import android.provider.MediaStore
 import android.util.Rational
 import android.util.Size
 import android.view.MotionEvent
 import android.view.View
-import android.widget.FrameLayout
 import android.widget.Button
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -87,9 +88,10 @@ class QrLoginCaptureActivity : ComponentActivity() {
     private lateinit var openButton: Button
     private lateinit var copyButton: Button
     private lateinit var closeButton: Button
-    private lateinit var torchButton: Button
+    private lateinit var torchButton: ImageButton
     private lateinit var exitButton: ImageButton
     private lateinit var galleryButton: ImageButton
+    private lateinit var bottomActions: View
 
     private val workScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -122,9 +124,17 @@ class QrLoginCaptureActivity : ComponentActivity() {
         }
     }
 
-    /** ACTION_GET_CONTENT works from API 29 without broad storage permission. */
-    private val imagePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    /** Photo Picker shows an image/album grid and grants access to only the selected photo. */
+    private val visualImagePicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let(::scanQrFromImage)
+    }
+
+    /**
+     * Android 10 devices may not have the modular Photo Picker. ACTION_PICK opens the installed
+     * image library instead of falling back to the generic Android file browser.
+     */
+    private val legacyImageLibrary = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) result.data?.data?.let(::scanQrFromImage)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -143,6 +153,7 @@ class QrLoginCaptureActivity : ComponentActivity() {
         torchButton = findViewById(R.id.qr_torch_button)
         exitButton = findViewById(R.id.qr_exit_button)
         galleryButton = findViewById(R.id.qr_gallery_button)
+        bottomActions = findViewById(R.id.qr_bottom_actions)
 
         openButton.setOnClickListener { openDisplayedLink() }
         copyButton.setOnClickListener { copyDisplayedContent() }
@@ -152,9 +163,7 @@ class QrLoginCaptureActivity : ComponentActivity() {
             if (resolvingQr) {
                 Toast.makeText(this, "Đang xử lý mã QR hiện tại.", Toast.LENGTH_SHORT).show()
             } else {
-                runCatching { imagePicker.launch("image/*") }.onFailure {
-                    Toast.makeText(this, "Không mở được trình chọn ảnh.", Toast.LENGTH_SHORT).show()
-                }
+                openImageLibrary()
             }
         }
 
@@ -313,7 +322,10 @@ class QrLoginCaptureActivity : ComponentActivity() {
             torchButton.isEnabled = true
             runCatching { request.get() }.onSuccess {
                 torchOn = on
-                torchButton.text = getString(if (on) R.string.qr_torch_off else R.string.qr_torch_on)
+                torchButton.isSelected = on
+                val description = getString(if (on) R.string.qr_torch_off else R.string.qr_torch_on)
+                torchButton.contentDescription = description
+                torchButton.tooltipText = description
             }.onFailure {
                 Toast.makeText(this, "Không điều khiển được đèn pin.", Toast.LENGTH_SHORT).show()
             }
@@ -332,8 +344,7 @@ class QrLoginCaptureActivity : ComponentActivity() {
         val topContent = findViewById<View>(R.id.qr_top_content)
         val baseTopPadding = topContent.paddingTop
         val baseSheetBottomPadding = resultSheet.paddingBottom
-        val torchParams = torchButton.layoutParams as FrameLayout.LayoutParams
-        val baseTorchBottomMargin = torchParams.bottomMargin
+        val baseActionsBottomPadding = bottomActions.paddingBottom
 
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val safe = insets.getInsets(
@@ -341,13 +352,7 @@ class QrLoginCaptureActivity : ComponentActivity() {
             )
             topContent.updatePadding(top = baseTopPadding + safe.top)
             resultSheet.updatePadding(bottom = baseSheetBottomPadding + safe.bottom)
-            (torchButton.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                val wanted = baseTorchBottomMargin + safe.bottom
-                if (params.bottomMargin != wanted) {
-                    params.bottomMargin = wanted
-                    torchButton.layoutParams = params
-                }
-            }
+            bottomActions.updatePadding(bottom = baseActionsBottomPadding + safe.bottom)
             insets
         }
         ViewCompat.requestApplyInsets(root)
@@ -522,9 +527,10 @@ class QrLoginCaptureActivity : ComponentActivity() {
         setResultSheetVisible(true)
     }
 
-    /** Bảng kết quả nằm đè lên góc dưới nên nút đèn phải nhường chỗ khi bảng hiện. */
+    /** Bảng kết quả nằm đè lên góc dưới nên cụm thao tác camera phải nhường chỗ khi bảng hiện. */
     private fun setResultSheetVisible(visible: Boolean) {
         resultSheet.visibility = if (visible) View.VISIBLE else View.GONE
+        bottomActions.visibility = if (visible) View.GONE else View.VISIBLE
         torchButton.visibility = if (!visible && hasFlash) View.VISIBLE else View.GONE
     }
 
@@ -553,6 +559,29 @@ class QrLoginCaptureActivity : ComponentActivity() {
             Toast.makeText(this, "Điện thoại chưa có ứng dụng phù hợp để mở liên kết.", Toast.LENGTH_LONG).show()
         } catch (_: SecurityException) {
             Toast.makeText(this, "Điện thoại đã chặn liên kết này.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
+     * Prefer Android's privacy-preserving photo grid. If a device has no Photo Picker module,
+     * explicitly open its image library so the user never lands in the generic DocumentsUI flow.
+     */
+    private fun openImageLibrary() {
+        runCatching {
+            if (ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(this)) {
+                visualImagePicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
+            } else {
+                legacyImageLibrary.launch(
+                    Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI).apply {
+                        type = "image/*"
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    },
+                )
+            }
+        }.onFailure {
+            Toast.makeText(this, "Không mở được thư viện ảnh.", Toast.LENGTH_SHORT).show()
         }
     }
 

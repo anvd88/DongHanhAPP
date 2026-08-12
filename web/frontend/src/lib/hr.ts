@@ -237,7 +237,8 @@ export interface PayrollCompute {
 
 export interface OvertimeDay {
   date: string;
-  checkOut: string;
+  checkIn: string;
+  checkOut: string | null;
   minutes: number;
 }
 

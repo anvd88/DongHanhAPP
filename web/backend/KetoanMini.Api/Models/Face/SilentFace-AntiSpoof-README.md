@@ -12,7 +12,8 @@ Engine (`SilentFaceLiveness.cs`) **tự dò** mọi file `*.onnx` trong thư m�
 | `4_0_0_80x80_MiniFASNetV1SE.onnx` | 4.0 | 80×80 |
 
 > Tên file quyết định **scale crop** (token đầu) và **kích thước đầu vào** (`80x80`). Giữ nguyên tên
-> như trên. Nếu thiếu cả hai → hệ thống tự lùi về model `face_antispoof_minifasnet.onnx` cũ (2 lớp).
+> như trên. Nếu thiếu hoặc hỏng bất kỳ file nào → Development lùi về model
+> `face_antispoof_minifasnet.onnx` cũ (2 lớp); Production từ chối khởi động.
 
 ## Cách lấy file ONNX
 

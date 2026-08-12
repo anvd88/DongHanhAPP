@@ -505,7 +505,9 @@ public sealed class RoleFoundationTests(ApiFactory factory)
                 """).With("@username", scopedUsername).ExecuteReaderAsync())
             {
                 Assert.True(await r.ReadAsync());
-                Assert.Equal(AppRoles.Executive, r.Str("role"));
+                // Giám đốc chi nhánh chỉ quản lý theo location, không nhận quyền xem toàn công ty
+                // của Ban giám đốc (Executive).
+                Assert.Equal(AppRoles.Manager, r.Str("role"));
                 Assert.Equal("location_manager", r.Str("access_role"));
                 Assert.True(r.Int("authorization_version") > versionBefore);
             }
@@ -517,6 +519,38 @@ public sealed class RoleFoundationTests(ApiFactory factory)
             await CleanupUsersAsync(conn, createdUsernames.Append(admin.Username).Append(hr.Username).ToArray());
             admin.Client.Dispose();
             hr.Client.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task TaoTaiKhoanRoiKhongCoHoSo_BiChan()
+    {
+        var admin = await CreateActorAsync(AppRoles.Admin);
+        var username = "__orphan_" + Guid.NewGuid().ToString("N")[..14];
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Database>();
+        await using var conn = await db.OpenAsync();
+        try
+        {
+            var response = await admin.Client.PostAsJsonAsync("/api/users", new
+            {
+                username,
+                fullName = "Tài khoản không hồ sơ",
+                email = "",
+                password = "Temporary-A1",
+                role = AppRoles.Admin,
+            });
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var count = Convert.ToInt32(await conn.Cmd(
+                    "SELECT COUNT(*) FROM app_users WHERE lower(username)=lower(@username)")
+                .With("@username", username).ExecuteScalarAsync());
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            await CleanupUsersAsync(conn, username, admin.Username);
+            admin.Client.Dispose();
         }
     }
 

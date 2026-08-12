@@ -109,7 +109,7 @@ builder.Services.AddSingleton<IOutboxHandler, PushOutboxHandler>();
 builder.Services.AddHostedService<OutboxWorker>();
 
 // Bộ máy nhận diện khuôn mặt cho chấm công: YuNet + căn chỉnh 5 điểm + AdaFace R50 ONNX Runtime.
-// Engine dựng lười ở lần gọi /api/chamcong đầu tiên nên lỗi model không làm sập API lúc khởi động.
+// Development dựng lười ở request đầu; Production chủ động nạp lúc khởi động để kiểm chứng đủ model.
 builder.Services.AddSingleton<IFaceEngine, AdaFaceR50Engine>();
 
 // Bộ nhớ đệm RAM dùng chung (token xác nhận chấm công, và các thứ tạm thời khác).
@@ -132,6 +132,9 @@ builder.Services.AddHostedService<HubPresenceRefresher>();
 builder.Services.AddHostedService<ChangeWatcher>();
 // Dọn tệp "giữ tạm" (gửi tệp qua LAN khi người nhận offline) đã quá hạn khỏi đĩa.
 builder.Services.AddHostedService<LanFileCleanupService>();
+// Enforce the 14-day retention limit for encrypted biometric templates awaiting HR verification.
+// The worker sweeps immediately at host start and hourly afterwards, independent of API traffic.
+builder.Services.AddHostedService<FaceEnrollmentCleanupService>();
 
 var jwt = builder.Configuration.GetSection("Jwt");
 
@@ -293,6 +296,12 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.SetIsOriginAllowed(origin => CorsPolicy.IsAllowed(origin, corsOrigins)).AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
+
+// Production phải nạp và kiểm chứng đầy đủ Silent-Face TRƯỚC khi nhận request. Nếu thiếu/hỏng model,
+// dừng triển khai ngay; runtime inference cũng fail-closed (điểm live = 0) nếu phát sinh lỗi về sau.
+ProductionSecurityValidator.ValidateFaceEngine(
+    app.Environment,
+    app.Services.GetRequiredService<IFaceEngine>());
 
 // OpenAPI JSON is available in every environment for contract automation. Interactive UI is
 // intentionally limited to Development to reduce production attack surface.
@@ -483,14 +492,32 @@ app.Use(async (ctx, next) =>
     // Endpoint AllowAnonymous phải thực sự độc lập với Bearer cũ. Nếu trình duyệt còn JWT của tài
     // khoản đã xóa/hết phiên, middleware kiểm tra phiên không được chặn vòng poll QR công khai.
     var allowsAnonymous = ctx.GetEndpoint()?.Metadata.GetMetadata<IAllowAnonymous>() is not null;
-    if (!allowsAnonymous && ctx.User.Identity?.IsAuthenticated == true)
+    // Riêng các endpoint kiosk AllowAnonymous vẫn phải kiểm chứng JWT nếu request có gửi JWT; nếu
+    // không, token của tài khoản vừa khóa/xóa sẽ bị KioskAccess hiểu nhầm là thiết bị hợp lệ.
+    var requiresFreshKioskIdentity = ctx.Request.Path.Equals("/api/chamcong/nhandien")
+        || ctx.Request.Path.Equals("/api/chamcong/cham")
+        || ctx.Request.Path.Equals("/api/chamcong/trangthai");
+    if ((!allowsAnonymous || requiresFreshKioskIdentity) && ctx.User.Identity?.IsAuthenticated == true)
     {
         var username = ctx.User.Username();
+        if (requiresFreshKioskIdentity && string.IsNullOrEmpty(username))
+        {
+            AuthCookies.Clear(ctx);
+            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                message = "Phiên đăng nhập không có danh tính hợp lệ. Vui lòng đăng nhập lại."
+            });
+            return;
+        }
         if (!string.IsNullOrEmpty(username))
         {
             var locked = false;
             var revoked = false;
             var idleExpired = false;
+            var sessionInactive = false;
+            var accountStateVerified = false;
+            var sessionAlive = false;
             // Vai trò HIỆN HÀNH đọc từ DB (chính + phụ) để thay cho claim trong JWT — xem phần ghi
             // claim bên dưới. null = chưa đọc được (DB lỗi) → giữ nguyên claim cũ, không đá người dùng.
             List<string>? freshRoles = null;
@@ -500,9 +527,11 @@ app.Use(async (ctx, next) =>
             {
                 var db = ctx.RequestServices.GetRequiredService<Database>();
                 await using var conn = await db.OpenAsync(ctx.RequestAborted);
-                var sessionAlive = false;
                 await using (var r = await conn.Cmd(
-                    @"SELECT u.is_active, COALESCE(s.revoked, FALSE) AS revoked,
+                    @"SELECT u.is_active,
+                             s.session_token IS NOT NULL AS session_exists,
+                             COALESCE(s.is_active, FALSE) AS session_active,
+                             COALESCE(s.revoked, FALSE) AS revoked,
                              (s.session_token IS NOT NULL AND s.last_seen IS NOT NULL
                               AND @idleDays > 0
                               AND s.last_seen < CURRENT_TIMESTAMP - make_interval(days => @idleDays)) AS idle_expired,
@@ -512,7 +541,8 @@ app.Use(async (ctx, next) =>
                                        WHERE ur.username = u.username
                                          AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)), '') AS secondary_roles
                       FROM app_users u
-                      LEFT JOIN user_sessions s ON s.session_token = @sid
+                      LEFT JOIN user_sessions s
+                        ON s.session_token = @sid AND s.username = u.username
                       WHERE u.username = @u AND u.is_deleted = FALSE
                       LIMIT 1")
                     .With("@u", username)
@@ -525,16 +555,20 @@ app.Use(async (ctx, next) =>
                     else
                     {
                         locked = r.IsDBNull(0) || !Convert.ToBoolean(r.GetValue(0));
-                        revoked = !r.IsDBNull(1) && Convert.ToBoolean(r.GetValue(1));
-                        idleExpired = !r.IsDBNull(2) && Convert.ToBoolean(r.GetValue(2));
-                        sessionAlive = !locked && !revoked && !idleExpired && !string.IsNullOrEmpty(sid);
+                        var sessionExists = !r.IsDBNull(1) && Convert.ToBoolean(r.GetValue(1));
+                        var sessionActive = !r.IsDBNull(2) && Convert.ToBoolean(r.GetValue(2));
+                        sessionInactive = sessionExists && !sessionActive;
+                        revoked = !r.IsDBNull(3) && Convert.ToBoolean(r.GetValue(3));
+                        idleExpired = !r.IsDBNull(4) && Convert.ToBoolean(r.GetValue(4));
+                        sessionAlive = !locked && sessionExists && sessionActive && !revoked && !idleExpired;
 
                         // Gộp vai trò chính + phụ theo đúng cách TokenService dựng claim lúc đăng nhập
                         // (chính thiếu/không hợp lệ thì coi là Employee) để hai đường cho kết quả giống nhau.
                         freshRoles = AccessProfileService.Combine(
-                            r.IsDBNull(3) ? null : r.GetString(3),
-                            r.IsDBNull(4) ? "" : r.GetString(4));
+                            r.IsDBNull(5) ? null : r.GetString(5),
+                            r.IsDBNull(6) ? "" : r.GetString(6));
                     }
+                    accountStateVerified = true;
                 }
 
                 // Làm mới last_seen khi có hoạt động (giới hạn 2 phút/lần để không ghi mỗi request).
@@ -544,8 +578,11 @@ app.Use(async (ctx, next) =>
                 if (sessionAlive && !ctx.Request.Headers.ContainsKey("X-Background-Poll"))
                     await conn.Cmd(
                         @"UPDATE user_sessions SET last_seen = CURRENT_TIMESTAMP
-                          WHERE session_token = @sid AND last_seen < CURRENT_TIMESTAMP - INTERVAL '2 minutes'")
-                        .With("@sid", sid!).ExecuteNonQueryAsync(ctx.RequestAborted);
+                          WHERE session_token = @sid AND username = @u
+                            AND is_active = TRUE AND revoked = FALSE
+                            AND last_seen < CURRENT_TIMESTAMP - INTERVAL '2 minutes'")
+                        .With("@sid", sid!).With("@u", username)
+                        .ExecuteNonQueryAsync(ctx.RequestAborted);
             }
             catch
             {
@@ -564,6 +601,23 @@ app.Use(async (ctx, next) =>
             if (locked) { await Reject("Tài khoản đã bị khóa."); return; }
             if (revoked) { await Reject("Thiết bị này đã bị thu hồi. Vui lòng đăng nhập lại."); return; }
             if (idleExpired) { await Reject("Phiên đăng nhập đã hết hạn do lâu không hoạt động. Vui lòng đăng nhập lại."); return; }
+            if (sessionInactive) { await Reject("Phiên đăng nhập đã kết thúc. Vui lòng đăng nhập lại."); return; }
+            if (requiresFreshKioskIdentity && !accountStateVerified)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await ctx.Response.WriteAsJsonAsync(new
+                {
+                    message = "Không kiểm chứng được trạng thái tài khoản; chấm công đã được khóa an toàn."
+                });
+                return;
+            }
+            if (requiresFreshKioskIdentity && !sessionAlive)
+            {
+                await Reject("Phiên đăng nhập không còn hiệu lực. Vui lòng đăng nhập lại.");
+                return;
+            }
+            if (sessionAlive)
+                ctx.Items[KioskAccess.FreshAccountItem] = true;
 
             // VAI TRÒ LẤY TỪ DB, KHÔNG TIN CLAIM TRONG JWT. Token sống tới 365 ngày, nên nếu cứ tin
             // claim thì admin bị hạ quyền vẫn qua được mọi endpoint RequireRole("Admin") cho tới khi
@@ -719,8 +773,25 @@ try { await ChamCongEndpoints.EnsureTables(app.Services.GetRequiredService<Datab
 catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng chấm công lúc khởi động: {Msg}", ex.Message); }
 
 // Mã hóa AES các mẫu khuôn mặt cũ còn ở dạng thô (chạy một lần, no-op nếu đã mã hóa/thiếu khóa).
-try { await ChamCongEndpoints.EncryptExistingEmbeddings(app.Services.GetRequiredService<Database>(), app.Services.GetRequiredService<FieldCipher>()); }
-catch (Exception ex) { app.Logger.LogWarning("Khong ma hoa duoc embedding cu luc khoi dong: {Msg}", ex.Message); }
+try
+{
+    await ChamCongEndpoints.EncryptExistingEmbeddings(
+        app.Services.GetRequiredService<Database>(),
+        app.Services.GetRequiredService<FieldCipher>());
+}
+catch (Exception ex) when (!app.Environment.IsProduction())
+{
+    app.Logger.LogWarning(ex,
+        "Khong ma hoa duoc embedding cu luc khoi dong {Environment}; se thu lai o lan khoi dong sau.",
+        app.Environment.EnvironmentName);
+}
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex,
+        "Production cannot start because biometric embedding migration failed.");
+    throw new InvalidOperationException(
+        "Production startup aborted: biometric embedding migration failed.", ex);
+}
 
 try { await PreferenceEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tuy chon nguoi dung luc khoi dong: {Msg}", ex.Message); }

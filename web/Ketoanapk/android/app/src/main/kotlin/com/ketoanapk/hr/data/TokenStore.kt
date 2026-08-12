@@ -6,7 +6,6 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -32,8 +31,6 @@ class TokenStore(private val context: Context) {
     private val keyPushNotificationsEnabled = booleanPreferencesKey("push_notifications_enabled")
     private val keyUserEnc = stringPreferencesKey("user_enc")     // hồ sơ người dùng đã mã hoá
     private val keyLastOnlineAt = longPreferencesKey("last_online_at")
-    private val keySnoozedVersionCode = intPreferencesKey("update_snoozed_version")  // bản đã bấm "Để sau"
-    private val keySnoozedUntil = longPreferencesKey("update_snoozed_until")         // nhắc lại sau mốc này
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -103,24 +100,6 @@ class TokenStore(private val context: Context) {
 
     /** Mốc (epoch ms) lần cuối máy chủ xác nhận phiên còn sống; 0 = chưa từng ghi nhận. */
     suspend fun lastOnlineAt(): Long = context.dataStore.data.first()[keyLastOnlineAt] ?: 0L
-
-    /**
-     * Người dùng bấm "Để sau" cho bản cập nhật nào, đến khi nào thì nhắc lại.
-     *
-     * Phải ghi xuống đĩa chứ không giữ trong RAM của ViewModel: trước đây tắt/mở lại app là quên sạch,
-     * nên vừa hoãn xong mở lại app đã bị nhắc tiếp — rất phiền. Bản BẮT BUỘC bỏ qua mốc hoãn này.
-     */
-    suspend fun snoozedUpdate(): Pair<Int, Long> {
-        val prefs = context.dataStore.data.first()
-        return (prefs[keySnoozedVersionCode] ?: 0) to (prefs[keySnoozedUntil] ?: 0L)
-    }
-
-    suspend fun snoozeUpdate(versionCode: Int, until: Long) {
-        context.dataStore.edit {
-            it[keySnoozedVersionCode] = versionCode
-            it[keySnoozedUntil] = until
-        }
-    }
 
     suspend fun touchOnline() {
         context.dataStore.edit { it[keyLastOnlineAt] = System.currentTimeMillis() }

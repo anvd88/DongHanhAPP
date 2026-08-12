@@ -13,6 +13,22 @@ namespace KetoanMini.Api.Endpoints;
 public static class ShiftEndpoints
 {
     private const string Tz = "Asia/Ho_Chi_Minh";
+    private static readonly TimeOnly OvertimeMorningEnd = new(8, 0);
+    private static readonly TimeOnly OvertimeEveningStart = new(17, 0);
+    private const int MinimumOvertimeMinutes = 15;
+
+    internal static int CalculateOvertimeMinutes(TimeOnly checkIn, TimeOnly? checkOut)
+    {
+        var morningMinutes = checkIn < OvertimeMorningEnd
+            ? (int)(OvertimeMorningEnd - checkIn).TotalMinutes
+            : 0;
+        var eveningMinutes = checkOut is { } outTime && outTime > OvertimeEveningStart
+            ? (int)(outTime - OvertimeEveningStart).TotalMinutes
+            : 0;
+
+        return (morningMinutes >= MinimumOvertimeMinutes ? morningMinutes : 0)
+             + (eveningMinutes >= MinimumOvertimeMinutes ? eveningMinutes : 0);
+    }
 
     public static async Task EnsureTables(Database db, CancellationToken ct = default)
     {
@@ -492,20 +508,19 @@ public static class ShiftEndpoints
                 var hasOut = log.Count > 1 && log.Out > log.In;
                 checkOut = hasOut ? log.Out.ToString("HH:mm") : null;
                 var workedMinutes = hasOut ? (int)(log.Out - log.In).TotalMinutes : 0;
+                var inTod = TimeOnly.FromDateTime(log.In);
+                var outTod = hasOut ? TimeOnly.FromDateTime(log.Out) : (TimeOnly?)null;
+                otMin = CalculateOvertimeMinutes(inTod, outTod);
 
                 if (shift is not null)
                 {
-                    var inTod = TimeOnly.FromDateTime(log.In);
                     var lateThreshold = shift.Start.AddMinutes(shift.Grace);
                     if (inTod > lateThreshold) lateMin = (int)(inTod - shift.Start).TotalMinutes;
 
                     if (hasOut)
                     {
-                        var outTod = TimeOnly.FromDateTime(log.Out);
-                        if (outTod < shift.End) earlyMin = (int)(shift.End - outTod).TotalMinutes;
+                        if (outTod!.Value < shift.End) earlyMin = (int)(shift.End - outTod.Value).TotalMinutes;
                         var netWorked = Math.Max(0, workedMinutes - shift.Break);
-                        var stdMin = (int)(shift.StandardHours * 60);
-                        otMin = Math.Max(0, netWorked - stdMin);
                         workedH = Math.Round(netWorked / 60.0, 2);
                     }
                     status = lateMin > 0 && earlyMin > 0 ? "Đi muộn & về sớm"

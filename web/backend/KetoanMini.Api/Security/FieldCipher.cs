@@ -88,5 +88,16 @@ public sealed class FieldCipher
 
     // ----- Tiện ích cho vector đặc trưng khuôn mặt (dữ liệu sinh trắc nhạy cảm) -----
     public byte[] EncryptEmbedding(float[] embedding) => Encrypt(EmbeddingCodec.ToBytes(embedding));
-    public float[] DecryptEmbedding(byte[] stored) => EmbeddingCodec.FromBytes(Decrypt(stored));
+
+    public float[] DecryptEmbedding(byte[] stored)
+    {
+        // Khi khóa đã được cấu hình, kho sinh trắc học phải hoàn toàn ở dạng AES-GCM. Không dùng
+        // nhánh tương thích plaintext của Decrypt(): nếu một import/lỗi DB chèn blob thô sau startup,
+        // request đầu tiên phải fail-closed thay vì âm thầm dùng dữ liệu chưa được xác thực.
+        if (_key is not null && !IsEncrypted(stored))
+            throw new InvalidOperationException(
+                "Biometric embedding is not AES-GCM encrypted with the KME1 format.");
+
+        return EmbeddingCodec.FromBytes(Decrypt(stored));
+    }
 }

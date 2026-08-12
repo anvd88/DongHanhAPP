@@ -42,7 +42,7 @@ fun lerpQuad(from: TrackQuad, to: TrackQuad, progress: Float): TrackQuad {
 }
 
 /** Translucent amber-yellow laid over a QR only while it is being tracked. */
-const val QR_TRACK_FILL_ARGB: Int = 0x30FFC400
+const val QR_TRACK_FILL_ARGB: Int = 0x304D9EFF
 
 /** Vùng ảnh phân tích đang thực sự hiển thị trên PreviewView (`ImageProxy.cropRect`). */
 data class QrCropRect(val left: Int, val top: Int, val right: Int, val bottom: Int) {

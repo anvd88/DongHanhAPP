@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, KeySquare, UserPlus, Wifi, WifiOff, BadgeCheck } from "lucide-react";
+import { Plus, Search, Trash2, Check, Lock, Unlock, KeyRound, KeySquare, Wifi, WifiOff, BadgeCheck } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Table } from "../components/Table";
@@ -19,6 +19,7 @@ const ROLES = [
   { key: "Executive", label: "Ban giám đốc" },
   { key: "ChiefAccountant", label: "Kế toán trưởng" },
   { key: "Accounting", label: "Kế toán viên" },
+  { key: "Payroll", label: "Kế toán tiền lương" },
   { key: "Cashier", label: "Thủ quỹ" },
   { key: "HR", label: "Nhân sự (HR)" },
   { key: "Manager", label: "Trưởng phòng" },
@@ -37,6 +38,7 @@ export const ASSIGNABLE_ROLES = [
   { key: "Executive", label: "Ban giám đốc" },
   { key: "ChiefAccountant", label: "Kế toán trưởng" },
   { key: "Accounting", label: "Kế toán viên" },
+  { key: "Payroll", label: "Kế toán tiền lương" },
   { key: "Cashier", label: "Thủ quỹ" },
   { key: "HR", label: "Nhân sự (HR)" },
   { key: "Manager", label: "Trưởng phòng" },
@@ -54,6 +56,10 @@ const SECONDARY_ROLES = [
   { key: "Warehouse", label: "Thủ kho", hint: "Giao việc & nghiệm thu" },
   { key: "Manager", label: "Trưởng phòng", hint: "Duyệt đơn của phòng + giao việc" },
   { key: "ChiefAccountant", label: "Kế toán trưởng", hint: "Duyệt chứng từ kế toán" },
+  { key: "Accounting", label: "Kế toán", hint: "Nghiệp vụ kế toán" },
+  { key: "Payroll", label: "Kế toán tiền lương", hint: "Lập và phát hành phiếu lương" },
+  { key: "Cashier", label: "Thủ quỹ", hint: "Thực hiện chi phiếu đã duyệt" },
+  { key: "HR", label: "Nhân sự", hint: "Quản lý nghiệp vụ nhân sự" },
 ];
 
 /** Vai trò + danh sách quyền nó cấp, lấy từ /api/roles/catalog (nguồn duy nhất: backend Permissions.cs). */
@@ -102,7 +108,6 @@ export function NhanSu({ embedded = false }: { embedded?: boolean } = {}) {
   const { user } = useAuth();
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("");
-  const [adding, setAdding] = useState(false);
   const { data, loading, error, reload } = useApi<UserAdmin[]>(
     `/api/users/?search=${encodeURIComponent(search)}&role=${role}`,
     [search, role]
@@ -189,13 +194,13 @@ export function NhanSu({ embedded = false }: { embedded?: boolean } = {}) {
               Quản lý đăng nhập, vai trò và trạng thái tài khoản. Tên đăng nhập cần trùng với tên đăng nhập trong hồ sơ nhân viên.
             </p>
           </div>
-          <Button onClick={() => setAdding(true)}><UserPlus className="h-4 w-4" /> Thêm tài khoản</Button>
+          <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--accent)]">Tài khoản được tạo từ hồ sơ nhân sự</span>
         </GlassPanel>
       ) : (
         <PageHeader
           title="Quản lý người dùng"
           subtitle="Quản lý tài khoản và thông tin người dùng trong hệ thống"
-          actions={<Button onClick={() => setAdding(true)}><UserPlus className="h-4 w-4" /> Thêm người dùng</Button>}
+          actions={<span className="rounded-full bg-[var(--accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--accent)]">Tạo tại mục Hồ sơ nhân sự</span>}
         />
       )}
 
@@ -231,8 +236,8 @@ export function NhanSu({ embedded = false }: { embedded?: boolean } = {}) {
               { header: "Vai trò hệ thống chính", cell: (r) => (
                 <Select
                   value={r.role}
-                  disabled={r.username === user?.username}
-                  title={r.username === user?.username ? "Không thể tự đổi vai trò của chính mình" : "Đổi vai trò"}
+                  disabled={r.rolesManagedByPositions || r.username === user?.username}
+                  title={r.rolesManagedByPositions ? "Vai trò được hợp nhất từ các chức vụ trong hồ sơ" : r.username === user?.username ? "Không thể tự đổi vai trò của chính mình" : "Đổi vai trò"}
                   onChange={(e) => changeRole(r, e.target.value)}
                   className="min-w-[132px] py-1.5 text-xs font-semibold"
                 >
@@ -241,7 +246,9 @@ export function NhanSu({ embedded = false }: { embedded?: boolean } = {}) {
               ) },
               { header: "Vai trò hệ thống bổ sung", cell: (r) => (
                 <div className="flex flex-wrap gap-1">
-                  {r.role === "Admin" ? (
+                  {r.rolesManagedByPositions ? (
+                    <span className="text-xs font-medium text-[var(--accent)]">Quản lý theo chức vụ</span>
+                  ) : r.role === "Admin" ? (
                     <span className="text-xs opacity-60">Admin có sẵn mọi quyền</span>
                   ) : (
                     SECONDARY_ROLES.filter((x) => x.key !== r.role).map((x) => {
@@ -317,8 +324,6 @@ export function NhanSu({ embedded = false }: { embedded?: boolean } = {}) {
           />
         )}
       </GlassPanel>
-
-      {adding && <AddUserModal onClose={() => setAdding(false)} onSaved={() => { setAdding(false); reload({ silent: true }); }} />}
     </div>
   );
 }
@@ -344,31 +349,31 @@ export type NewUserInitial = { username?: string; fullName?: string; email?: str
  * trong bảng Nhân viên (khi người đó có hồ sơ nhưng chưa có tài khoản).
  */
 export function AccountCreateForm({ initial, onSaved }: { initial?: NewUserInitial; onSaved: () => void }) {
-  const catalog = useRoleCatalog();
   const [username, setUsername] = useState(initial?.username ?? "");
   const [fullName, setFullName] = useState(initial?.fullName ?? "");
   const [email, setEmail] = useState(initial?.email ?? "");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("Employee");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
     setSaving(true); setError("");
     try {
-      await api.post("/api/users", { username, fullName, email, password, role });
+      // Máy chủ chỉ chấp nhận tài khoản cho hồ sơ đã tồn tại và tự suy ra toàn bộ vai trò từ chức vụ.
+      await api.post("/api/users", { username, fullName, email, password, role: "Employee" });
       onSaved();
     } catch (e) { setError(e instanceof Error ? e.message : "Lỗi"); } finally { setSaving(false); }
   };
 
   return (
     <div className="space-y-4">
-      <Field label="Tên đăng nhập *"><Input value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
+      <Field label="Tên đăng nhập *"><Input value={username} disabled={Boolean(initial?.username)} onChange={(e) => setUsername(e.target.value)} /></Field>
       <Field label="Họ tên"><Input value={fullName} onChange={(e) => setFullName(e.target.value)} /></Field>
       <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
       <Field label="Mật khẩu *"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
-      <Field label="Vai trò hệ thống chính"><Select value={role} onChange={(e) => setRole(e.target.value)} className="w-full">{ASSIGNABLE_ROLES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</Select></Field>
-      <RolePermissions catalog={catalog} roles={[role]} title="Vai trò này cấp các quyền" />
+      <div className="rounded-xl border border-[var(--gc-border)] bg-[var(--accent-soft)]/30 p-3 text-sm text-[var(--text-secondary)]">
+        Vai trò và quyền được máy chủ hợp nhất từ chức vụ chính cùng các chức vụ kiêm nhiệm trong hồ sơ; không thể chọn quyền trực tiếp tại đây.
+      </div>
       {error && <div className="rounded-xl bg-red-500/10 px-3 py-2.5 text-sm font-medium text-[var(--danger)]">{error}</div>}
       <div className="flex justify-end border-t border-[var(--gc-border)] pt-4">
         <Button onClick={save} loading={saving}><Plus className="h-4 w-4" /> Tạo tài khoản</Button>

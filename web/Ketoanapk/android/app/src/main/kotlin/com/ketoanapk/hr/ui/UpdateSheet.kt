@@ -1,6 +1,7 @@
 package com.ketoanapk.hr.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,55 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.data.ReleaseInfo
+
+/**
+ * Thanh nhắc nhỏ, cố định trong khung ứng dụng khi có bản mới.
+ *
+ * Thanh này không phụ thuộc quyền thông báo Android và không có nút đóng: người dùng có thể hoãn
+ * bảng chi tiết, nhưng vẫn luôn nhìn thấy đường quay lại cập nhật trên mọi màn hình của ứng dụng.
+ */
+@Composable
+fun UpdateReminderBar(
+    info: ReleaseInfo,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        tonalElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 40.dp)
+                .padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            Icon(
+                Icons.Filled.SystemUpdate,
+                contentDescription = null,
+                modifier = Modifier.size(19.dp),
+            )
+            Text(
+                "Có bản cập nhật ${info.version}",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Text(
+                "Xem ngay",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
 
 /**
  * Bảng cập nhật ứng dụng — thay cho hộp thoại cũ.

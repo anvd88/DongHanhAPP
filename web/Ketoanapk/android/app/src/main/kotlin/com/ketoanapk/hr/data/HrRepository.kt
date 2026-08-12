@@ -489,6 +489,9 @@ class HrRepository(context: Context, background: Boolean = false) {
     // Đọc cấu hình liveness quay đầu (có yêu cầu quay đầu lúc quét không).
     suspend fun motionConfig(): MotionConfig = call { attendanceApi.motionConfig() }
 
+    // Yêu cầu cười khi quét (runtime config; backend cũ/lỗi mạng được ViewModel xử lý về mặc định tắt).
+    suspend fun smileConfig(): SmileConfig = call { attendanceApi.smileConfig() }
+
     // --- Tự đăng ký khuôn mặt (đi qua máy chủ LAN như chấm công) ---
     suspend fun myFaceStatus(): SelfFaceStatus = call { attendanceApi.myFaceStatus() }
 

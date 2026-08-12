@@ -3,6 +3,7 @@ package com.ketoanapk.hr.ui
 import android.app.Activity
 import android.content.Intent
 import android.view.View
+import android.widget.ImageButton
 import android.widget.TextView
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -43,6 +44,11 @@ class QrCaptureScreenUiTest {
                 assertNotNull(activity.findViewById<View>(R.id.qr_overlay))
                 assertNotNull(activity.findViewById<View>(R.id.qr_exit_button))
                 assertNotNull(activity.findViewById<View>(R.id.qr_gallery_button))
+                assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.qr_bottom_actions).visibility)
+                assertEquals(
+                    activity.getString(R.string.qr_pick_image),
+                    activity.findViewById<ImageButton>(R.id.qr_gallery_button).contentDescription,
+                )
                 assertEquals(
                     activity.getString(R.string.qr_close_scanner),
                     activity.findViewById<View>(R.id.qr_exit_button).contentDescription,

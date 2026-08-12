@@ -6,18 +6,76 @@ using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
+using OpenCvSharp;
 using Xunit;
 
 namespace KetoanMini.Api.Tests;
 
 /// <summary>
-/// Chống giả mạo hỏng là kiểu hỏng KHÔNG có triệu chứng: model không nạp được thì
-/// <see cref="IFaceEngine.LivenessProbability"/> trả 1 cho mọi ảnh, chấm công vẫn chạy y như bình
-/// thường, chỉ là giơ ảnh/màn hình cũng qua. Hai test này là cái chuông cho đúng tình huống đó.
+/// Chống giả mạo là chốt fail-closed: model thiếu/hỏng hoặc inference lỗi phải từ chối lượt quét,
+/// đồng thời Production không được khởi động nếu chưa đủ ensemble Silent-Face.
 /// </summary>
 [Collection(ApiCollection.Name)]
 public sealed class AntiSpoofStatusTests(ApiFactory factory)
 {
+    [Fact]
+    public void ProductionGuard_RequiresFullAntiSpoof_WhileDevelopmentMayDiagnoseDegradedModels()
+    {
+        var production = new TestEnvironment(Environments.Production);
+        var development = new TestEnvironment(Environments.Development);
+
+        ProductionSecurityValidator.ValidateFaceEngine(production, new StubFaceEngine(AntiSpoofLevel.Full, 1));
+        Assert.Throws<InvalidOperationException>(() =>
+            ProductionSecurityValidator.ValidateFaceEngine(production, new StubFaceEngine(AntiSpoofLevel.Basic, 1)));
+        Assert.Throws<InvalidOperationException>(() =>
+            ProductionSecurityValidator.ValidateFaceEngine(production, new StubFaceEngine(AntiSpoofLevel.None, 1)));
+        ProductionSecurityValidator.ValidateFaceEngine(development, new StubFaceEngine(AntiSpoofLevel.None, 1));
+    }
+
+    [Fact]
+    public void SharedLivenessBoundary_FailsClosed_ForMissingThrowingOrNonFiniteEngines()
+    {
+        Assert.False(FaceAntiSpoofSecurity.IsOperational(new StubFaceEngine(AntiSpoofLevel.None, 1)));
+        Assert.Equal(0, FaceAntiSpoofSecurity.ProbabilityReal(
+            new StubFaceEngine(AntiSpoofLevel.None, 1), [1]));
+        Assert.Equal(0, FaceAntiSpoofSecurity.ProbabilityReal(
+            new StubFaceEngine(AntiSpoofLevel.Full, double.NaN), [1]));
+        Assert.Equal(0, FaceAntiSpoofSecurity.ProbabilityReal(
+            new StubFaceEngine(AntiSpoofLevel.Full, 1, throws: true), [1]));
+    }
+
+    [Fact]
+    public void SilentFace_RequiresBothModels_AndNoModelReturnsZero()
+    {
+        var emptyDir = Path.Combine(Path.GetTempPath(), "ketoanmini-sf-empty-" + Guid.NewGuid().ToString("N"));
+        var partialDir = Path.Combine(Path.GetTempPath(), "ketoanmini-sf-partial-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(emptyDir);
+        Directory.CreateDirectory(partialDir);
+        try
+        {
+            using (var empty = new SilentFaceLiveness(emptyDir))
+            using (var image = new Mat())
+            {
+                Assert.False(empty.Available);
+                Assert.Equal(0, empty.ProbabilityReal(image, default));
+            }
+
+            const string oneModel = "2.7_80x80_MiniFASNetV2.onnx";
+            var source = Path.Combine(AppContext.BaseDirectory, "Models", "Face", oneModel);
+            Assert.True(File.Exists(source), $"Missing packaged test model: {source}");
+            File.Copy(source, Path.Combine(partialDir, oneModel));
+            using var partial = new SilentFaceLiveness(partialDir);
+            Assert.False(partial.Available);
+        }
+        finally
+        {
+            Directory.Delete(emptyDir, recursive: true);
+            Directory.Delete(partialDir, recursive: true);
+        }
+    }
+
     /// <summary>
     /// Nếu ai đó làm hỏng việc đóng gói model (đổi luật copy trong .csproj, dọn nhầm thư mục
     /// Models/Face, đổi tên file), test này đỏ NGAY thay vì để hệ thống chạy không có chống giả mạo.
@@ -93,5 +151,26 @@ public sealed class AntiSpoofStatusTests(ApiFactory factory)
                 .ExecuteNonQueryAsync();
         }
         catch { /* dọn dẹp best-effort */ }
+    }
+
+    private sealed class TestEnvironment(string name) : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = name;
+        public string ApplicationName { get; set; } = "tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+    }
+
+    private sealed class StubFaceEngine(AntiSpoofLevel level, double score, bool throws = false) : IFaceEngine
+    {
+        public string Name => "stub";
+        public double MatchThreshold => 0.45;
+        public AntiSpoofStatus AntiSpoof => new(level, "test");
+        public bool CheckLiveness(byte[] imageBytes) => LivenessProbability(imageBytes) >= LivenessThreshold;
+        public double LivenessProbability(byte[] imageBytes) => throws ? throw new InvalidOperationException("test") : score;
+        public double LivenessThreshold => 0.5;
+        public float[]? ExtractEmbedding(byte[] imageBytes) => [1, 0, 0];
+        public double Compare(float[] a, float[] b) => 1;
+        public FaceFrameQuality? AssessFrame(byte[] imageBytes) => null;
     }
 }

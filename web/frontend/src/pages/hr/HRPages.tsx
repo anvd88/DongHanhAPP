@@ -922,14 +922,14 @@ function PayslipMaker({ canManage }: { canManage: boolean }) {
               )}
             </div>
             {otDays.length === 0 ? (
-              <p className="hr-salary-empty">Không có ngày nào tăng ca (giờ ra sau 17:20) trong kỳ này.</p>
+              <p className="hr-salary-empty">Không có ngày nào tăng ca đủ 15 phút trước 08:00 hoặc sau 17:00 trong kỳ này.</p>
             ) : (
               <div className="hr-ot-list">
                 {otDays.map((d) => (
                   <label key={d.date} className="hr-ot-row" data-on={otSelected.has(d.date)}>
                     <input type="checkbox" checked={otSelected.has(d.date)} disabled={!canManage} onChange={() => toggleOt(d.date)} />
                     <span className="hr-ot-date">{date(d.date)}</span>
-                    <span className="hr-ot-out">Ra {d.checkOut}</span>
+                    <span className="hr-ot-out">Vào {d.checkIn}{d.checkOut ? ` · Ra ${d.checkOut}` : ""}</span>
                     <span className="hr-ot-min">{Math.round((d.minutes / 60) * 100) / 100} giờ</span>
                     <b>{moneyVnd(Math.round((d.minutes / 60) * otRate))}</b>
                   </label>

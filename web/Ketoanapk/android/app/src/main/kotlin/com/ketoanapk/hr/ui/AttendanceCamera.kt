@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.os.SystemClock
 import android.util.Base64
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,7 +26,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -76,11 +76,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -128,10 +128,11 @@ private const val NEAR_TOO_CLOSE = 0.70f   // vượt ngưỡng này = quá sát
 private const val CENTER_TOL_X = 0.18f
 private const val CENTER_TOL_Y = 0.20f
 private const val STAGE_STABLE_MS = 550L   // giữ đạt liên tục ngần này mới sang bước kế
-private const val HOLD_MS = 3000L          // quét giữ khung 3 giây (kèm soi sáng)
+private const val HOLD_MS = 3000L          // quét giữ khung 3 giây
 private const val MOTION_CENTER_YAW = 12f  // |yaw| < mức này = coi như nhìn thẳng (độ)
 private const val MOTION_TURN_YAW = 20f    // |yaw| > mức này = đã quay đủ sang một bên (độ)
 private const val MOTION_FRONTAL_MS = 350L // giữ nhìn thẳng ngần này trước khi yêu cầu quay
+private const val SMILE_STABLE_MS = 500L   // giữ nụ cười liên tục để tránh nhận nhầm một khung hình
 // ── Kiểm tra "đang nhìn vào màn hình" trong lúc quét (mở mắt + hướng mặt thẳng) ──
 // Không có eye-tracking con ngươi (ML Kit không cho) nên "ánh nhìn" = tư thế đầu hướng vào máy trên
 // cả hai trục + mắt đang mở. Nhắm mắt / nhìn đi chỗ khác sẽ TẠM DỪNG đồng hồ giữ khung.
@@ -141,8 +142,9 @@ private const val EYE_OPEN_MIN = 0.35f     // xác suất mở mắt tối thi�
 private const val POLL_MS = 40L
 private const val FACE_STALE_MS = 350L     // không thấy mặt quá lâu = coi như rời khung
 private const val AIM_TIMEOUT_MS = 45_000L // không căn được khung đủ lâu → tự huỷ để thử lại
-private const val MAX_FRAMES = 14          // trần số khung gửi lên khi KHÔNG chạy flash (giữ khung mới nhất)
-private const val PER_SLOT_CAP = 3         // khi chạy flash: tối đa số khung mỗi ô màu (phủ đủ mọi slot)
+private const val MAX_FRAMES = 14          // trần số khung gửi lên ở chế độ nhìn thẳng
+private const val PER_SLOT_CAP = 3         // chế độ quay đầu: tối đa số khung của mỗi pha chuyển động
+private const val CAPTURE_GAP_MS = 180L    // trải đều khung, tránh tạo JPEG ở mọi frame gây tăng RAM đột biến
 
 private enum class AimStage { Far, Near, Hold }
 
@@ -222,8 +224,8 @@ fun AttendanceScreen(vm: HrViewModel) {
 }
 
 /**
- * Bước quét: camera TOÀN MÀN HÌNH thật sự — ẩn cả thanh trạng thái lẫn thanh điều hướng hệ thống
- * (immersive, vuốt để hiện tạm) để chỉ còn camera + nút Đóng. Được gọi ở tầng ngoài Scaffold
+ * Bước quét: camera toàn màn hình, chỉ ẩn tạm thanh trạng thái; thanh điều hướng Android luôn hiện.
+ * Được gọi ở tầng ngoài Scaffold
  * (xem HrShell) nên không dính thanh tiêu đề/điều hướng của app. Chỉ hiện khi đang Collecting.
  */
 @Composable
@@ -231,17 +233,20 @@ fun FullScreenCameraScan(
     onCaptured: (List<CapturedFrame>) -> Unit,
     onCancel: () -> Unit,
     motionMode: Boolean = false,
+    smileMode: Boolean = false,
+    smileThreshold: Float = 0.65f,
 ) {
     val context = LocalContext.current
-    // Ẩn thanh hệ thống trong lúc quét để camera phủ kín màn hình; khôi phục khi thoát.
+    KeepScreenBrightEffect()
+    // Chỉ ẩn thanh trạng thái để camera rộng hơn; luôn giữ thanh điều hướng Android cho người dùng.
     DisposableEffect(Unit) {
         val window = context.findActivity()?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
         controller?.apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.systemBars())
+            hide(WindowInsetsCompat.Type.statusBars())
         }
-        onDispose { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+        onDispose { controller?.show(WindowInsetsCompat.Type.statusBars()) }
     }
     Box(
         modifier = Modifier
@@ -254,13 +259,18 @@ fun FullScreenCameraScan(
             onCaptured = onCaptured,
             onCancel = onCancel,
             motionMode = motionMode,
+            smileMode = smileMode,
+            smileThreshold = smileThreshold,
         )
         IconButton(
             onClick = onCancel,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .statusBarsPadding() // vẫn bấm được nếu người dùng vuốt hiện thanh trạng thái
-                .padding(8.dp),
+                .padding(12.dp)
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.48f)),
         ) {
             Icon(Icons.Filled.Close, contentDescription = "Đóng", tint = Color.White)
         }
@@ -466,14 +476,14 @@ private fun IdlePrompt() {
             Icon(Icons.Filled.Face, contentDescription = null, tint = accent, modifier = Modifier.size(56.dp))
         }
         Text(
-            "Sẵn sàng xác thực khuôn mặt",
+            "Sẵn sàng chấm công",
             color = Color.White,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
         Text(
-            "Bấm \"Bắt đầu chấm công\", giữ máy ngang tầm mắt ở khoảng cách thoải mái. Đưa khuôn mặt vào khung lớn rồi khung nhỏ — không cần đưa mặt quá gần.",
+            "Giữ điện thoại ngang tầm mắt, tháo khẩu trang và chọn nơi đủ sáng. Khi mở camera, làm theo từng hướng dẫn trên màn hình.",
             color = Color.White.copy(alpha = 0.82f),
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
@@ -912,6 +922,7 @@ private fun attendanceVisual(status: String): Triple<Tone, String, ImageVector> 
     "pending" -> Triple(Tone.Warning, "Đã gửi — chờ duyệt", Icons.Filled.Schedule)
     "posture" -> Triple(Tone.Warning, "Sai tư thế", Icons.Filled.WarningAmber)
     "eyesclosed" -> Triple(Tone.Warning, "Chưa mở mắt", Icons.Filled.WarningAmber)
+    "nosmile" -> Triple(Tone.Warning, "Chưa thấy nụ cười", Icons.Filled.WarningAmber)
     "lowquality" -> Triple(Tone.Warning, "Ảnh chưa đủ rõ", Icons.Filled.WarningAmber)
     "noface" -> Triple(Tone.Warning, "Không thấy khuôn mặt", Icons.Filled.WarningAmber)
     "spoof" -> Triple(Tone.Danger, "Nghi ngờ giả mạo", Icons.Filled.ErrorOutline)
@@ -930,42 +941,49 @@ private data class FaceObs(
     val yaw: Float,       // góc quay đầu trái/phải (độ, từ ML Kit headEulerAngleY) — cho liveness quay đầu
     val pitch: Float,     // góc ngẩng/cúi (độ, headEulerAngleX) — cùng yaw để biết mặt có hướng vào màn hình
     val eyeOpen: Float,   // xác suất mở mắt (min hai mắt; 1f nếu ML Kit chưa chắc) — cho bước kiểm tra ánh nhìn
+    val smile: Float,     // xác suất đang cười từ ML Kit; 0f khi không phân loại được
     val t: Long,          // mốc thời gian (elapsedRealtime) để biết khung còn "tươi"
 )
 
 private class FaceAimState {
     @Volatile var latest: FaceObs? = null
-    // Ô màu flash đang chiếu lúc thu khung (-1 = không chạy flash liveness). Vòng lặp giữ khung cập nhật.
+    // Pha quay đầu đang thu khung; -1 là chế độ nhìn thẳng thông thường. Không điều khiển màu màn hình.
     @Volatile var currentSlot: Int = -1
     val collect = AtomicBoolean(false)
     private val frames = ArrayList<CapturedFrame>()
+    private var lastCaptureAt = 0L
 
-    fun addFrame(url: String) = synchronized(frames) {
+    /** Đặt trước một chỗ chụp; null nghĩa là chưa tới nhịp hoặc pha hiện tại đã đủ ảnh. */
+    fun reserveCaptureSlot(now: Long): Int? = synchronized(frames) {
         val slot = currentSlot
+        if (now - lastCaptureAt < CAPTURE_GAP_MS) return@synchronized null
+        val hasCapacity = if (slot < 0) {
+            frames.count { it.slot < 0 } < MAX_FRAMES
+        } else {
+            frames.count { it.slot == slot } < PER_SLOT_CAP
+        }
+        if (!hasCapacity) return@synchronized null
+        lastCaptureAt = now
+        slot
+    }
+
+    fun addFrame(url: String, slot: Int) = synchronized(frames) {
         if (slot < 0) {
-            // Khung TỰ NHIÊN (không flash, hoặc đuôi sau chuỗi màu để nhận diện): giữ tối đa MAX_FRAMES
-            // khung tự nhiên MỚI NHẤT — chỉ loại khung tự nhiên cũ, KHÔNG đụng khung flash (slot ≥ 0)
-            // đang cần cho việc đối chiếu phản xạ.
-            while (frames.count { it.slot < 0 } >= MAX_FRAMES) {
-                val i = frames.indexOfFirst { it.slot < 0 }
-                if (i < 0) break
-                frames.removeAt(i)
-            }
+            // Chế độ nhìn thẳng: reserveCaptureSlot đã giới hạn MAX_FRAMES.
             frames.add(CapturedFrame(url, -1))
         } else {
-            // Khung FLASH: giới hạn số khung MỖI slot để không slot nào lấn át, phủ đủ mọi màu.
-            if (frames.count { it.slot == slot } >= PER_SLOT_CAP) return@synchronized
+            // Chế độ quay đầu: reserveCaptureSlot đã giới hạn từng pha.
             frames.add(CapturedFrame(url, slot))
         }
     }
     fun snapshot(): List<CapturedFrame> = synchronized(frames) { frames.toList() }
-    fun clearFrames() = synchronized(frames) { frames.clear() }
+    fun clearFrames() = synchronized(frames) { frames.clear(); lastCaptureAt = 0L }
 }
 
 /**
- * CameraX (camera trước) + ML Kit nhận diện on-device để căn khung 2 bước (khung lớn → khung nhỏ,
- * không đòi đưa mặt quá sát), quét giữ khung 3 giây có SOI SÁNG bằng cách đổi màu dịu trên màn hình,
- * gom khung ngay trong lúc giữ rồi trả về loạt ảnh qua [onCaptured]. [onCancel] khi hết thời gian căn.
+ * CameraX (camera trước) + ML Kit nhận diện on-device để căn vị trí/khoảng cách, quét giữ khung
+ * 3 giây, gom khung ngay trong lúc giữ rồi trả về loạt ảnh qua [onCaptured]. MediaPipe không chạy
+ * trong luồng này: lớp nhận diện chỉ xử lý nền, không vẽ lưới hoặc khung bám theo khuôn mặt.
  */
 @androidx.annotation.OptIn(ExperimentalGetImage::class)
 @Composable
@@ -975,6 +993,8 @@ fun BiometricFaceCamera(
     onCaptured: (List<CapturedFrame>) -> Unit,
     onCancel: () -> Unit,
     motionMode: Boolean = false,
+    smileMode: Boolean = false,
+    smileThreshold: Float = 0.65f,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -984,6 +1004,7 @@ fun BiometricFaceCamera(
     // khi màn hình camera bị hủy lúc executor nền đã shutdown → tránh crash.
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
     val aim = remember { FaceAimState() }
+    val cameraClosed = remember { AtomicBoolean(false) }
     val onCapturedNow by rememberUpdatedState(onCaptured)
     val onCancelNow by rememberUpdatedState(onCancel)
     val detector = remember {
@@ -1000,14 +1021,12 @@ fun BiometricFaceCamera(
 
     // Trạng thái UI do vòng lặp căn khung điều khiển (đọc/ghi trên luồng chính).
     var stage by remember { mutableStateOf(AimStage.Far) }
-    var hint by remember { mutableStateOf("Đưa khuôn mặt vào khung lớn") }
+    var hint by remember { mutableStateOf("Đặt khuôn mặt vào giữa khung") }
     var holdProgress by remember { mutableStateOf(0f) }
-    // Màu SOI SÁNG hắt ra VÙNG NGOÀI khung (phần đen quanh khuôn mặt) trong lúc quét — KHÔNG phủ lên
-    // mặt. null = không soi (chưa tới bước giữ khung). Xem [FaceGuideOverlay].
-    var lightColor by remember { mutableStateOf<Color?>(null) }
     val analysisRef = remember { java.util.concurrent.atomic.AtomicReference<ImageAnalysis?>() }
 
     DisposableEffect(Unit) {
+        cameraClosed.set(false)
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             val provider = future.get()
@@ -1021,8 +1040,12 @@ fun BiometricFaceCamera(
                         // Bọc toàn bộ để MỘT lỗi bất kỳ (ML Kit/giải mã ảnh) không làm crash cả app và
                         // ImageProxy luôn được đóng đúng một lần (nếu không đóng, camera sẽ treo khung).
                         try {
+                            if (cameraClosed.get()) { image.close(); return@setAnalyzer }
                             // Thu khung NGAY trên luồng nền (khi đang ở pha giữ) — tách khỏi callback ML Kit.
-                            if (aim.collect.get()) runCatching { aim.addFrame(image.toJpegDataUrl()) }
+                            if (aim.collect.get()) {
+                                val slot = aim.reserveCaptureSlot(SystemClock.elapsedRealtime())
+                                if (slot != null) runCatching { aim.addFrame(image.toJpegDataUrl(), slot) }
+                            }
 
                             val media = image.image
                             if (media == null) { image.close(); return@setAnalyzer }
@@ -1032,7 +1055,7 @@ fun BiometricFaceCamera(
                             val input = InputImage.fromMediaImage(media, rotation)
                             detector.process(input)
                                 .addOnSuccessListener(mainExecutor) { faces ->
-                                    runCatching {
+                                    if (!cameraClosed.get()) runCatching {
                                         val face = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }
                                         aim.latest = if (face != null) {
                                             val bb = face.boundingBox
@@ -1049,6 +1072,7 @@ fun BiometricFaceCamera(
                                                 yaw = face.headEulerAngleY,
                                                 pitch = face.headEulerAngleX,
                                                 eyeOpen = eyeOpen,
+                                                smile = face.smilingProbability ?: 0f,
                                                 t = SystemClock.elapsedRealtime(),
                                             )
                                         } else {
@@ -1056,7 +1080,9 @@ fun BiometricFaceCamera(
                                         }
                                     }
                                 }
-                                .addOnFailureListener(mainExecutor) { aim.latest = null }
+                                .addOnFailureListener(mainExecutor) {
+                                    if (!cameraClosed.get()) aim.latest = null
+                                }
                                 .addOnCompleteListener(mainExecutor) { runCatching { image.close() } }
                         } catch (_: Throwable) {
                             runCatching { image.close() }
@@ -1072,24 +1098,11 @@ fun BiometricFaceCamera(
         onDispose {
             // Gỡ analyzer TRƯỚC để CameraX chắc chắn không đẩy thêm khung nào lên executor sắp tắt,
             // rồi mới unbind + đóng detector + shutdown (tất cả bọc runCatching cho an toàn tuyệt đối).
+            cameraClosed.set(true)
             runCatching { analysisRef.getAndSet(null)?.clearAnalyzer() }
             runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
             runCatching { detector.close() }
             runCatching { executor.shutdown() }
-        }
-    }
-
-    // Tăng độ sáng màn hình tối đa trong lúc quét để soi sáng khuôn mặt (khôi phục khi xong).
-    DisposableEffect(capturing) {
-        val window = context.findActivity()?.window
-        val prev = window?.attributes?.screenBrightness
-        if (capturing && window != null) {
-            window.attributes = window.attributes.apply { screenBrightness = 1f }
-        }
-        onDispose {
-            if (window != null && prev != null) {
-                window.attributes = window.attributes.apply { screenBrightness = prev }
-            }
         }
     }
 
@@ -1102,8 +1115,7 @@ fun BiometricFaceCamera(
         aim.currentSlot = -1
         stage = AimStage.Far
         holdProgress = 0f
-        lightColor = null
-        hint = "Đưa khuôn mặt vào khung lớn"
+        hint = "Đặt khuôn mặt vào giữa khung"
 
         var goodSince = 0L
         var holdStart = 0L
@@ -1111,10 +1123,11 @@ fun BiometricFaceCamera(
         val startedAt = SystemClock.elapsedRealtime()
 
         // Trạng thái pha giữ khung khi bật liveness QUAY ĐẦU (motionMode):
-        // 0 = nhìn thẳng, 1 = quay sang một bên, 2 = quay sang bên còn lại, 3 = xong.
+        // 0 = nhìn thẳng, 1 = quay một bên, 2 = quay bên còn lại, 3 = cười (nếu bật), 4 = xong.
         var motionStep = 0
         var sideASign = 0        // dấu yaw của lần quay đầu tiên (ép lần sau quay NGƯỢC lại)
         var frontalSince = 0L
+        var smileSince = 0L
 
         while (isActive) {
             val now = SystemClock.elapsedRealtime()
@@ -1124,38 +1137,37 @@ fun BiometricFaceCamera(
                 goodSince = 0L
                 if (stage == AimStage.Hold) { stage = AimStage.Near; aim.collect.set(false); aim.clearFrames() }
                 holdProgress = 0f
-                lightColor = null
                 aim.currentSlot = -1
-                motionStep = 0; frontalSince = 0L
-                hint = "Đưa khuôn mặt vào giữa khung"
+                motionStep = 0; frontalSince = 0L; smileSince = 0L
+                hint = "Đặt khuôn mặt vào giữa khung"
             } else {
                 val centered = abs(face.cx - 0.5f) < CENTER_TOL_X && abs(face.cy - 0.5f) < CENTER_TOL_Y
                 val w = face.widthFrac
                 when (stage) {
                     AimStage.Far -> when {
-                        !centered -> { hint = "Đưa khuôn mặt vào giữa khung"; goodSince = 0L }
-                        w < FAR_MIN -> { hint = "Nhích lại gần khung một chút"; goodSince = 0L }
-                        w > FAR_MAX -> { hint = "Lùi ra xa một chút"; goodSince = 0L }
+                        !centered -> { hint = "Di chuyển nhẹ để khuôn mặt nằm chính giữa"; goodSince = 0L }
+                        w < FAR_MIN -> { hint = "Đưa điện thoại lại gần khuôn mặt một chút"; goodSince = 0L }
+                        w > FAR_MAX -> { hint = "Đưa điện thoại ra xa khuôn mặt một chút"; goodSince = 0L }
                         else -> {
                             if (goodSince == 0L) goodSince = now
                             if (now - goodSince >= STAGE_STABLE_MS) {
                                 stage = AimStage.Near; goodSince = 0L
                             }
-                            hint = "Giữ khuôn mặt trong khung lớn…"
+                            hint = "Đúng vị trí — giữ yên một chút"
                         }
                     }
                     AimStage.Near -> when {
-                        w > NEAR_TOO_CLOSE -> { hint = "Quá gần — lùi ra xa để bảo vệ mắt"; goodSince = 0L }
-                        !centered -> { hint = "Đưa khuôn mặt vào giữa khung nhỏ"; goodSince = 0L }
-                        w < NEAR_MIN -> { hint = "Nhích lại gần thêm một chút"; goodSince = 0L }
+                        w > NEAR_TOO_CLOSE -> { hint = "Đang quá gần — đưa điện thoại ra xa"; goodSince = 0L }
+                        !centered -> { hint = "Căn khuôn mặt vào chính giữa khung"; goodSince = 0L }
+                        w < NEAR_MIN -> { hint = "Đưa điện thoại lại gần thêm một chút"; goodSince = 0L }
                         else -> {
                             if (goodSince == 0L) goodSince = now
                             if (now - goodSince >= STAGE_STABLE_MS) {
                                 stage = AimStage.Hold; holdStart = now; holdTick = now
                                 aim.clearFrames(); aim.collect.set(true)
-                                motionStep = 0; sideASign = 0; frontalSince = 0L
+                                motionStep = 0; sideASign = 0; frontalSince = 0L; smileSince = 0L
                             }
-                            hint = "Giữ yên trong khung nhỏ…"
+                            hint = "Khoảng cách phù hợp — giữ yên"
                         }
                     }
                     AimStage.Hold -> {
@@ -1167,9 +1179,9 @@ fun BiometricFaceCamera(
                             val wayOff = abs(face.cx - 0.5f) > 0.30f || abs(face.cy - 0.5f) > 0.30f
                             if (tooClose || wayOff || w < NEAR_MIN * 0.55f) {
                                 stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
-                                aim.currentSlot = -1; motionStep = 0; frontalSince = 0L
+                                aim.currentSlot = -1; motionStep = 0; frontalSince = 0L; smileSince = 0L
                                 aim.collect.set(false); aim.clearFrames()
-                                hint = if (tooClose) "Quá gần — lùi ra xa" else "Giữ khuôn mặt trong khung"
+                                hint = if (tooClose) "Đang quá gần — đưa điện thoại ra xa" else "Giữ toàn bộ khuôn mặt trong khung"
                             } else {
                                 val yaw = face.yaw
                                 aim.collect.set(true)
@@ -1178,7 +1190,7 @@ fun BiometricFaceCamera(
                                         aim.currentSlot = 0; holdProgress = 0f
                                         // Phải MỞ MẮT và nhìn thẳng (yaw & pitch nhỏ) mới cho qua bước quay đầu.
                                         val eyesOpen = face.eyeOpen >= EYE_OPEN_MIN
-                                        hint = if (!eyesOpen) "Hãy mở mắt nhìn vào camera" else "Nhìn thẳng vào camera"
+                                        hint = if (!eyesOpen) "Mở mắt và nhìn thẳng vào camera" else "Nhìn thẳng vào camera"
                                         if (eyesOpen && abs(yaw) < MOTION_CENTER_YAW && abs(face.pitch) < GAZE_MAX_PITCH) {
                                             if (frontalSince == 0L) frontalSince = now
                                             if (now - frontalSince >= MOTION_FRONTAL_MS) motionStep = 1
@@ -1194,9 +1206,29 @@ fun BiometricFaceCamera(
                                     }
                                     2 -> {
                                         aim.currentSlot = 2; holdProgress = 0.67f
-                                        hint = "Rồi quay sang bên còn lại"
+                                        hint = "Từ từ quay sang bên còn lại"
                                         // Bắt buộc quay NGƯỢC dấu lần đầu, đủ mạnh → đã phủ cả hai bên.
-                                        if (yaw * sideASign < -MOTION_TURN_YAW) motionStep = 3
+                                        if (yaw * sideASign < -MOTION_TURN_YAW) {
+                                            motionStep = if (smileMode) 3 else 4
+                                            smileSince = 0L
+                                        }
+                                    }
+                                    3 -> {
+                                        aim.currentSlot = 3; holdProgress = 0.85f
+                                        val front = abs(yaw) < MOTION_CENTER_YAW && abs(face.pitch) < GAZE_MAX_PITCH
+                                        val smiling = face.smile >= smileThreshold
+                                        aim.collect.set(front && smiling)
+                                        hint = when {
+                                            !front -> "Đưa mặt về giữa và nhìn thẳng"
+                                            !smiling -> "Nhìn thẳng và mỉm cười"
+                                            else -> "Giữ nụ cười một chút"
+                                        }
+                                        if (front && smiling) {
+                                            if (smileSince == 0L) smileSince = now
+                                            if (now - smileSince >= SMILE_STABLE_MS) motionStep = 4
+                                        } else {
+                                            smileSince = 0L
+                                        }
                                     }
                                     else -> {
                                         holdProgress = 1f
@@ -1218,31 +1250,37 @@ fun BiometricFaceCamera(
                             val inBand = centered && w in NEAR_MIN..NEAR_TOO_CLOSE
                             val eyesOpen = face.eyeOpen >= EYE_OPEN_MIN
                             val looking = eyesOpen && abs(face.yaw) < GAZE_MAX_YAW && abs(face.pitch) < GAZE_MAX_PITCH
+                            val smiling = !smileMode || face.smile >= smileThreshold
                             when {
                                 !inBand -> {
                                     stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
-                                    lightColor = null; aim.currentSlot = -1
+                                    aim.currentSlot = -1
                                     aim.collect.set(false); aim.clearFrames()
-                                    hint = if (w > NEAR_TOO_CLOSE) "Quá gần — lùi ra xa" else "Giữ khuôn mặt trong khung"
+                                    hint = if (w > NEAR_TOO_CLOSE) "Đang quá gần — đưa điện thoại ra xa" else "Giữ toàn bộ khuôn mặt trong khung"
                                 }
                                 !looking -> {
                                     // DỪNG đồng hồ: đẩy mốc bắt đầu theo nhịp vừa trôi qua → held đứng yên,
                                     // vòng tiến độ giữ nguyên. Ngừng thu khung để ảnh gửi lên chỉ có mắt-mở/thẳng.
                                     holdStart += now - holdTick
-                                    aim.collect.set(false); lightColor = null; aim.currentSlot = -1
-                                    hint = if (!eyesOpen) "Hãy mở mắt nhìn vào màn hình" else "Nhìn thẳng vào màn hình"
+                                    aim.collect.set(false); aim.currentSlot = -1
+                                    hint = if (!eyesOpen) "Mở mắt và nhìn thẳng vào camera" else "Nhìn thẳng vào camera"
+                                }
+                                !smiling -> {
+                                    // Tạm dừng cả tiến độ và thu ảnh cho tới khi nụ cười đạt ngưỡng cấu hình.
+                                    holdStart += now - holdTick
+                                    aim.collect.set(false); aim.currentSlot = -1
+                                    hint = "Nhìn thẳng và mỉm cười để tiếp tục"
                                 }
                                 else -> {
                                     aim.collect.set(true)
                                     val held = now - holdStart
                                     holdProgress = (held.toFloat() / HOLD_MS).coerceIn(0f, 1f)
                                     aim.currentSlot = -1
-                                    lightColor = softFlashColor(held)
                                     val remain = ((HOLD_MS - held) / 1000f).toInt() + 1
-                                    hint = "Đang quét khuôn mặt… ${remain.coerceAtLeast(1)}s"
+                                    hint = "Giữ yên • còn ${remain.coerceAtLeast(1)} giây"
                                     if (held >= HOLD_MS) {
                                         val frames = aim.snapshot()
-                                        aim.collect.set(false); lightColor = null; aim.currentSlot = -1
+                                        aim.collect.set(false); aim.currentSlot = -1
                                         if (frames.isNotEmpty()) { onCapturedNow(frames); return@LaunchedEffect }
                                         else {
                                             stage = AimStage.Near; goodSince = 0L; holdProgress = 0f
@@ -1268,109 +1306,174 @@ fun BiometricFaceCamera(
 
     Box(modifier = modifier) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-
         if (capturing) {
-            // Soi sáng KHÔNG phủ lên mặt: màu sáng chỉ hắt ra VÙNG NGOÀI khung (lightColor) — xem overlay.
-            FaceGuideOverlay(stage = stage, holdProgress = holdProgress, lightColor = lightColor)
+            AttendanceCameraGuide(
+                stage = stage,
+                progress = holdProgress,
+                hint = hint,
+                motionMode = motionMode,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+/**
+ * Lớp hướng dẫn cố định của camera chấm công. Khung bốn góc luôn nằm cùng một vị trí, không bám theo
+ * hộp khuôn mặt ML Kit; nhờ vậy người dùng luôn biết phải căn vào đâu mà không thấy lưới MediaPipe.
+ */
+@Composable
+private fun AttendanceCameraGuide(
+    stage: AimStage,
+    progress: Float,
+    hint: String,
+    motionMode: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val step = when (stage) {
+        AimStage.Far -> 1
+        AimStage.Near -> 2
+        AimStage.Hold -> 3
+    }
+    val title = when (stage) {
+        AimStage.Far -> "Căn vị trí khuôn mặt"
+        AimStage.Near -> "Điều chỉnh khoảng cách"
+        AimStage.Hold -> if (motionMode) "Kiểm tra chuyển động" else "Xác thực khuôn mặt"
+    }
+    val guideColor = if (stage == AimStage.Hold) Success else Color.White
+
+    Box(modifier = modifier) {
+        Canvas(Modifier.fillMaxSize()) {
+            val guideWidth = minOf(size.width * 0.74f, size.height * 0.42f)
+            val guideHeight = guideWidth * 1.30f
+            val left = (size.width - guideWidth) / 2f
+            val top = size.height * 0.43f - guideHeight / 2f
+            val right = left + guideWidth
+            val bottom = top + guideHeight
+            val dim = Color.Black.copy(alpha = 0.44f)
+
+            // Làm dịu vùng ngoài khung chữ nhật; phần giữa giữ nguyên camera để khuôn mặt luôn rõ.
+            drawRect(dim, topLeft = Offset.Zero, size = Size(size.width, top.coerceAtLeast(0f)))
+            drawRect(dim, topLeft = Offset(0f, bottom), size = Size(size.width, (size.height - bottom).coerceAtLeast(0f)))
+            drawRect(dim, topLeft = Offset(0f, top), size = Size(left.coerceAtLeast(0f), guideHeight))
+            drawRect(dim, topLeft = Offset(right, top), size = Size((size.width - right).coerceAtLeast(0f), guideHeight))
+
+            val radius = 26.dp.toPx()
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.28f),
+                topLeft = Offset(left, top),
+                size = Size(guideWidth, guideHeight),
+                cornerRadius = CornerRadius(radius, radius),
+                style = Stroke(width = 1.2.dp.toPx()),
+            )
+
+            // Chỉ vẽ bốn góc cố định thay vì khung/lưới chạy theo khuôn mặt.
+            val corner = 40.dp.toPx()
+            val stroke = 4.dp.toPx()
+            fun cornerLine(a: Offset, b: Offset) = drawLine(guideColor, a, b, strokeWidth = stroke, cap = StrokeCap.Round)
+            cornerLine(Offset(left, top + corner), Offset(left, top + radius))
+            cornerLine(Offset(left + radius, top), Offset(left + corner, top))
+            cornerLine(Offset(right - corner, top), Offset(right - radius, top))
+            cornerLine(Offset(right, top + radius), Offset(right, top + corner))
+            cornerLine(Offset(left, bottom - corner), Offset(left, bottom - radius))
+            cornerLine(Offset(left + radius, bottom), Offset(left + corner, bottom))
+            cornerLine(Offset(right - corner, bottom), Offset(right - radius, bottom))
+            cornerLine(Offset(right, bottom - corner), Offset(right, bottom - radius))
+
+            if (progress > 0f) {
+                val y = bottom + 12.dp.toPx()
+                drawLine(Color.White.copy(alpha = 0.28f), Offset(left, y), Offset(right, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+                drawLine(Success, Offset(left, y), Offset(left + guideWidth * progress.coerceIn(0f, 1f), y), strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round)
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "CHẤM CÔNG KHUÔN MẶT",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            Text(
+                "Giữ điện thoại ngang tầm mắt",
+                color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(start = 16.dp, end = 16.dp, bottom = 18.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xE61B1D22))
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                repeat(3) { index ->
+                    Box(
+                        Modifier
+                            .width(34.dp)
+                            .height(4.dp)
+                            .clip(CircleShape)
+                            .background(if (index < step) guideColor else Color.White.copy(alpha = 0.22f)),
+                    )
+                }
+            }
+            Text(
+                "BƯỚC $step/3  •  $title",
+                color = guideColor,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
             Text(
                 hint,
                 color = Color.White,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 20.dp, start = 20.dp, end = 20.dp),
             )
-        } else {
-            // Khung tĩnh gợi ý vùng đặt mặt khi chưa quét.
-            FaceGuideOverlay(stage = AimStage.Far, holdProgress = 0f, idle = true)
+            Text(
+                "Giữ đủ sáng • Không che khuôn mặt",
+                color = Color.White.copy(alpha = 0.64f),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
 
-/**
- * Vẽ khung ngắm bầu dục (lớn ở bước Far, nhỏ ở bước Near/Hold) + vòng tiến độ khi quét 3 giây, kèm
- * hiệu ứng "đóng dần": khi mặt đã vào khung (Near → Hold) thì thu hẹp vùng camera xung quanh, chỉ
- * chừa lại đúng ô khuôn mặt (khoét lỗ bầu dục bằng Path + PathFillType.EvenOdd, an toàn trên mọi GPU).
- *
- * SOI SÁNG: vùng NGOÀI khung (phần quanh khuôn mặt) là nơi hắt ánh sáng — KHÔNG phủ màu lên mặt.
- * Khi đang quét ([lightColor] != null) vùng này phát màu sáng để hắt thêm sáng vào mặt lúc thiếu sáng;
- * lúc chưa quét thì tối lại như cũ để làm nổi khuôn mặt.
- */
+/** Giữ màn hình thức và sáng tối đa trong phiên camera; thoát camera sẽ trả đúng trạng thái cũ. */
 @Composable
-private fun FaceGuideOverlay(
-    stage: AimStage,
-    holdProgress: Float,
-    idle: Boolean = false,
-    lightColor: Color? = null,
-) {
-    val targetFrac = if (stage == AimStage.Far) 0.82f else 0.60f
-    val ovalFrac by animateFloatAsState(targetFrac, tween(450), label = "oval")
-    val targetScrim = when {
-        idle -> 0f
-        stage == AimStage.Far -> 0f      // còn đang căn khung lớn → chưa che
-        stage == AimStage.Near -> 0.55f  // mặt đã vào khung → bắt đầu đóng dần
-        else -> 0.9f                     // Hold: gần như chỉ còn thấy ô khuôn mặt
-    }
-    val scrim by animateFloatAsState(targetScrim, tween(500), label = "scrim")
-    val ring = when {
-        idle -> Color.White.copy(alpha = 0.35f)
-        stage == AimStage.Hold -> Success
-        else -> Color.White.copy(alpha = 0.9f)
-    }
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val cw = size.width
-        val ch = size.height
-        val ovalW = cw * ovalFrac
-        val ovalH = ovalW / 0.78f
-        val left = (cw - ovalW) / 2f
-        val top = (ch - ovalH) / 2f
-        val topLeft = Offset(left, top)
-        val ovalSize = Size(ovalW, ovalH)
-        // Phủ vùng NGOÀI bầu dục NHƯNG chừa lỗ bầu dục ở giữa (mặt): vẽ path (chữ nhật trừ bầu dục theo
-        // quy tắc EvenOdd) → an toàn trên mọi GPU, không cần lớp vẽ offscreen. Đang quét → tô màu SÁNG
-        // (soi sáng), chưa quét → tô đen (làm nổi mặt).
-        val outside = lightColor ?: (if (scrim > 0f) Color.Black.copy(alpha = scrim) else null)
-        if (outside != null) {
-            val mask = Path().apply {
-                addRect(androidx.compose.ui.geometry.Rect(0f, 0f, cw, ch))
-                addOval(androidx.compose.ui.geometry.Rect(left, top, left + ovalW, top + ovalH))
-                fillType = PathFillType.EvenOdd
-            }
-            drawPath(mask, color = outside)
-        }
-        drawOval(color = ring, topLeft = topLeft, size = ovalSize, style = Stroke(width = 6.dp.toPx()))
-        if (stage == AimStage.Hold && holdProgress > 0f) {
-            drawArc(
-                color = Success,
-                startAngle = -90f,
-                sweepAngle = 360f * holdProgress,
-                useCenter = false,
-                topLeft = topLeft,
-                size = ovalSize,
-                style = Stroke(width = 9.dp.toPx(), cap = StrokeCap.Round),
-            )
-        }
-    }
-}
+internal fun KeepScreenBrightEffect() {
+    val window = LocalContext.current.findActivity()?.window
+    DisposableEffect(window) {
+        if (window == null) {
+            onDispose { }
+        } else {
+            val previousBrightness = window.attributes.screenBrightness
+            val wasKeepingScreenOn =
+                window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window.attributes = window.attributes.apply { screenBrightness = 1f }
 
-/**
- * Màu SOI SÁNG hắt ra vùng NGOÀI khung (quanh khuôn mặt), đổi liên tục theo thời gian giữ khung.
- * Dùng màu sáng + độ mờ cao để thực sự hắt thêm sáng vào mặt khi môi trường thiếu sáng (không phủ
- * lên mặt nên không làm ám màu ảnh chấm công).
- */
-private fun softFlashColor(heldMs: Long): Color {
-    val palette = listOf(
-        Color(0xFFFFFFFF), // trắng
-        Color(0xFFFFF3E0), // trắng ấm
-        Color(0xFFE3F2FD), // xanh nhạt
-        Color(0xFFFFF9C4), // vàng nhạt
-        Color(0xFFFCE4EC), // hồng nhạt
-    )
-    val idx = ((heldMs / 450L) % palette.size).toInt()
-    return palette[idx].copy(alpha = 0.92f)
+            onDispose {
+                runCatching { window.attributes = window.attributes.apply { screenBrightness = previousBrightness } }
+                if (!wasKeepingScreenOn) runCatching { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            }
+        }
+    }
 }
 
 /** Tìm Activity chứa để chỉnh độ sáng cửa sổ. */
@@ -1393,8 +1496,10 @@ internal fun ImageProxy.toJpegDataUrl(quality: Int = 80): String {
     var bmp = BitmapFactory.decodeByteArray(raw, 0, raw.size)
     val rotation = imageInfo.rotationDegrees
     if (rotation != 0) {
+        val source = bmp
         val m = Matrix().apply { postRotate(rotation.toFloat()) }
-        bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+        bmp = Bitmap.createBitmap(source, 0, 0, source.width, source.height, m, true)
+        if (bmp !== source && !source.isRecycled) source.recycle()
     }
     val out = ByteArrayOutputStream()
     bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)

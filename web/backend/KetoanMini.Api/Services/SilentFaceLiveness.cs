@@ -18,6 +18,11 @@ namespace KetoanMini.Api.Services;
 /// </summary>
 public sealed class SilentFaceLiveness : IDisposable
 {
+    private static readonly string[] RequiredModelFiles =
+    [
+        "2.7_80x80_MiniFASNetV2.onnx",
+        "4_0_0_80x80_MiniFASNetV1SE.onnx",
+    ];
     private const int OutputClasses = 3;
     // Index lớp "sống/thật" trong đầu ra 3 lớp của 2 file ONNX (hpc203). Đã kiểm chứng thực tế = 2.
     // Nếu sau này đổi sang bộ ONNX khác (vd export theo quy ước minivision gốc) thì đổi về 1.
@@ -31,17 +36,21 @@ public sealed class SilentFaceLiveness : IDisposable
 
     private readonly List<SpoofModel> _models = new();
 
-    public bool Available => _models.Count > 0;
+    // "Full" means the complete two-model ensemble loaded successfully. A partial ensemble is not
+    // silently promoted to Full because that would let Production start with weaker protection.
+    public bool Available => _models.Count == RequiredModelFiles.Length;
 
     public SilentFaceLiveness(string modelDir)
     {
         if (!Directory.Exists(modelDir)) return;
 
-        foreach (var path in Directory.EnumerateFiles(modelDir, "*.onnx"))
+        foreach (var requiredFile in RequiredModelFiles)
         {
+            var path = Path.Combine(modelDir, requiredFile);
+            if (!File.Exists(path)) continue;
             var fileName = Path.GetFileName(path);
             var m = NamePattern.Match(fileName);
-            if (!m.Success) continue; // bỏ qua YuNet/AdaFace/MiniFASNet cũ — chỉ nhận file Silent-Face
+            if (!m.Success) continue;
 
             var h = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
             var w = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
@@ -56,32 +65,35 @@ public sealed class SilentFaceLiveness : IDisposable
             }
             catch
             {
-                // File hỏng/không nạp được → bỏ qua, các model còn lại vẫn dùng được.
+                // File hỏng/không nạp được → Available=false. Engine sẽ hạ cấp ở Development và
+                // ProductionSecurityValidator sẽ dừng hẳn Production.
             }
         }
     }
 
     /// <summary>
     /// Xác suất khuôn mặt là người THẬT trong [0,1]. Quy ước: &gt; 0.5 ⇔ argmax == lớp "thật"
-    /// (khớp đúng quyết định argmax của Silent-Face). Trả 1.0 nếu không có model nào.
+    /// (khớp đúng quyết định argmax của Silent-Face). Fail-closed: trả 0 nếu ensemble thiếu model,
+    /// crop/output không hợp lệ hoặc không tính được xác suất hữu hạn.
     /// </summary>
     public double ProbabilityReal(Mat imageBgr, Rect faceRect)
     {
-        if (_models.Count == 0) return 1.0;
+        if (!Available) return 0.0;
 
         var accum = new double[OutputClasses];
         foreach (var model in _models)
         {
             using var crop = CropWithScale(imageBgr, faceRect, model.Scale, model.Width, model.Height);
-            if (crop is null || crop.Empty()) continue;
+            if (crop is null || crop.Empty()) return 0.0;
 
             var tensor = ToTensorBgr(crop, model.Width, model.Height);
             var input = NamedOnnxValue.CreateFromTensor(model.InputName, tensor);
             using var results = model.Session.Run([input]);
             var logits = results.First().AsEnumerable<float>().Take(OutputClasses).ToArray();
-            if (logits.Length < OutputClasses) continue;
+            if (logits.Length < OutputClasses || logits.Any(v => !float.IsFinite(v))) return 0.0;
 
             Softmax(logits);
+            if (logits.Any(v => !float.IsFinite(v))) return 0.0;
             for (var i = 0; i < OutputClasses; i++) accum[i] += logits[i];
         }
 
@@ -92,7 +104,9 @@ public sealed class SilentFaceLiveness : IDisposable
         // Trả P(lớp sống) đã chuẩn hóa trên tổng 3 lớp: > 0.5 ⇔ argmax == LiveClass.
         var live = accum[LiveClass];
         var total = accum[0] + accum[1] + accum[2];
-        return total <= 1e-9 ? 1.0 : live / total;
+        if (!double.IsFinite(total) || total <= 1e-9) return 0.0;
+        var probability = live / total;
+        return double.IsFinite(probability) ? Math.Clamp(probability, 0.0, 1.0) : 0.0;
     }
 
     private static double ParseScale(string fileName, double fallback)

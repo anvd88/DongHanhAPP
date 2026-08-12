@@ -1623,8 +1623,9 @@ public static class HrEndpoints
                        AND first_in::time > start_time + (late_grace_minutes * INTERVAL '1 minute')
                    ) AS late,
                    COUNT(*) FILTER (
-                     WHERE first_in IS NOT NULL AND cnt > 1 AND standard_hours IS NOT NULL
-                       AND GREATEST(0, EXTRACT(EPOCH FROM (last_out - first_in)) / 60 - break_minutes - (standard_hours * 60)) > 0
+                     WHERE first_in IS NOT NULL
+                       AND (first_in::time <= TIME '07:45'
+                         OR (cnt > 1 AND last_out > first_in AND last_out::time >= TIME '17:15'))
                    ) AS overtime
             FROM rows
             """)
@@ -1843,11 +1844,14 @@ public static class HrEndpoints
                        THEN FLOOR(EXTRACT(EPOCH FROM (l.first_in::time - s.start_time)) / 60)::int
                      END, 0
                    ) AS late_minutes,
-                   COALESCE(
-                     CASE WHEN l.first_in IS NOT NULL AND l.cnt > 1 AND s.standard_hours IS NOT NULL
-                       THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (l.last_out - l.first_in)) / 60 - s.break_minutes - (s.standard_hours * 60)))::int
-                     END, 0
-                   ) AS overtime_minutes,
+                   (CASE WHEN l.first_in::time <= TIME '07:45'
+                       THEN FLOOR(EXTRACT(EPOCH FROM (TIME '08:00' - l.first_in::time)) / 60)::int
+                       ELSE 0
+                    END
+                    + CASE WHEN l.cnt > 1 AND l.last_out > l.first_in AND l.last_out::time >= TIME '17:15'
+                       THEN FLOOR(EXTRACT(EPOCH FROM (l.last_out::time - TIME '17:00')) / 60)::int
+                       ELSE 0
+                    END) AS overtime_minutes,
                    lr.request_no AS leave_request_no,
                    lr.title AS leave_title,
                    br.request_no AS business_request_no,
@@ -1989,8 +1993,12 @@ public static class HrEndpoints
                            AND dr.first_in::time > dr.start_time + (dr.late_grace_minutes * INTERVAL '1 minute')
                        ) AS late_days,
                        COALESCE(SUM(
-                         CASE WHEN dr.first_in IS NOT NULL AND dr.cnt > 1 AND dr.standard_hours IS NOT NULL
-                           THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (dr.last_out - dr.first_in)) / 60 - dr.break_minutes - (dr.standard_hours * 60)))
+                         CASE WHEN dr.first_in::time <= TIME '07:45'
+                           THEN FLOOR(EXTRACT(EPOCH FROM (TIME '08:00' - dr.first_in::time)) / 60)::int
+                           ELSE 0
+                         END
+                         + CASE WHEN dr.cnt > 1 AND dr.last_out > dr.first_in AND dr.last_out::time >= TIME '17:15'
+                           THEN FLOOR(EXTRACT(EPOCH FROM (dr.last_out::time - TIME '17:00')) / 60)::int
                            ELSE 0
                          END
                        ), 0) AS overtime_minutes

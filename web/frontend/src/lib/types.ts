@@ -366,6 +366,8 @@ export interface ChamCongLog {
 export type ChamCongStatus =
   | "ok"
   | "posture"
+  | "eyesclosed"
+  | "nosmile"
   | "lowquality"
   | "noface"
   | "spoof"
@@ -426,6 +428,25 @@ export interface MotionConfig {
   enabled: boolean;
   /** Chặn nếu biên độ quay quá nhỏ (nghi ảnh tĩnh) hay chỉ ghi log. */
   enforce: boolean;
+}
+export interface FaceEnrollmentRequest {
+  id: string;
+  username: string;
+  fullName: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  sampleCount: number;
+  requestedAt: string;
+  expiresAt: string;
+  reviewedBy: string;
+  reviewedAt?: string | null;
+  reviewNote: string;
+  identityVerificationMethod: string;
+}
+
+/** Yêu cầu cười: app hướng dẫn lúc thu ảnh, server xác minh lại trước khi chấm công. */
+export interface SmileConfig {
+  enabled: boolean;
+  threshold: number;
 }
 
 /** Một lượt đo Silent-Face (chống ảnh/màn hình): điểm P(real) cao nhất/trung bình/nhì trong các khung. */

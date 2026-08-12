@@ -5,7 +5,8 @@
     <string name="package_name">com.ketoanapk.hr</string>
     <string name="custom_url_scheme">com.ketoanapk.hr</string>
 
-    <string name="qr_screen_title">Quét mã QR</string>
+    <string name="qr_screen_title">Quét QR</string>
+    <string name="qr_screen_subtitle">Tự động nhận diện mã</string>
     <string name="qr_close_scanner">Đóng trình quét</string>
     <string name="qr_pick_image">Chọn ảnh có mã QR</string>
     <string name="qr_default_prompt">Đưa mã QR vào vùng quét</string>

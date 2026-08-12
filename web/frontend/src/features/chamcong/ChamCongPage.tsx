@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, MapPin, ShieldAlert, Trash2, UserPlus, Wifi, WifiOff, X } from "lucide-react";
+import { Check, MapPin, ShieldAlert, Smile, Trash2, UserCheck, UserPlus, Wifi, WifiOff, X } from "lucide-react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useApi } from "../../lib/useApi";
 import { api } from "../../lib/api";
@@ -7,10 +7,12 @@ import type {
   ChamCongLog,
   ChamCongOffline,
   FaceRegistrationLog,
+  FaceEnrollmentRequest,
   FaceNguoiDung,
   EyeOpenConfig,
   LivenessPanel,
   MotionConfig,
+  SmileConfig,
   OfflineConfig,
   UserAdmin,
 } from "../../lib/types";
@@ -18,7 +20,7 @@ import { CameraPanel } from "./CameraPanel";
 import { EnrollWizard } from "./EnrollWizard";
 import "./chamcong.css";
 
-type Tab = "dangky" | "khuonmat" | "nhatky" | "ngoaituyen";
+type Tab = "dangky" | "xetduyet" | "khuonmat" | "nhatky" | "ngoaituyen";
 
 interface FaceDeleteConfirm {
   title: string;
@@ -48,6 +50,9 @@ export function ChamCongPage() {
         <button className="cc-tab" data-on={tab === "khuonmat"} onClick={() => setTab("khuonmat")} type="button">
           Dữ liệu khuôn mặt
         </button>
+        <button className="cc-tab" data-on={tab === "xetduyet"} onClick={() => setTab("xetduyet")} type="button">
+          <UserCheck className="h-4 w-4" /> Yêu cầu khuôn mặt
+        </button>
         <button className="cc-tab" data-on={tab === "nhatky"} onClick={() => setTab("nhatky")} type="button">
           Nhật ký chấm công
         </button>
@@ -57,10 +62,224 @@ export function ChamCongPage() {
       </div>
 
       {tab === "dangky" && <RegisterTab />}
+      {tab === "xetduyet" && <FaceEnrollmentTab />}
       {tab === "khuonmat" && <FaceDataTab />}
       {tab === "nhatky" && <LogTab />}
       {tab === "ngoaituyen" && <OfflineTab />}
     </div>
+  );
+}
+
+/* ------------------ Tab: yêu cầu đăng ký khuôn mặt chờ xác minh ------------------ */
+function FaceEnrollmentTab() {
+  const [showAll, setShowAll] = useState(false);
+  const { data, reload } = useApi<FaceEnrollmentRequest[]>(
+    `/api/chamcong/face-enrollments?status=${showAll ? "all" : "pending"}`,
+  );
+  const [approveRow, setApproveRow] = useState<FaceEnrollmentRequest | null>(null);
+  const [identityChecked, setIdentityChecked] = useState(false);
+  const [approveNote, setApproveNote] = useState("");
+  const [verificationImages, setVerificationImages] = useState<string[]>([]);
+  const [rejectRow, setRejectRow] = useState<FaceEnrollmentRequest | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const rows = data ?? [];
+
+  const openApprove = (row: FaceEnrollmentRequest) => {
+    setIdentityChecked(false);
+    setApproveNote("");
+    setVerificationImages([]);
+    setApproveRow(row);
+  };
+  const closeApprove = () => {
+    setApproveRow(null);
+    setIdentityChecked(false);
+    setApproveNote("");
+    setVerificationImages([]);
+  };
+  const captureVerificationImage = (image: string) => {
+    setVerificationImages((current) => current.length >= 3 ? current : [...current, image]);
+  };
+  const openReject = (row: FaceEnrollmentRequest) => {
+    setRejectReason("");
+    setRejectRow(row);
+  };
+  const approve = async () => {
+    if (!approveRow || !identityChecked || verificationImages.length < 2) return;
+    await api.post(`/api/chamcong/face-enrollments/${approveRow.id}/approve`, {
+      identityVerified: true,
+      verificationMethod: "in_person",
+      note: approveNote.trim(),
+      verificationImages,
+    });
+    // Ảnh xác minh chỉ tồn tại trong bộ nhớ của dialog và được bỏ ngay sau khi máy chủ xử lý.
+    setVerificationImages([]);
+    reload();
+  };
+  const reject = async () => {
+    if (!rejectRow || rejectReason.trim().length < 5) return;
+    await api.post(`/api/chamcong/face-enrollments/${rejectRow.id}/reject`, {
+      reason: rejectReason.trim(),
+    });
+    reload();
+  };
+
+  const statusLabel = (status: FaceEnrollmentRequest["status"]) => ({
+    pending: "Chờ xác minh",
+    approved: "Đã kích hoạt",
+    rejected: "Đã từ chối",
+    expired: "Đã hết hạn",
+  })[status];
+
+  return (
+    <>
+      <div className="cc-result glass">
+        <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <UserCheck className="h-4 w-4" />
+          Yêu cầu khuôn mặt {showAll ? "(tất cả)" : "chờ xác minh"} ({rows.length})
+          <button className="cc-tab" style={{ marginLeft: "auto" }} onClick={() => setShowAll((v) => !v)} type="button">
+            {showAll ? "Chỉ chờ duyệt" : "Hiện lịch sử"}
+          </button>
+        </div>
+        <div className="cc-note" style={{ margin: "8px 0 14px" }}>
+          Chỉ vector đặc trưng đã mã hóa được lưu tạm; hệ thống không lưu ảnh camera. Chỉ duyệt khi HR
+          đã gặp và đối chiếu trực tiếp đúng nhân viên với tài khoản. Không được duyệt thay hoặc duyệt từ xa.
+        </div>
+        <table className="cc-table">
+          <thead>
+            <tr>
+              <th>Nhân viên</th>
+              <th>Gửi lúc</th>
+              <th>Hết hạn</th>
+              <th>Số mẫu</th>
+              <th>Trạng thái</th>
+              <th>Người xử lý</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td><b>{row.fullName || row.username}</b><div className="cc-list-sub">{row.username}</div></td>
+                <td>{new Date(row.requestedAt).toLocaleString("vi-VN")}</td>
+                <td>{new Date(row.expiresAt).toLocaleString("vi-VN")}</td>
+                <td>{row.sampleCount}</td>
+                <td>
+                  <span className="cc-result-badge" data-loai={row.status === "approved" ? "Ra" : "Vào"}>
+                    {statusLabel(row.status)}
+                  </span>
+                  {row.reviewNote && <div className="cc-list-sub" style={{ maxWidth: 260 }}>{row.reviewNote}</div>}
+                </td>
+                <td>{row.reviewedBy || "—"}</td>
+                <td>
+                  {row.status === "pending" && (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="cc-icon-btn" title="Đối chiếu và duyệt" type="button" onClick={() => openApprove(row)}>
+                        <Check className="h-4 w-4" style={{ color: "#16a34a" }} />
+                      </button>
+                      <button className="cc-icon-btn" title="Từ chối" type="button" onClick={() => openReject(row)}>
+                        <X className="h-4 w-4" style={{ color: "#dc2626" }} />
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={7} className="cc-empty-cell">Không có yêu cầu đăng ký khuôn mặt chờ xử lý.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <ConfirmDialog
+        open={Boolean(approveRow)}
+        title="Xác minh và kích hoạt khuôn mặt?"
+        description={approveRow ? `Nhân viên “${approveRow.fullName || approveRow.username}” (${approveRow.username}) sẽ được kích hoạt ${approveRow.sampleCount} mẫu.` : ""}
+        detail={
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gap: 8 }}>
+              <div>
+                <b>Camera xác minh trực tiếp</b>
+                <div style={{ marginTop: 3, fontWeight: 600 }}>
+                  Chụp 2–3 ảnh mới khi nhân viên đang đứng trước HR. Mời nhân viên nhìn thẳng, giữ máy
+                  ổn định và chụp các khung liên tiếp cách nhau một nhịp.
+                </div>
+              </div>
+              {verificationImages.length < 3 ? (
+                <CameraPanel
+                  key={approveRow?.id ?? "face-enrollment-verification"}
+                  onCapture={captureVerificationImage}
+                  captureLabel={`Chụp ảnh ${verificationImages.length + 1}/3`}
+                />
+              ) : (
+                <div className="cc-note" role="status">
+                  Đã thu đủ 3 ảnh xác minh. Camera đã được tắt.
+                </div>
+              )}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span aria-live="polite">
+                  Đã thu <b>{verificationImages.length}/3</b> ảnh
+                  {verificationImages.length < 2 ? " · cần ít nhất 2 ảnh" : " · đã đủ để xác minh"}
+                </span>
+                {verificationImages.length > 0 && (
+                  <button className="cc-btn" type="button" onClick={() => setVerificationImages([])}>
+                    Chụp lại
+                  </button>
+                )}
+              </div>
+              <div style={{ fontWeight: 600 }}>
+                Ảnh chỉ được gửi một lần cùng quyết định duyệt, không lưu trong trình duyệt và không hiển thị lại sau khi gửi.
+              </div>
+            </div>
+            <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+              <input type="checkbox" checked={identityChecked} onChange={(e) => setIdentityChecked(e.target.checked)} />
+              <span>Tôi đã trực tiếp gặp và đối chiếu đúng nhân viên với tài khoản này.</span>
+            </label>
+            <textarea
+              value={approveNote}
+              maxLength={500}
+              rows={3}
+              placeholder="Ghi chú đối chiếu (không bắt buộc)"
+              onChange={(e) => setApproveNote(e.target.value)}
+              style={{ width: "100%", borderRadius: 8, padding: 8, border: "1px solid currentColor", background: "transparent" }}
+            />
+          </div>
+        }
+        confirmLabel="Đã đối chiếu — Kích hoạt"
+        busyLabel="Đang kích hoạt..."
+        tone="info"
+        icon={<UserCheck className="h-6 w-6" />}
+        confirmDisabled={!identityChecked || verificationImages.length < 2}
+        onClose={closeApprove}
+        onConfirm={approve}
+      />
+
+      <ConfirmDialog
+        open={Boolean(rejectRow)}
+        title="Từ chối yêu cầu khuôn mặt?"
+        description={rejectRow ? `Toàn bộ vector tạm của “${rejectRow.fullName || rejectRow.username}” sẽ bị xóa ngay.` : ""}
+        detail={
+          <div style={{ display: "grid", gap: 6 }}>
+            <label htmlFor="face-reject-reason">Lý do bắt buộc (ít nhất 5 ký tự)</label>
+            <textarea
+              id="face-reject-reason"
+              value={rejectReason}
+              maxLength={500}
+              rows={3}
+              onChange={(e) => setRejectReason(e.target.value)}
+              style={{ width: "100%", borderRadius: 8, padding: 8, border: "1px solid currentColor", background: "transparent" }}
+            />
+          </div>
+        }
+        confirmLabel="Từ chối và xóa vector"
+        busyLabel="Đang xử lý..."
+        tone="danger"
+        icon={<X className="h-6 w-6" />}
+        confirmDisabled={rejectReason.trim().length < 5}
+        onClose={() => setRejectRow(null)}
+        onConfirm={reject}
+      />
+    </>
   );
 }
 
@@ -94,6 +313,7 @@ function OfflineTab() {
   return (
     <>
       <MotionConfigPanel />
+      <SmileConfigPanel />
       <EyeOpenConfigPanel />
       <LivenessMetricsPanel />
       <OfflineConfigPanel />
@@ -239,6 +459,68 @@ function MotionConfigPanel() {
               <div className="cc-note">Tắt = chỉ ghi log biên độ quay để hiệu chỉnh, KHÔNG chặn chấm công.</div>
             </span>
           </label>
+          {msg && <span className="cc-note">{msg}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------- Công tắc yêu cầu CƯỜI khi quét -------- */
+function SmileConfigPanel() {
+  const { data, reload } = useApi<SmileConfig>("/api/chamcong/smile-config");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [draft, setDraft] = useState<number | null>(null);
+  const threshold = draft ?? data?.threshold ?? 0.65;
+
+  const save = async (patch: Partial<SmileConfig>) => {
+    if (!data) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.put("/api/chamcong/smile-config", {
+        enabled: patch.enabled ?? data.enabled,
+        threshold: patch.threshold ?? threshold,
+      });
+      setMsg("Đã lưu — áp dụng cho lượt quét tiếp theo.");
+      setDraft(null);
+      reload();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Lỗi lưu cấu hình.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cc-result glass" style={{ marginBottom: 12 }}>
+      <div className="cc-list-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Smile className="h-4 w-4" /> Yêu cầu cười khi quét khuôn mặt
+      </div>
+      <div className="cc-note" style={{ marginBottom: 10 }}>
+        Khi bật, app hướng dẫn người dùng mỉm cười và chỉ lấy hình khi độ cười đạt ngưỡng. Máy chủ tự
+        kiểm tra lại nụ cười từ ảnh trước khi nhận diện và ghi chấm công.
+      </div>
+      {data && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={data.enabled} disabled={busy}
+              onChange={(e) => save({ enabled: e.target.checked })} />
+            <span><b>Bật yêu cầu cười</b><div className="cc-note">Tắt = quét bình thường như hiện tại.</div></span>
+          </label>
+          <div style={{ opacity: data.enabled ? 1 : 0.5 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ minWidth: 110 }}>Ngưỡng cười</span>
+              <input type="range" min={0.35} max={0.95} step={0.05} value={threshold}
+                disabled={busy || !data.enabled}
+                onChange={(e) => setDraft(Number(e.target.value))}
+                onPointerUp={() => draft != null && save({ threshold: draft })}
+                onKeyUp={() => draft != null && save({ threshold: draft })}
+                style={{ flex: 1 }} />
+              <b>{threshold.toFixed(2)}</b>
+            </div>
+          </div>
           {msg && <span className="cc-note">{msg}</span>}
         </div>
       )}

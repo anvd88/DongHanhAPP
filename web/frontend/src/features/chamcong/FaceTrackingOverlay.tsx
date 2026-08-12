@@ -75,11 +75,15 @@ const EXPR_DEADZONE = 0.02; // thay đổi nhỏ hơn coi là nhiễu, không t�
 
 // Nạp MediaPipe FaceLandmarker một lần (dùng chung mọi lần gắn). Tài nguyên tự host trong /public.
 let landmarkerPromise: Promise<FaceLandmarker> | null = null;
+type LandmarkConnection = { start: number; end: number };
+let faceMeshConnections: LandmarkConnection[] = [];
+
 function getLandmarker(): Promise<FaceLandmarker> {
   if (!landmarkerPromise) {
     landmarkerPromise = (async () => {
       const vision = await import("@mediapipe/tasks-vision");
       const fileset = await vision.FilesetResolver.forVisionTasks("/mediapipe/wasm");
+      faceMeshConnections = vision.FaceLandmarker.FACE_LANDMARKS_TESSELATION as LandmarkConnection[];
       return vision.FaceLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: "/mediapipe/face_landmarker.task" },
         runningMode: "VIDEO",
@@ -98,6 +102,79 @@ function getLandmarker(): Promise<FaceLandmarker> {
 type Box = { left: number; top: number; width: number; height: number };
 type Category = { categoryName?: string; displayName?: string; score: number };
 
+const LANDMARK_RADIUS = 0.8;
+const MAX_CANVAS_PIXEL_RATIO = 2;
+
+function clearLandmarks(canvas: HTMLCanvasElement | null) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+/** Vẽ lưới tam giác Face Mesh lên đúng vị trí video sau object-fit: cover và lật gương selfie. */
+function drawLandmarkMesh(
+  canvas: HTMLCanvasElement,
+  landmarks: LMPoint[],
+  sourceWidth: number,
+  sourceHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+  framingOk: boolean,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx || displayWidth <= 0 || displayHeight <= 0) return;
+
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_PIXEL_RATIO);
+  const canvasWidth = Math.max(1, Math.round(displayWidth * pixelRatio));
+  const canvasHeight = Math.max(1, Math.round(displayHeight * pixelRatio));
+  if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+  }
+
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  ctx.clearRect(0, 0, displayWidth, displayHeight);
+
+  const scale = Math.max(displayWidth / sourceWidth, displayHeight / sourceHeight);
+  const offsetX = (displayWidth - sourceWidth * scale) / 2;
+  const offsetY = (displayHeight - sourceHeight * scale) / 2;
+
+  const projected = landmarks.map((point) => ({
+    x: displayWidth - (offsetX + point.x * sourceWidth * scale),
+    y: offsetY + point.y * sourceHeight * scale,
+    valid: Number.isFinite(point.x) && Number.isFinite(point.y),
+  }));
+
+  // Nối các điểm theo topology chính thức của MediaPipe để tạo lưới phủ sát bề mặt khuôn mặt.
+  ctx.beginPath();
+  for (const connection of faceMeshConnections) {
+    const start = projected[connection.start];
+    const end = projected[connection.end];
+    if (!start?.valid || !end?.valid) continue;
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+  }
+  ctx.strokeStyle = framingOk ? "rgba(52, 211, 153, 0.38)" : "rgba(250, 204, 21, 0.34)";
+  ctx.lineWidth = 0.65;
+  ctx.lineJoin = "round";
+  ctx.stroke();
+
+  // Giữ các nút landmark nhỏ để người dùng nhìn rõ lưới đang bám theo chuyển động thật.
+  ctx.beginPath();
+  for (const point of projected) {
+    if (!point.valid) continue;
+    ctx.moveTo(point.x + LANDMARK_RADIUS, point.y);
+    ctx.arc(point.x, point.y, LANDMARK_RADIUS, 0, Math.PI * 2);
+  }
+  ctx.fillStyle = framingOk ? "rgba(110, 231, 183, 0.92)" : "rgba(253, 224, 71, 0.9)";
+  ctx.shadowColor = framingOk ? "rgba(16, 185, 129, 0.7)" : "rgba(250, 204, 21, 0.65)";
+  ctx.shadowBlur = 3;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
 function blendScore(cats: Category[] | undefined, name: string): number {
   if (!cats) return 0;
   const c = cats.find((x) => x.categoryName === name || x.displayName === name);
@@ -105,8 +182,8 @@ function blendScore(cats: Category[] | undefined, name: string): number {
 }
 
 /**
- * Khung bám theo khuôn mặt + liveness chớp mắt: chạy MediaPipe FaceLandmarker ngay trên trình
- * duyệt, vẽ khung đi theo mặt (đổi màu theo độ căn khung) và đếm số lần chớp mắt qua blendshape.
+ * Điểm mốc + khung bám theo khuôn mặt + liveness chớp mắt: chạy MediaPipe FaceLandmarker ngay trên
+ * trình duyệt, vẽ landmark/khung đi theo mặt và đếm số lần chớp mắt qua blendshape.
  * Tự xử lý gương (scaleX(-1)) và object-fit: cover để khung khớp đúng mặt. Nếu không nạp được
  * model thì lui về không hiện gì (server vẫn nhận diện & chống giả mạo như cũ).
  *
@@ -117,17 +194,22 @@ export function FaceTrackingOverlay({
   active,
   onFraming,
   drawBox = true,
+  drawLandmarks,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
   active: boolean;
   onFraming?: (f: Framing) => void;
   /** Vẽ khung bám mặt hay chỉ chạy phát hiện ngầm (kiosk dùng false để lấy tín hiệu căn khung). */
   drawBox?: boolean;
+  /** Vẽ toàn bộ điểm mốc MediaPipe. Mặc định đi cùng drawBox để kiosk ẩn không tốn công vẽ. */
+  drawLandmarks?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const landmarkCanvasRef = useRef<HTMLCanvasElement>(null);
   const [box, setBox] = useState<Box | null>(null);
   const [ok, setOk] = useState(false);
   const [failed, setFailed] = useState(false);
+  const shouldDrawLandmarks = drawLandmarks ?? drawBox;
   const onFramingRef = useRef(onFraming);
   useEffect(() => {
     onFramingRef.current = onFraming;
@@ -135,8 +217,7 @@ export function FaceTrackingOverlay({
 
   useEffect(() => {
     if (!active) {
-      setBox(null);
-      setOk(false);
+      clearLandmarks(landmarkCanvasRef.current);
       onFramingRef.current?.(NONE);
       return;
     }
@@ -144,6 +225,7 @@ export function FaceTrackingOverlay({
     let cancelled = false;
     let raf = 0;
     let landmarker: FaceLandmarker | null = null;
+    const canvasAtEffectStart = landmarkCanvasRef.current;
     let lastDetect = 0;
     let lastTs = -1;
     let eyesClosed = false; // trạng thái mắt cho máy đếm chớp
@@ -179,6 +261,7 @@ export function FaceTrackingOverlay({
       if (!lm || lm.length === 0) {
         setBox(null);
         setOk(false);
+        clearLandmarks(landmarkCanvasRef.current);
         emit(NONE);
         return;
       }
@@ -244,6 +327,10 @@ export function FaceTrackingOverlay({
         framing = { state: "offcenter", hint: "Đưa khuôn mặt vào giữa khung", ok: false, ...pose };
       else framing = { state: "good", hint: "Giữ yên — đã vào khung", ok: true, ...pose };
 
+      if (shouldDrawLandmarks && landmarkCanvasRef.current) {
+        drawLandmarkMesh(landmarkCanvasRef.current, lm as LMPoint[], vw, vh, W, H, framing.ok);
+      }
+
       setBox({ left, top, width, height });
       setOk(framing.ok);
       emit(framing);
@@ -252,6 +339,7 @@ export function FaceTrackingOverlay({
     getLandmarker()
       .then((d) => {
         if (cancelled) return;
+        setFailed(false);
         landmarker = d;
         loop();
       })
@@ -262,14 +350,16 @@ export function FaceTrackingOverlay({
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      clearLandmarks(canvasAtEffectStart);
     };
-  }, [active, videoRef]);
+  }, [active, shouldDrawLandmarks, videoRef]);
 
   // Không nạp được model → không hiện khung gì (server vẫn phát hiện & nhận diện như cũ).
   if (failed) return null;
 
   return (
     <div ref={rootRef} className="cc-face-overlay" aria-hidden="true">
+      {shouldDrawLandmarks && <canvas ref={landmarkCanvasRef} className="cc-face-landmarks" />}
       {drawBox && box && (
         <div
           className="cc-face-box"

@@ -25,7 +25,7 @@ public interface IFaceEngine
     bool CheckLiveness(byte[] imageBytes);
 
     /// <summary>Xác suất khuôn mặt là người thật (0..1) cho MỘT khung — để tổng hợp liveness cả loạt chụp.
-    /// Trả 0 nếu không thấy mặt; trả 1 nếu engine không có model chống giả mạo.</summary>
+    /// Fail-closed: trả 0 nếu không thấy mặt, thiếu model hoặc inference thất bại.</summary>
     double LivenessProbability(byte[] imageBytes);
 
     /// <summary>Ngưỡng P(real) để coi là người thật (mặc định 0.5).</summary>
@@ -77,16 +77,13 @@ public interface IFaceEngine
 /// <summary>
 /// Mức chống giả mạo (ảnh/màn hình) thực sự đang chạy.
 ///
-/// Vì sao phải phơi ra thay vì để trong log: khi model chống giả mạo không nạp được, engine vẫn chạy
-/// bình thường nhưng <see cref="IFaceEngine.LivenessProbability"/> trả 1 cho MỌI ảnh — tức mọi thứ đưa
-/// vào camera đều được coi là người thật. Đó là kiểu hỏng KHÔNG có triệu chứng: chấm công vẫn "chạy tốt",
-/// chỉ là hết chống giả. Nên trạng thái này phải đi tới tận màn hình quản trị.
+/// Vì sao phải phơi ra thay vì để trong log: khi model chống giả mạo không nạp được, mọi lượt quét phải
+/// bị từ chối (fail-closed), đồng thời trạng thái phải đi tới tận màn hình quản trị để vận hành khắc phục.
 /// </summary>
 public enum AntiSpoofLevel
 {
     /// <summary>
-    /// KHÔNG có model nào — mọi ảnh đều được coi là người thật, và KHÔNG còn lớp nào khác gác thay:
-    /// giơ ảnh/màn hình là chấm công được. Đây là mức phải báo động đỏ tận panel quản trị.
+    /// KHÔNG có model nào — mọi lượt quét bị từ chối. Đây là mức phải báo động đỏ tận panel quản trị.
     /// </summary>
     None = 0,
     /// <summary>Chỉ còn model MiniFASNet đơn lẻ cũ (yếu hơn Silent-Face hai model).</summary>
@@ -97,6 +94,28 @@ public enum AntiSpoofLevel
 
 /// <summary>Mức chống giả mạo + mô tả ngắn để hiện lên panel quản trị.</summary>
 public readonly record struct AntiSpoofStatus(AntiSpoofLevel Level, string Detail);
+
+/// <summary>Shared fail-closed boundary used by every API that relies on face liveness.</summary>
+public static class FaceAntiSpoofSecurity
+{
+    public static bool IsOperational(IFaceEngine engine) => engine.AntiSpoof.Level != AntiSpoofLevel.None;
+
+    public static double ProbabilityReal(IFaceEngine engine, byte[] imageBytes)
+    {
+        if (!IsOperational(engine)) return 0.0;
+        try
+        {
+            var score = engine.LivenessProbability(imageBytes);
+            return double.IsFinite(score) ? Math.Clamp(score, 0.0, 1.0) : 0.0;
+        }
+        catch
+        {
+            // The security boundary must never turn an inference failure into a live face. Concrete
+            // engines log their detailed exception; this catch also protects future implementations.
+            return 0.0;
+        }
+    }
+}
 
 /// <summary>Hướng mặt tương đối (tỉ lệ hình học từ 5 điểm landmark, không phải độ).</summary>
 public readonly record struct FacePose(double Yaw, double Pitch);
@@ -116,7 +135,10 @@ public readonly record struct FaceFrameQuality(
     double DetectScore,  // độ tin cậy phát hiện 0..1
     // Độ MỞ MẮT ước lượng 0..1 (min hai mắt) — để chặn "nhắm mắt/lim dim" phía SERVER. Đây là heuristic
     // hình học (không phải model), 1.0 = không đánh giá được ⇒ fail-open (không chặn). Xem AdaFaceR50Engine.EyeOpenScore.
-    double EyeOpen = 1.0);
+    double EyeOpen = 1.0,
+    // Điểm cười 0..1 do SERVER tính từ độ mở rộng hai khóe miệng so với khoảng cách hai mắt.
+    // Đây là tín hiệu hình học từ landmark YuNet, không nhận giá trị do ứng dụng điện thoại gửi lên.
+    double Smile = 0.0);
 
 /// <summary>Chuyển vector đặc trưng ↔ byte[] để lưu cột bytea trong PostgreSQL.</summary>
 public static class EmbeddingCodec

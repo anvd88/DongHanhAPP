@@ -5,9 +5,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
+import com.ketoanapk.hr.data.ReleaseInfo
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertTrue
 
 /** Smoke tests for the five release-critical Android surfaces. */
 class CoreFlowsUiTest {
@@ -52,5 +55,21 @@ class CoreFlowsUiTest {
             }
         }
         compose.onNodeWithText("Chưa có phiếu lương").assertIsDisplayed()
+    }
+
+    @Test fun updateReminderBarStaysActionable() {
+        var opened = false
+        compose.setContent {
+            MaterialTheme {
+                UpdateReminderBar(
+                    info = ReleaseInfo(hasUpdate = true, version = "1.4.0", versionCode = 90),
+                    onOpen = { opened = true },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Có bản cập nhật 1.4.0").assertIsDisplayed()
+        compose.onNodeWithText("Xem ngay").performClick()
+        compose.runOnIdle { assertTrue(opened) }
     }
 }

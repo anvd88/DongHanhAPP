@@ -14,6 +14,7 @@ export interface ConfirmDialogProps {
   tone?: ConfirmDialogTone;
   icon?: ReactNode;
   busyLabel?: string;
+  confirmDisabled?: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void> | void;
 }
@@ -28,6 +29,7 @@ export function ConfirmDialog({
   tone = "danger",
   icon,
   busyLabel = "Đang xử lý...",
+  confirmDisabled = false,
   onClose,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -78,7 +80,7 @@ export function ConfirmDialog({
             data-tone={tone}
             type="button"
             onClick={confirm}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
           >
             {busy ? busyLabel : confirmLabel}
           </button>

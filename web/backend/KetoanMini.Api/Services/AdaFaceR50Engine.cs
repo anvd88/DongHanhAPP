@@ -39,6 +39,7 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
     private readonly string _recognizerInputName;
     private readonly SilentFaceLiveness? _silentFace;
     private readonly Net? _livenessNet;
+    private readonly ILogger<AdaFaceR50Engine> _logger;
     private readonly object _gate = new();
 
     private byte[]? _lastBytes;
@@ -46,6 +47,7 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
 
     public AdaFaceR50Engine(IConfiguration config, ILogger<AdaFaceR50Engine> logger)
     {
+        _logger = logger;
         var modelDir = Path.Combine(AppContext.BaseDirectory, "Models", "Face");
         var detectorPath = Path.Combine(modelDir, "face_detection_yunet_2023mar.onnx");
         var recognizerPath = config["FaceRecognition:AdaFaceR50ModelPath"];
@@ -123,9 +125,9 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
             }
         }
 
-        // Kêu to theo đúng mức độ nghiêm trọng. Mức None là hỏng NGẦM nguy hiểm nhất trong cả hệ thống
-        // chấm công: LivenessProbability trả 1 cho mọi ảnh nên giơ ảnh/màn hình cũng chấm được, mà không
-        // có triệu chứng nào khác. Ghi Error để nó nổi lên trong log chứ không lẫn vào tiếng ồn.
+        // Kêu to theo đúng mức độ nghiêm trọng. Engine luôn fail-closed: nếu không có model hoặc inference
+        // lỗi thì LivenessProbability trả 0 và từ chối lượt quét. Production còn chặn khởi động nếu chưa
+        // nạp đủ Silent-Face; cảnh báo này chủ yếu giúp Development chẩn đoán cấu hình model.
         AntiSpoof = _silentFace is not null
             ? new AntiSpoofStatus(AntiSpoofLevel.Full, "Silent-Face (MiniFASNetV2 + MiniFASNetV1SE)")
             : _livenessNet is not null
@@ -144,9 +146,8 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
                 break;
             default:
                 logger.LogError(
-                    "KHÔNG CÓ CHỐNG GIẢ MẠO: mọi ảnh sẽ được coi là người thật, giơ ảnh/màn hình vẫn " +
-                    "chấm công được và KHÔNG còn lớp nào gác thay (active-flash đã gỡ; liveness quay đầu " +
-                    "mặc định tắt). Đặt model chống giả mạo vào {Dir} rồi khởi động lại.", modelDir);
+                    "KHÔNG CÓ CHỐNG GIẢ MẠO: mọi lượt quét khuôn mặt sẽ bị TỪ CHỐI (fail-closed). " +
+                    "Đặt đủ model Silent-Face vào {Dir} rồi khởi động lại.", modelDir);
                 break;
         }
     }
@@ -175,8 +176,9 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
         {
             var face = DetectCached(imageBytes, image);
             if (face is null) return 0;
-            if (_silentFace is null && _livenessNet is null) return 1;
-            return LivenessScore(image, face);
+            if (_silentFace is null && _livenessNet is null) return 0;
+            var score = LivenessScore(image, face);
+            return double.IsFinite(score) ? Math.Clamp(score, 0.0, 1.0) : 0.0;
         }
     }
 
@@ -259,9 +261,10 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
                          + 0.18 * frontal + 0.10 * face.Score) * (1.0 - 0.6 * glarePenalty);
 
             var eyeOpen = EyeOpenScore(image, face);
+            var smile = SmileScore(face);
 
             return new FaceFrameQuality(true, Math.Clamp(score, 0, 1),
-                sharpNorm, brightness, glare, faceRatio, pose, face.Score, eyeOpen);
+                sharpNorm, brightness, glare, faceRatio, pose, face.Score, eyeOpen, smile);
         }
     }
 
@@ -273,12 +276,13 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
             try
             {
                 var rect = ClampRect(face.Rect, imageBgr.Width, imageBgr.Height);
-                if (rect.Width <= 1 || rect.Height <= 1) return 1.0;
+                if (rect.Width <= 1 || rect.Height <= 1) return 0.0;
                 return _silentFace.ProbabilityReal(imageBgr, rect);
             }
-            catch
+            catch (Exception ex)
             {
-                return 1.0;
+                _logger.LogError(ex, "Silent-Face inference failed; rejecting the face scan (fail-closed).");
+                return 0.0;
             }
         }
 
@@ -286,7 +290,7 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
         try
         {
             using var crop = CropForLiveness(imageBgr, face);
-            if (crop is null || crop.Empty()) return 1.0;
+            if (crop is null || crop.Empty()) return 0.0;
 
             using var resized = new Mat();
             Cv2.Resize(crop, resized, new Size(LivenessSize, LivenessSize), 0, 0,
@@ -298,13 +302,14 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
             using var output = _livenessNet.Forward();
 
             using var flat = output.Reshape(1, 1);
-            if (flat.Cols < 2) return 1.0;
+            if (flat.Cols < 2) return 0.0;
             var diff = flat.At<float>(0, 0) - flat.At<float>(0, 1);
             return 1.0 / (1.0 + Math.Exp(-diff));
         }
-        catch
+        catch (Exception ex)
         {
-            return 1.0;
+            _logger.LogError(ex, "MiniFASNet inference failed; rejecting the face scan (fail-closed).");
+            return 0.0;
         }
     }
 
@@ -453,6 +458,24 @@ public sealed class AdaFaceR50Engine : IFaceEngine, IDisposable
         }
         // Mắt mở → vùng tối cao ~nửa ô; chia 0.5 để mở hẳn ≈ 1.0. Ngưỡng chặn hiệu chỉnh ở panel.
         return Math.Clamp((rowsWithDark / (double)rows) / 0.5, 0, 1);
+    }
+
+    // YuNet trả hai khóe miệng nhưng không trả viền môi, vì vậy server đo độ rộng miệng đã chuẩn hóa
+    // theo khoảng cách hai mắt. Mốc 0.66..0.90 được đưa về 0..1: mặt trung tính thường ở vùng thấp,
+    // còn cười làm hai khóe miệng tách rộng hơn. Khi admin bật yêu cầu cười, server dùng chính điểm
+    // này trên ảnh nhận được; không tin cờ hay xác suất do client cung cấp.
+    private static double SmileScore(FaceDetection face)
+    {
+        var eyeDx = face.LeftEye.X - face.RightEye.X;
+        var eyeDy = face.LeftEye.Y - face.RightEye.Y;
+        var eyeDistance = Math.Sqrt(eyeDx * eyeDx + eyeDy * eyeDy);
+        if (eyeDistance < 8) return 0;
+
+        var mouthDx = face.LeftMouth.X - face.RightMouth.X;
+        var mouthDy = face.LeftMouth.Y - face.RightMouth.Y;
+        var mouthWidth = Math.Sqrt(mouthDx * mouthDx + mouthDy * mouthDy);
+        var ratio = mouthWidth / eyeDistance;
+        return Math.Clamp((ratio - 0.66) / 0.24, 0, 1);
     }
 
     private static Rect ClampRect(Rect2d r, int imgW, int imgH)

@@ -11,9 +11,6 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,13 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathFillType
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -98,22 +89,30 @@ private const val E_FACE_TOO_CLOSE = 0.75f    // quá sát → lùi ra (bảo v�
 private const val E_CENTER_TOL_X = 0.24f
 private const val E_CENTER_TOL_Y = 0.24f
 private const val E_FRONT_YAW_MAX = 12f       // "nhìn thẳng": |yaw| ≤ 12°
-private const val E_SIDE_YAW_MIN = 15f        // "nghiêng": cần quay ít nhất 15°
-private const val E_SIDE_YAW_MAX = 42f        // nhưng đừng quay quá 42° (mất mặt)
-private const val E_HOLD_MS = 1100L           // giữ mỗi góc ~1.1s để gom khung
+private const val E_FRONT_PITCH_MAX = 12f     // tránh lấy góc ngẩng/cúi làm mẫu chính diện
+private const val E_SIDE_YAW_MIN = 16f        // nghiêng đủ để có dữ liệu khác chính diện
+private const val E_SIDE_YAW_MAX = 38f        // nhưng không quay quá mạnh làm mất nửa mặt
+private const val E_PITCH_DELTA = 11f         // độ ngẩng/cúi tối thiểu so với góc chính diện của máy
+private const val E_ROLL_MAX = 15f            // không nghiêng đầu về vai
+private const val E_EYE_OPEN_MIN = 0.40f      // loại khung nhắm/lim dim mắt
+private const val E_HOLD_MS = 1500L           // đủ thời gian gom nhiều khung nét cho mỗi góc
 private const val E_POLL_MS = 40L
 private const val E_FACE_STALE_MS = 350L
-private const val E_TIMEOUT_MS = 70_000L      // tổng thời gian tối đa cho cả 3 góc
-private const val E_MAX_FRAMES = 10
+private const val E_TIMEOUT_MS = 110_000L     // tổng thời gian tối đa cho đủ 5 góc
+private const val E_MAX_FRAMES = 6            // 5 góc × 6 = 30, dưới trần backend 36 ảnh
+private const val E_MIN_FRAMES = 4
+private const val E_CAPTURE_GAP_MS = 170L     // tránh JPEG dồn dập; lấy khung trải đều trong 1,5 giây
 
-private enum class PoseKind { Front, Side }
+private enum class PoseKind { Front, Side, Up, Down }
 private data class EnrollPoseSpec(val label: String, val title: String, val kind: PoseKind)
 
-// Trình tự 3 góc: chính diện (mẫu chuẩn) + nghiêng 2 bên ngược nhau (mẫu bền hơn khi ánh sáng/biểu cảm đổi).
+// Năm góc phủ đủ biến thiên thường gặp khi chấm công: thẳng, hai bên, ngẩng và cúi.
 private val ENROLL_POSES = listOf(
     EnrollPoseSpec("front", "Nhìn thẳng vào camera", PoseKind.Front),
     EnrollPoseSpec("side1", "Quay đầu nhẹ sang một bên", PoseKind.Side),
     EnrollPoseSpec("side2", "Quay sang bên còn lại", PoseKind.Side),
+    EnrollPoseSpec("up", "Ngẩng mặt nhẹ lên", PoseKind.Up),
+    EnrollPoseSpec("down", "Cúi mặt nhẹ xuống", PoseKind.Down),
 )
 
 /**
@@ -124,8 +123,9 @@ private val ENROLL_POSES = listOf(
 @Composable
 fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
-    LaunchedEffect(Unit) { vm.loadFaceStatus() }
+    LaunchedEffect(Unit) { vm.loadFaceStatus(force = true) }
     val registered = vm.faceRegistered == true
+    val pending = vm.faceEnrollmentPending
     val enroll = vm.faceEnroll
     val back: () -> Unit = { vm.resetFaceEnroll(); onBack() }
 
@@ -159,7 +159,7 @@ fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 24.dp, top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item { EnrollHero(registered) }
+            item { EnrollHero(registered, pending, vm.faceEnrollmentStatus, vm.faceEnrollmentReviewNote) }
 
             item {
                 HrCard {
@@ -179,7 +179,7 @@ fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
                         Icon(Icons.Filled.Shield, contentDescription = null, tint = Success, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            "Hệ thống chỉ lưu VECTOR đặc trưng đã mã hoá, KHÔNG lưu ảnh khuôn mặt của bạn.",
+                            "Hệ thống chỉ lưu VECTOR đặc trưng đã mã hoá, KHÔNG lưu ảnh khuôn mặt. Vector chỉ được kích hoạt sau khi HR đối chiếu trực tiếp danh tính của bạn.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -189,11 +189,13 @@ fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
 
             item {
                 HrCard {
-                    Text("Cách quét (3 góc)", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    Text("Cách quét (5 góc)", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(10.dp))
                     StepRow(1, "Nhìn thẳng vào camera")
                     StepRow(2, "Quay đầu nhẹ sang một bên")
                     StepRow(3, "Quay sang bên còn lại")
+                    StepRow(4, "Ngẩng mặt nhẹ lên")
+                    StepRow(5, "Cúi mặt nhẹ xuống")
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "Giữ máy ngang tầm mắt ở nơi đủ sáng. Mỗi tài khoản chỉ đăng ký một lần.",
@@ -210,7 +212,7 @@ fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(Modifier.size(20.dp), MaterialTheme.colorScheme.primary, 2.dp)
                             Spacer(Modifier.width(12.dp))
-                            Text("Đang lưu mẫu khuôn mặt…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                            Text("Đang mã hoá và gửi yêu cầu…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -229,6 +231,7 @@ fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
         ) {
             EnrollActionButton(
                 registered = registered,
+                pending = pending,
                 submitting = enroll is FaceEnrollCapture.Submitting,
                 failed = enroll is FaceEnrollCapture.Done && !(enroll).success,
                 onStart = onStart,
@@ -238,8 +241,10 @@ fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun EnrollHero(registered: Boolean) {
+private fun EnrollHero(registered: Boolean, pending: Boolean, status: String?, reviewNote: String?) {
     val accent = MaterialTheme.colorScheme.primary
+    val rejected = status.equals("rejected", ignoreCase = true)
+    val expired = status.equals("expired", ignoreCase = true)
     HrCard {
         Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
@@ -250,22 +255,34 @@ private fun EnrollHero(registered: Boolean) {
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    if (registered) Icons.Filled.CheckCircle else Icons.Filled.Fingerprint,
+                    if (registered) Icons.Filled.CheckCircle else if (pending) Icons.Filled.Shield else Icons.Filled.Fingerprint,
                     contentDescription = null,
                     tint = if (registered) Success else accent,
                     modifier = Modifier.size(42.dp),
                 )
             }
             Text(
-                if (registered) "Đã đăng ký khuôn mặt" else "Đăng ký khuôn mặt của bạn",
+                when {
+                    registered -> "Đã đăng ký khuôn mặt"
+                    pending -> "Đang chờ HR xác minh"
+                    rejected -> "Yêu cầu chưa được duyệt"
+                    expired -> "Yêu cầu đã hết hạn"
+                    else -> "Đăng ký khuôn mặt của bạn"
+                },
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
             )
             Text(
-                if (registered) "Tài khoản của bạn đã có mẫu khuôn mặt. Mỗi tài khoản chỉ đăng ký một lần."
-                else "Quét khuôn mặt một lần để dùng cho chấm công, đăng nhập và khôi phục mật khẩu.",
+                when {
+                    registered -> "Tài khoản của bạn đã có mẫu khuôn mặt được xác minh."
+                    pending -> "Vector đã được mã hoá và lưu tạm. HR cần gặp, đối chiếu trực tiếp bạn với tài khoản rồi mới kích hoạt."
+                    rejected -> reviewNote?.takeIf { it.isNotBlank() }?.let { "Lý do: $it. Bạn có thể quét và gửi lại." }
+                        ?: "Bạn có thể quét và gửi lại sau khi kiểm tra thông tin với HR."
+                    expired -> "Vector tạm đã được xoá an toàn. Vui lòng quét và gửi yêu cầu mới."
+                    else -> "Quét khuôn mặt một lần để gửi yêu cầu xác minh dùng cho chấm công."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -333,8 +350,8 @@ private fun EnrollResultCard(success: Boolean, message: String) {
 }
 
 @Composable
-private fun EnrollActionButton(registered: Boolean, submitting: Boolean, failed: Boolean, onStart: () -> Unit) {
-    if (registered) {
+private fun EnrollActionButton(registered: Boolean, pending: Boolean, submitting: Boolean, failed: Boolean, onStart: () -> Unit) {
+    if (registered || pending) {
         // Đã đăng ký → nút bị LÀM MỜ (disabled) để tránh đăng ký lần hai.
         Button(
             onClick = {},
@@ -344,9 +361,9 @@ private fun EnrollActionButton(registered: Boolean, submitting: Boolean, failed:
                 .height(52.dp),
             shape = RoundedCornerShape(16.dp),
         ) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
+            Icon(if (registered) Icons.Filled.CheckCircle else Icons.Filled.Shield, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Đã đăng ký khuôn mặt", fontWeight = FontWeight.Bold)
+            Text(if (registered) "Đã đăng ký khuôn mặt" else "Đang chờ HR duyệt", fontWeight = FontWeight.Bold)
         }
     } else {
         Button(
@@ -369,20 +386,22 @@ private fun EnrollActionButton(registered: Boolean, submitting: Boolean, failed:
 }
 
 /**
- * Lớp phủ TOÀN MÀN HÌNH cho bước quét đăng ký (ẩn thanh hệ thống + nút Đóng). Được gọi ở tầng ngoài
- * Scaffold (xem HrShell). Khi quét đủ 3 góc → [onCompleted]; bấm Đóng / hết giờ → [onCancel].
+ * Lớp phủ toàn màn hình cho bước quét đăng ký (chỉ ẩn thanh trạng thái + nút Đóng). Thanh điều hướng
+ * Android luôn hiện. Được gọi ở tầng ngoài
+ * Scaffold (xem HrShell). Khi quét đủ 5 góc → [onCompleted]; bấm Đóng / hết giờ → [onCancel].
  */
 @Composable
 fun FaceEnrollCameraScan(onCompleted: (List<FaceEnrollPose>) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
+    KeepScreenBrightEffect()
     DisposableEffect(Unit) {
         val window = context.findActivity()?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
         controller?.apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.systemBars())
+            hide(WindowInsetsCompat.Type.statusBars())
         }
-        onDispose { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+        onDispose { controller?.show(WindowInsetsCompat.Type.statusBars()) }
     }
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         FaceEnrollCamera(modifier = Modifier.fillMaxSize(), onCompleted = onCompleted, onCancel = onCancel)
@@ -398,25 +417,40 @@ fun FaceEnrollCameraScan(onCompleted: (List<FaceEnrollPose>) -> Unit, onCancel: 
     }
 }
 
-// Quan sát khuôn mặt cho đăng ký (kèm yaw để căn góc nghiêng).
-private data class EnrollObs(val cx: Float, val cy: Float, val widthFrac: Float, val yawDeg: Float, val t: Long)
+// Quan sát khuôn mặt cho đăng ký: tư thế 3 trục và độ mở mắt.
+private data class EnrollObs(
+    val cx: Float,
+    val cy: Float,
+    val widthFrac: Float,
+    val yawDeg: Float,
+    val pitchDeg: Float,
+    val rollDeg: Float,
+    val eyeOpen: Float,
+    val t: Long,
+)
 
 private class EnrollAimState {
     @Volatile var latest: EnrollObs? = null
     val collect = AtomicBoolean(false)
     private val frames = ArrayList<String>()
+    private var lastCaptureAt = 0L
+
+    fun shouldCaptureFrame(now: Long): Boolean = synchronized(frames) {
+        if (frames.size >= E_MAX_FRAMES || now - lastCaptureAt < E_CAPTURE_GAP_MS) return@synchronized false
+        lastCaptureAt = now
+        true
+    }
+
     fun addFrame(url: String) = synchronized(frames) {
-        if (frames.size >= E_MAX_FRAMES) frames.removeAt(0)
-        frames.add(url)
+        if (frames.size < E_MAX_FRAMES) frames.add(url)
     }
     fun snapshot(): List<String> = synchronized(frames) { frames.toList() }
-    fun clearFrames() = synchronized(frames) { frames.clear() }
+    fun clearFrames() = synchronized(frames) { frames.clear(); lastCaptureAt = 0L }
 }
 
 /**
- * CameraX (camera trước) + ML Kit: quét lần lượt 3 góc (chính diện → nghiêng trái/phải bất kỳ, bên
- * thứ hai phải ngược bên thứ nhất). Mỗi góc giữ ~1.1s để gom khung, xong tự chuyển góc kế. Đủ 3 góc →
- * trả loạt ảnh theo từng góc qua [onCompleted]. Hết giờ → [onCancel].
+ * CameraX + ML Kit nhẹ: quét 5 góc; mỗi góc giữ ổn định để gom 4–6 khung trải đều. Không chạy
+ * MediaPipe/lưới mặt trên thiết bị; server mới là nơi chọn khung, PAD và trích vector bảo mật.
  */
 @androidx.annotation.OptIn(ExperimentalGetImage::class)
 @Composable
@@ -431,12 +465,14 @@ private fun FaceEnrollCamera(
     val executor = remember { Executors.newSingleThreadExecutor() }
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
     val aim = remember { EnrollAimState() }
+    val cameraClosed = remember { AtomicBoolean(false) }
     val onCompletedNow by rememberUpdatedState(onCompleted)
     val onCancelNow by rememberUpdatedState(onCancel)
     val detector = remember {
         FaceDetection.getClient(
             FaceDetectorOptions.Builder()
                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
                 .setMinFaceSize(0.15f)
                 .build(),
         )
@@ -448,6 +484,7 @@ private fun FaceEnrollCamera(
     val analysisRef = remember { java.util.concurrent.atomic.AtomicReference<ImageAnalysis?>() }
 
     DisposableEffect(Unit) {
+        cameraClosed.set(false)
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             val provider = future.get()
@@ -459,7 +496,10 @@ private fun FaceEnrollCamera(
                     analysisRef.set(a)
                     a.setAnalyzer(executor) { image ->
                         try {
-                            if (aim.collect.get()) runCatching { aim.addFrame(image.toJpegDataUrl()) }
+                            if (cameraClosed.get()) { image.close(); return@setAnalyzer }
+                            if (aim.collect.get() && aim.shouldCaptureFrame(SystemClock.elapsedRealtime())) {
+                                runCatching { aim.addFrame(image.toJpegDataUrl(quality = 88)) }
+                            }
                             val media = image.image
                             if (media == null) { image.close(); return@setAnalyzer }
                             val rotation = image.imageInfo.rotationDegrees
@@ -468,21 +508,29 @@ private fun FaceEnrollCamera(
                             val input = InputImage.fromMediaImage(media, rotation)
                             detector.process(input)
                                 .addOnSuccessListener(mainExecutor) { faces ->
-                                    runCatching {
+                                    if (!cameraClosed.get()) runCatching {
                                         val face = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }
                                         aim.latest = if (face != null) {
                                             val bb = face.boundingBox
                                             EnrollObs(
                                                 cx = (bb.exactCenterX() / iw).coerceIn(0f, 1f),
                                                 cy = (bb.exactCenterY() / ih).coerceIn(0f, 1f),
-                                                widthFrac = (bb.width().toFloat() / iw).coerceIn(0f, 1f),
-                                                yawDeg = face.headEulerAngleY,
-                                                t = SystemClock.elapsedRealtime(),
+                                                 widthFrac = (bb.width().toFloat() / iw).coerceIn(0f, 1f),
+                                                 yawDeg = face.headEulerAngleY,
+                                                 pitchDeg = face.headEulerAngleX,
+                                                 rollDeg = face.headEulerAngleZ,
+                                                 eyeOpen = minOf(
+                                                     face.leftEyeOpenProbability ?: 1f,
+                                                     face.rightEyeOpenProbability ?: 1f,
+                                                 ),
+                                                 t = SystemClock.elapsedRealtime(),
                                             )
                                         } else null
                                     }
                                 }
-                                .addOnFailureListener(mainExecutor) { aim.latest = null }
+                                .addOnFailureListener(mainExecutor) {
+                                    if (!cameraClosed.get()) aim.latest = null
+                                }
                                 .addOnCompleteListener(mainExecutor) { runCatching { image.close() } }
                         } catch (_: Throwable) {
                             runCatching { image.close() }
@@ -496,20 +544,11 @@ private fun FaceEnrollCamera(
         }, ContextCompat.getMainExecutor(context))
 
         onDispose {
+            cameraClosed.set(true)
             runCatching { analysisRef.getAndSet(null)?.clearAnalyzer() }
             runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
             runCatching { detector.close() }
             runCatching { executor.shutdown() }
-        }
-    }
-
-    // Tăng độ sáng màn hình để soi sáng khuôn mặt trong lúc quét (khôi phục khi xong).
-    DisposableEffect(Unit) {
-        val window = context.findActivity()?.window
-        val prev = window?.attributes?.screenBrightness
-        if (window != null) window.attributes = window.attributes.apply { screenBrightness = 1f }
-        onDispose {
-            if (window != null && prev != null) window.attributes = window.attributes.apply { screenBrightness = prev }
         }
     }
 
@@ -518,6 +557,7 @@ private fun FaceEnrollCamera(
         poseIndex = 0; holdProgress = 0f; hint = ENROLL_POSES[0].title
         val collected = ArrayList<FaceEnrollPose>()
         var firstSideSign = 0
+        var frontPitch = 0f
         var holding = false
         var holdStart = 0L
         val startedAt = SystemClock.elapsedRealtime()
@@ -541,13 +581,21 @@ private fun FaceEnrollCamera(
                 val yaw = face.yawDeg
                 val mag = abs(yaw)
                 val sign = if (yaw >= 0f) 1 else -1
+                val eyesOpen = face.eyeOpen >= E_EYE_OPEN_MIN
+                val upright = abs(face.rollDeg) <= E_ROLL_MAX
 
                 val poseGood: Boolean
                 val poseHint: String
                 when (spec.kind) {
                     PoseKind.Front -> {
-                        poseGood = mag <= E_FRONT_YAW_MAX
-                        poseHint = "Nhìn thẳng vào camera"
+                        poseGood = mag <= E_FRONT_YAW_MAX && abs(face.pitchDeg) <= E_FRONT_PITCH_MAX
+                        poseHint = if (face.pitchDeg > E_FRONT_PITCH_MAX) {
+                            "Hạ mặt xuống để nhìn thẳng"
+                        } else if (face.pitchDeg < -E_FRONT_PITCH_MAX) {
+                            "Ngẩng mặt lên để nhìn thẳng"
+                        } else {
+                            "Nhìn thẳng vào camera"
+                        }
                     }
                     PoseKind.Side -> {
                         val inBand = mag in E_SIDE_YAW_MIN..E_SIDE_YAW_MAX
@@ -559,12 +607,22 @@ private fun FaceEnrollCamera(
                             poseHint = "Quay sang bên còn lại"
                         }
                     }
+                    PoseKind.Up -> {
+                        poseGood = mag <= E_FRONT_YAW_MAX && face.pitchDeg - frontPitch >= E_PITCH_DELTA
+                        poseHint = "Ngẩng mặt lên thêm một chút"
+                    }
+                    PoseKind.Down -> {
+                        poseGood = mag <= E_FRONT_YAW_MAX && frontPitch - face.pitchDeg >= E_PITCH_DELTA
+                        poseHint = "Cúi mặt xuống thêm một chút"
+                    }
                 }
 
                 when {
                     w > E_FACE_TOO_CLOSE -> resetHold("Quá gần — lùi ra xa một chút")
                     !centered -> resetHold("Đưa khuôn mặt vào giữa khung")
                     w < E_FACE_MIN -> resetHold("Nhích lại gần hơn một chút")
+                    !eyesOpen -> resetHold("Hãy mở mắt nhìn vào camera")
+                    !upright -> resetHold("Giữ đầu thẳng, không nghiêng về vai")
                     !poseGood -> resetHold(poseHint)
                     else -> {
                         if (!holding) { holding = true; holdStart = now; aim.clearFrames(); aim.collect.set(true) }
@@ -574,8 +632,9 @@ private fun FaceEnrollCamera(
                         if (held >= E_HOLD_MS) {
                             val frames = aim.snapshot()
                             aim.collect.set(false); holding = false; holdProgress = 0f
-                            if (frames.isNotEmpty()) {
+                            if (frames.size >= E_MIN_FRAMES) {
                                 collected.add(FaceEnrollPose(spec.label, frames))
+                                if (spec.kind == PoseKind.Front) frontPitch = face.pitchDeg
                                 if (spec.kind == PoseKind.Side && firstSideSign == 0) firstSideSign = sign
                                 poseIndex++
                                 if (poseIndex >= ENROLL_POSES.size) {
@@ -584,7 +643,7 @@ private fun FaceEnrollCamera(
                                 }
                                 hint = ENROLL_POSES[poseIndex].title
                             } else {
-                                hint = "Chưa bắt được ảnh, thử lại"
+                                hint = "Chưa đủ ảnh rõ nét — giữ lại góc này"
                             }
                             aim.clearFrames()
                         }
@@ -603,7 +662,6 @@ private fun FaceEnrollCamera(
 
     Box(modifier = modifier) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        EnrollGuideOverlay(holdProgress = holdProgress, poseIndex = poseIndex, total = ENROLL_POSES.size)
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -629,54 +687,5 @@ private fun FaceEnrollCamera(
                 .navigationBarsPadding()
                 .padding(bottom = 24.dp, start = 20.dp, end = 20.dp),
         )
-    }
-}
-
-/** Khung ngắm bầu dục + vòng tiến độ giữ góc + các chấm đếm số góc đã xong. */
-@Composable
-private fun EnrollGuideOverlay(holdProgress: Float, poseIndex: Int, total: Int) {
-    val ovalFrac by animateFloatAsState(0.66f, tween(300), label = "eoval")
-    val ring = if (holdProgress > 0f) Success else Color.White.copy(alpha = 0.9f)
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val cw = size.width
-        val ch = size.height
-        val ovalW = cw * ovalFrac
-        val ovalH = ovalW / 0.78f
-        val left = (cw - ovalW) / 2f
-        val top = (ch - ovalH) / 2f
-        val topLeft = Offset(left, top)
-        val ovalSize = Size(ovalW, ovalH)
-        // Tối nhẹ vùng ngoài khung để làm nổi khuôn mặt.
-        val mask = Path().apply {
-            addRect(androidx.compose.ui.geometry.Rect(0f, 0f, cw, ch))
-            addOval(androidx.compose.ui.geometry.Rect(left, top, left + ovalW, top + ovalH))
-            fillType = PathFillType.EvenOdd
-        }
-        drawPath(mask, color = Color.Black.copy(alpha = 0.5f))
-        drawOval(color = ring, topLeft = topLeft, size = ovalSize, style = Stroke(width = 6.dp.toPx()))
-        if (holdProgress > 0f) {
-            drawArc(
-                color = Success,
-                startAngle = -90f,
-                sweepAngle = 360f * holdProgress,
-                useCenter = false,
-                topLeft = topLeft,
-                size = ovalSize,
-                style = Stroke(width = 9.dp.toPx(), cap = StrokeCap.Round),
-            )
-        }
-        // Chấm đếm số góc đã hoàn thành, đặt dưới khung.
-        val dotR = 6.dp.toPx()
-        val gap = 22.dp.toPx()
-        val totalW = (total - 1) * gap
-        val startX = cw / 2f - totalW / 2f
-        val y = top + ovalH + 26.dp.toPx()
-        for (i in 0 until total) {
-            drawOval(
-                color = if (i < poseIndex) Success else Color.White.copy(alpha = 0.4f),
-                topLeft = Offset(startX + i * gap - dotR, y - dotR),
-                size = Size(dotR * 2, dotR * 2),
-            )
-        }
     }
 }

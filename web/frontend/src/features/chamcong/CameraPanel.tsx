@@ -76,7 +76,6 @@ export function CameraPanel({
             <span>Camera đang tắt</span>
           </div>
         )}
-        <span className="cc-frame-guide" aria-hidden="true" />
         {auto && active && (
           <div className="cc-scan-hint">
             {busy ? (

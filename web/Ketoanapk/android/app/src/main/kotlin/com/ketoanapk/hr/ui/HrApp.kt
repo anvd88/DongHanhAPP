@@ -5,33 +5,46 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -44,6 +57,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -94,9 +109,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -105,6 +122,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -119,6 +137,8 @@ import kotlin.math.roundToInt
 import com.ketoanapk.hr.data.AnniversaryGreeting
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.AppPersonalization
+import com.ketoanapk.hr.ui.theme.BrandGradientBottom
+import com.ketoanapk.hr.ui.theme.BrandGradientTop
 import com.ketoanapk.hr.ui.theme.KetoanTheme
 
 @Composable
@@ -143,9 +163,13 @@ fun HrApp(vm: HrViewModel) {
         }
         // Intro mở app chạy 1 lần mỗi phiên (không lặp lại khi xoay màn hình).
         var showIntro by rememberSaveable { mutableStateOf(true) }
+        var introHandoffStarted by rememberSaveable { mutableStateOf(false) }
         val hasPendingWebLogin = vm.pendingQrLoginCode != null || vm.pendingMobileAppLoginCode != null
         LaunchedEffect(hasPendingWebLogin) {
-            if (hasPendingWebLogin) showIntro = false
+            if (hasPendingWebLogin) {
+                introHandoffStarted = true
+                showIntro = false
+            }
         }
         val appContext = LocalContext.current
         val permissionPrefs = remember { appContext.getSharedPreferences("permission_onboarding", android.content.Context.MODE_PRIVATE) }
@@ -171,33 +195,73 @@ fun HrApp(vm: HrViewModel) {
                             detectTapGestures(onTap = { focusManager.clearFocus() })
                         },
                 ) {
-                // Chuyển cảnh mượt khi vào ứng dụng (Loading → Đăng nhập / Trang chủ).
-                AnimatedContent(
-                    targetState = vm.authState,
-                    transitionSpec = {
-                        (fadeIn(tween(400)) + scaleIn(tween(400), initialScale = 0.94f)) togetherWith fadeOut(tween(250))
-                    },
-                    label = "auth",
-                ) { state ->
-                    when (state) {
-                        AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                val introDestination = if (vm.authState is AuthState.SignedIn) {
+                    IntroDestination.Home
+                } else {
+                    IntroDestination.Login
+                }
+                val contentReveal by animateFloatAsState(
+                    targetValue = if (introHandoffStarted || !showIntro) 1f else 0f,
+                    animationSpec = tween(
+                        durationMillis = 650,
+                        easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
+                    ),
+                    label = "intro-content-handoff",
+                )
+                val hiddenScale = if (introDestination == IntroDestination.Home) 0.955f else 0.975f
+                val hiddenAlpha = if (introDestination == IntroDestination.Home) 0.78f else 0.72f
+                val hiddenOffsetPx = with(LocalDensity.current) {
+                    (if (introDestination == IntroDestination.Home) 12.dp else 22.dp).toPx()
+                }
+
+                // Login và Home được dựng sẵn dưới intro, rồi cùng chuyển động khi logo bắt đầu handoff.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            alpha = hiddenAlpha + (1f - hiddenAlpha) * contentReveal
+                            val scale = hiddenScale + (1f - hiddenScale) * contentReveal
+                            scaleX = scale
+                            scaleY = scale
+                            translationY = hiddenOffsetPx * (1f - contentReveal)
+                        },
+                ) {
+                    // AnimatedContent vẫn xử lý các lần đăng nhập/đăng xuất sau intro như trước.
+                    AnimatedContent(
+                        targetState = vm.authState,
+                        transitionSpec = {
+                            (fadeIn(tween(400)) + scaleIn(tween(400), initialScale = 0.94f)) togetherWith fadeOut(tween(250))
+                        },
+                        label = "auth",
+                    ) { state ->
+                        when (state) {
+                            AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            }
+                            AuthState.SignedOut -> LoginScreen(
+                                loading = vm.loginLoading,
+                                error = vm.loginError,
+                                resetLoading = vm.resetPasswordLoading,
+                                rememberedUsername = vm.rememberedUsername,
+                                onLogin = vm::login,
+                                onResetPasswordWithCode = vm::resetPasswordWithCode,
+                            )
+                            is AuthState.SignedIn -> HrShell(state.user, vm, qrScanner)
                         }
-                        AuthState.SignedOut -> LoginScreen(
-                            loading = vm.loginLoading,
-                            error = vm.loginError,
-                            resetLoading = vm.resetPasswordLoading,
-                            rememberedUsername = vm.rememberedUsername,
-                            onLogin = vm::login,
-                            onResetPasswordWithCode = vm::resetPasswordWithCode,
-                        )
-                        is AuthState.SignedIn -> HrShell(state.user, vm, qrScanner)
                     }
                 }
 
-                // Lớp phủ intro (vẽ logo bằng vector) nằm trên cùng, tự mờ dần rồi biến mất.
+                // Giữ intro cũ làm nền, thêm gear chờ API và handoff riêng sang Login/Home.
                 if (showIntro) {
-                    IntroOverlay(onFinished = { showIntro = false })
+                    IntroOverlay(
+                        bootstrapReady = vm.authState !is AuthState.Loading,
+                        destination = introDestination,
+                        onHandoffStarted = { introHandoffStarted = true },
+                        onFinished = {
+                            introHandoffStarted = true
+                            showIntro = false
+                        },
+                    )
                 }
 
                 if (!showIntro && showPermissionOnboarding && !hasPendingWebLogin) {
@@ -545,13 +609,19 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
         HrDestination.Calls -> vm.callHistoryState.loading
         else -> vm.homeState.loading
     }
+    val footerDestinations = vm.bottomDestinations(user)
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Chat là "mini app": chiếm trọn màn, tự dựng header + thanh tab riêng nên ẩn hẳn header và
         // thanh dưới của HR ở đây.
         val chatFullScreen = vm.selected == HrDestination.Chat
         Scaffold(
-            snackbarHost = { SnackbarHost(snackbar) },
+            snackbarHost = {
+                SnackbarHost(
+                    hostState = snackbar,
+                    modifier = Modifier.padding(bottom = if (chatFullScreen) 0.dp else 84.dp),
+                )
+            },
             topBar = {
                 if (chatFullScreen) Unit
                 else if (vm.searchOpen) SearchTopBar(
@@ -593,22 +663,28 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
                 )
             },
-            bottomBar = {
-                if (!chatFullScreen) BottomBar(
-                    items = vm.bottomDestinations(user),
-                    selected = vm.selected,
-                    badgeCount = vm::badgeCount,
-                    onSelect = vm::select,
-                    onScanQr = qrScanner.startScan,
-                )
-            },
         ) { padding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .background(MaterialTheme.colorScheme.background),
+                    .background(MaterialTheme.colorScheme.background)
+                    // Footer nổi trên nền màn hình; chỉ chừa chỗ cho nội dung tương tác để hàng cuối
+                    // không bị khung 5 nút che, không tạo một lớp nền footer hình chữ nhật riêng.
+                    .padding(bottom = if (chatFullScreen) 0.dp else 84.dp),
             ) {
+                // Thanh cập nhật nằm ngoài nội dung từng màn nên luôn được ghim ở cùng một vị trí,
+                // kể cả Chat toàn màn hình. Không có nút tắt; bấm vào sẽ mở lại bảng chi tiết.
+                val availableUpdate = vm.availableUpdate
+                AnimatedVisibility(
+                    visible = availableUpdate != null && !vm.updateSheetVisible,
+                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+                ) {
+                    availableUpdate?.let { info ->
+                        UpdateReminderBar(info = info, onOpen = vm::openUpdateSheet)
+                    }
+                }
                 // Báo MẤT KẾT NỐI ngay ở đỉnh mọi màn: mất Internet (máy không có mạng) hoặc không chạm
                 // được máy chủ. Tự ẩn khi kết nối phục hồi (heartbeat + callback mạng cập nhật liên tục).
                 ConnectionBanner(status = vm.connection)
@@ -644,8 +720,43 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         results = vm.searchResults(user),
                         badgeCount = vm::badgeCount,
                         onSelect = { vm.closeSearch(); vm.select(it) },
-                    ) else screenState.SaveableStateProvider(vm.selected) {
-                    when (vm.selected) {
+                    ) else AnimatedContent(
+                        targetState = vm.selected,
+                        modifier = Modifier.fillMaxSize(),
+                        transitionSpec = {
+                            val fromIndex = footerDestinations.indexOf(initialState)
+                            val toIndex = footerDestinations.indexOf(targetState)
+                            val canSlide =
+                                fromIndex >= 0 &&
+                                    toIndex >= 0 &&
+                                    fromIndex != toIndex &&
+                                    initialState != HrDestination.Scan &&
+                                    targetState != HrDestination.Scan
+
+                            if (canSlide) {
+                                val direction = if (toIndex > fromIndex) 1 else -1
+                                (
+                                    slideInHorizontally(
+                                        animationSpec = tween(
+                                            durationMillis = 280,
+                                            easing = CubicBezierEasing(0.2f, 0f, 0f, 1f),
+                                        ),
+                                        initialOffsetX = { width -> direction * width / 10 },
+                                    ) + fadeIn(tween(220))
+                                ) togetherWith (
+                                    slideOutHorizontally(
+                                        animationSpec = tween(180, easing = FastOutSlowInEasing),
+                                        targetOffsetX = { width -> -direction * width / 14 },
+                                    ) + fadeOut(tween(160))
+                                )
+                            } else {
+                                fadeIn(tween(220)) togetherWith fadeOut(tween(160))
+                            }
+                        },
+                        label = "footer-screen-transition",
+                    ) { destination ->
+                    screenState.SaveableStateProvider(destination) {
+                    when (destination) {
                     HrDestination.Home -> HomeScreen(
                         user = user,
                         state = vm.homeState,
@@ -716,8 +827,20 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     )
                 }
                 }
+                }
             }
             }
+        }
+
+        if (!chatFullScreen) {
+            BottomBar(
+                items = footerDestinations,
+                selected = vm.selected,
+                badgeCount = vm::badgeCount,
+                onSelect = vm::select,
+                onScanQr = qrScanner.startScan,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
 
         // Camera quét khuôn mặt phủ TOÀN MÀN HÌNH (ngoài Scaffold) → không dính thanh tiêu đề/điều hướng.
@@ -726,6 +849,8 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                 onCaptured = vm::onFramesCaptured,
                 onCancel = vm::resetCapture,
                 motionMode = vm.motionMode,
+                smileMode = vm.smileMode,
+                smileThreshold = vm.smileThreshold,
             )
         }
 
@@ -1069,7 +1194,10 @@ private fun NotificationBell(count: Int, onClick: () -> Unit) {
     }
 }
 
-/** Thanh điều hướng nổi (floating): thẻ bo tròn, nút Quét QR đỏ nhô lên ở giữa (có hiệu ứng quét). */
+/**
+ * Footer nổi: capsule chọn tab trượt thật giữa 5 ô, icon/nhãn spring nhẹ và QR thương hiệu ở giữa.
+ * Giữ nguyên kích thước cũ để toàn bộ màn hình không bị thay đổi vùng nội dung.
+ */
 @Composable
 private fun BottomBar(
     items: List<HrDestination>,
@@ -1077,35 +1205,104 @@ private fun BottomBar(
     badgeCount: (HrDestination) -> Int,
     onSelect: (HrDestination) -> Unit,
     onScanQr: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    if (items.isEmpty()) return
+
+    val selectedIndex = items.indexOf(selected).takeIf { it >= 0 && selected != HrDestination.Scan } ?: -1
+    var indicatorIndex by remember(items) {
+        mutableIntStateOf(selectedIndex.takeIf { it >= 0 } ?: items.indexOfFirst { it != HrDestination.Scan }.coerceAtLeast(0))
+    }
+    LaunchedEffect(selectedIndex) {
+        if (selectedIndex >= 0) indicatorIndex = selectedIndex
+    }
+    val indicatorAlpha by animateFloatAsState(
+        targetValue = if (selectedIndex >= 0) 1f else 0f,
+        animationSpec = tween(160),
+        label = "footer-indicator-alpha",
+    )
+
+    val navShape = RoundedCornerShape(28.dp)
+    val activeShape = RoundedCornerShape(19.dp)
+    val surface = MaterialTheme.colorScheme.surface
+    val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
+    val primary = MaterialTheme.colorScheme.primary
+    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            // Đã ẩn thanh điều hướng hệ thống → dành sẵn khoảng đệm cố định để thanh nổi không sát mép,
-            // vẫn giữ navigationBarsPadding để khi vuốt hiện thanh tạm thời thì không bị che.
+            // Thanh điều hướng Android đã được bật lại: chỉ chừa đúng inset hệ thống để footer không
+            // bị che. Không thêm khoảng đệm đáy riêng vì nó tạo một dải trống sau footer.
             .navigationBarsPadding()
-            .padding(start = 14.dp, end = 14.dp, bottom = 18.dp)
+            .padding(horizontal = 14.dp)
             .height(84.dp),
     ) {
-        Surface(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp)
-                .align(Alignment.BottomCenter),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 16.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                .align(Alignment.BottomCenter)
+                .shadow(16.dp, navShape)
+                .clip(navShape)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(surface, surfaceVariant.copy(alpha = 0.72f)),
+                    ),
+                )
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.72f), navShape),
         ) {
+            val rowPadding = 8.dp
+            val slotWidth = (maxWidth - rowPadding * 2f) / items.size.toFloat()
+            val indicatorWidth = (slotWidth - 12.dp).coerceAtLeast(0.dp)
+            // Tính từ tâm ô thay vì cộng bù theo mép để capsule luôn trùng tâm icon/nhãn.
+            val targetIndicatorX =
+                rowPadding + slotWidth * (indicatorIndex.toFloat() + 0.5f) - indicatorWidth / 2f
+            val indicatorX by animateDpAsState(
+                targetValue = targetIndicatorX,
+                animationSpec = tween(
+                    durationMillis = 240,
+                    easing = CubicBezierEasing(0.2f, 0f, 0f, 1f),
+                ),
+                label = "footer-indicator-x",
+            )
+
+            // Capsule chạy phía sau tab; khi đi xuyên qua giữa sẽ lướt dưới nút QR nổi.
+            Box(
+                modifier = Modifier
+                    .offset(x = indicatorX, y = 8.dp)
+                    .width(indicatorWidth)
+                    .height(48.dp)
+                    .graphicsLayer { alpha = indicatorAlpha }
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                primaryContainer.copy(alpha = 0.96f),
+                                primary.copy(alpha = 0.13f),
+                            ),
+                        ),
+                        activeShape,
+                    )
+                    .border(1.dp, primary.copy(alpha = 0.14f), activeShape),
+            )
+
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.20f)),
+            )
+
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = rowPadding)
+                    .selectableGroup(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 items.forEach { item ->
                     if (item == HrDestination.Scan) {
-                        Spacer(Modifier.weight(1f)) // chừa chỗ cho nút nổi ở giữa
+                        Spacer(Modifier.weight(1f))
                     } else {
                         BottomItem(
                             icon = item.icon,
@@ -1122,6 +1319,7 @@ private fun BottomBar(
 
         QrScanButton(
             onClick = onScanQr,
+            active = selected == HrDestination.Scan,
             modifier = Modifier.align(Alignment.TopCenter),
         )
     }
@@ -1153,19 +1351,99 @@ private fun BottomItem(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-    Column(
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val activeProgress by animateFloatAsState(
+        targetValue = if (active) 1f else 0f,
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        label = "footer-item-active-$label",
+    )
+    val itemScale by animateFloatAsState(
+        targetValue = when {
+            pressed -> 0.96f
+            active -> 1.035f
+            else -> 1f
+        },
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = if (pressed) 700f else Spring.StiffnessMedium,
+        ),
+        label = "footer-item-scale-$label",
+    )
+    val itemColor by animateColorAsState(
+        targetValue = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = tween(160),
+        label = "footer-item-color-$label",
+    )
+    val badgeProgress by animateFloatAsState(
+        targetValue = if (badge > 0) 1f else 0f,
+        animationSpec = tween(160),
+        label = "footer-badge-$label",
+    )
+    Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+            .fillMaxHeight()
+            .selectable(
+                selected = active,
+                interactionSource = interaction,
+                indication = null,
+                role = Role.Tab,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        BadgedBox(badge = { if (badge > 0) CountBadge(badge) }) {
-            Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp))
+        Column(
+            modifier = Modifier
+                .graphicsLayer {
+                    scaleX = itemScale
+                    scaleY = itemScale
+                }
+                .padding(horizontal = 2.dp, vertical = 5.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            BadgedBox(
+                badge = {
+                    Badge(
+                        modifier = Modifier.graphicsLayer {
+                            alpha = badgeProgress
+                            scaleX = 0.70f + badgeProgress * 0.30f
+                            scaleY = 0.70f + badgeProgress * 0.30f
+                        },
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ) {
+                        if (badge > 0) Text(if (badge > 99) "99+" else "$badge")
+                    }
+                },
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = itemColor,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = itemColor,
+                fontWeight = if (active) FontWeight.ExtraBold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+            Box(
+                modifier = Modifier
+                    .width(16.dp)
+                    .height(2.dp)
+                    .graphicsLayer {
+                        alpha = activeProgress
+                        scaleX = activeProgress.coerceAtLeast(0.01f)
+                    }
+                    .background(MaterialTheme.colorScheme.primary, CircleShape),
+            )
         }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
     }
 }
 
@@ -1179,90 +1457,182 @@ private fun CountBadge(count: Int) {
 }
 
 /**
- * Nút Quét QR nổi ở giữa thanh dưới. Tự vẽ hiệu ứng động: khung ngắm 4 góc "thở" nhẹ, một vạch quét
- * trượt lên xuống, và một mã QR nhỏ mô phỏng ở giữa — gợi ngay chức năng quét mã.
+ * Nút Quét QR nổi ở giữa thanh dưới. Vạch sáng quét một chiều từ trên xuống, halo tỏa dần ra ngoài
+ * và thân nút thở rất nhẹ; các lớp luôn dùng chung một tâm để chuyển động không bị rung/lệch.
  */
 @Composable
-private fun QrScanButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun QrScanButton(
+    onClick: () -> Unit,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val onPrimary = MaterialTheme.colorScheme.onPrimary
     val transition = rememberInfiniteTransition(label = "qr")
-    // Vạch quét trượt lên–xuống trong khung ngắm.
-    val scan by transition.animateFloat(
+    val scanProgress by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
+            animation = tween(1450, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
         ),
-        label = "scan",
+        label = "qr-scan-line",
     )
-    // Khung 4 góc co giãn nhẹ như đang "thở".
-    val pulse by transition.animateFloat(
+    val breathe by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = LinearEasing),
+            animation = tween(1800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse,
         ),
-        label = "pulse",
+        label = "qr-breathe",
     )
+    val haloProgress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "qr-halo-wave",
+    )
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val buttonScale by animateFloatAsState(
+        targetValue = when {
+            pressed -> 0.94f
+            active -> 1.04f
+            else -> 1f
+        },
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 520f),
+        label = "qr-button-scale",
+    )
+    val ringColor by animateColorAsState(
+        targetValue = if (active) Color(0xFFFCDE00) else Color.White.copy(alpha = 0.82f),
+        animationSpec = tween(180),
+        label = "qr-ring-color",
+    )
+    val labelColor by animateColorAsState(
+        targetValue = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = tween(160),
+        label = "qr-label-color",
+    )
+
     Box(
         modifier = modifier
-            .size(62.dp)
-            .shadow(12.dp, CircleShape)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primary)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .width(80.dp)
+            .height(84.dp),
     ) {
-        Canvas(modifier = Modifier.size(30.dp)) {
-            val s = size.minDimension
-            val stroke = s * 0.10f
-            val inset = stroke / 2f
-            val left = inset
-            val top = inset
-            val right = s - inset
-            val bottom = s - inset
-            val arm = s * (0.24f + 0.05f * pulse)   // độ dài cạnh mỗi góc, thở nhẹ
-            val cap = StrokeCap.Round
-
-            // Khung ngắm 4 góc hình chữ L.
-            drawLine(onPrimary, Offset(left, top), Offset(left + arm, top), stroke, cap)
-            drawLine(onPrimary, Offset(left, top), Offset(left, top + arm), stroke, cap)
-            drawLine(onPrimary, Offset(right, top), Offset(right - arm, top), stroke, cap)
-            drawLine(onPrimary, Offset(right, top), Offset(right, top + arm), stroke, cap)
-            drawLine(onPrimary, Offset(left, bottom), Offset(left + arm, bottom), stroke, cap)
-            drawLine(onPrimary, Offset(left, bottom), Offset(left, bottom - arm), stroke, cap)
-            drawLine(onPrimary, Offset(right, bottom), Offset(right - arm, bottom), stroke, cap)
-            drawLine(onPrimary, Offset(right, bottom), Offset(right, bottom - arm), stroke, cap)
-
-            // Mã QR nhỏ mô phỏng ở giữa: 3 ô định vị góc + vài module.
-            val gridInset = s * 0.30f
-            val cell = (s - gridInset * 2f) / 3f
-            val dot = cell * 0.74f
-            fun module(cx: Int, cy: Int, scale: Float) {
-                val d = dot * scale
-                val off = (cell - d) / 2f
-                drawRect(
-                    color = onPrimary,
-                    topLeft = Offset(gridInset + cx * cell + off, gridInset + cy * cell + off),
-                    size = Size(d, d),
-                )
-            }
-            module(0, 0, 1f); module(2, 0, 1f); module(0, 2, 1f)  // 3 ô định vị
-            module(1, 1, 0.6f); module(2, 2, 0.55f)               // vài module cho ra dáng mã
-
-            // Vạch quét ngang trượt trong khung.
-            val trackTop = top + arm * 0.15f
-            val trackBottom = bottom - arm * 0.15f
-            val y = trackTop + (trackBottom - trackTop) * scan
-            drawLine(
-                color = onPrimary,
-                start = Offset(left + arm * 0.15f, y),
-                end = Offset(right - arm * 0.15f, y),
-                strokeWidth = stroke * 0.8f,
-                cap = cap,
+        // Halo và nút dùng chung một hộp căn giữa để tâm hai vòng luôn trùng tuyệt đối.
+        Box(
+            modifier = Modifier
+                .size(70.dp)
+                .align(Alignment.TopCenter),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val haloScale = 0.90f + haloProgress * 0.18f
+                        scaleX = haloScale
+                        scaleY = haloScale
+                        alpha = (1f - haloProgress) * if (active) 0.28f else 0.18f
+                    }
+                    .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
             )
+
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .graphicsLayer {
+                        val idleBreath = 0.992f + breathe * 0.016f
+                        scaleX = buttonScale * idleBreath
+                        scaleY = buttonScale * idleBreath
+                    }
+                    .shadow(14.dp, CircleShape)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(BrandGradientTop, MaterialTheme.colorScheme.primary, BrandGradientBottom),
+                        ),
+                    )
+                    .border(2.dp, ringColor, CircleShape)
+                    .clickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        role = Role.Button,
+                        onClick = onClick,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(modifier = Modifier.size(30.dp)) {
+                    val s = size.minDimension
+                    val stroke = s * 0.10f
+                    val inset = stroke / 2f
+                    val left = inset
+                    val top = inset
+                    val right = s - inset
+                    val bottom = s - inset
+                    val arm = s * (0.23f + 0.04f * breathe)
+                    val cap = StrokeCap.Round
+
+                    drawLine(onPrimary, Offset(left, top), Offset(left + arm, top), stroke, cap)
+                    drawLine(onPrimary, Offset(left, top), Offset(left, top + arm), stroke, cap)
+                    drawLine(onPrimary, Offset(right, top), Offset(right - arm, top), stroke, cap)
+                    drawLine(onPrimary, Offset(right, top), Offset(right, top + arm), stroke, cap)
+                    drawLine(onPrimary, Offset(left, bottom), Offset(left + arm, bottom), stroke, cap)
+                    drawLine(onPrimary, Offset(left, bottom), Offset(left, bottom - arm), stroke, cap)
+                    drawLine(onPrimary, Offset(right, bottom), Offset(right - arm, bottom), stroke, cap)
+                    drawLine(onPrimary, Offset(right, bottom), Offset(right, bottom - arm), stroke, cap)
+
+                    val gridInset = s * 0.30f
+                    val cell = (s - gridInset * 2f) / 3f
+                    val dot = cell * 0.74f
+                    fun module(cx: Int, cy: Int, scale: Float) {
+                        val d = dot * scale
+                        val off = (cell - d) / 2f
+                        drawRect(
+                            color = onPrimary,
+                            topLeft = Offset(gridInset + cx * cell + off, gridInset + cy * cell + off),
+                            size = Size(d, d),
+                        )
+                    }
+                    module(0, 0, 1f); module(2, 0, 1f); module(0, 2, 1f)
+                    module(1, 1, 0.6f); module(2, 2, 0.55f)
+
+                    val trackTop = top + arm * 0.15f
+                    val trackBottom = bottom - arm * 0.15f
+                    val y = trackTop + (trackBottom - trackTop) * scanProgress
+                    // Mờ hoàn toàn tại hai đầu để lúc chu kỳ quay lại đỉnh không tạo cảm giác giật.
+                    val scanAlpha =
+                        (1f - kotlin.math.abs(scanProgress * 2f - 1f)).coerceIn(0f, 1f)
+                    drawLine(
+                        color = Color(0xFFFCDE00).copy(alpha = scanAlpha * 0.28f),
+                        start = Offset(left + arm * 0.10f, y),
+                        end = Offset(right - arm * 0.10f, y),
+                        strokeWidth = stroke * 2f,
+                        cap = cap,
+                    )
+                    drawLine(
+                        color = Color(0xFFFCDE00).copy(alpha = scanAlpha),
+                        start = Offset(left + arm * 0.15f, y),
+                        end = Offset(right - arm * 0.15f, y),
+                        strokeWidth = stroke * 0.70f,
+                        cap = cap,
+                    )
+                }
+            }
         }
+
+        Text(
+            text = "Quét",
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = labelColor,
+            fontWeight = if (active) FontWeight.ExtraBold else FontWeight.Bold,
+            maxLines = 1,
+        )
     }
 }

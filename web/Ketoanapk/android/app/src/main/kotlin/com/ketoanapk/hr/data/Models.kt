@@ -168,6 +168,8 @@ data class HrUser(
     val isDiamond: Boolean = false,
     // Đã đăng ký khuôn mặt chưa (máy chủ trả kèm lúc đăng nhập/me) → quyết định hiện banner nhắc.
     val faceRegistered: Boolean = false,
+    // Đã gửi vector mã hóa và đang chờ HR đối chiếu trực tiếp/kích hoạt.
+    val faceEnrollmentPending: Boolean = false,
     // MỌI vai trò (vai trò chính + vai trò phụ như "Warehouse"/Thủ kho).
     val roles: List<String> = emptyList(),
     // Quyền hiệu lực do backend tính từ DB; thiếu/rỗng thì UI đặc quyền đóng mặc định.
@@ -187,6 +189,7 @@ data class HrUser(
             "executive" -> "Ban giám đốc"
             "chiefaccountant" -> "Kế toán trưởng"
             "accounting" -> "Kế toán viên"
+            "payroll" -> "Kế toán tiền lương"
             "cashier" -> "Thủ quỹ"
             "hr" -> "Quản lý nhân sự"
             "manager" -> "Trưởng phòng"
@@ -852,6 +855,10 @@ data class ChamCongBurstRequest(
 @Serializable
 data class MotionConfig(val enabled: Boolean = false, val enforce: Boolean = false)
 
+// Cấu hình yêu cầu cười trước khi thu ảnh; tải từ server ở đầu mỗi lượt chấm công.
+@Serializable
+data class SmileConfig(val enabled: Boolean = false, val threshold: Double = 0.65)
+
 // Một khung đã chụp kèm nhãn PHA quét soi sáng (slot 0/1/2 = ba pha sáng của màn quét 3 giây; -1 = khung
 // tự nhiên ở đuôi). Nhãn này chỉ dùng NỘI BỘ trong app để giới hạn số khung giữ lại mỗi pha — server
 // không còn nhận nó nữa (active-flash liveness đã gỡ hẳn ở cả hai phía).
@@ -875,12 +882,19 @@ data class SelfFaceStatus(
     val registered: Boolean = false,
     val sampleCount: Int = 0,
     val createdAt: String? = null,
+    val pending: Boolean = false,
+    val requestId: String? = null,
+    val requestStatus: String? = null,
+    val requestedAt: String? = null,
+    val reviewNote: String? = null,
 )
 
 @Serializable
 data class SelfFaceEnrollResult(
     val message: String = "",
     val sampleCount: Int = 0,
+    val status: String = "pending",
+    val requestId: String? = null,
 )
 
 // Một bản chấm công ngoại tuyến đang chờ đồng bộ (lưu trong hàng đợi trên máy).
@@ -920,7 +934,7 @@ data class AttendancePolicy(
 @Serializable
 data class QrAttendanceBody(val token: String)
 
-// Kết quả chấm công. status: ok | posture | lowquality | noface | spoof | unknown | proxy | expired | error
+// Kết quả chấm công. status: ok | posture | eyesclosed | nosmile | lowquality | noface | spoof | unknown | proxy | expired | error
 // previewToken chỉ có ở phản hồi bước xem trước — gửi lại nó khi bấm Xác nhận (thay cho cả loạt ảnh).
 @Serializable
 data class ChamCongResult(

@@ -48,6 +48,8 @@ public static class DatabaseChangePublisher
         // toán kế toán làm trang chấm công tải lại, và một lượt chấm công làm mọi màn kế toán tải lại.
         // Vẫn giữ 'hr' vì bảng công/hồ sơ nhân sự tính trực tiếp từ các bảng này.
         ("cham_cong_face", ["attendance", "hr"]),
+        ("cham_cong_face_enrollments", ["attendance", "hr"]),
+        ("cham_cong_face_enrollment_samples", ["attendance", "hr"]),
         ("cham_cong_log", ["attendance", "hr"]),
 
         ("app_users", ["presence"]),

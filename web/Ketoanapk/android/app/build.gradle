@@ -29,8 +29,8 @@ android {
         applicationId "com.ketoanapk.hr"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 78
-        versionName "1.3.2"
+        versionCode 89
+        versionName "1.3.13"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Địa chỉ API backend qua Cloudflare Tunnel (public, cert hợp lệ, cổng 443).
         // Đổi tại đây nếu đổi domain. Dùng cho MỌI tính năng TRỪ chấm công.

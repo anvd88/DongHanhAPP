@@ -25,6 +25,7 @@ import com.ketoanapk.hr.data.BenefitsSummary
 import com.ketoanapk.hr.data.FaceEngineStatus
 import com.ketoanapk.hr.data.RecoveryResetRequest
 import com.ketoanapk.hr.data.MotionConfig
+import com.ketoanapk.hr.data.SmileConfig
 import com.ketoanapk.hr.data.OfflineAttendanceRecord
 import com.ketoanapk.hr.data.AttendancePolicy
 import com.ketoanapk.hr.data.QrAttendanceBody
@@ -330,6 +331,9 @@ interface HrApi {
     // Liveness quay đầu: đọc cấu hình để biết có yêu cầu quay đầu lúc quét không.
     @GET("api/chamcong/motion-config")
     suspend fun motionConfig(): MotionConfig
+
+    @GET("api/chamcong/smile-config")
+    suspend fun smileConfig(): SmileConfig
 
     @GET("api/chamcong/offline/mine")
     suspend fun myOfflineAttendance(): List<OfflineAttendanceRecord>

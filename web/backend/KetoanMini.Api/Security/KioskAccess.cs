@@ -7,7 +7,7 @@ namespace KetoanMini.Api.Security;
 /// <summary>
 /// Gác các endpoint chấm công "ẩn danh" (kiosk web) khi hệ thống mở ra Internet qua tunnel.
 /// Cho qua nếu MỘT trong các điều kiện đúng:
-///   (a) request đã đăng nhập (APK / web có token),
+///   (a) request đã đăng nhập và phiên trong DB vẫn thuộc đúng tài khoản, còn hoạt động (APK / web có token),
 ///   (b) request đến từ máy nội bộ (loopback hoặc dải IP LAN riêng) — kiosk cắm thẳng trong mạng công ty,
 ///   (c) có header <c>X-Kiosk-Key</c> khớp <c>Security:KioskApiKey</c> (khóa cấp riêng cho thiết bị kiosk).
 /// Chỉ SIẾT khi đã cấu hình <c>Security:KioskApiKey</c>; chưa cấu hình thì giữ nguyên hành vi cũ
@@ -16,6 +16,7 @@ namespace KetoanMini.Api.Security;
 public static class KioskAccess
 {
     public const string HeaderName = "X-Kiosk-Key";
+    public const string FreshAccountItem = "KetoanMini.KioskFreshAccount";
 
     /// <summary>Đã cấu hình khóa kiosk ⇒ bật kiểm soát truy cập cho endpoint chấm công ẩn danh.</summary>
     public static bool IsEnforced(IConfiguration config)
@@ -23,8 +24,12 @@ public static class KioskAccess
 
     public static bool IsAllowed(HttpContext ctx, IConfiguration config)
     {
-        // (a) Đã đăng nhập hợp lệ (APK, web đã đăng nhập) → luôn cho qua.
-        if (ctx.User.Identity?.IsAuthenticated == true) return true;
+        // (a) JWT chỉ được coi là hợp lệ sau khi middleware vừa kiểm tra tài khoản/phiên trong DB.
+        // Không tin riêng IsAuthenticated: JWT của tài khoản đã khóa vẫn còn đúng chữ ký tới khi hết hạn.
+        if (ctx.User.Identity?.IsAuthenticated == true
+            && ctx.Items.TryGetValue(FreshAccountItem, out var fresh)
+            && fresh is true)
+            return true;
 
         // (b) Máy nội bộ: loopback hoặc IP LAN riêng. Sau UseForwardedHeaders, request qua Cloudflare
         // Tunnel mang IP CÔNG KHAI của khách (cloudflared là proxy loopback đã tin, X-Forwarded-For được
@@ -66,7 +71,8 @@ public static class KioskAccess
 }
 
 /// <summary>
-/// Endpoint filter áp cho <c>/api/chamcong/nhandien</c> và <c>/api/chamcong/cham</c>: trả 401 kèm mã
+/// Endpoint filter áp cho <c>/api/chamcong/nhandien</c>, <c>/api/chamcong/cham</c> và
+/// <c>/api/chamcong/trangthai</c>: trả 401 kèm mã
 /// <c>kiosk_key_required</c> khi đã bật kiểm soát mà request không đủ điều kiện (để client hiện ô nhập mã kiosk).
 /// </summary>
 public sealed class KioskAccessFilter : IEndpointFilter

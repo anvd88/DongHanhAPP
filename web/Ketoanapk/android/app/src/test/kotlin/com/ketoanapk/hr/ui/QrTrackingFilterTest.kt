@@ -10,11 +10,11 @@ import org.junit.Test
 
 class QrTrackingFilterTest {
     @Test
-    fun trackingFill_isVisibleTranslucentYellow() {
+    fun trackingFill_isVisibleTranslucentBlue() {
         assertEquals(0x30, QR_TRACK_FILL_ARGB ushr 24 and 0xff)
-        assertEquals(0xff, QR_TRACK_FILL_ARGB ushr 16 and 0xff)
-        assertEquals(0xc4, QR_TRACK_FILL_ARGB ushr 8 and 0xff)
-        assertEquals(0x00, QR_TRACK_FILL_ARGB and 0xff)
+        assertEquals(0x4d, QR_TRACK_FILL_ARGB ushr 16 and 0xff)
+        assertEquals(0x9e, QR_TRACK_FILL_ARGB ushr 8 and 0xff)
+        assertEquals(0xff, QR_TRACK_FILL_ARGB and 0xff)
     }
 
     @Test

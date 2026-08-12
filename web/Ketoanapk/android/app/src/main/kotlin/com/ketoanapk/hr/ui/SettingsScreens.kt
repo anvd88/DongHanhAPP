@@ -209,10 +209,12 @@ private fun SettingsHome(
                 SettingsRow(
                     Icons.Filled.Face,
                     "Đăng ký khuôn mặt",
-                    when (vm.faceRegistered) {
-                        true -> "Đã đăng ký · dùng cho chấm công và đăng nhập"
-                        false -> "Quét khuôn mặt để chấm công & đăng nhập"
-                        null -> "Chấm công và đăng nhập bằng khuôn mặt"
+                    when {
+                        vm.faceRegistered == true -> "Đã xác minh · dùng cho chấm công và đăng nhập"
+                        vm.faceEnrollmentPending -> "Đã mã hoá · đang chờ HR xác minh trực tiếp"
+                        vm.faceEnrollmentStatus.equals("rejected", ignoreCase = true) -> "Chưa được duyệt · chạm để xem lý do và gửi lại"
+                        vm.faceRegistered == false -> "Quét khuôn mặt để gửi yêu cầu xác minh"
+                        else -> "Chấm công và đăng nhập bằng khuôn mặt"
                     },
                 ) { onOpen(SettingsRoute.FaceEnroll) }
                 SettingsDivider()

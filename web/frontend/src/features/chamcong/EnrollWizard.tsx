@@ -18,6 +18,8 @@ const STEPS: Step[] = [
   { dir: "center", label: "Nhìn thẳng vào camera" },
   { dir: "left", label: "Quay mặt sang trái một chút" },
   { dir: "right", label: "Quay mặt sang phải một chút" },
+  { dir: "up", label: "Ngẩng mặt nhẹ lên" },
+  { dir: "down", label: "Cúi mặt nhẹ xuống" },
 ];
 
 // Ngưỡng (tỉ lệ hình học landmark, không phải độ) — cùng thang với FacePose phía máy chủ
@@ -25,8 +27,8 @@ const STEPS: Step[] = [
 const YAW_FRONTAL = 0.13; // |yaw| dưới mức này coi là chính diện
 const YAW_DELTA = 0.14; // mức quay trái/phải tối thiểu so với chính diện
 const PITCH_DELTA = 0.07; // mức ngước/cúi tối thiểu so với chính diện
-// Số khung liên tiếp phải GIỮ đúng góc trước khi tự chụp (~50ms/khung ⇒ ~0.3s) — tránh chụp khi đang lia mặt.
-const HOLD_FRAMES = 6;
+// Giữ ổn định khoảng 0,7 giây trước khi chụp để tránh lưu khung đang lia mặt hoặc bị nhòe.
+const HOLD_FRAMES = 14;
 const PAUSE_AFTER_SAVE_MS = 1300;
 
 export function EnrollWizard({
@@ -210,7 +212,7 @@ export function EnrollWizard({
               </div>
             )}
             <span className="cc-frame-guide" aria-hidden="true" />
-            <FaceTrackingOverlay videoRef={videoRef} active={active} onFraming={onFraming} />
+            {active && <FaceTrackingOverlay videoRef={videoRef} active={active} onFraming={onFraming} />}
             {running && !done && (
               <div className="cc-scan-hint">
                 {busy ? (

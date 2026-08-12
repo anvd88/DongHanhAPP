@@ -5,7 +5,6 @@ import {
   ArrowRight,
   Calculator,
   CheckCircle2,
-  Clock3,
   Eye,
   EyeOff,
   LockKeyhole,
@@ -622,12 +621,7 @@ export function Login() {
                             <span>Truy cập nhanh</span>
                             <small>Không cần đăng nhập</small>
                           </div>
-                          <nav className="login-quick-grid" aria-label="Truy cập nhanh">
-                            <Link to="/kiosk" className="login-quick-link login-quick-attendance">
-                              <span><Clock3 aria-hidden="true" /></span>
-                              <div><strong>Chấm công</strong><small>Ghi nhận vào / ra</small></div>
-                              <ArrowRight aria-hidden="true" />
-                            </Link>
+                          <nav className="login-quick-grid login-quick-grid--single" aria-label="Truy cập nhanh">
                             <Link to="/tinh-toan" className="login-quick-link login-quick-calculator">
                               <span><Calculator aria-hidden="true" /></span>
                               <div><strong>Tính toán</strong><small>Công cụ nghiệp vụ</small></div>

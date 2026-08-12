@@ -7,8 +7,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import com.ketoanapk.hr.data.AppForeground
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
@@ -34,27 +32,9 @@ class MainActivity : ComponentActivity() {
         AppNotifier.ensureChannel(this)
         CallManager.init(this)
         AppUpdater.purgeCachedApks(this)
-        hideSystemNavBar()
         handleDeepLink(intent)
 
         setContent { HrApp(viewModel) }
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        // Hệ thống tự hiện lại thanh điều hướng sau khi có hộp thoại/bàn phím → giành lại tiêu điểm là ẩn tiếp.
-        if (hasFocus) hideSystemNavBar()
-    }
-
-    /**
-     * Ẩn thanh điều hướng 3 nút của Android (kiểu toàn màn hình như game): người dùng vuốt từ mép dưới
-     * để tạm hiện, rồi hệ thống tự ẩn lại. Chỉ ẩn thanh điều hướng, GIỮ thanh trạng thái (giờ/pin/sóng).
-     */
-    private fun hideSystemNavBar() {
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        controller.hide(WindowInsetsCompat.Type.navigationBars())
-        controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
     override fun onNewIntent(intent: Intent) {

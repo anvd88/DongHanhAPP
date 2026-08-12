@@ -61,7 +61,14 @@ public sealed class AttendanceConfirmEndpointTests(ApiFactory factory)
     }
 
     private static AttendancePreviewTokens.Pending Pending(string username) =>
-        new(username, username, "Người Thử Nghiệm", 0.91, 0.7, [0.5f, 0.5f, 0.7071f]);
+        new(username, username, "Người Thử Nghiệm", 0.91, 0.7, FaceEmbedding());
+
+    private static float[] FaceEmbedding()
+    {
+        var embedding = new float[512];
+        embedding[0] = 1;
+        return embedding;
+    }
 
     private async Task<JsonElement> ConfirmAsync(string bearer, string previewToken)
     {
@@ -86,14 +93,24 @@ public sealed class AttendanceConfirmEndpointTests(ApiFactory factory)
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Database>();
         var tokens = scope.ServiceProvider.GetRequiredService<TokenService>();
+        var cipher = scope.ServiceProvider.GetRequiredService<FieldCipher>();
         await using var conn = await db.OpenAsync();
-        return (await MakeUserAsync(conn, tokens, owner), await MakeUserAsync(conn, tokens, other));
+        var ownerToken = await MakeUserAsync(conn, tokens, owner);
+        var otherToken = await MakeUserAsync(conn, tokens, other);
+        await conn.Cmd(
+                @"INSERT INTO cham_cong_face (username, full_name, embedding, created_at, created_by)
+                  VALUES (@u, 'Người Thử Nghiệm', @e, CURRENT_TIMESTAMP, 'test')")
+            .With("@u", owner)
+            .With("@e", cipher.EncryptEmbedding(FaceEmbedding()))
+            .ExecuteNonQueryAsync();
+        return (ownerToken, otherToken);
     }
 
     private static async Task<string> MakeUserAsync(Npgsql.NpgsqlConnection conn, TokenService tokens,
         string username)
     {
         var userId = Guid.NewGuid();
+        var sid = "app:cc:" + Guid.NewGuid().ToString("N")[..16];
         await conn.Cmd("""
             INSERT INTO app_users (id, username, full_name, email, role, password_hash, is_active,
                 approval_status, approved_at, approved_by, created_at, is_deleted)
@@ -102,10 +119,16 @@ public sealed class AttendanceConfirmEndpointTests(ApiFactory factory)
             """)
             .With("@id", userId).With("@u", username).With("@n", "Người Thử Nghiệm")
             .With("@ph", PasswordHasher.Hash("test-pass")).ExecuteNonQueryAsync();
+        await conn.Cmd("""
+            INSERT INTO user_sessions
+                (session_token, username, machine_name, started_at, last_seen, is_active, client_kind, revoked)
+            VALUES (@sid, @u, 'attendance-test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, 'App', FALSE)
+            """)
+            .With("@sid", sid).With("@u", username).ExecuteNonQueryAsync();
 
         return tokens.CreateToken(
             new UserDto(userId, username, "Người Thử Nghiệm", "", AppRoles.Employee, true, "Approved", DateTime.UtcNow),
-            "app:cc:" + Guid.NewGuid().ToString("N")[..16]);
+            sid);
     }
 
     private async Task CleanupAsync(params string[] usernames)

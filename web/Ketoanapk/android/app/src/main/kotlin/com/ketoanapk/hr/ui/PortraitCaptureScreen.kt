@@ -140,9 +140,9 @@ fun PortraitCaptureScan(
         val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
         controller?.apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.systemBars())
+            hide(WindowInsetsCompat.Type.statusBars())
         }
-        onDispose { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+        onDispose { controller?.show(WindowInsetsCompat.Type.statusBars()) }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {

@@ -25,6 +25,20 @@
         android:layout_height="match_parent"
         android:importantForAccessibility="no" />
 
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="176dp"
+        android:layout_gravity="top"
+        android:background="@drawable/qr_top_scrim"
+        android:importantForAccessibility="no" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="196dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/qr_bottom_scrim"
+        android:importantForAccessibility="no" />
+
     <LinearLayout
         android:id="@+id/qr_top_content"
         android:layout_width="match_parent"
@@ -34,12 +48,12 @@
         android:gravity="center_horizontal"
         android:orientation="vertical"
         android:paddingStart="16dp"
-        android:paddingTop="8dp"
+        android:paddingTop="10dp"
         android:paddingEnd="16dp">
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="56dp"
+            android:layout_height="60dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -47,7 +61,7 @@
                 android:id="@+id/qr_exit_button"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:background="@drawable/qr_result_close_button"
+                android:background="@drawable/qr_icon_button_background"
                 android:backgroundTint="@null"
                 android:contentDescription="@string/qr_close_scanner"
                 android:padding="12dp"
@@ -55,31 +69,49 @@
                 android:stateListAnimator="@null"
                 android:tooltipText="@string/qr_close_scanner" />
 
-            <TextView
+            <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="match_parent"
                 android:layout_marginHorizontal="12dp"
                 android:layout_weight="1"
-                android:background="@drawable/qr_top_pill_background"
                 android:gravity="center"
-                android:maxLines="1"
-                android:paddingHorizontal="16dp"
-                android:text="@string/qr_screen_title"
-                android:textColor="@android:color/white"
-                android:textSize="16sp"
-                android:textStyle="bold" />
+                android:orientation="vertical">
 
-            <ImageButton
-                android:id="@+id/qr_gallery_button"
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="@string/qr_screen_title"
+                    android:textColor="@android:color/white"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="1dp"
+                    android:text="@string/qr_screen_subtitle"
+                    android:textColor="#BFFFFFFF"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <FrameLayout
                 android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:background="@drawable/qr_result_close_button"
-                android:backgroundTint="@null"
-                android:contentDescription="@string/qr_pick_image"
-                android:padding="12dp"
-                android:src="@drawable/ic_qr_gallery"
-                android:stateListAnimator="@null"
-                android:tooltipText="@string/qr_pick_image" />
+                android:layout_height="48dp">
+
+                <ImageButton
+                    android:id="@+id/qr_torch_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/qr_torch_icon_button_background"
+                    android:backgroundTint="@null"
+                    android:contentDescription="@string/qr_torch_on"
+                    android:padding="12dp"
+                    android:src="@drawable/ic_qr_flash"
+                    android:stateListAnimator="@null"
+                    android:tooltipText="@string/qr_torch_on"
+                    android:visibility="gone" />
+            </FrameLayout>
         </LinearLayout>
 
         <TextView
@@ -87,37 +119,43 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginHorizontal="24dp"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="8dp"
             android:accessibilityLiveRegion="polite"
             android:background="@drawable/qr_status_background"
             android:gravity="center"
-            android:maxLines="2"
-            android:paddingHorizontal="16dp"
-            android:paddingVertical="9dp"
+            android:maxLines="3"
+            android:paddingHorizontal="18dp"
+            android:paddingVertical="10dp"
             android:text="@string/qr_default_prompt"
             android:textColor="@android:color/white"
-            android:textSize="14sp" />
+            android:textSize="14sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
-    <Button
-        android:id="@+id/qr_torch_button"
-        android:layout_width="wrap_content"
-        android:layout_height="48dp"
-        android:layout_gravity="bottom|end"
-        android:layout_marginEnd="18dp"
-        android:layout_marginBottom="24dp"
-        android:background="@drawable/qr_result_close_button"
-        android:backgroundTint="@null"
-        android:minHeight="48dp"
-        android:minWidth="48dp"
-        android:paddingHorizontal="20dp"
-        android:stateListAnimator="@null"
-        android:text="@string/qr_torch_on"
-        android:textAllCaps="false"
-        android:textColor="@android:color/white"
-        android:textSize="15sp"
-        android:textStyle="bold"
-        android:visibility="gone" />
+    <FrameLayout
+        android:id="@+id/qr_bottom_actions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:clipToPadding="false"
+        android:paddingStart="18dp"
+        android:paddingTop="20dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="24dp">
+
+        <ImageButton
+            android:id="@+id/qr_gallery_button"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="end"
+            android:background="@drawable/qr_gallery_icon_button_background"
+            android:backgroundTint="@null"
+            android:contentDescription="@string/qr_pick_image"
+            android:padding="15dp"
+            android:src="@drawable/ic_qr_gallery"
+            android:stateListAnimator="@null"
+            android:tooltipText="@string/qr_pick_image" />
+    </FrameLayout>
 
     <LinearLayout
         android:id="@+id/qr_result_sheet"

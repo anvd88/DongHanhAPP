@@ -1064,6 +1064,7 @@ html[data-theme="dark"] .login-entry-sequence {
 .login-quick-head span { color: #3f506a; font-size: 0.76rem; font-weight: 800; }
 .login-quick-head small { color: #94a0b1; font-size: 0.66rem; font-weight: 650; }
 .login-quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.login-quick-grid--single { grid-template-columns: minmax(0, 1fr); }
 .login-quick-link {
   display: grid;
   min-width: 0;

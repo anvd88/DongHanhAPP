@@ -3,7 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { useGlow } from "./useGlow";
 import { CountUp } from "./CountUp";
 
-const iosSpring = { type: "spring", stiffness: 330, damping: 25, mass: 0.82 } as const;
+const enterpriseSpring = { type: "spring", stiffness: 420, damping: 34, mass: 0.7 } as const;
 
 export function StatCard({
   label,
@@ -30,9 +30,9 @@ export function StatCard({
     <motion.div
       ref={ref}
       onMouseMove={onMouseMove}
-      whileHover={{ y: -7, scale: 1.018 }}
-      whileTap={{ y: -2, scale: 0.985 }}
-      transition={iosSpring}
+      whileHover={{ y: -2 }}
+      whileTap={{ y: 0, scale: 0.99 }}
+      transition={enterpriseSpring}
       className={`km-stat-card km-stat-card-${tone}`}
     >
       <div className="km-stat-icon" style={color ? { color } : undefined}>

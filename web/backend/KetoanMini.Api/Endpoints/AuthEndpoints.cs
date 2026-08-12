@@ -102,17 +102,18 @@ public static class AuthEndpoints
                 Verified = await LoadVerified(conn, user.Username, user.Role),
                 IsDiamond = await LoadDiamond(conn, user.Username, user.Role),
                 FaceRegistered = await LoadFaceRegistered(conn, user.Username),
+                FaceEnrollmentPending = await LoadFaceEnrollmentPending(conn, user.Username),
                 Roles = await ApiHelpers.LoadAllRolesAsync(conn, user.Username, user.Role)
             };
             // Ghi nhận thiết bị đăng nhập ngay để hiện trong "Quản lý thiết bị" + gắn sid vào token
             // (phục vụ thu hồi từ xa). Đăng nhập mới luôn gỡ cờ thu hồi cũ của chính thiết bị đó.
             var clientKind = isNative ? "App" : "Web";
-            var sid = WebSessionId(req.Sid, user.Username);
-            var knownDevice = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM user_sessions WHERE username=@u AND session_token=@sid")
-                .With("@u",user.Username).With("@sid",sid).ExecuteScalarAsync()) > 0;
-            if (!knownDevice)
+            var requestedSid = WebSessionId(req.Sid, user.Username);
+            var registration = await RegisterDeviceSessionAsync(
+                conn, user.Username, requestedSid, UserAgentOf(http), clientKind);
+            var sid = registration.Sid;
+            if (!registration.WasKnown)
                 await push.SendToUserAsync(user.Username,"Đăng nhập trên thiết bị mới",$"Tài khoản vừa đăng nhập từ {clientKind}: {UserAgentOf(http)}",$"security:{sid}","Settings");
-            await RegisterDeviceSessionAsync(conn, user.Username, sid, UserAgentOf(http), clientKind);
 
             // MỖI TÀI KHOẢN CHỈ 1 APP (nhưng cho phép dùng web song song). Chỉ áp khi đăng nhập từ ỨNG
             // DỤNG: thu hồi các phiên APP khác (KHÔNG đụng phiên Web) → app cũ bị đá (request kế nhận 401);
@@ -277,26 +278,37 @@ public static class AuthEndpoints
                 user = user with
                 {
                     AvatarUrl = await LoadAvatarUrl(conn, user.Id),
-                    FaceRegistered = await LoadFaceRegistered(conn, user.Username)
+                    FaceRegistered = await LoadFaceRegistered(conn, user.Username),
+                    FaceEnrollmentPending = await LoadFaceEnrollmentPending(conn, user.Username)
                 };
 
+                string? browserSessionId;
                 if (!session.AlreadyAuthorized)
                 {
-                    var knownDevice = Convert.ToInt32(await conn.Cmd(
-                            "SELECT COUNT(*) FROM user_sessions WHERE username=@u AND session_token=@sid")
-                        .With("@u", user.Username).With("@sid", session.BrowserSid).ExecuteScalarAsync()) > 0;
-                    if (!knownDevice)
+                    var registration = await RegisterDeviceSessionAsync(
+                        conn, user.Username, session.BrowserSid, session.UserAgent, "Web");
+                    browserSessionId = registration.Sid;
+                    if (!registration.WasKnown)
                         await push.SendToUserAsync(user.Username, "Đăng nhập trên thiết bị mới",
                             $"Tài khoản vừa đăng nhập bằng QR từ Web: {session.UserAgent}",
-                            $"security:{session.BrowserSid}", "Settings");
+                            $"security:{browserSessionId}", "Settings");
 
-                    await RegisterDeviceSessionAsync(conn, user.Username, session.BrowserSid, session.UserAgent, "Web");
                     await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username, "Đăng nhập web bằng QR.");
+                }
+                else
+                {
+                    browserSessionId = await FindOwnedSessionIdAsync(
+                        conn, user.Username, session.BrowserSid);
+                    if (browserSessionId is null)
+                    {
+                        qr.Invalidate(session);
+                        return Results.Unauthorized();
+                    }
                 }
 
                 // Người POLL ở đây luôn là TRÌNH DUYỆT (điện thoại chỉ quét mã và xác nhận), nên phiên
                 // đi bằng cookie HttpOnly y như đăng nhập mật khẩu — không trả token ra cho JavaScript.
-                var token = IssueBrowserSession(http, tokens, user, session.BrowserSid);
+                var token = IssueBrowserSession(http, tokens, user, browserSessionId);
                 qr.CompleteConsume(session, success: true);
                 return Results.Ok(new
                 {
@@ -454,25 +466,36 @@ public static class AuthEndpoints
                 user = user with
                 {
                     AvatarUrl = await LoadAvatarUrl(conn, user.Id),
-                    FaceRegistered = await LoadFaceRegistered(conn, user.Username)
+                    FaceRegistered = await LoadFaceRegistered(conn, user.Username),
+                    FaceEnrollmentPending = await LoadFaceEnrollmentPending(conn, user.Username)
                 };
+                string? browserSessionId;
                 if (!session.AlreadyAuthorized)
                 {
-                    var knownDevice = Convert.ToInt32(await conn.Cmd(
-                            "SELECT COUNT(*) FROM user_sessions WHERE username=@u AND session_token=@sid")
-                        .With("@u", user.Username).With("@sid", session.BrowserSid).ExecuteScalarAsync()) > 0;
-                    if (!knownDevice)
+                    var registration = await RegisterDeviceSessionAsync(
+                        conn, user.Username, session.BrowserSid, session.UserAgent, "Web");
+                    browserSessionId = registration.Sid;
+                    if (!registration.WasKnown)
                         await push.SendToUserAsync(user.Username, "Đăng nhập trên thiết bị mới",
                             $"Tài khoản vừa đăng nhập bằng ứng dụng Nhân sự từ Web mobile: {session.UserAgent}",
-                            $"security:{session.BrowserSid}", "Settings");
+                            $"security:{browserSessionId}", "Settings");
 
-                    await RegisterDeviceSessionAsync(conn, user.Username, session.BrowserSid, session.UserAgent, "Web");
                     await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username,
                         "Đăng nhập web mobile bằng ứng dụng Nhân sự.");
                 }
+                else
+                {
+                    browserSessionId = await FindOwnedSessionIdAsync(
+                        conn, user.Username, session.BrowserSid);
+                    if (browserSessionId is null)
+                    {
+                        logins.Invalidate(session);
+                        return Results.Unauthorized();
+                    }
+                }
 
                 // Cũng là trình duyệt (web trên điện thoại) đang chờ ứng dụng xác nhận hộ → cookie.
-                var token = IssueBrowserSession(http, tokens, user, session.BrowserSid);
+                var token = IssueBrowserSession(http, tokens, user, browserSessionId);
                 logins.CompleteConsume(session, success: true);
                 return Results.Ok(new
                 {
@@ -510,6 +533,8 @@ public static class AuthEndpoints
         // không quét toàn bộ nhân viên như luồng đăng nhập khuôn mặt cũ.
         g.MapPost("/forgot-password-face", async (FacePasswordResetRequest req, Database db, IFaceEngine engine, FieldCipher cipher) =>
         {
+            if (!FaceAntiSpoofSecurity.IsOperational(engine))
+                return Results.Json(new { message = "Hệ thống chống giả mạo đang không khả dụng. Khôi phục bằng khuôn mặt đã được khóa an toàn." }, statusCode: 503);
             var username = (req?.Username ?? "").Trim();
             var newPass = (req?.NewPassword ?? "").Trim();
             if (string.IsNullOrWhiteSpace(username))
@@ -557,30 +582,36 @@ public static class AuthEndpoints
                 return Results.Json(new { message = "Không thấy khuôn mặt rõ ràng. Hãy nhìn thẳng vào camera." }, statusCode: 400);
 
             candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
-            var bestBytes = candidates[0].Bytes;
-
-            // 2) Chống giả mạo: chấm liveness trên vài khung tốt nhất, qua nếu CÓ khung đạt.
+            // 2) Mỗi probe phải được trích từ chính frame đã vượt PAD; không được dùng liveness
+            // của người ở frame A để đặt lại mật khẩu bằng khuôn mặt trong frame B.
             const int livenessFramesToCheck = 5;
-            double bestLive = 0;
+            var liveProbes = new List<float[]>();
+            var liveFrameHashes = new HashSet<string>(StringComparer.Ordinal);
             foreach (var c in candidates.Take(livenessFramesToCheck))
             {
-                bestLive = Math.Max(bestLive, engine.LivenessProbability(c.Bytes));
-                if (bestLive >= engine.LivenessThreshold) break;
+                if (c.Q.Score < 0.28 || Math.Abs(c.Q.Pose.Yaw) > 0.20) continue;
+                if (FaceAntiSpoofSecurity.ProbabilityReal(engine, c.Bytes) < engine.LivenessThreshold) continue;
+                var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(c.Bytes));
+                if (!liveFrameHashes.Add(hash)) continue;
+                if (engine.ExtractEmbedding(c.Bytes) is { } frameProbe) liveProbes.Add(frameProbe);
             }
-            if (bestLive < engine.LivenessThreshold)
-                return Results.Json(new { message = "Nghi ngờ giả mạo. Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình." }, statusCode: 401);
-
-            var probe = engine.ExtractEmbedding(bestBytes);
-            if (probe is null)
-                return Results.Json(new { message = "Không trích được đặc trưng khuôn mặt. Vui lòng thử lại." }, statusCode: 400);
+            if (liveProbes.Count < 2)
+                return Results.Json(new { message = "Chưa có đủ hai khung chụp trực tiếp vượt kiểm tra người thật. Hãy quét lại, không dùng ảnh/màn hình." }, statusCode: 401);
+            var consistencyThreshold = Math.Max(0.33, engine.MatchThreshold - 0.12);
+            if (liveProbes.Skip(1).Any(p => engine.Compare(liveProbes[0], p) < consistencyThreshold))
+                return Results.Json(new { message = "Phát hiện nhiều khuôn mặt khác nhau trong lượt xác minh." }, statusCode: 401);
 
             // 3) So 1:1 với các mẫu của CHÍNH tài khoản này.
-            double bestSim = 0;
-            foreach (var emb in enrolled)
+            var probeSimilarities = new List<double>();
+            foreach (var probe in liveProbes)
             {
-                var sim = engine.Compare(probe, emb);
-                if (sim > bestSim) bestSim = sim;
+                double frameBest = 0;
+                foreach (var emb in enrolled)
+                    frameBest = Math.Max(frameBest, engine.Compare(probe, emb));
+                probeSimilarities.Add(frameBest);
             }
+            // Tất cả frame trực tiếp phải khớp; lấy điểm thấp nhất để không che một frame bất thường.
+            var bestSim = probeSimilarities.Min();
             if (bestSim < engine.MatchThreshold)
                 return Results.Json(new { message = "Khuôn mặt không khớp với tài khoản này. Vui lòng thử lại." }, statusCode: 401);
 
@@ -655,7 +686,8 @@ public static class AuthEndpoints
             {
                 AvatarUrl = await LoadAvatarUrl(conn, user.Id),
                 IsDiamond = await LoadDiamond(conn, user.Username, user.Role),
-                FaceRegistered = await LoadFaceRegistered(conn, user.Username)
+                FaceRegistered = await LoadFaceRegistered(conn, user.Username),
+                FaceEnrollmentPending = await LoadFaceEnrollmentPending(conn, user.Username)
             });
         }).RequireAuthorization();
 
@@ -814,49 +846,44 @@ public static class AuthEndpoints
         // web bỏ hẳn đường này, app CHỈ còn gọi khi SignalR tắt (ở nền) hoặc ping thưa làm lưới an toàn
         // phát hiện phiên bị thu hồi. ON CONFLICT giữ nguyên client_kind đặt lúc đăng nhập (App/Web) nên
         // phiên App không bị hiểu nhầm thành Web. CURRENT_TIMESTAMP để ghi cùng chuẩn started_at/last_seen.
-        g.MapPost("/heartbeat", async (HeartbeatRequest req, ClaimsPrincipal principal, Database db) =>
+        g.MapPost("/heartbeat", async (HeartbeatRequest _, ClaimsPrincipal principal, Database db, HttpContext http) =>
         {
             var username = principal.Username();
             if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
-            var sid = WebSessionId(req?.Sid, username);
+            // SID phải lấy từ JWT đã ký, tuyệt đối không lấy từ body do client tự khai. Heartbeat chỉ
+            // làm mới phiên đã được tạo lúc đăng nhập; không INSERT, đổi chủ hay hồi sinh phiên đã tắt.
+            var sid = principal.FindFirst("sid")?.Value?.Trim();
+            if (string.IsNullOrWhiteSpace(sid)) return Results.Unauthorized();
+            var touchLastSeen = !http.Request.Headers.ContainsKey("X-Background-Poll");
 
             await using var conn = await db.OpenAsync();
-            await conn.Cmd(
-                @"INSERT INTO user_sessions (session_token, username, machine_name, started_at, last_seen, is_active, client_kind)
-                  VALUES (@t, @u, 'Web', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, 'Web')
-                  ON CONFLICT (session_token) DO UPDATE SET
-                      username = EXCLUDED.username,
-                      last_seen = CURRENT_TIMESTAMP,
-                      is_active = TRUE,
-                      ended_at = NULL,
-                      end_reason = '',
-                      -- GIU NGUYEN machine_name/client_kind da dat luc login (App hay Web); heartbeat
-                      -- KHONG ghi de ve Web nua, neu khong phien App se bi hieu nham thanh Web va
-                      -- rang buoc 1-app-moi-tai-khoan khong da dung thiet bi.
-                      started_at = CASE
-                          WHEN user_sessions.is_active = FALSE
-                            OR user_sessions.last_seen < CURRENT_TIMESTAMP - INTERVAL '90 seconds'
-                          THEN CURRENT_TIMESTAMP
-                          ELSE user_sessions.started_at
-                      END;")
+            var updated = await conn.Cmd(
+                @"UPDATE user_sessions
+                     SET last_seen = CASE WHEN @touch THEN CURRENT_TIMESTAMP ELSE last_seen END
+                   WHERE session_token = @t AND username = @u
+                     AND is_active = TRUE AND revoked = FALSE")
                 .With("@u", username).With("@t", sid)
+                .With("@touch", touchLastSeen)
                 .ExecuteNonQueryAsync();
-            return Results.NoContent();
+            return updated == 1 ? Results.NoContent() : Results.Unauthorized();
         }).RequireAuthorization();
 
         // Đăng xuất chủ động trên web → tắt phiên ngay để ẩn khỏi danh sách online.
-        g.MapPost("/logout", async (HeartbeatRequest req, ClaimsPrincipal principal, Database db, HttpContext http) =>
+        g.MapPost("/logout", async (HeartbeatRequest _, ClaimsPrincipal principal, Database db, HttpContext http) =>
         {
             // Xoá cookie phiên NGAY, trước cả khi đụng tới CSDL: đăng xuất mà CSDL đang chập chờn thì
             // vẫn phải đăng xuất được. Trình duyệt hết cookie là hết phiên, không còn gì để dùng lại.
             AuthCookies.Clear(http);
-            var sid = WebSessionId(req?.Sid, principal.Username());
+            var username = principal.Username();
+            var sid = principal.FindFirst("sid")?.Value?.Trim();
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(sid))
+                return Results.NoContent();
             await using var conn = await db.OpenAsync();
             await conn.Cmd(
                 @"UPDATE user_sessions
-                     SET is_active = FALSE, ended_at = CURRENT_TIMESTAMP, end_reason = 'Đăng xuất (web)'
-                   WHERE session_token = @t AND client_kind = 'Web';")
-                .With("@t", sid).ExecuteNonQueryAsync();
+                     SET is_active = FALSE, ended_at = CURRENT_TIMESTAMP, end_reason = 'Đăng xuất'
+                   WHERE session_token = @t AND username = @u;")
+                .With("@t", sid).With("@u", username).ExecuteNonQueryAsync();
             return Results.NoContent();
         }).RequireAuthorization();
 
@@ -1019,39 +1046,82 @@ public static class AuthEndpoints
         http.Response.Headers.Pragma = "no-cache";
     }
 
-    // Ghi/nâng cấp một phiên thiết bị web khi đăng nhập (hiện ngay trong "Quản lý thiết bị") và
-    // gỡ mọi cờ thu hồi cũ của đúng thiết bị đó (đăng nhập lại = tin cậy lại thiết bị).
-    private static async Task RegisterDeviceSessionAsync(NpgsqlConnection conn, string username, string sid, string userAgent, string clientKind)
+    private sealed record DeviceSessionRegistration(string Sid, bool WasKnown);
+
+    // Ghi/nâng cấp một phiên thiết bị khi đăng nhập (hiện ngay trong "Quản lý thiết bị") và gỡ cờ
+    // thu hồi cũ của ĐÚNG tài khoản đó. session_token là khóa toàn cục, nên tuyệt đối không cho UPSERT
+    // đổi username. Nếu một SID do client chọn đã thuộc tài khoản khác, chuyển sang SID server tạo có
+    // phạm vi theo tài khoản; cùng input luôn ra cùng fallback để QR poll lặp vẫn tìm đúng phiên.
+    private static async Task<DeviceSessionRegistration> RegisterDeviceSessionAsync(
+        NpgsqlConnection conn, string username, string sid, string userAgent, string clientKind)
     {
         // machine_name để hiển thị trong "Quản lý thiết bị"; client_kind để phân biệt App/Web (dùng cho
         // ràng buộc "1 app/tài khoản" — web không bị đá).
         var machine = clientKind == "App" ? "Ứng dụng" : "Web";
-        await conn.Cmd(
-            @"INSERT INTO user_sessions
-                  (session_token, username, machine_name, user_agent, started_at, last_seen, is_active, client_kind, revoked, revoked_at, revoked_by)
-              VALUES (@t, @u, @m, @ua, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, @k, FALSE, NULL, '')
-              ON CONFLICT (session_token) DO UPDATE SET
-                  username = EXCLUDED.username,
-                  machine_name = @m,
-                  user_agent = EXCLUDED.user_agent,
-                  last_seen = CURRENT_TIMESTAMP,
-                  started_at = CURRENT_TIMESTAMP,
-                  is_active = TRUE,
-                  ended_at = NULL,
-                  end_reason = '',
-                  client_kind = @k,
-                  revoked = FALSE,
-                  revoked_at = NULL,
-                  revoked_by = '';")
-            .With("@t", sid).With("@u", username).With("@ua", userAgent).With("@m", machine).With("@k", clientKind)
-            .ExecuteNonQueryAsync();
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var candidate = attempt == 0 ? sid : ScopedSessionId(username, sid, attempt);
+            var owner = Convert.ToString(await conn.Cmd(
+                    "SELECT username FROM user_sessions WHERE session_token=@t LIMIT 1")
+                .With("@t", candidate).ExecuteScalarAsync());
+            var wasKnown = string.Equals(owner, username, StringComparison.Ordinal);
+            if (!string.IsNullOrEmpty(owner) && !wasKnown) continue;
+
+            var affected = await conn.Cmd(
+                @"INSERT INTO user_sessions
+                      (session_token, username, machine_name, user_agent, started_at, last_seen, is_active, client_kind, revoked, revoked_at, revoked_by)
+                  VALUES (@t, @u, @m, @ua, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE, @k, FALSE, NULL, '')
+                  ON CONFLICT (session_token) DO UPDATE SET
+                      machine_name = EXCLUDED.machine_name,
+                      user_agent = EXCLUDED.user_agent,
+                      last_seen = CURRENT_TIMESTAMP,
+                      started_at = CURRENT_TIMESTAMP,
+                      is_active = TRUE,
+                      ended_at = NULL,
+                      end_reason = '',
+                      client_kind = EXCLUDED.client_kind,
+                      revoked = FALSE,
+                      revoked_at = NULL,
+                      revoked_by = ''
+                  WHERE user_sessions.username = EXCLUDED.username;")
+                .With("@t", candidate).With("@u", username).With("@ua", userAgent)
+                .With("@m", machine).With("@k", clientKind)
+                .ExecuteNonQueryAsync();
+            if (affected == 1) return new DeviceSessionRegistration(candidate, wasKnown);
+        }
+
+        throw new InvalidOperationException("Cannot allocate an account-bound device session id.");
+    }
+
+    private static async Task<string?> FindOwnedSessionIdAsync(
+        NpgsqlConnection conn, string username, string requestedSid)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var candidate = attempt == 0
+                ? requestedSid
+                : ScopedSessionId(username, requestedSid, attempt);
+            var found = await conn.Cmd(
+                    "SELECT 1 FROM user_sessions WHERE session_token=@t AND username=@u LIMIT 1")
+                .With("@t", candidate).With("@u", username).ExecuteScalarAsync();
+            if (found is not null and not DBNull) return candidate;
+        }
+        return null;
+    }
+
+    private static string ScopedSessionId(string username, string requestedSid, int attempt)
+    {
+        var material = System.Text.Encoding.UTF8.GetBytes(
+            $"{username.ToLowerInvariant()}\0{requestedSid}\0{attempt}");
+        return "sid2:" + Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(material));
     }
 
     /// <summary>Giải mã ảnh base64 (chấp nhận cả tiền tố data URL "data:image/...;base64,").</summary>
     private static bool TryDecodeImage(string? b64, out byte[] bytes)
         => PayloadLimits.TryDecodeImage(b64, out bytes);
 
-    // session_token là varchar(64); dùng sid của trình duyệt, fallback theo username nếu thiếu.
+    // SID client được giới hạn 64 ký tự; cột session_token rộng 128 để còn chỗ cho SID server-scoped.
     private static string WebSessionId(string? sid, string username)
     {
         var value = string.IsNullOrWhiteSpace(sid) ? "web:" + username : sid.Trim();
@@ -1112,6 +1182,20 @@ public static class AuthEndpoints
         {
             var r = await conn.Cmd(
                 "SELECT 1 FROM cham_cong_face WHERE username = @u LIMIT 1")
+                .With("@u", username).ExecuteScalarAsync();
+            return r is not null and not DBNull;
+        }
+        catch { return false; }
+    }
+
+    private static async Task<bool> LoadFaceEnrollmentPending(NpgsqlConnection conn, string username)
+    {
+        try
+        {
+            var r = await conn.Cmd(
+                @"SELECT 1 FROM cham_cong_face_enrollments
+                   WHERE lower(username)=lower(@u) AND status='pending' AND expires_at>CURRENT_TIMESTAMP
+                   LIMIT 1")
                 .With("@u", username).ExecuteScalarAsync();
             return r is not null and not DBNull;
         }

@@ -37,6 +37,7 @@ public sealed class RealtimeCoverageTests
         // Hạ tầng nội bộ, không có màn hình nào đọc.
         ["app_outbox"] = "hàng chờ nội bộ của OutboxWorker",
         ["schema_migrations"] = "sổ di trú lược đồ",
+        ["canonical_role_positions"] = "bảng tạm chỉ tồn tại trong migration chuẩn hóa vai trò, không phải dữ liệu giao diện",
         // Sổ chỉ-ghi-thêm để tra soát phân quyền về sau; chưa màn hình nào đọc trực tiếp, và người
         // BỊ đổi quyền đã được báo riêng qua tín hiệu "access" (nhắm đúng một người, xem bên dưới).
         ["user_role_history"] = "sổ lịch sử phân quyền, người bị ảnh hưởng đã được báo qua tín hiệu access",

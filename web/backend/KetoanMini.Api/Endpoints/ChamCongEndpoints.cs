@@ -22,14 +22,16 @@ public static class ChamCongEndpoints
 {
     // Số mẫu khuôn mặt tối đa giữ cho mỗi nhân viên (mẫu admin đăng ký + mẫu tự học).
     private const int MaxFaceSamples = 5;
+    // Mọi thao tác có thể kích hoạt vector vào kho sinh trắc dùng cùng một khóa toàn cục để
+    // duplicate-scan + insert là một miền tới hạn, không bị write-skew khi hai HR duyệt đồng thời.
+    private const long FaceRegistryLockKey = 723974401234567890L;
+    private static readonly HashSet<string> SelfEnrollPoseNames =
+        new(["front", "side1", "side2", "up", "down"], StringComparer.OrdinalIgnoreCase);
     // Chỉ TỰ HỌC khi độ khớp cao hơn hẳn ngưỡng nhận diện để chắc chắn đúng người
     // → tránh "nhiễm" hồ sơ bằng một lần khớp sai. Tăng/giảm nếu cần chặt/lỏng hơn.
     private const double AdaptiveLearnMinSimilarity = 0.65;
     // Nhãn ở cột created_by để phân biệt mẫu hệ thống TỰ HỌC với mẫu admin đăng ký.
     private const string AutoLearnTag = "(tự học)";
-    // Nhãn created_by cho mẫu do NHÂN VIÊN tự đăng ký trên app (phân biệt với mẫu admin/ tự học).
-    private const string SelfEnrollTag = "(tự đăng ký)";
-
     // Cổng tư thế cho chấm công loạt ảnh: lệch quá ngưỡng ⇒ báo trực tiếp, KHÔNG ghi nhật ký.
     // Khớp ngưỡng phía kiosk cũ (yaw chính diện, pitch trong khoảng nhìn thẳng).
     private const double PostureYawMax = 0.16;
@@ -48,10 +50,14 @@ public static class ChamCongEndpoints
     // + self-only; liveness QUAY ĐẦU là lớp chủ động thay thế, bật bằng hai cờ dưới đây khi đã hiệu chỉnh.
     private const string CfgMotionEnabled = "attendance.motion.enabled"; // app yêu cầu quay đầu lúc quét
     private const string CfgMotionEnforce = "attendance.motion.enforce"; // chặn nếu biên độ quay quá nhỏ
+    private const string CfgSmileEnabled = "attendance.smile.enabled";   // app hướng dẫn + server xác minh nụ cười
+    private const string CfgSmileThreshold = "attendance.smile.threshold";
 
     // Liveness QUAY ĐẦU: cần người dùng chủ động quay đầu → để admin tự bật khi sẵn sàng (tránh phiền hà).
     private const bool DefaultMotionEnabled = false;
     private const bool DefaultMotionEnforce = false;
+    private const bool DefaultSmileEnabled = false;
+    private const double DefaultSmileThreshold = 0.65;
     // yaw span tối thiểu, theo thang của FacePose (tỉ lệ hình học từ 5 landmark, KHÔNG phải độ) —
     // xem AdaFaceR50Engine.PoseFrom. CẦN hiệu chỉnh bằng số đo thật trước khi bật enforce.
     private const double MinMotionSpan = 0.30;
@@ -106,6 +112,53 @@ public static class ChamCongEndpoints
 
             CREATE INDEX IF NOT EXISTS ix_cham_cong_face_username ON cham_cong_face (username, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_cham_cong_log_username_time ON cham_cong_log (username, occurred_at DESC);
+
+            -- Tự đăng ký trên app KHÔNG đi thẳng vào kho mẫu đã duyệt. Chỉ vector AES-GCM nằm tạm
+            -- trong yêu cầu chờ HR đối chiếu trực tiếp danh tính; tuyệt đối không lưu ảnh camera.
+            CREATE TABLE IF NOT EXISTS cham_cong_face_enrollments (
+                id uuid PRIMARY KEY,
+                username varchar(100) NOT NULL,
+                full_name varchar(200) NOT NULL DEFAULT '',
+                status varchar(20) NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+                sample_count integer NOT NULL DEFAULT 0,
+                requested_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                expires_at timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP + interval '14 days'),
+                reviewed_by varchar(100) NOT NULL DEFAULT '',
+                reviewed_at timestamptz NULL,
+                review_note varchar(500) NOT NULL DEFAULT '',
+                identity_verification_method varchar(40) NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS cham_cong_face_enrollment_samples (
+                id bigserial PRIMARY KEY,
+                request_id uuid NOT NULL REFERENCES cham_cong_face_enrollments(id) ON DELETE CASCADE,
+                pose varchar(20) NOT NULL,
+                embedding bytea NOT NULL
+                    CHECK (substring(embedding FROM 1 FOR 4) = '\x4b4d4531'::bytea),
+                quality double precision NOT NULL DEFAULT 0,
+                liveness double precision NOT NULL DEFAULT 0,
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (request_id, pose)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_cham_cong_face_enrollments_pending_user
+                ON cham_cong_face_enrollments (lower(username)) WHERE status='pending';
+            CREATE INDEX IF NOT EXISTS ix_cham_cong_face_enrollments_status_time
+                ON cham_cong_face_enrollments (status, requested_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_cham_cong_face_enrollment_samples_request
+                ON cham_cong_face_enrollment_samples (request_id);
+            """).ExecuteNonQueryAsync();
+
+        // Hết hạn thì xóa ngay vector sinh trắc tạm; chỉ giữ metadata yêu cầu để audit.
+        await conn.Cmd("""
+            UPDATE cham_cong_face_enrollments
+               SET status='expired', reviewed_at=CURRENT_TIMESTAMP,
+                   review_note='Tự động hết hạn sau 14 ngày.'
+             WHERE status='pending' AND expires_at <= CURRENT_TIMESTAMP;
+            DELETE FROM cham_cong_face_enrollment_samples s
+             USING cham_cong_face_enrollments r
+             WHERE s.request_id=r.id AND r.status='expired';
             """).ExecuteNonQueryAsync();
 
         // Chấm công NGOẠI TUYẾN chờ duyệt: khi mất điện/mất mạng, app xếp hàng rồi đồng bộ sau. Những
@@ -147,15 +200,10 @@ public static class ChamCongEndpoints
             );
             """).ExecuteNonQueryAsync();
 
-        // AdaFace R50 emits 512-float embeddings. SFace embeddings from older versions are incompatible,
-        // so drop stale templates once during startup; newly registered AdaFace templates are preserved.
-        // ⚠️ Chỉ áp cho mẫu CHƯA mã hóa (không có magic "KME1"): mẫu đã mã hóa AES có độ dài khác 2048
-        // nên phải loại trừ để không xóa nhầm (giải mã xong mới đúng 2048).
-        await conn.Cmd(
-            @"DELETE FROM cham_cong_face
-              WHERE substring(embedding FROM 1 FOR 4) <> '\x4b4d4531'::bytea
-                AND octet_length(embedding) <> 2048")
-            .ExecuteNonQueryAsync();
+        // Không tự xóa blob có độ dài lạ ở đây. Một ciphertext KME1 bị hỏng vài byte đầu cũng trông
+        // giống "mẫu cũ chưa mã hóa"; xóa trước bước xác thực AES-GCM sẽ làm mất bằng chứng/dữ liệu và
+        // cho Production khởi động nhầm. EncryptExistingEmbeddings bên dưới sẽ kiểm tra trong transaction
+        // và dừng an toàn nếu gặp mẫu không thể xác định/không hợp lệ.
 
         // Quyền riêng tư: hệ thống KHÔNG lưu ảnh gốc khuôn mặt nữa (chỉ giữ vector đặc trưng).
         // Dọn mọi ảnh đăng ký cũ còn sót lại. Tự chữa: sau lần đầu sẽ là no-op (0 dòng).
@@ -172,11 +220,12 @@ public static class ChamCongEndpoints
     {
         if (!cipher.Enabled) return;
         await using var conn = await db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
 
         var pending = new List<(long Id, byte[] Bytes)>();
         await using (var r = await conn.Cmd(
             @"SELECT id, embedding FROM cham_cong_face
-              WHERE substring(embedding FROM 1 FOR 4) <> '\x4b4d4531'::bytea").ExecuteReaderAsync(ct))
+              WHERE substring(embedding FROM 1 FOR 4) <> '\x4b4d4531'::bytea", tx).ExecuteReaderAsync(ct))
         {
             while (await r.ReadAsync(ct))
                 if (r["embedding"] is byte[] bytes && bytes.Length > 0)
@@ -184,8 +233,98 @@ public static class ChamCongEndpoints
         }
 
         foreach (var (id, bytes) in pending)
-            await conn.Cmd("UPDATE cham_cong_face SET embedding=@e WHERE id=@id")
-                .With("@e", cipher.Encrypt(bytes)).With("@id", id).ExecuteNonQueryAsync(ct);
+        {
+            try
+            {
+                ValidatePlaintextEmbeddingForMigration(bytes, id);
+                await conn.Cmd("UPDATE cham_cong_face SET embedding=@e WHERE id=@id", tx)
+                    .With("@e", cipher.Encrypt(bytes)).With("@id", id).ExecuteNonQueryAsync(ct);
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
+            }
+        }
+
+        // Không chỉ nhìn magic KME1: thử xác thực AES-GCM của TOÀN BỘ kho active + staging bằng
+        // khóa hiện hành. Sai/đổi khóa hoặc blob hỏng phải làm Production dừng trước khi nhận request,
+        // thay vì để lượt chấm công đầu tiên văng 500 giữa vòng quét.
+        await using (var r = await conn.Cmd(
+            @"SELECT 'active' AS source, id::text AS item_id, embedding FROM cham_cong_face
+              UNION ALL
+              SELECT 'staging' AS source, request_id::text || ':' || id::text AS item_id, embedding
+                FROM cham_cong_face_enrollment_samples", tx).ExecuteReaderAsync(ct))
+        {
+            while (await r.ReadAsync(ct))
+            {
+                ValidateEncryptedEmbedding(cipher, (byte[])r["embedding"],
+                    r.Str("source"), r.Str("item_id"));
+            }
+        }
+
+        // Chặn cả thao tác import/SQL ghi plaintext SAU lúc startup. Constraint chỉ được thêm sau khi
+        // mọi mẫu cũ hợp lệ đã được mã hóa trong cùng transaction, nên không có cửa sổ kho trộn lẫn.
+        await conn.Cmd("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                     WHERE conname = 'ck_cham_cong_face_embedding_kme1'
+                       AND conrelid = 'cham_cong_face'::regclass
+                ) THEN
+                    ALTER TABLE cham_cong_face
+                        ADD CONSTRAINT ck_cham_cong_face_embedding_kme1
+                        CHECK (substring(embedding FROM 1 FOR 4) = '\x4b4d4531'::bytea);
+                END IF;
+            END $$;
+            """, tx).ExecuteNonQueryAsync(ct);
+
+        await tx.CommitAsync(ct);
+    }
+
+    internal static void ValidatePlaintextEmbeddingForMigration(byte[] stored, long itemId)
+    {
+        if (stored.Length != 512 * sizeof(float))
+            throw new InvalidOperationException(
+                $"Unencrypted biometric active item {itemId} has an unexpected length; migration was aborted.");
+
+        var decoded = EmbeddingCodec.FromBytes(stored);
+        try
+        {
+            if (decoded.Any(v => !float.IsFinite(v)))
+                throw new InvalidOperationException(
+                    $"Unencrypted biometric active item {itemId} has an invalid embedding; migration was aborted.");
+        }
+        finally
+        {
+            Array.Clear(decoded);
+        }
+    }
+
+    internal static void ValidateEncryptedEmbedding(
+        FieldCipher cipher, byte[] stored, string source, string itemId)
+    {
+        if (!FieldCipher.IsEncrypted(stored))
+            throw new InvalidOperationException(
+                $"Biometric {source} item {itemId} is not AES-GCM encrypted.");
+
+        float[]? decoded = null;
+        try
+        {
+            decoded = cipher.DecryptEmbedding(stored);
+            if (decoded.Length != 512 || decoded.Any(v => !float.IsFinite(v)))
+                throw new InvalidOperationException(
+                    $"Biometric {source} item {itemId} has an invalid embedding.");
+        }
+        catch (System.Security.Cryptography.CryptographicException ex)
+        {
+            throw new InvalidOperationException(
+                $"Cannot authenticate biometric {source} item {itemId} with the configured key.", ex);
+        }
+        finally
+        {
+            if (decoded is not null) Array.Clear(decoded);
+        }
     }
 
     public static void MapChamCong(this IEndpointRouteBuilder app)
@@ -217,6 +356,16 @@ public static class ChamCongEndpoints
             return Results.Ok(new MotionConfigDto(
                 await GetSettingBoolAsync(conn, CfgMotionEnabled, DefaultMotionEnabled),
                 await GetSettingBoolAsync(conn, CfgMotionEnforce, DefaultMotionEnforce)));
+        });
+
+        // Cấu hình yêu cầu CƯỜI. App dùng để hướng dẫn/lấy ảnh đúng thời điểm; server vẫn tự đo lại
+        // nụ cười từ ảnh cùng với nhận diện danh tính, liveness và ghi công.
+        g.MapGet("/smile-config", async (Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            return Results.Ok(new SmileConfigDto(
+                await GetSettingBoolAsync(conn, CfgSmileEnabled, DefaultSmileEnabled),
+                await GetSettingDoubleAsync(conn, CfgSmileThreshold) ?? DefaultSmileThreshold));
         });
 
         // QR dự phòng do HR/công trình cấp. Token là chuỗi ngẫu nhiên, có thể thu hồi bằng cách tắt địa điểm.
@@ -264,6 +413,18 @@ public static class ChamCongEndpoints
             await db.RecordAudit(u.Username(), "Cấu hình liveness quay đầu", "ChamCong", "",
                 $"motion enabled={cfg.Enabled} enforce={cfg.Enforce}");
             return Results.Ok(new { message = "Đã lưu cấu hình liveness quay đầu (áp dụng ngay)." });
+        }).RequirePermission(Permissions.AttendanceManage);
+
+        g.MapPut("/smile-config", async (SmileConfigDto cfg, ClaimsPrincipal u, Database db) =>
+        {
+            var threshold = Math.Clamp(cfg.Threshold, 0.35, 0.95);
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            await using var conn = await db.OpenAsync();
+            await SetSettingAsync(conn, CfgSmileEnabled, cfg.Enabled ? "1" : "0", u.Username());
+            await SetSettingAsync(conn, CfgSmileThreshold, threshold.ToString(inv), u.Username());
+            await db.RecordAudit(u.Username(), "Cấu hình yêu cầu cười", "ChamCong", "",
+                $"smile enabled={cfg.Enabled} threshold={threshold.ToString(inv)}");
+            return Results.Ok(new { message = "Đã lưu yêu cầu cười khi chấm công (áp dụng ngay)." });
         }).RequirePermission(Permissions.AttendanceManage);
 
         // Cấu hình kiểm tra MỞ MẮT phía server (Admin). Mặc định enforce=false (chỉ đo). Bật enforce sau khi
@@ -335,56 +496,133 @@ public static class ChamCongEndpoints
         // Đăng ký 1 mẫu khuôn mặt cho nhân viên (Admin). Gọi nhiều lần để thêm nhiều góc chụp.
         g.MapPost("/dangky", async (DangKyKhuonMatRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher) =>
         {
+            if (!FaceAntiSpoofSecurity.IsOperational(engine))
+                return Results.Json(new { message = "Hệ thống chống giả mạo đang không khả dụng; không thể đăng ký an toàn." }, statusCode: 503);
+            if (!cipher.Enabled)
+                return Results.Json(new { message = "Máy chủ chưa bật mã hóa dữ liệu sinh trắc; không thể đăng ký an toàn." }, statusCode: 503);
             if (string.IsNullOrWhiteSpace(req.Username))
                 return Results.BadRequest(new { message = "Thiếu tên đăng nhập nhân viên." });
 
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
                 return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
-
+            if (engine.AssessFrame(bytes) is not { FaceFound: true } quality || quality.Score < MinFrameQuality)
+                return Results.BadRequest(new { message = "Không phát hiện được khuôn mặt đủ rõ. Hãy chụp lại ở nơi đủ sáng." });
+            if (FaceAntiSpoofSecurity.ProbabilityReal(engine, bytes) < engine.LivenessThreshold)
+                return Results.BadRequest(new { message = "Nghi ngờ giả mạo. Nhân viên phải có mặt trực tiếp, không dùng ảnh hoặc màn hình." });
             var emb = engine.ExtractEmbedding(bytes);
             if (emb is null)
                 return Results.BadRequest(new { message = "Không phát hiện được khuôn mặt trong ảnh. Hãy chụp lại rõ hơn." });
 
             await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            await conn.Cmd("SELECT pg_advisory_xact_lock(@key)", tx)
+                .With("@key", FaceRegistryLockKey).ExecuteScalarAsync();
+
+            var username = req.Username.Trim();
+            string fullName = "", approval = "";
+            bool active = false, deleted = true;
+            await using (var reader = await conn.Cmd(
+                @"SELECT full_name, is_active, COALESCE(is_deleted,FALSE) AS is_deleted, approval_status
+                    FROM app_users WHERE lower(username)=lower(@u) FOR UPDATE", tx)
+                .With("@u", username).ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync())
+                    return Results.NotFound(new { message = "Không tìm thấy tài khoản nhân viên." });
+                fullName = reader.Str("full_name");
+                active = reader.Bool("is_active");
+                deleted = reader.Bool("is_deleted");
+                approval = reader.Str("approval_status");
+            }
+            if (!active || deleted || approval != "Approved")
+                return Results.Conflict(new { message = "Tài khoản đang bị khóa, đã xóa hoặc chưa được duyệt." });
+
+            var sampleCount = Convert.ToInt32(await conn.Cmd(
+                "SELECT COUNT(*) FROM cham_cong_face WHERE lower(username)=lower(@u)", tx)
+                .With("@u", username).ExecuteScalarAsync());
+            if (sampleCount >= MaxFaceSamples)
+                return Results.Conflict(new { message = $"Tài khoản đã đủ tối đa {MaxFaceSamples} mẫu khuôn mặt." });
+
+            var otherEmbeddings = new List<float[]>();
+            await using (var reader = await conn.Cmd(
+                "SELECT embedding FROM cham_cong_face WHERE lower(username)<>lower(@u)", tx)
+                .With("@u", username).ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                    otherEmbeddings.Add(cipher.DecryptEmbedding((byte[])reader["embedding"]));
+            }
+            var duplicateThreshold = Math.Max(0.60, engine.MatchThreshold + 0.10);
+            if (otherEmbeddings.Any(other => engine.Compare(emb, other) >= duplicateThreshold))
+                return Results.Conflict(new { message = "Khuôn mặt trùng mạnh với một tài khoản khác. Không thể đăng ký." });
+
+            var encrypted = cipher.EncryptEmbedding(emb);
+            if (!FieldCipher.IsEncrypted(encrypted))
+                return Results.Json(new { message = "Không thể mã hóa vector khuôn mặt; đăng ký đã bị khóa an toàn." }, statusCode: 503);
             // CHỈ lưu vector đặc trưng, KHÔNG lưu ảnh gốc khuôn mặt (riêng tư + gọn DB). Ảnh chỉ dùng
             // tạm để trích embedding rồi bỏ; nhận diện về sau chỉ cần vector (cột anh để mặc định NULL).
             await conn.Cmd(
                 @"INSERT INTO cham_cong_face (username, full_name, embedding, created_at, created_by)
-                  VALUES (@u, @fn, @emb, CURRENT_TIMESTAMP, @by)")
-                .With("@u", req.Username.Trim())
-                .With("@fn", req.FullName ?? "")
-                .With("@emb", cipher.EncryptEmbedding(emb))
+                  VALUES (@u, @fn, @emb, CURRENT_TIMESTAMP, @by)", tx)
+                .With("@u", username)
+                .With("@fn", fullName)
+                .With("@emb", encrypted)
                 .With("@by", u.Username())
                 .ExecuteNonQueryAsync();
+            await tx.CommitAsync();
 
-            await db.RecordAudit(u.Username(), "Đăng ký khuôn mặt", "ChamCong", req.Username, "Thêm mẫu khuôn mặt (web).");
+            await db.RecordAudit(u.Username(), "Đăng ký khuôn mặt", "ChamCong", username,
+                "HR đăng ký trực tiếp: PAD cùng khung đạt, vector AES-GCM, đã kiểm tra trùng.");
             return Results.Ok(new { message = "Đã lưu mẫu khuôn mặt." });
         }).RequirePermission(Permissions.AttendanceManage);
 
         // ── Tự đăng ký khuôn mặt (nhân viên tự làm trên app) ────────────────────────
-        // Trạng thái đã đăng ký của CHÍNH tài khoản đang đăng nhập → app dùng để làm mờ nút "Đăng ký
-        // khuôn mặt" (mỗi tài khoản chỉ đăng ký một lần). Xác định người TỪ TOKEN.
+        // Trạng thái của CHÍNH tài khoản: phân biệt mẫu đã kích hoạt với yêu cầu đang chờ HR duyệt.
         g.MapGet("/dangky/cua-toi", async (ClaimsPrincipal u, Database db) =>
         {
             var me = u.Username();
             if (string.IsNullOrWhiteSpace(me)) return Results.Unauthorized();
 
             await using var conn = await db.OpenAsync();
+            await ExpireFaceEnrollmentsAsync(conn);
             var count = 0;
             DateTime? first = null;
             await using var r = await conn.Cmd(
                 "SELECT COUNT(*) AS c, MIN(created_at) AS f FROM cham_cong_face WHERE username=@u")
                 .With("@u", me).ExecuteReaderAsync();
             if (await r.ReadAsync()) { count = r.Int("c"); first = r.DtNull("f"); }
-            return Results.Ok(new SelfFaceStatusDto(count > 0, count, first));
+
+            if (count > 0)
+                return Results.Ok(new SelfFaceStatusDto(true, count, first, RequestStatus: "registered"));
+
+            Guid? requestId = null;
+            string? status = null, note = null;
+            DateTime? requestedAt = null;
+            await using var pending = await conn.Cmd(
+                @"SELECT id, status, requested_at, review_note
+                    FROM cham_cong_face_enrollments
+                   WHERE lower(username)=lower(@u)
+                   ORDER BY requested_at DESC LIMIT 1")
+                .With("@u", me).ExecuteReaderAsync();
+            if (await pending.ReadAsync())
+            {
+                requestId = pending.GetGuid(pending.GetOrdinal("id"));
+                status = pending.Str("status");
+                requestedAt = pending.Dt("requested_at");
+                note = pending.Str("review_note");
+            }
+            return Results.Ok(new SelfFaceStatusDto(false, 0, null,
+                string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase),
+                requestId, status ?? "not_enrolled", requestedAt, note));
         });
 
-        // Tự đăng ký khuôn mặt: quét NHIỀU góc (nhìn thẳng + nghiêng 2 bên), mỗi góc là một loạt ảnh.
-        // Server chọn khung tốt nhất mỗi góc, kiểm tra chất lượng + liveness rồi lưu 1 mẫu/góc.
-        // CHẶN CỨNG: mỗi tài khoản chỉ đăng ký MỘT lần (đã có mẫu ⇒ từ chối) — xác định người TỪ TOKEN,
-        // KHÔNG tin client. Nhờ vậy không thể tự đăng ký khuôn mặt của mình đè lên tài khoản khác.
-        g.MapPost("/dangky/tu", async (SelfFaceEnrollRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher) =>
+        // Tự đăng ký khuôn mặt: quét 5 góc (thẳng, hai bên, ngẩng, cúi), mỗi góc là một loạt ảnh.
+        // Server kiểm tra chất lượng/PAD rồi chỉ lưu vector AES-GCM vào staging. HR phải đối chiếu trực tiếp
+        // danh tính và duyệt thì vector mới được chuyển nguyên tử vào cham_cong_face.
+        g.MapPost("/dangky/tu", async (SelfFaceEnrollRequest req, ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher, PushService push) =>
         {
+            if (!FaceAntiSpoofSecurity.IsOperational(engine))
+                return Results.Json(new { message = "Hệ thống chống giả mạo đang không khả dụng. Đăng ký khuôn mặt đã được khóa an toàn; vui lòng báo quản trị viên." }, statusCode: 503);
+            if (!cipher.Enabled)
+                return Results.Json(new { message = "Máy chủ chưa bật mã hóa dữ liệu sinh trắc. Đăng ký khuôn mặt đã được khóa an toàn; vui lòng báo quản trị viên." }, statusCode: 503);
             var me = u.Username();
             if (string.IsNullOrWhiteSpace(me)) return Results.Unauthorized();
             if (req?.Poses is null || req.Poses.Count == 0)
@@ -395,19 +633,31 @@ public static class ChamCongEndpoints
                 return Results.BadRequest(new { message = $"Mỗi ảnh phải nhỏ hơn {PayloadLimits.MaxImageBytes / 1024 / 1024} MB." });
 
             await using var conn = await db.OpenAsync();
+            await ExpireFaceEnrollmentsAsync(conn);
 
-            // Đã đăng ký rồi → chặn (mỗi tài khoản chỉ đăng ký một lần).
             var existing = Convert.ToInt32(await conn.Cmd(
                 "SELECT COUNT(*) FROM cham_cong_face WHERE username=@u").With("@u", me).ExecuteScalarAsync());
             if (existing > 0)
                 return Results.BadRequest(new { message = "Bạn đã đăng ký khuôn mặt rồi. Mỗi tài khoản chỉ được đăng ký một lần." });
+            var alreadyPending = Convert.ToInt32(await conn.Cmd(
+                "SELECT COUNT(*) FROM cham_cong_face_enrollments WHERE lower(username)=lower(@u) AND status='pending'")
+                .With("@u", me).ExecuteScalarAsync());
+            if (alreadyPending > 0)
+                return Results.Conflict(new { message = "Yêu cầu đăng ký khuôn mặt của bạn đang chờ HR xác minh và duyệt." });
 
             var fullName = u.FindFirstValue("fullName") ?? "";
 
-            // Xử lý từng góc → chọn khung tốt nhất, kiểm tra chất lượng + liveness, trích embedding.
-            var samples = new List<float[]>();
+            // Xử lý từng góc. Chỉ khung TỰ NÓ vượt PAD mới được dùng để trích embedding;
+            // không được lấy liveness của khung A rồi lấy danh tính từ khung B.
+            var samples = new List<(string Pose, float[] Embedding, double Quality, double Liveness, FacePose DetectedPose)>();
             var frontOk = false;
-            foreach (var pose in req.Poses)
+            // Chỉ nhận đúng 5 góc nghiệp vụ, bỏ tên lạ/trùng để một request không thể vượt trần mẫu.
+            var poses = req.Poses
+                .Where(p => p is not null && SelfEnrollPoseNames.Contains(p.Pose?.Trim() ?? ""))
+                .DistinctBy(p => p.Pose.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Take(MaxFaceSamples)
+                .ToList();
+            foreach (var pose in poses)
             {
                 if (pose?.Images is null || pose.Images.Count == 0) continue;
                 var isFront = string.Equals(pose.Pose, "front", StringComparison.OrdinalIgnoreCase);
@@ -421,54 +671,355 @@ public static class ChamCongEndpoints
                 }
                 if (candidates.Count == 0) continue;
                 candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
-                var best = candidates[0];
 
                 // Chất lượng tối thiểu (nới nhẹ cho góc nghiêng vì mặt nhỏ hơn/khó nét hơn chính diện).
                 var minQuality = isFront ? MinFrameQuality : MinFrameQuality * 0.8;
-                if (best.Q.Score < minQuality) continue;
+                var eligible = candidates
+                    .Where(c => c.Q.Score >= minQuality && SelfEnrollPoseMatches(pose.Pose, c.Q.Pose))
+                    .Take(5)
+                    .ToList();
+                if (eligible.Count == 0) continue;
 
-                // Mẫu CHÍNH DIỆN phải thực sự nhìn thẳng (chấm công vốn ép chính diện nên đây là mẫu chuẩn).
-                if (isFront && CheckPosture(best.Q.Pose) is not null) continue;
-
-                // Chống giả mạo trên vài khung tốt nhất của góc này (ảnh/màn hình giả thấp ở mọi khung).
-                double bestLive = 0;
-                foreach (var c in candidates.Take(5))
+                (byte[] Bytes, FaceFrameQuality Q, double Liveness)? selected = null;
+                foreach (var c in eligible)
                 {
-                    bestLive = Math.Max(bestLive, engine.LivenessProbability(c.Bytes));
-                    if (bestLive >= engine.LivenessThreshold) break;
+                    var liveness = FaceAntiSpoofSecurity.ProbabilityReal(engine, c.Bytes);
+                    if (liveness < engine.LivenessThreshold) continue;
+                    selected = (c.Bytes, c.Q, liveness);
+                    break;
                 }
-                if (bestLive < engine.LivenessThreshold)
+                if (selected is null)
                     return Results.BadRequest(new { message = "Nghi ngờ giả mạo (không phải người thật). Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình." });
 
-                var emb = engine.ExtractEmbedding(best.Bytes);
+                var accepted = selected.Value;
+                var emb = engine.ExtractEmbedding(accepted.Bytes);
                 if (emb is null) continue;
-                samples.Add(emb);
+                samples.Add((pose.Pose.Trim().ToLowerInvariant(), emb, accepted.Q.Score,
+                    accepted.Liveness, accepted.Q.Pose));
                 if (isFront) frontOk = true;
             }
 
             if (!frontOk)
                 return Results.BadRequest(new { message = "Chưa lấy được ảnh chính diện rõ nét. Hãy đăng ký lại ở nơi đủ sáng và nhìn thẳng vào camera." });
-            if (samples.Count < 2)
-                return Results.BadRequest(new { message = "Chưa đủ mẫu khuôn mặt. Vui lòng quét lại đủ các góc theo hướng dẫn." });
+            if (samples.Count < 3)
+                return Results.BadRequest(new { message = "Chưa đủ ít nhất 3 góc khuôn mặt hợp lệ. Vui lòng quét lại theo đúng hướng dẫn." });
 
-            // Kiểm tra lại lần cuối rồi chèn tất cả mẫu (tránh đăng ký hai lần nếu bấm dồn).
+            var side1 = samples.FirstOrDefault(s => s.Pose == "side1");
+            var side2 = samples.FirstOrDefault(s => s.Pose == "side2");
+            if (side1.Embedding is not null && side2.Embedding is not null
+                && Math.Sign(side1.DetectedPose.Yaw) == Math.Sign(side2.DetectedPose.Yaw))
+                return Results.BadRequest(new { message = "Hai góc quay phải ở hai hướng đối diện. Vui lòng quay sang bên còn lại và quét lại." });
+
+            // Không cho một request trộn khuôn mặt của nhiều người ở các góc khác nhau.
+            var frontEmbedding = samples.First(s => s.Pose == "front").Embedding;
+            var consistencyThreshold = Math.Max(0.33, engine.MatchThreshold - 0.12);
+            if (samples.Any(s => s.Pose != "front" && engine.Compare(frontEmbedding, s.Embedding) < consistencyThreshold))
+                return Results.BadRequest(new { message = "Các góc quét không cùng một khuôn mặt. Vui lòng chỉ một mình bạn ở trước camera và quét lại." });
+
+            var requestId = Guid.NewGuid();
+            await using var tx = await conn.BeginTransactionAsync();
+            // Khóa theo username để hai lần bấm/gửi đồng thời không tạo hai yêu cầu.
+            await conn.Cmd("SELECT pg_advisory_xact_lock(hashtext(@key))", tx)
+                .With("@key", "face-enrollment:" + me.ToLowerInvariant()).ExecuteScalarAsync();
+            await ExpireFaceEnrollmentsAsync(conn, tx);
+
             var existing2 = Convert.ToInt32(await conn.Cmd(
-                "SELECT COUNT(*) FROM cham_cong_face WHERE username=@u").With("@u", me).ExecuteScalarAsync());
+                "SELECT COUNT(*) FROM cham_cong_face WHERE lower(username)=lower(@u)", tx)
+                .With("@u", me).ExecuteScalarAsync());
             if (existing2 > 0)
+            {
+                await tx.RollbackAsync();
                 return Results.BadRequest(new { message = "Bạn đã đăng ký khuôn mặt rồi." });
+            }
+            var pending2 = Convert.ToInt32(await conn.Cmd(
+                "SELECT COUNT(*) FROM cham_cong_face_enrollments WHERE lower(username)=lower(@u) AND status='pending'", tx)
+                .With("@u", me).ExecuteScalarAsync());
+            if (pending2 > 0)
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new { message = "Yêu cầu đăng ký khuôn mặt của bạn đang chờ HR xác minh và duyệt." });
+            }
 
-            foreach (var emb in samples)
+            var dbFullName = await conn.Cmd(
+                @"SELECT full_name FROM app_users
+                   WHERE lower(username)=lower(@u) AND is_active=TRUE
+                     AND COALESCE(is_deleted,FALSE)=FALSE AND approval_status='Approved'
+                   LIMIT 1 FOR UPDATE", tx)
+                .With("@u", me).ExecuteScalarAsync() as string;
+            if (dbFullName is null)
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new { message = "Tài khoản đang bị khóa, đã xóa hoặc chưa được duyệt." });
+            }
+            if (!string.IsNullOrWhiteSpace(dbFullName)) fullName = dbFullName;
+
+            await conn.Cmd(
+                @"INSERT INTO cham_cong_face_enrollments
+                    (id, username, full_name, status, sample_count, requested_at, expires_at)
+                  VALUES (@id, @u, @fn, 'pending', @count, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + interval '14 days')", tx)
+                .With("@id", requestId).With("@u", me).With("@fn", fullName).With("@count", samples.Count)
+                .ExecuteNonQueryAsync();
+
+            foreach (var sample in samples)
+            {
+                var encrypted = cipher.EncryptEmbedding(sample.Embedding);
+                if (!FieldCipher.IsEncrypted(encrypted))
+                    throw new InvalidOperationException("Face enrollment staging requires AES-GCM encryption.");
                 await conn.Cmd(
-                    @"INSERT INTO cham_cong_face (username, full_name, embedding, created_at, created_by)
-                      VALUES (@u, @fn, @emb, CURRENT_TIMESTAMP, @by)")
-                    .With("@u", me).With("@fn", fullName)
-                    .With("@emb", cipher.EncryptEmbedding(emb))
-                    .With("@by", SelfEnrollTag)
+                    @"INSERT INTO cham_cong_face_enrollment_samples
+                        (request_id, pose, embedding, quality, liveness)
+                      VALUES (@id, @pose, @emb, @quality, @live)", tx)
+                    .With("@id", requestId).With("@pose", sample.Pose).With("@emb", encrypted)
+                    .With("@quality", sample.Quality).With("@live", sample.Liveness)
                     .ExecuteNonQueryAsync();
+            }
+            await tx.CommitAsync();
 
-            await db.RecordAudit(me, "Đăng ký khuôn mặt", "ChamCong", me, $"Tự đăng ký {samples.Count} mẫu (app).");
-            return Results.Ok(new SelfFaceEnrollResult("Đăng ký khuôn mặt thành công.", samples.Count));
+            await db.RecordAudit(me, "Gửi yêu cầu đăng ký khuôn mặt", "ChamCong", me,
+                $"Yêu cầu {requestId} · {samples.Count} vector đã mã hóa · chờ HR đối chiếu trực tiếp.");
+            await push.SendToAdminsAsync("Yêu cầu khuôn mặt chờ duyệt",
+                $"{fullName} ({me}) đã gửi yêu cầu đăng ký khuôn mặt.", $"face-enroll:{requestId}", "Attendance");
+            return Results.Json(new SelfFaceEnrollResult(
+                "Đã gửi yêu cầu. HR cần đối chiếu trực tiếp danh tính trước khi kích hoạt khuôn mặt.",
+                samples.Count, "pending", requestId), statusCode: StatusCodes.Status202Accepted);
         });
+
+        // Danh sách yêu cầu sinh trắc: chỉ HR/Admin có quyền quản lý chấm công. Không endpoint nào trả
+        // ảnh hoặc embedding; người duyệt bắt buộc đối chiếu nhân viên trực tiếp ngoài hệ thống.
+        g.MapGet("/face-enrollments", async (Database db, string? status) =>
+        {
+            var filter = (status ?? "pending").Trim().ToLowerInvariant();
+            if (filter is not ("pending" or "approved" or "rejected" or "expired" or "all"))
+                return Results.BadRequest(new { message = "Trạng thái không hợp lệ." });
+            await using var conn = await db.OpenAsync();
+            await ExpireFaceEnrollmentsAsync(conn);
+            var cmd = conn.Cmd(
+                @"SELECT r.id, r.username, r.full_name, r.status, r.requested_at, r.expires_at,
+                         r.reviewed_by, r.reviewed_at, r.review_note, r.identity_verification_method,
+                         r.sample_count
+                    FROM cham_cong_face_enrollments r
+                   WHERE (@status='all' OR r.status=@status)
+                   ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END, r.requested_at DESC
+                   LIMIT 500")
+                .With("@status", filter);
+            var rows = new List<FaceEnrollmentRequestDto>();
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                rows.Add(new FaceEnrollmentRequestDto(
+                    reader.GetGuid(reader.GetOrdinal("id")), reader.Str("username"), reader.Str("full_name"),
+                    reader.Str("status"), reader.Int("sample_count"), reader.Dt("requested_at"),
+                    reader.Dt("expires_at"), reader.Str("reviewed_by"), reader.DtNull("reviewed_at"),
+                    reader.Str("review_note"), reader.Str("identity_verification_method")));
+            return Results.Ok(rows);
+        }).RequirePermission(Permissions.AttendanceManage);
+
+        g.MapPost("/face-enrollments/{id:guid}/approve", async (Guid id, FaceEnrollmentApproveRequest req,
+            ClaimsPrincipal u, Database db, IFaceEngine engine, FieldCipher cipher, PushService push) =>
+        {
+            var actor = u.Username();
+            var method = (req?.VerificationMethod ?? "").Trim().ToLowerInvariant();
+            if (req?.IdentityVerified != true || method != "in_person")
+                return Results.BadRequest(new { message = "Chỉ được duyệt sau khi đã đối chiếu trực tiếp người đăng ký. Hãy xác nhận phương thức in_person." });
+            if (!cipher.Enabled)
+                return Results.Json(new { message = "Máy chủ thiếu khóa mã hóa dữ liệu sinh trắc; không thể kích hoạt an toàn." }, statusCode: 503);
+            if (!FaceAntiSpoofSecurity.IsOperational(engine))
+                return Results.Json(new { message = "Hệ thống chống giả mạo đang không khả dụng; không thể xác minh trực tiếp an toàn." }, statusCode: 503);
+            var note = (req.Note ?? "").Trim();
+            if (note.Length > 500) return Results.BadRequest(new { message = "Ghi chú tối đa 500 ký tự." });
+            if (req.VerificationImages is null || req.VerificationImages.Count is < 2 or > 3)
+                return Results.BadRequest(new { message = "Cần chụp trực tiếp từ 2 đến 3 ảnh xác minh khi nhân viên có mặt cùng HR." });
+            var verificationFrames = new List<byte[]>();
+            foreach (var image in req.VerificationImages)
+            {
+                if (!TryDecodeImage(image, out var bytes))
+                    return Results.BadRequest(new { message = "Ảnh xác minh trực tiếp không hợp lệ hoặc vượt giới hạn dung lượng." });
+                verificationFrames.Add(bytes);
+            }
+            if (verificationFrames
+                .Select(f => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(f)))
+                .Distinct(StringComparer.Ordinal)
+                .Count() < 2)
+                return Results.BadRequest(new { message = "Hai ảnh xác minh phải là hai khung chụp trực tiếp khác nhau." });
+
+            await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+
+            // Đọc username bất biến trước để có thể khóa theo thứ tự: registry → app_user → request.
+            var requestedUsername = await conn.Cmd(
+                "SELECT username FROM cham_cong_face_enrollments WHERE id=@id", tx)
+                .With("@id", id).ExecuteScalarAsync() as string;
+            if (string.IsNullOrWhiteSpace(requestedUsername)) return Results.NotFound();
+
+            await conn.Cmd("SELECT pg_advisory_xact_lock(@key)", tx)
+                .With("@key", FaceRegistryLockKey).ExecuteScalarAsync();
+
+            string accountName = "", accountApproval = "";
+            bool accountActive = false, accountDeleted = true;
+            await using (var reader = await conn.Cmd(
+                @"SELECT full_name, is_active, COALESCE(is_deleted,FALSE) AS is_deleted, approval_status
+                    FROM app_users WHERE lower(username)=lower(@u) FOR UPDATE", tx)
+                .With("@u", requestedUsername).ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync())
+                    return Results.Conflict(new { message = "Tài khoản đăng ký không còn tồn tại." });
+                accountName = reader.Str("full_name");
+                accountActive = reader.Bool("is_active");
+                accountDeleted = reader.Bool("is_deleted");
+                accountApproval = reader.Str("approval_status");
+            }
+            if (!accountActive || accountDeleted || accountApproval != "Approved")
+                return Results.Conflict(new { message = "Tài khoản đăng ký đang bị khóa, đã xóa hoặc chưa được duyệt." });
+
+            string username = "", fullName = "", currentStatus = "";
+            DateTime expiresAt = default;
+            await using (var reader = await conn.Cmd(
+                @"SELECT username, full_name, status, expires_at
+                    FROM cham_cong_face_enrollments WHERE id=@id FOR UPDATE", tx)
+                .With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync()) return Results.NotFound();
+                username = reader.Str("username"); fullName = reader.Str("full_name");
+                currentStatus = reader.Str("status"); expiresAt = reader.Dt("expires_at");
+            }
+            if (!string.Equals(username, requestedUsername, StringComparison.OrdinalIgnoreCase))
+                return Results.Conflict(new { message = "Yêu cầu đăng ký đã thay đổi không hợp lệ." });
+            if (!string.IsNullOrWhiteSpace(accountName)) fullName = accountName;
+            if (!string.Equals(currentStatus, "pending", StringComparison.OrdinalIgnoreCase))
+                return Results.Conflict(new { message = "Yêu cầu này đã được xử lý." });
+            if (expiresAt <= DateTime.UtcNow)
+            {
+                await conn.Cmd("UPDATE cham_cong_face_enrollments SET status='expired', reviewed_at=CURRENT_TIMESTAMP, review_note='Tự động hết hạn sau 14 ngày.' WHERE id=@id", tx)
+                    .With("@id", id).ExecuteNonQueryAsync();
+                await conn.Cmd("DELETE FROM cham_cong_face_enrollment_samples WHERE request_id=@id", tx)
+                    .With("@id", id).ExecuteNonQueryAsync();
+                await tx.CommitAsync();
+                return Results.Conflict(new { message = "Yêu cầu đã hết hạn; nhân viên cần đăng ký lại." });
+            }
+            if (string.Equals(actor, username, StringComparison.OrdinalIgnoreCase))
+                return Results.Json(new { message = "Không được tự duyệt yêu cầu khuôn mặt của chính mình." }, statusCode: 403);
+
+            var staged = new List<(string Pose, byte[] Encrypted, float[] Embedding)>();
+            await using (var reader = await conn.Cmd(
+                "SELECT pose, embedding FROM cham_cong_face_enrollment_samples WHERE request_id=@id ORDER BY id", tx)
+                .With("@id", id).ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    var encrypted = (byte[])reader["embedding"];
+                    if (!FieldCipher.IsEncrypted(encrypted))
+                        return Results.Json(new { message = "Vector staging không được mã hóa đúng chuẩn; đã khóa duyệt an toàn." }, statusCode: 503);
+                    staged.Add((reader.Str("pose"), encrypted, cipher.DecryptEmbedding(encrypted)));
+                }
+            }
+            if (staged.Count < 3 || staged.All(s => s.Pose != "front"))
+                return Results.Conflict(new { message = "Yêu cầu không còn đủ mẫu hợp lệ; nhân viên cần đăng ký lại." });
+
+            // Xác minh trực tiếp tại thời điểm duyệt: embedding chỉ được trích từ chính từng frame đã
+            // vượt PAD. Ảnh và probe chỉ sống trong bộ nhớ của request này, không ghi DB/log.
+            var liveProbes = new List<float[]>();
+            foreach (var frame in verificationFrames)
+            {
+                if (engine.AssessFrame(frame) is not { FaceFound: true } quality
+                    || quality.Score < MinFrameQuality
+                    || CheckPosture(quality.Pose) is not null)
+                    continue;
+                if (FaceAntiSpoofSecurity.ProbabilityReal(engine, frame) < engine.LivenessThreshold)
+                    continue;
+                if (engine.ExtractEmbedding(frame) is { } probe) liveProbes.Add(probe);
+            }
+            if (liveProbes.Count < 2)
+                return Results.BadRequest(new { message = "Chưa có đủ 2 ảnh chính diện vượt kiểm tra người thật. Hãy chụp lại khi nhân viên đang có mặt." });
+
+            var verificationConsistency = Math.Max(0.33, engine.MatchThreshold - 0.12);
+            if (liveProbes.Skip(1).Any(p => engine.Compare(liveProbes[0], p) < verificationConsistency))
+                return Results.BadRequest(new { message = "Các ảnh xác minh trực tiếp không cùng một người. Không thể duyệt." });
+            var stagedFront = staged.Where(s => s.Pose == "front").Select(s => s.Embedding).ToList();
+            if (liveProbes.Any(p => stagedFront.All(s => engine.Compare(p, s) < engine.MatchThreshold)))
+                return Results.Conflict(new { message = "Người đang được HR xác minh không khớp với yêu cầu đã gửi. Không thể kích hoạt khuôn mặt." });
+
+            var targetHasFace = Convert.ToInt32(await conn.Cmd(
+                "SELECT COUNT(*) FROM cham_cong_face WHERE lower(username)=lower(@u)", tx)
+                .With("@u", username).ExecuteScalarAsync());
+            if (targetHasFace > 0)
+                return Results.Conflict(new { message = "Tài khoản đã có mẫu khuôn mặt được kích hoạt." });
+
+            // Chặn cùng một khuôn mặt bị gắn mạnh vào tài khoản khác. Dùng ngưỡng cao để tránh từ chối
+            // nhầm; bước đối chiếu trực tiếp của HR vẫn là kiểm soát danh tính bắt buộc.
+            var active = new List<float[]>();
+            await using (var reader = await conn.Cmd(
+                "SELECT embedding FROM cham_cong_face WHERE lower(username)<>lower(@u)", tx)
+                .With("@u", username).ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync()) active.Add(cipher.DecryptEmbedding((byte[])reader["embedding"]));
+            }
+            var duplicateThreshold = Math.Max(0.60, engine.MatchThreshold + 0.10);
+            if (staged.Any(s => active.Any(a => engine.Compare(s.Embedding, a) >= duplicateThreshold)))
+                return Results.Conflict(new { message = "Khuôn mặt trùng mạnh với một hồ sơ khác. Không thể kích hoạt; HR cần kiểm tra tài khoản." });
+
+            await conn.Cmd(
+                @"INSERT INTO cham_cong_face (username, full_name, embedding, created_at, created_by)
+                  SELECT r.username, @fn, s.embedding, CURRENT_TIMESTAMP, @by
+                    FROM cham_cong_face_enrollments r
+                    JOIN cham_cong_face_enrollment_samples s ON s.request_id=r.id
+                   WHERE r.id=@id AND r.status='pending'", tx)
+                .With("@by", actor).With("@fn", fullName).With("@id", id).ExecuteNonQueryAsync();
+            await conn.Cmd(
+                @"UPDATE cham_cong_face_enrollments
+                     SET status='approved', reviewed_by=@by, reviewed_at=CURRENT_TIMESTAMP,
+                         review_note=@note, identity_verification_method='in_person'
+                   WHERE id=@id AND status='pending'", tx)
+                .With("@by", actor)
+                .With("@note", note.Length > 0 ? note : "Đã đối chiếu trực tiếp danh tính nhân viên.")
+                .With("@id", id).ExecuteNonQueryAsync();
+            await conn.Cmd("DELETE FROM cham_cong_face_enrollment_samples WHERE request_id=@id", tx)
+                .With("@id", id).ExecuteNonQueryAsync();
+            await tx.CommitAsync();
+
+            await db.RecordAudit(actor, "Duyệt đăng ký khuôn mặt", "ChamCong", username,
+                $"Yêu cầu {id} · PAD trực tiếp {liveProbes.Count} khung khớp · kích hoạt {staged.Count} mẫu mã hóa.");
+            await push.SendToUserAsync(username, "Khuôn mặt đã được duyệt",
+                "HR đã xác minh và kích hoạt khuôn mặt để chấm công.", $"face-enroll:{id}:approved", "Settings");
+            return Results.Ok(new { message = $"Đã xác minh và kích hoạt {staged.Count} mẫu khuôn mặt." });
+        }).RequirePermission(Permissions.AttendanceManage);
+
+        g.MapPost("/face-enrollments/{id:guid}/reject", async (Guid id, FaceEnrollmentRejectRequest req,
+            ClaimsPrincipal u, Database db, PushService push) =>
+        {
+            var actor = u.Username();
+            var reason = (req?.Reason ?? "").Trim();
+            if (reason.Length < 5 || reason.Length > 500)
+                return Results.BadRequest(new { message = "Lý do từ chối phải từ 5 đến 500 ký tự." });
+
+            await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            string username = "", status = "";
+            await using (var reader = await conn.Cmd(
+                "SELECT username, status FROM cham_cong_face_enrollments WHERE id=@id FOR UPDATE", tx)
+                .With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync()) return Results.NotFound();
+                username = reader.Str("username"); status = reader.Str("status");
+            }
+            if (status != "pending") return Results.Conflict(new { message = "Yêu cầu này đã được xử lý." });
+            if (string.Equals(actor, username, StringComparison.OrdinalIgnoreCase))
+                return Results.Json(new { message = "Không được tự xử lý yêu cầu khuôn mặt của chính mình." }, statusCode: 403);
+
+            await conn.Cmd(
+                @"UPDATE cham_cong_face_enrollments
+                     SET status='rejected', reviewed_by=@by, reviewed_at=CURRENT_TIMESTAMP, review_note=@reason
+                   WHERE id=@id AND status='pending'", tx)
+                .With("@by", actor).With("@reason", reason).With("@id", id).ExecuteNonQueryAsync();
+            // Quyền riêng tư: xóa vector sinh trắc ngay khi từ chối, chỉ giữ metadata/audit.
+            await conn.Cmd("DELETE FROM cham_cong_face_enrollment_samples WHERE request_id=@id", tx)
+                .With("@id", id).ExecuteNonQueryAsync();
+            await tx.CommitAsync();
+
+            await db.RecordAudit(actor, "Từ chối đăng ký khuôn mặt", "ChamCong", username,
+                $"Yêu cầu {id}. Lý do: {reason}");
+            await push.SendToUserAsync(username, "Yêu cầu khuôn mặt bị từ chối", reason,
+                $"face-enroll:{id}:rejected", "Settings");
+            return Results.Ok(new { message = "Đã từ chối và xóa toàn bộ vector sinh trắc tạm." });
+        }).RequirePermission(Permissions.AttendanceManage);
 
         // ĐÃ GỠ: POST /huongmat (ước lượng hướng mặt cho EnrollWizard). Trình đăng ký khuôn mặt trên web
         // nay tự tính tư thế NGAY TRÊN TRÌNH DUYỆT bằng đúng công thức hình học đó (xem
@@ -481,8 +1032,14 @@ public static class ChamCongEndpoints
         g.MapDelete("/dangky/{username}", async (string username, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("DELETE FROM cham_cong_face WHERE username=@u")
+            await using var tx = await conn.BeginTransactionAsync();
+            // Dùng đúng khóa app_user mà adaptive learning dùng. Nếu một lượt tự học đang chạy,
+            // thao tác xóa sẽ đợi nó hoàn tất rồi xóa cả mẫu vừa thêm; nếu xóa chạy trước,
+            // lượt tự học phải đợi và sẽ thấy kho mẫu đã trống nên không thể tái tạo mẫu mồ côi.
+            await LockFaceOwnerForMutationAsync(conn, tx, username);
+            var n = await conn.Cmd("DELETE FROM cham_cong_face WHERE lower(username)=lower(@u)", tx)
                 .With("@u", username).ExecuteNonQueryAsync();
+            await tx.CommitAsync();
             if (n > 0) await db.RecordAudit(u.Username(), "Xóa khuôn mặt", "ChamCong", username, "Xóa mẫu khuôn mặt (web).");
             return n > 0 ? Results.NoContent() : Results.NotFound();
         }).RequirePermission(Permissions.AttendanceManage);
@@ -491,15 +1048,24 @@ public static class ChamCongEndpoints
         g.MapDelete("/dangky/mau/{id:long}", async (long id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
             var owner = "";
-            await using (var r = await conn.Cmd("SELECT username FROM cham_cong_face WHERE id=@id LIMIT 1")
+            await using (var r = await conn.Cmd("SELECT username FROM cham_cong_face WHERE id=@id LIMIT 1", tx)
                 .With("@id", id).ExecuteReaderAsync())
             {
                 if (await r.ReadAsync()) owner = r.Str("username");
             }
 
-            var n = await conn.Cmd("DELETE FROM cham_cong_face WHERE id=@id")
+            if (owner.Length == 0)
+            {
+                await tx.RollbackAsync();
+                return Results.NotFound();
+            }
+
+            await LockFaceOwnerForMutationAsync(conn, tx, owner);
+            var n = await conn.Cmd("DELETE FROM cham_cong_face WHERE id=@id", tx)
                 .With("@id", id).ExecuteNonQueryAsync();
+            await tx.CommitAsync();
             if (n > 0) await db.RecordAudit(u.Username(), "Xóa mẫu khuôn mặt", "ChamCong", owner, $"Xóa mẫu khuôn mặt id={id} (web).");
             return n > 0 ? Results.NoContent() : Results.NotFound();
         }).RequirePermission(Permissions.AttendanceManage);
@@ -508,13 +1074,15 @@ public static class ChamCongEndpoints
         // Ẩn danh: cho phép chấm công ở kiosk màn hình đăng nhập (không cần tài khoản).
         g.MapPost("/nhandien", async (NhanDienRequest req, Database db, IFaceEngine engine, FieldCipher cipher, HttpContext http) =>
         {
+            if (!FaceAntiSpoofSecurity.IsOperational(engine))
+                return Results.Json(new { message = "Hệ thống chống giả mạo đang không khả dụng. Chấm công khuôn mặt đã được khóa an toàn." }, statusCode: 503);
             // Ẩn danh (kiosk, chưa đăng nhập) ⇒ KHÔNG trả username/họ tên đầy đủ để tránh thu thập danh
             // tính. Đăng nhập rồi (chấm cho chính mình) ⇒ trả đủ thông tin như trước.
             var anon = http.User.Identity?.IsAuthenticated != true;
             if (!TryDecodeImage(req.ImageBase64, out var bytes))
                 return Results.BadRequest(new { message = "Ảnh không hợp lệ." });
 
-            if (!engine.CheckLiveness(bytes))
+            if (FaceAntiSpoofSecurity.ProbabilityReal(engine, bytes) < engine.LivenessThreshold)
                 return Results.Ok(new NhanDienResult(false, null, null, 0, null, null,
                     "Nghi ngờ giả mạo (không phải người thật). Vui lòng thử lại."));
 
@@ -530,7 +1098,11 @@ public static class ChamCongEndpoints
             string? bestUser = null, bestName = null;
             double best = 0;
             await using (var r = await conn.Cmd(
-                "SELECT username, full_name, embedding FROM cham_cong_face").ExecuteReaderAsync())
+                @"SELECT f.username, f.full_name, f.embedding
+                    FROM cham_cong_face f
+                    JOIN app_users a ON lower(a.username)=lower(f.username)
+                   WHERE a.is_active=TRUE AND COALESCE(a.is_deleted,FALSE)=FALSE
+                     AND a.approval_status='Approved'").ExecuteReaderAsync())
             {
                 while (await r.ReadAsync())
                 {
@@ -556,14 +1128,22 @@ public static class ChamCongEndpoints
 
             var loai = decision.Loai;
 
+            await using var attendanceTx = await conn.BeginTransactionAsync();
+            if (!await LockActiveFaceOwnerAsync(conn, attendanceTx, bestUser))
+            {
+                await attendanceTx.RollbackAsync();
+                return Results.Ok(new NhanDienResult(false, null, null, 0, null, null,
+                    "Tài khoản đã bị khóa hoặc khuôn mặt không còn hiệu lực."));
+            }
             // KHÔNG lưu ảnh vào log: cột anh không hiển thị ở bất kỳ đâu nên chỉ làm phình DB.
             // (Cột vẫn còn trong bảng để tương thích cũ; đơn giản là không ghi nữa → mặc định NULL.)
             await conn.Cmd(
                 @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at)
-                  VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP)")
+                  VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP)", attendanceTx)
                 .With("@u", bestUser).With("@fn", bestName ?? "")
                 .With("@loai", loai).With("@sim", best)
                 .ExecuteNonQueryAsync();
+            await attendanceTx.CommitAsync();
 
             await db.RecordAudit(bestUser, $"Chấm công {loai}", "ChamCong", bestUser, $"Độ khớp {best:0.000} (web).");
 
@@ -581,6 +1161,8 @@ public static class ChamCongEndpoints
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
         g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, LivenessMetricsLog livenessLog, AttendancePreviewTokens previewTokens, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http) =>
         {
+            if (!FaceAntiSpoofSecurity.IsOperational(engine))
+                return Results.Json(new { message = "Hệ thống chống giả mạo đang không khả dụng. Chấm công khuôn mặt đã được khóa an toàn." }, statusCode: 503);
             // ── XÁC NHẬN BẰNG TOKEN XEM TRƯỚC ────────────────────────────────────────────────────
             // Người dùng vừa xem trước xong và bấm "Xác nhận": mọi cổng (tư thế, chất lượng, Silent-Face,
             // quay đầu, so khớp đúng người) ĐÃ qua vài giây trước và kết quả còn nguyên
@@ -609,12 +1191,21 @@ public static class ChamCongEndpoints
                         pending.Similarity, confirmDecision.Loai, confirmDecision.ExistingAt, pending.Quality,
                         confirmDecision.Message, null));
 
+                await using var confirmTx = await confirmConn.BeginTransactionAsync();
+                if (!await LockActiveFaceOwnerAsync(confirmConn, confirmTx, pending.MatchedUser))
+                {
+                    await confirmTx.RollbackAsync();
+                    return Results.Ok(new ChamCongResult("disabled", false, null, null, 0, null, null,
+                        pending.Quality, "Tài khoản đã bị khóa hoặc khuôn mặt không còn hiệu lực.",
+                        "Liên hệ HR nếu bạn cho rằng đây là nhầm lẫn."));
+                }
                 await confirmConn.Cmd(
                     @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
-                      VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP, '')")
+                      VALUES (@u, @fn, @loai, @sim, CURRENT_TIMESTAMP, '')", confirmTx)
                     .With("@u", pending.MatchedUser).With("@fn", pending.MatchedName)
                     .With("@loai", confirmDecision.Loai).With("@sim", pending.Similarity)
                     .ExecuteNonQueryAsync();
+                await confirmTx.CommitAsync();
 
                 await db.RecordAudit(pending.MatchedUser, $"Chấm công {confirmDecision.Loai}", "ChamCong",
                     pending.MatchedUser,
@@ -667,44 +1258,42 @@ public static class ChamCongEndpoints
                     "Không thấy khuôn mặt trong ảnh.", "Đưa khuôn mặt vào giữa khung hình rồi chấm lại."));
 
             candidates.Sort((a, b) => b.Q.Score.CompareTo(a.Q.Score));
-            var bestBytes = candidates[0].Bytes;
-            var best = candidates[0].Q;
-
-            // MỞ MẮT: lấy khung "mở mắt nhất" của loạt — người thật chỉ cần MỞ MẮT ở MỘT khung tốt là đủ
-            // (chớp mắt vài khung không sao). Đo phía server nên không tin được cờ client. Giá trị ~1.0 khi
-            // heuristic không đánh giá được (mặt nhỏ/lỗi) ⇒ fail-open.
-            var bestEyeOpen = candidates.Max(c => c.Q.EyeOpen);
-
-            // 2) Cổng tư thế — báo trực tiếp, KHÔNG ghi nhật ký nếu sai.
-            var posture = CheckPosture(best.Pose);
-            if (posture is not null)
-                return Results.Ok(new ChamCongResult("posture", false, null, null, 0, null, null, best.Score,
-                    "Sai tư thế chấm công.", posture));
-
-            // 3) Chất lượng quá thấp (mờ/thiếu sáng/loá) → yêu cầu chụp lại.
-            if (best.Score < MinFrameQuality)
-                return Results.Ok(new ChamCongResult("lowquality", false, null, null, 0, null, null, best.Score,
-                    "Ảnh chưa đủ rõ (thiếu sáng, loá hoặc bị nhòe).",
-                    "Tìm nơi đủ sáng, giữ máy ổn định và nhìn thẳng rồi chấm lại."));
-
-            // 4) Chống giả mạo: chấm liveness trên VÀI khung tốt nhất của loạt, qua nếu CÓ khung đạt.
-            // Model 1 ảnh tĩnh dao động mạnh ngay với người thật (cùng mặt lúc 0.99 lúc 0.11), nên xét
-            // 1 khung dễ từ chối nhầm. Ảnh/màn hình giả thì thấp ở MỌI khung → vẫn bị chặn.
+            // 2) PAD được gắn với từng khung. Chỉ các khung tự vượt ngưỡng mới được phép cung cấp
+            // embedding/pose/eye/smile cho các bước sau; điều này chặn việc ghép người thật ở khung A
+            // với ảnh của nạn nhân ở khung B.
             const int livenessFramesToCheck = 5;
             var liveScores = new List<double>();
+            var liveCandidates = new List<(byte[] Bytes, FaceFrameQuality Q, double Liveness)>();
             foreach (var c in candidates.Take(livenessFramesToCheck))
-                liveScores.Add(engine.LivenessProbability(c.Bytes)); // tính HẾT để có đủ số đo hiệu chỉnh
-            var bestLive = liveScores.Count > 0 ? liveScores.Max() : 0;
-            var livePassed = bestLive >= engine.LivenessThreshold;
+            {
+                var score = FaceAntiSpoofSecurity.ProbabilityReal(engine, c.Bytes);
+                liveScores.Add(score); // tính hết để có đủ số đo hiệu chỉnh
+                if (score >= engine.LivenessThreshold) liveCandidates.Add((c.Bytes, c.Q, score));
+            }
+            var livePassed = liveCandidates.Count > 0;
+            var bestBytes = livePassed ? liveCandidates[0].Bytes : candidates[0].Bytes;
+            var best = livePassed ? liveCandidates[0].Q : candidates[0].Q;
+
+            var signalFrames = livePassed
+                ? liveCandidates.Select(c => c.Q).ToList()
+                : new List<FaceFrameQuality> { best };
+            var bestEyeOpen = signalFrames.Max(q => q.EyeOpen);
+            var bestSmile = signalFrames
+                .Where(q => Math.Abs(q.Pose.Yaw) < 0.20)
+                .Select(q => q.Smile)
+                .DefaultIfEmpty(0)
+                .Max();
 
             // 4a) LIVENESS QUAY ĐẦU (challenge-response): biên độ góc quay yaw của loạt (từ pose các khung
             // đã có sẵn). Ảnh tĩnh không quay đầu ⇒ span ≈ 0. Chỉ xét khi app báo motionCheck.
-            var yaws = candidates.Where(c => c.Q.FaceFound).Select(c => c.Q.Pose.Yaw).ToList();
+            var yaws = liveCandidates.Select(c => c.Q.Pose.Yaw).ToList();
             var motionSpan = req.MotionCheck && yaws.Count >= 2 ? yaws.Max() - yaws.Min() : -1;
             bool motionEnabled = false, motionEnforce = false;
             // Cấu hình MỞ MẮT: đọc LUÔN (không phụ thuộc motionCheck) vì đây là lớp server độc lập.
             bool eyeOpenEnforce;
             double eyeOpenThreshold;
+            bool smileEnabled;
+            double smileThreshold;
             {
                 await using var smc = await db.OpenAsync();
                 if (req.MotionCheck)
@@ -714,6 +1303,8 @@ public static class ChamCongEndpoints
                 }
                 eyeOpenEnforce = await GetSettingBoolAsync(smc, CfgEyeOpenEnforce, DefaultEyeOpenEnforce);
                 eyeOpenThreshold = await GetSettingDoubleAsync(smc, CfgEyeOpenThreshold) ?? DefaultEyeOpenThreshold;
+                smileEnabled = await GetSettingBoolAsync(smc, CfgSmileEnabled, DefaultSmileEnabled);
+                smileThreshold = await GetSettingDoubleAsync(smc, CfgSmileThreshold) ?? DefaultSmileThreshold;
             }
 
             // Ghi số đo (Silent-Face + biên độ quay + độ mở mắt) để hiển thị lên panel hiệu chỉnh.
@@ -726,6 +1317,16 @@ public static class ChamCongEndpoints
             if (!livePassed)
                 return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
                     "Nghi ngờ giả mạo (không phải người thật).", "Hãy nhìn trực tiếp vào camera, không dùng ảnh/màn hình."));
+
+            // 3) Tư thế/chất lượng cũng phải được đánh giá trên chính khung đã vượt PAD.
+            var posture = CheckPosture(best.Pose);
+            if (posture is not null)
+                return Results.Ok(new ChamCongResult("posture", false, null, null, 0, null, null, best.Score,
+                    "Sai tư thế chấm công.", posture));
+            if (best.Score < MinFrameQuality)
+                return Results.Ok(new ChamCongResult("lowquality", false, null, null, 0, null, null, best.Score,
+                    "Ảnh chưa đủ rõ (thiếu sáng, loá hoặc bị nhòe).",
+                    "Tìm nơi đủ sáng, giữ máy ổn định và nhìn thẳng rồi chấm lại."));
 
             // Chặn nếu bật kiểm tra chuyển động + biên độ quay quá nhỏ (nghi ảnh tĩnh). Fail-open khi thiếu
             // dữ liệu (span < 0). Mặc định enforce=false (chỉ ghi log) để hiệu chỉnh trước.
@@ -741,6 +1342,11 @@ public static class ChamCongEndpoints
                 return Results.Ok(new ChamCongResult("eyesclosed", false, null, null, 0, null, null, best.Score,
                     "Chưa xác nhận mở mắt.", "Hãy mở mắt và nhìn thẳng vào màn hình rồi chấm lại."));
 
+            // Yêu cầu cười là tùy chọn nhưng khi đã bật thì server bắt buộc kiểm tra lại từ ảnh.
+            if (smileEnabled && bestSmile < smileThreshold)
+                return Results.Ok(new ChamCongResult("nosmile", false, null, null, 0, null, null, best.Score,
+                    "Chưa xác nhận được nụ cười.", "Hãy nhìn thẳng, mỉm cười rõ hơn và quét lại khuôn mặt."));
+
             // ĐÃ GỠ: 4b) active-flash liveness (đối chiếu màu phản xạ với chuỗi màu màn hình). Khối này
             // chỉ chạy khi client gửi challengeId + slotIndices, mà cả APK lẫn web đều đã ngừng gửi từ
             // lâu ⇒ nó chưa từng gác gì trên thực tế. Xem ghi chú đầu lớp.
@@ -750,12 +1356,30 @@ public static class ChamCongEndpoints
             // không làm méo vector. Không có khung chính diện nào ⇒ dùng khung tốt nhất.
             const int fuseFrames = 5;
             const double frontalYawLimit = 0.18;
-            var fuseBytes = candidates
+            var fuseBytes = liveCandidates
                 .Where(c => Math.Abs(c.Q.Pose.Yaw) < frontalYawLimit)
                 .Take(fuseFrames)
                 .Select(c => c.Bytes)
                 .ToList();
             if (fuseBytes.Count == 0) fuseBytes.Add(bestBytes);
+
+            // Một burst có thể chứa nhiều người thật. Kiểm tra danh tính từng khung trước khi fuse để
+            // không tạo vector lai hoặc cho một người "mượn" chuyển động của người khác.
+            var frameEmbeddings = new List<float[]>();
+            foreach (var frame in fuseBytes)
+            {
+                if (engine.ExtractEmbedding(frame) is { } frameEmbedding)
+                    frameEmbeddings.Add(frameEmbedding);
+            }
+            if (frameEmbeddings.Count == 0)
+                return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, best.Score,
+                    "Không trích được đặc trưng khuôn mặt.", "Nhìn thẳng vào camera rồi chấm lại."));
+            var burstConsistencyThreshold = Math.Max(0.33, engine.MatchThreshold - 0.12);
+            if (frameEmbeddings.Skip(1).Any(e => engine.Compare(frameEmbeddings[0], e) < burstConsistencyThreshold))
+                return Results.Ok(new ChamCongResult("spoof", false, null, null, 0, null, null, best.Score,
+                    "Phát hiện nhiều khuôn mặt khác nhau trong lượt quét.",
+                    "Chỉ một người đứng trước camera và chấm công lại."));
+
             var probe = engine.ExtractFusedEmbedding(fuseBytes);
             if (probe is null)
                 return Results.Ok(new ChamCongResult("noface", false, null, null, 0, null, null, best.Score,
@@ -770,7 +1394,11 @@ public static class ChamCongEndpoints
             double selfSim = 0;
             string? selfName = null;
             await using (var r = await conn.Cmd(
-                "SELECT username, full_name, embedding FROM cham_cong_face").ExecuteReaderAsync())
+                @"SELECT f.username, f.full_name, f.embedding
+                    FROM cham_cong_face f
+                    JOIN app_users a ON lower(a.username)=lower(f.username)
+                   WHERE a.is_active=TRUE AND COALESCE(a.is_deleted,FALSE)=FALSE
+                     AND a.approval_status='Approved'").ExecuteReaderAsync())
             {
                 while (await r.ReadAsync())
                 {
@@ -855,8 +1483,16 @@ public static class ChamCongEndpoints
             // ty lúc chấm) → tạo bản CHỜ DUYỆT + gắn cờ rủi ro để quản lý soi và duyệt/từ chối trên web.
             if (isOffline)
             {
+                await using var offlineTx = await conn.BeginTransactionAsync();
+                if (!await LockActiveFaceOwnerAsync(conn, offlineTx, bestUser))
+                {
+                    await offlineTx.RollbackAsync();
+                    return Results.Ok(new ChamCongResult("disabled", false, null, null, 0, null, null,
+                        best.Score, "Tài khoản đã bị khóa hoặc khuôn mặt không còn hiệu lực.", null));
+                }
                 await CreateOfflinePendingAsync(conn, http, bestUser, bestName ?? "", decision,
-                    bestSim, best.Score, occurredAtUtc!.Value, req.GpsLat, req.GpsLng);
+                    bestSim, best.Score, occurredAtUtc!.Value, req.GpsLat, req.GpsLng, offlineTx);
+                await offlineTx.CommitAsync();
                 await db.RecordAudit(bestUser, "Chấm công ngoại tuyến (chờ duyệt)", "ChamCong", bestUser,
                     $"Chờ duyệt · độ khớp {bestSim:0.000} · giờ chấm {occurredAtUtc:yyyy-MM-dd HH:mm} (UTC).");
                 return Results.Ok(new ChamCongResult("pending", true, outUser, outName, bestSim, decision.Loai,
@@ -868,14 +1504,22 @@ public static class ChamCongEndpoints
                     decision.ExistingAt, best.Score, decision.Message, null));
 
             var loai = decision.Loai;
+            await using var writeTx = await conn.BeginTransactionAsync();
+            if (!await LockActiveFaceOwnerAsync(conn, writeTx, bestUser))
+            {
+                await writeTx.RollbackAsync();
+                return Results.Ok(new ChamCongResult("disabled", false, null, null, 0, null, null,
+                    best.Score, "Tài khoản đã bị khóa hoặc khuôn mặt không còn hiệu lực.", null));
+            }
             await conn.Cmd(
                 @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
-                  VALUES (@u, @fn, @loai, @sim, COALESCE(@at, CURRENT_TIMESTAMP), @note)")
+                  VALUES (@u, @fn, @loai, @sim, COALESCE(@at, CURRENT_TIMESTAMP), @note)", writeTx)
                 .With("@u", bestUser).With("@fn", bestName ?? "")
                 .With("@loai", loai).With("@sim", bestSim)
                 .With("@at", (object?)occurredAtUtc ?? DBNull.Value)
                 .With("@note", isOffline ? "Đồng bộ ngoại tuyến" : "")
                 .ExecuteNonQueryAsync();
+            await writeTx.CommitAsync();
 
             await db.RecordAudit(bestUser, $"Chấm công {loai}", "ChamCong", bestUser,
                 $"Độ khớp {bestSim:0.000}, chất lượng ảnh {best.Score:0.00}{(isOffline ? ", đồng bộ ngoại tuyến" : "")} (web).");
@@ -979,34 +1623,69 @@ public static class ChamCongEndpoints
         g.MapPost("/offline/{id:long}/approve", async (long id, OfflineReviewRequest? body, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
-            string? username = null, fullName = null, loai = null; DateTime occurredAt = default; double sim = 0; string curStatus = "";
+            // Đọc username không khóa trước để giữ thứ tự khóa toàn hệ thống: app_user -> bản offline.
+            // DeleteUserEverywhere cũng khóa app_user trước rồi mới xóa offline, nên không tạo vòng deadlock.
+            var expectedUsername = Convert.ToString(await conn.Cmd(
+                "SELECT username FROM cham_cong_offline WHERE id=@id LIMIT 1")
+                .With("@id", id).ExecuteScalarAsync());
+            if (string.IsNullOrWhiteSpace(expectedUsername)) return Results.NotFound();
+
+            await using var tx = await conn.BeginTransactionAsync();
+            if (!await LockActiveFaceOwnerAsync(conn, tx, expectedUsername))
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new { message = "Không thể duyệt: tài khoản hoặc khuôn mặt của nhân viên không còn hoạt động." });
+            }
+
+            string username = "", fullName = "", loai = "", curStatus = "";
+            DateTime occurredAt = default;
+            double sim = 0;
             await using (var r = await conn.Cmd(
-                "SELECT username, full_name, loai, occurred_at, similarity, status FROM cham_cong_offline WHERE id=@id")
+                "SELECT username, full_name, loai, occurred_at, similarity, status FROM cham_cong_offline WHERE id=@id FOR UPDATE", tx)
                 .With("@id", id).ExecuteReaderAsync())
             {
-                if (!await r.ReadAsync()) return Results.NotFound();
+                if (!await r.ReadAsync())
+                {
+                    await tx.RollbackAsync();
+                    return Results.NotFound();
+                }
                 username = r.Str("username"); fullName = r.Str("full_name"); loai = r.Str("loai");
                 occurredAt = r.Dt("occurred_at"); sim = r.GetDouble(r.GetOrdinal("similarity")); curStatus = r.Str("status");
             }
+            if (!string.Equals(username, expectedUsername, StringComparison.OrdinalIgnoreCase))
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new { message = "Bản chấm công đã thay đổi chủ sở hữu; yêu cầu bị hủy an toàn." });
+            }
+            // Retry hoặc hai quản trị viên duyệt đồng thời đều nhận thành công nhưng không ghi log lần hai.
+            if (curStatus == "approved")
+            {
+                await tx.CommitAsync();
+                return Results.Ok(new { message = "Bản này đã được duyệt và ghi công trước đó.", alreadyApproved = true });
+            }
             if (curStatus != "pending")
-                return Results.BadRequest(new { message = "Bản này đã được xử lý." });
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new { message = "Bản này đã được xử lý với trạng thái khác." });
+            }
 
             await conn.Cmd(
                 @"INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
-                  VALUES (@u, @fn, @loai, @sim, @at, @note)")
-                .With("@u", username!).With("@fn", fullName ?? "")
-                .With("@loai", loai!).With("@sim", sim)
+                  VALUES (@u, @fn, @loai, @sim, @at, @note)", tx)
+                .With("@u", username).With("@fn", fullName)
+                .With("@loai", loai).With("@sim", sim)
                 .With("@at", occurredAt)
                 .With("@note", "Ngoại tuyến (đã duyệt)")
                 .ExecuteNonQueryAsync();
 
             await conn.Cmd(
                 @"UPDATE cham_cong_offline SET status='approved', reviewed_by=@by, reviewed_at=CURRENT_TIMESTAMP,
-                    review_note=@note WHERE id=@id")
+                    review_note=@note WHERE id=@id AND status='pending'", tx)
                 .With("@by", u.Username()).With("@note", body?.Note ?? "").With("@id", id)
                 .ExecuteNonQueryAsync();
+            await tx.CommitAsync();
 
-            await db.RecordAudit(u.Username(), "Duyệt chấm công ngoại tuyến", "ChamCong", username!,
+            await db.RecordAudit(u.Username(), "Duyệt chấm công ngoại tuyến", "ChamCong", username,
                 $"Duyệt bản #{id} · {loai} · {occurredAt:yyyy-MM-dd HH:mm} (UTC).");
             return Results.Ok(new { message = "Đã duyệt và ghi công." });
         }).RequirePermission(Permissions.AttendanceManage);
@@ -1060,6 +1739,83 @@ public static class ChamCongEndpoints
             .With("@k", key).With("@v", value).With("@by", by).ExecuteNonQueryAsync();
     }
 
+    /// <summary>Hết hạn yêu cầu và xóa ngay vector staging; metadata được giữ lại cho audit.</summary>
+    private static async Task ExpireFaceEnrollmentsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx = null)
+    {
+        const string sql = """
+            UPDATE cham_cong_face_enrollments
+               SET status='expired', reviewed_at=CURRENT_TIMESTAMP,
+                   review_note='Tự động hết hạn sau 14 ngày.'
+             WHERE status='pending' AND expires_at <= CURRENT_TIMESTAMP;
+            DELETE FROM cham_cong_face_enrollment_samples s
+             USING cham_cong_face_enrollments r
+             WHERE s.request_id=r.id AND r.status='expired';
+            """;
+        var cmd = tx is null ? conn.Cmd(sql) : conn.Cmd(sql, tx);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static bool SelfEnrollPoseMatches(string? requestedPose, FacePose detected)
+    {
+        return (requestedPose ?? "").Trim().ToLowerInvariant() switch
+        {
+            "front" => CheckPosture(detected) is null,
+            "side1" or "side2" => Math.Abs(detected.Yaw) > PostureYawMax,
+            "up" => Math.Abs(detected.Yaw) <= PostureYawMax && detected.Pitch < PosturePitchMin,
+            "down" => Math.Abs(detected.Yaw) <= PostureYawMax && detected.Pitch > PosturePitchMax,
+            _ => false
+        };
+    }
+
+    private static async Task<bool> LockActiveFaceOwnerAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string username)
+    {
+        string? canonical = null;
+        // Khóa tài khoản TRƯỚC, rồi mới kiểm tra kho mặt bằng một statement mới. Nhờ vậy một
+        // transaction xóa đã commit trong lúc ta chờ khóa không thể bị snapshot cũ che khuất.
+        await using (var reader = await conn.Cmd(
+            @"SELECT username
+                FROM app_users
+               WHERE lower(username)=lower(@u)
+                 AND is_active=TRUE
+                 AND COALESCE(is_deleted,FALSE)=FALSE
+                 AND approval_status='Approved'
+               ORDER BY username
+               FOR UPDATE", tx).With("@u", username).ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                var candidate = reader.Str("username");
+                if (canonical is null || string.Equals(candidate, username, StringComparison.Ordinal))
+                    canonical = candidate;
+            }
+        }
+        if (canonical is null) return false;
+
+        var face = await conn.Cmd(
+            "SELECT 1 FROM cham_cong_face WHERE lower(username)=lower(@u) LIMIT 1", tx)
+            .With("@u", canonical).ExecuteScalarAsync();
+        return face is not null and not DBNull;
+    }
+
+    private static async Task<string?> LockFaceOwnerForMutationAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string username)
+    {
+        string? canonical = null;
+        // Không lọc active: quản trị viên vẫn phải xóa được dữ liệu sinh trắc của tài khoản đã khóa.
+        // Đọc hết để khóa mọi biến thể hoa/thường nếu dữ liệu cũ từng cho phép chúng cùng tồn tại.
+        await using var reader = await conn.Cmd(
+            "SELECT username FROM app_users WHERE lower(username)=lower(@u) ORDER BY username FOR UPDATE", tx)
+            .With("@u", username).ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var candidate = reader.Str("username");
+            if (canonical is null || string.Equals(candidate, username, StringComparison.Ordinal))
+                canonical = candidate;
+        }
+        return canonical;
+    }
+
     /// <summary>
     /// Tạo bản chấm công ngoại tuyến CHỜ DUYỆT + tính các cờ rủi ro: lùi giờ (occurred so với lúc nhận),
     /// có ở LAN công ty không (IP riêng/khớp cấu hình), có trong geofence không (nếu đã cấu hình toạ độ).
@@ -1067,17 +1823,17 @@ public static class ChamCongEndpoints
     private static async Task CreateOfflinePendingAsync(
         NpgsqlConnection conn, HttpContext http, string username, string fullName,
         AttendanceDecision decision, double similarity, double quality, DateTime occurredAtUtc,
-        double? gpsLat, double? gpsLng)
+        double? gpsLat, double? gpsLng, NpgsqlTransaction tx)
     {
         var nowUtc = DateTime.UtcNow;
         var backdateMinutes = Math.Max(0, (int)(nowUtc - occurredAtUtc).TotalMinutes);
         var ip = (http.Connection.RemoteIpAddress?.MapToIPv4() ?? http.Connection.RemoteIpAddress)?.ToString() ?? "";
         var onLan = IsPrivateIp(http.Connection.RemoteIpAddress);
 
-        var maxBackdate = (int)(await GetSettingDoubleAsync(conn, CfgMaxBackdate) ?? DefaultMaxBackdateMinutes);
-        var geoLat = await GetSettingDoubleAsync(conn, CfgGeofenceLat);
-        var geoLng = await GetSettingDoubleAsync(conn, CfgGeofenceLng);
-        var geoRadius = await GetSettingDoubleAsync(conn, CfgGeofenceRadius) ?? DefaultGeofenceRadiusM;
+        var maxBackdate = (int)(await GetSettingDoubleAsync(conn, CfgMaxBackdate, tx) ?? DefaultMaxBackdateMinutes);
+        var geoLat = await GetSettingDoubleAsync(conn, CfgGeofenceLat, tx);
+        var geoLng = await GetSettingDoubleAsync(conn, CfgGeofenceLng, tx);
+        var geoRadius = await GetSettingDoubleAsync(conn, CfgGeofenceRadius, tx) ?? DefaultGeofenceRadiusM;
 
         double? distanceM = null;
         bool? inGeofence = null;
@@ -1098,7 +1854,7 @@ public static class ChamCongEndpoints
             @"INSERT INTO cham_cong_offline
                 (username, full_name, loai, similarity, quality, occurred_at, synced_at, backdate_minutes,
                  client_ip, on_company_lan, gps_lat, gps_lng, distance_m, in_geofence, flags, status)
-              VALUES (@u, @fn, @loai, @sim, @q, @at, CURRENT_TIMESTAMP, @bd, @ip, @lan, @la, @lo, @dist, @inf, @flags, 'pending')")
+              VALUES (@u, @fn, @loai, @sim, @q, @at, CURRENT_TIMESTAMP, @bd, @ip, @lan, @la, @lo, @dist, @inf, @flags, 'pending')", tx)
             .With("@u", username).With("@fn", fullName).With("@loai", decision.Loai)
             .With("@sim", similarity).With("@q", quality).With("@at", occurredAtUtc)
             .With("@bd", backdateMinutes).With("@ip", ip).With("@lan", onLan)
@@ -1115,10 +1871,12 @@ public static class ChamCongEndpoints
         return v is string s ? (s == "1" || s.Equals("true", StringComparison.OrdinalIgnoreCase)) : dflt;
     }
 
-    private static async Task<double?> GetSettingDoubleAsync(NpgsqlConnection conn, string key)
+    private static async Task<double?> GetSettingDoubleAsync(
+        NpgsqlConnection conn, string key, NpgsqlTransaction? tx = null)
     {
-        var v = await conn.Cmd("SELECT setting_value FROM web_system_settings WHERE setting_key=@k LIMIT 1")
-            .With("@k", key).ExecuteScalarAsync();
+        const string sql = "SELECT setting_value FROM web_system_settings WHERE setting_key=@k LIMIT 1";
+        var cmd = tx is null ? conn.Cmd(sql) : conn.Cmd(sql, tx);
+        var v = await cmd.With("@k", key).ExecuteScalarAsync();
         return v is string s && double.TryParse(s, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : null;
     }
@@ -1159,17 +1917,26 @@ public static class ChamCongEndpoints
     {
         if (similarity < AdaptiveLearnMinSimilarity) return;
 
+        await using var tx = await conn.BeginTransactionAsync();
+        // Khóa cùng hàng app_user với luồng xóa/khóa. Nếu tài khoản vừa bị vô hiệu hóa sau bước
+        // nhận diện, tuyệt đối không được tái tạo một mẫu khuôn mặt mồ côi.
+        if (!await LockActiveFaceOwnerAsync(conn, tx, username))
+        {
+            await tx.RollbackAsync();
+            return;
+        }
+
         // Mỗi người chỉ học tối đa 1 mẫu/ngày.
         var learnedToday = await conn.Cmd(
             @"SELECT 1 FROM cham_cong_face
               WHERE username=@u AND created_by=@auto
                 AND created_at::date = CURRENT_DATE
-              LIMIT 1")
+              LIMIT 1", tx)
             .With("@u", username).With("@auto", AutoLearnTag).ExecuteScalarAsync();
         if (learnedToday is not null and not DBNull) return;
 
         var total = Convert.ToInt32(await conn.Cmd(
-            "SELECT COUNT(*) FROM cham_cong_face WHERE username=@u")
+            "SELECT COUNT(*) FROM cham_cong_face WHERE username=@u", tx)
             .With("@u", username).ExecuteScalarAsync());
 
         if (total >= MaxFaceSamples)
@@ -1177,20 +1944,21 @@ public static class ChamCongEndpoints
             // Hết chỗ → thay mẫu TỰ HỌC cũ nhất. Nếu cả 5 đều là mẫu admin thì thôi (không học).
             var oldestAuto = await conn.Cmd(
                 @"SELECT id FROM cham_cong_face
-                  WHERE username=@u AND created_by=@auto ORDER BY created_at ASC, id ASC LIMIT 1")
+                  WHERE username=@u AND created_by=@auto ORDER BY created_at ASC, id ASC LIMIT 1", tx)
                 .With("@u", username).With("@auto", AutoLearnTag).ExecuteScalarAsync();
             if (oldestAuto is null or DBNull) return;
-            await conn.Cmd("DELETE FROM cham_cong_face WHERE id=@id")
+            await conn.Cmd("DELETE FROM cham_cong_face WHERE id=@id", tx)
                 .With("@id", Convert.ToInt64(oldestAuto)).ExecuteNonQueryAsync();
         }
 
         await conn.Cmd(
             @"INSERT INTO cham_cong_face (username, full_name, embedding, anh, created_at, created_by)
-              VALUES (@u, @fn, @emb, NULL, CURRENT_TIMESTAMP, @auto)")
+              VALUES (@u, @fn, @emb, NULL, CURRENT_TIMESTAMP, @auto)", tx)
             .With("@u", username).With("@fn", fullName)
             .With("@emb", cipher.EncryptEmbedding(embedding))
             .With("@auto", AutoLearnTag)
             .ExecuteNonQueryAsync();
+        await tx.CommitAsync();
     }
 
     /// <summary>

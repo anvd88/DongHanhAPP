@@ -602,6 +602,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // quay đầu; false = giữ khung tĩnh như cũ.
     var motionMode: Boolean by mutableStateOf(false)
         private set
+    var smileMode: Boolean by mutableStateOf(false)
+        private set
+    var smileThreshold: Float by mutableStateOf(0.65f)
+        private set
     var attendanceServer: AttendanceServerState by mutableStateOf(AttendanceServerState.Checking)
         private set
     var attendanceCapture: AttendanceCapture by mutableStateOf(AttendanceCapture.Idle)
@@ -619,6 +623,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // Đăng ký khuôn mặt: trạng thái đã đăng ký (null = chưa biết) + luồng quét đăng ký.
     var faceRegistered: Boolean? by mutableStateOf(null)
         private set
+    var faceEnrollmentPending by mutableStateOf(false)
+        private set
+    var faceEnrollmentStatus: String? by mutableStateOf(null)
+        private set
+    var faceEnrollmentReviewNote: String? by mutableStateOf(null)
+        private set
     var faceStatusLoading by mutableStateOf(false)
         private set
     var faceEnroll: FaceEnrollCapture by mutableStateOf(FaceEnrollCapture.Idle)
@@ -635,7 +645,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     private var lastConfigFetchAt = 0L
 
     /** Chỉ hiện banner nhắc khuôn mặt khi CHẮC CHẮN chưa đăng ký VÀ admin không tắt từ xa. */
-    val showFaceEnrollBanner: Boolean get() = faceRegistered == false && appConfig.faceEnrollBannerEnabled
+    val showFaceEnrollBanner: Boolean get() =
+        faceRegistered == false && !faceEnrollmentPending && appConfig.faceEnrollBannerEnabled
     var rememberedUsername by mutableStateOf("")
         private set
     var actionMessage: String? by mutableStateOf(null)
@@ -649,7 +660,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     var notifications: List<AppNotification> by mutableStateOf(emptyList())
         private set
 
-    // Cập nhật tự động (không cần vào Cài đặt): bản mới tìm thấy ngầm + cờ hiện bảng cập nhật.
+    // Cập nhật tự động (không cần vào Cài đặt): bản mới tìm thấy ngầm + thanh nhắc toàn ứng dụng.
     var availableUpdate: ReleaseInfo? by mutableStateOf(null)
         private set
     var updateSheetVisible by mutableStateOf(false)
@@ -850,6 +861,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
         if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
         faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
+        faceEnrollmentPending = user.faceEnrollmentPending
+        faceEnrollmentStatus = when {
+            user.faceRegistered -> "registered"
+            user.faceEnrollmentPending -> "pending"
+            else -> "not_enrolled"
+        }
         loadAppConfig(force = true)
         consumePendingTarget(user)
         autoCheckForUpdate(force = true)
@@ -1032,6 +1049,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             attendanceServer = AttendanceServerState.Checking
             attendanceCapture = AttendanceCapture.Idle
             faceRegistered = null
+            faceEnrollmentPending = false
+            faceEnrollmentStatus = null
+            faceEnrollmentReviewNote = null
             faceEnroll = FaceEnrollCapture.Idle
             openFaceEnroll = false
             appConfig = AppConfig()
@@ -1127,7 +1147,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateTo(target: String?, entityId: String? = null) {
         // Thông báo "bản cập nhật mới" → kiểm tra lại ngay và mở bảng cập nhật (không phải điều hướng).
         // Bỏ qua mốc hoãn: người dùng vừa chủ động bấm vào thông báo thì đương nhiên muốn xem bản mới.
-        if (target == UPDATE_TARGET) { autoCheckForUpdate(force = true, bypassSnooze = true); return }
+        if (target == UPDATE_TARGET) { autoCheckForUpdate(force = true, openDetails = true); return }
         // "WorkTasks" là tên màn CŨ (trước khi gộp vào "Việc cần làm") — thông báo do máy chủ bản cũ
         // gửi vẫn còn mang tên này nên phải quy về màn mới, nếu không bấm vào sẽ không đi đâu cả.
         val name = if (target == "WorkTasks") HrDestination.Tasks.name else target
@@ -2303,6 +2323,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
         if (user.can(AppPermissions.HrRead)) refreshManager(silent = true)
         faceRegistered = user.faceRegistered // cờ đi kèm dữ liệu đăng nhập → không cần gọi API riêng
+        faceEnrollmentPending = user.faceEnrollmentPending
+        faceEnrollmentStatus = when {
+            user.faceRegistered -> "registered"
+            user.faceEnrollmentPending -> "pending"
+            else -> "not_enrolled"
+        }
         loadAppConfig(force = true)
         consumePendingTarget(user)
     }
@@ -2745,11 +2771,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Kiểm tra cập nhật NGẦM để nhắc người dùng ngay trên Trang chủ (không phải vào Cài đặt).
+     * Kiểm tra cập nhật NGẦM để nhắc người dùng bằng thanh cố định trên mọi màn hình (không phải vào Cài đặt).
      * Gọi lúc đăng nhập ([force]) và mỗi khi app quay lại foreground; tự chặn gọi dồn trong 10 phút.
      * Lỗi mạng thì im lặng — người dùng vẫn có nút "Kiểm tra cập nhật" thủ công trong Cài đặt.
      */
-    fun autoCheckForUpdate(force: Boolean = false, bypassSnooze: Boolean = false) {
+    fun autoCheckForUpdate(force: Boolean = false, openDetails: Boolean = false) {
         if (authState !is AuthState.SignedIn) return
         val now = System.currentTimeMillis()
         if (!force && now - lastUpdateCheckAt < 10 * 60 * 1000L) return
@@ -2759,7 +2785,16 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             val current = AppUpdater.installedVersionCode(ctx)
             runCatching { repo.latestRelease(current) }
                 .onSuccess { info ->
-                    if (!info.hasUpdate) return@onSuccess
+                    if (!info.hasUpdate) {
+                        availableUpdate = null
+                        settingsState = settingsState.copy(
+                            updateInfo = null,
+                            updateChecked = true,
+                            updateMessage = "Bạn đang dùng phiên bản mới nhất.",
+                        )
+                        if (updateStage is UpdateStage.Idle) updateSheetVisible = false
+                        return@onSuccess
+                    }
                     availableUpdate = info
                     // Đồng bộ luôn màn Cài đặt để nút "Cập nhật ngay" ở đó cũng sẵn sàng.
                     settingsState = settingsState.copy(
@@ -2769,11 +2804,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     // Đang tải/đang cài thì đừng dựng lại bảng đè lên tiến trình đang chạy.
                     if (updateStage !is UpdateStage.Idle) return@onSuccess
-                    // Bản bắt buộc luôn nhắc; bản thường im cho tới hết hạn hoãn đã ghi xuống đĩa.
-                    val (snoozedVersion, snoozedUntil) = tokenStore.snoozedUpdate()
-                    val snoozed = !bypassSnooze &&
-                        snoozedVersion == info.versionCode && System.currentTimeMillis() < snoozedUntil
-                    if (info.isMandatory || !snoozed) {
+                    // Bản thường chỉ hiện thanh nhỏ để không chặn công việc. Bản bắt buộc vẫn mở bảng;
+                    // openDetails=true là lúc người dùng chủ động bấm thông báo phát hành ngoài hệ thống.
+                    if (info.isMandatory || openDetails) {
                         updateNeedsMeteredConsent = needsMeteredConsent(ctx, info)
                         updateSheetVisible = true
                     }
@@ -2790,8 +2823,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Người dùng bấm "Để sau" — ẩn bảng và **hoãn 24 giờ**, ghi xuống đĩa nên tắt/mở lại app vẫn nhớ.
-     * Trước đây chỉ nhớ trong RAM của ViewModel, mở lại app là bị nhắc ngay lần nữa.
+     * Người dùng bấm "Để sau" — chỉ ẩn bảng chi tiết; thanh cập nhật nhỏ vẫn hiện trên mọi màn hình.
+     * Không lưu trạng thái "đã bỏ qua" nên đóng/mở app vẫn tiếp tục nhắc cho tới khi đã cài bản mới.
      */
     fun dismissUpdateSheet() {
         val info = availableUpdate
@@ -2799,11 +2832,6 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         if (updateStage is UpdateStage.Downloading) return  // đang tải: đóng bảng sẽ mất dấu tiến độ
         updateSheetVisible = false
         updateStage = UpdateStage.Idle
-        if (info != null) {
-            viewModelScope.launch {
-                runCatching { tokenStore.snoozeUpdate(info.versionCode, System.currentTimeMillis() + UPDATE_SNOOZE_MS) }
-            }
-        }
     }
 
     /** Gói lớn + đang dùng dữ liệu di động → phải xác nhận trước khi tốn cước. */
@@ -2907,11 +2935,19 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         if (attendanceServer !is AttendanceServerState.Online) return
         captureOffline = false
         motionMode = false
-        // Đọc cấu hình liveness quay đầu TRƯỚC khi mở camera để biết pha quét (quay đầu hay giữ tĩnh).
-        // Lỗi/không có ⇒ giữ tĩnh như cũ. Hiện màn chờ ngắn trong lúc đọc.
+        smileMode = false
+        smileThreshold = 0.65f
+        // Đọc đồng thời cấu hình quay đầu + yêu cầu cười TRƯỚC khi mở camera. Backend cũ/lỗi mạng
+        // sẽ tự lùi về tắt để không khóa chức năng chấm công.
         attendanceCapture = AttendanceCapture.Preparing
         viewModelScope.launch {
-            motionMode = runCatching { repo.motionConfig().enabled }.getOrDefault(false)
+            val motionRequest = async { runCatching { repo.motionConfig().enabled }.getOrDefault(false) }
+            val smileRequest = async { runCatching { repo.smileConfig() }.getOrNull() }
+            motionMode = motionRequest.await()
+            smileRequest.await()?.let {
+                smileMode = it.enabled
+                smileThreshold = it.threshold.coerceIn(0.35, 0.95).toFloat()
+            }
             // Chỉ mở camera nếu người dùng chưa hủy trong lúc chờ.
             if (attendanceCapture is AttendanceCapture.Preparing) {
                 attendanceCapture = AttendanceCapture.Collecting
@@ -2922,6 +2958,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Bắt đầu chấm công NGOẠI TUYẾN (khi mất mạng/máy chủ): quét xong lưu tạm, chờ đồng bộ + duyệt. */
     fun startOfflineCapture() {
         captureOffline = true
+        motionMode = false
+        smileMode = false
         attendanceCapture = AttendanceCapture.Collecting
     }
 
@@ -3045,11 +3083,16 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // ── Tự đăng ký khuôn mặt (mỗi tài khoản một lần, quét nhiều góc) ─────────────
     /** Nạp trạng thái đã đăng ký khuôn mặt của chính tài khoản (để làm mờ nút đăng ký). */
     fun loadFaceStatus(force: Boolean = false) {
-        if (!force && faceRegistered != null) return
+        if (!force && faceEnrollmentStatus != null) return
         viewModelScope.launch {
             faceStatusLoading = true
             runCatching { repo.myFaceStatus() }
-                .onSuccess { faceRegistered = it.registered }
+                .onSuccess {
+                    faceRegistered = it.registered
+                    faceEnrollmentPending = it.pending
+                    faceEnrollmentStatus = it.requestStatus ?: if (it.registered) "registered" else "not_enrolled"
+                    faceEnrollmentReviewNote = it.reviewNote
+                }
                 .onFailure { /* im lặng: giữ null, người dùng vẫn có thể thử đăng ký */ }
             faceStatusLoading = false
         }
@@ -3066,7 +3109,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Bắt đầu quét đăng ký khuôn mặt (chặn nếu đã đăng ký rồi). */
     fun startFaceEnroll() {
-        if (faceRegistered == true) return
+        if (faceRegistered == true || faceEnrollmentPending) return
         faceEnroll = FaceEnrollCapture.Capturing
     }
 
@@ -3144,8 +3187,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { repo.enrollFace(poses) }
                 .onSuccess {
-                    faceRegistered = true
-                    faceEnroll = FaceEnrollCapture.Done(true, it.message.ifBlank { "Đăng ký khuôn mặt thành công." })
+                    faceRegistered = false
+                    faceEnrollmentPending = it.status.equals("pending", ignoreCase = true)
+                    faceEnrollmentStatus = it.status.ifBlank { "pending" }
+                    faceEnrollmentReviewNote = null
+                    faceEnroll = FaceEnrollCapture.Done(true, it.message.ifBlank { "Đã gửi yêu cầu đăng ký khuôn mặt chờ HR duyệt." })
                 }
                 .onFailure {
                     faceEnroll = FaceEnrollCapture.Done(false, readable(it))
@@ -3190,7 +3236,6 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         /** Sentinel target của thông báo "bản cập nhật mới" (khớp với backend PushService). */
         const val UPDATE_TARGET = "AppUpdate"
         /** Bấm "Để sau" thì im 24 giờ (bản bắt buộc không áp dụng). */
-        private const val UPDATE_SNOOZE_MS = 24 * 60 * 60 * 1000L
         private const val AUDIT_PAGE_SIZE = 50
         /** Khi SignalR đang mở (foreground): chỉ ping HTTP thưa cỡ này làm lưới an toàn phát hiện phiên
          *  bị thu hồi phòng khi lỡ sự kiện "kicked". Presence + banner lúc đó đã do kết nối SignalR lo. */

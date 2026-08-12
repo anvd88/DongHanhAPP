@@ -121,15 +121,15 @@ public static class UserEndpoints
 
             var employeeId = await conn.Cmd("SELECT id FROM hr_employees WHERE lower(username)=lower(@u) LIMIT 1")
                 .With("@u", req.Username.Trim()).ExecuteScalarAsync();
-            var rolesManagedByPositions = employeeId is Guid managedEmployee
-                                          && await conn.Cmd("SELECT EXISTS(SELECT 1 FROM hr_employee_positions WHERE employee_id=@id)")
-                                              .With("@id", managedEmployee).ExecuteScalarAsync() is bool managed && managed;
-            if (rolesManagedByPositions && employeeId is Guid positionManagedEmployee)
-            {
-                var derivedPrimary = (await EmployeePositionRoleService.LoadDerivedRolesAsync(conn, positionManagedEmployee))[0];
-                // Hồ sơ đã có chức vụ thì server là source-of-truth; bỏ qua role cũ client gửi lên.
-                role = derivedPrimary;
-            }
+            if (employeeId is not Guid managedEmployee)
+                return Results.Conflict(new
+                {
+                    message = "Không thể tạo tài khoản rời. Hãy tạo hồ sơ nhân sự và chọn chức vụ; hệ thống sẽ tự tạo tài khoản và phân quyền."
+                });
+
+            // Tài khoản luôn thuộc về một hồ sơ. Vai trò do TOÀN BỘ chức vụ của hồ sơ quyết định;
+            // tuyệt đối không tin role client gửi lên, kể cả ở đường khôi phục tài khoản cho hồ sơ cũ.
+            role = (await EmployeePositionRoleService.LoadDerivedRolesAsync(conn, managedEmployee))[0];
 
             var id = Guid.NewGuid();
             EmployeePositionRoleService.SyncResult? roleSync = null;
@@ -156,9 +156,8 @@ public static class UserEndpoints
             if (employeeId is Guid eid)
             {
                 await HrEndpoints.SyncEmployeeAccountSharedFields(conn, eid, tx);
-                if (rolesManagedByPositions)
-                    roleSync = await EmployeePositionRoleService.SyncAsync(
-                        conn, eid, u.Username(), http.Connection.RemoteIpAddress?.ToString() ?? "", tx);
+                roleSync = await EmployeePositionRoleService.SyncAsync(
+                    conn, eid, u.Username(), http.Connection.RemoteIpAddress?.ToString() ?? "", tx);
             }
             await tx.CommitAsync();
 
@@ -567,9 +566,14 @@ WHERE NOT EXISTS (SELECT 1 FROM web_chat_members mm WHERE mm.conversation_id = c
 DELETE FROM web_verified_users WHERE username = @username;
 DELETE FROM web_diamond_members WHERE username = @username;
 DELETE FROM user_roles WHERE username = @username;
-DELETE FROM cham_cong_log WHERE username = @username;
-DELETE FROM cham_cong_face WHERE username = @username;
-UPDATE cham_cong_face SET created_by = '' WHERE created_by = @username;
+-- Dữ liệu chấm công cũ có thể mang casing khác app_users (ALICE/alice). Luôn dọn theo
+-- danh tính chuẩn không phân biệt hoa-thường để không sót log hoặc vector sinh trắc mồ côi.
+DELETE FROM cham_cong_log WHERE lower(username) = lower(@username);
+DELETE FROM cham_cong_offline WHERE lower(username) = lower(@username);
+DELETE FROM cham_cong_face WHERE lower(username) = lower(@username);
+UPDATE cham_cong_face SET created_by = '' WHERE lower(created_by) = lower(@username);
+DELETE FROM cham_cong_face_enrollments WHERE lower(username) = lower(@username);
+UPDATE cham_cong_face_enrollments SET reviewed_by = '' WHERE lower(reviewed_by) = lower(@username);
 DELETE FROM user_sessions WHERE username = @username;
 DELETE FROM work_access_requests WHERE username = @username;
 UPDATE work_access_requests SET approved_by = '' WHERE approved_by = @username;
@@ -583,9 +587,9 @@ UPDATE app_users SET approved_by = '' WHERE approved_by = @username;
 
 DELETE FROM audit_logs
 WHERE user_id = @id
-   OR username = @username
-   OR (entity = 'User' AND (entity_name = @username OR entity_name = @idText))
-   OR (entity = 'ChamCong' AND entity_name = @username);
+   OR lower(username) = lower(@username)
+   OR (entity = 'User' AND (lower(entity_name) = lower(@username) OR entity_name = @idText))
+   OR (entity = 'ChamCong' AND lower(entity_name) = lower(@username));
 
 DELETE FROM app_users WHERE username = @username;",
             conn, tx);

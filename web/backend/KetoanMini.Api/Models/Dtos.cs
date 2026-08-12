@@ -90,6 +90,9 @@ public record UserDto(Guid Id, string Username, string FullName, string Email, s
     /// <summary>Đã đăng ký khuôn mặt (có mẫu trong cham_cong_face) — app dùng để hiện banner nhắc đăng ký.</summary>
     public bool FaceRegistered { get; init; }
 
+    /// <summary>Đã gửi vector mã hóa nhưng còn chờ HR đối chiếu trực tiếp và kích hoạt.</summary>
+    public bool FaceEnrollmentPending { get; init; }
+
     /// <summary>MỌI vai trò của tài khoản (vai trò chính + vai trò phụ như "Thủ kho"). Client dùng để
     /// hiện/ẩn tính năng giao việc &amp; nghiệm thu. Rỗng ⇒ chỉ có vai trò chính trong <see cref="Role"/>.</summary>
     public IReadOnlyList<string> Roles { get; init; } = System.Array.Empty<string>();
@@ -255,8 +258,16 @@ public record NhanDienRequest(string ImageBase64);
 // Mỗi góc là một loạt ảnh; server chọn khung tốt nhất, kiểm tra chất lượng + liveness rồi lưu 1 mẫu/góc.
 public record FaceEnrollPose(string Pose, List<string> Images);
 public record SelfFaceEnrollRequest(List<FaceEnrollPose> Poses);
-public record SelfFaceStatusDto(bool Registered, int SampleCount, DateTime? CreatedAt);
-public record SelfFaceEnrollResult(string Message, int SampleCount);
+public record SelfFaceStatusDto(bool Registered, int SampleCount, DateTime? CreatedAt,
+    bool Pending = false, Guid? RequestId = null, string? RequestStatus = null,
+    DateTime? RequestedAt = null, string? ReviewNote = null);
+public record SelfFaceEnrollResult(string Message, int SampleCount, string Status = "pending", Guid? RequestId = null);
+public record FaceEnrollmentRequestDto(Guid Id, string Username, string FullName, string Status,
+    int SampleCount, DateTime RequestedAt, DateTime ExpiresAt, string ReviewedBy,
+    DateTime? ReviewedAt, string ReviewNote, string IdentityVerificationMethod);
+public record FaceEnrollmentApproveRequest(bool IdentityVerified, string VerificationMethod, string? Note,
+    List<string>? VerificationImages = null);
+public record FaceEnrollmentRejectRequest(string Reason);
 public record NhanDienResult(bool Matched, string? Username, string? FullName, double Similarity,
     string? Loai, DateTime? OccurredAt, string Message);
 
@@ -284,6 +295,9 @@ public record ChamCongBurstRequest(List<string>? Images = null, DateTime? Occurr
 // Enforce = chặn nếu biên độ quay quá nhỏ (nghi ảnh tĩnh) hay chỉ ghi log để hiệu chỉnh.
 public record MotionConfigDto(bool Enabled, bool Enforce);
 
+// Cấu hình yêu cầu cười dùng chung cho hướng dẫn trên app và bước xác minh lại từ ảnh ở server (0..1).
+public record SmileConfigDto(bool Enabled, double Threshold = 0.65);
+
 // Cấu hình kiểm tra MỞ MẮT phía server: Enforce = chặn khi mắt nhắm/lim dim (bestEyeOpen < Threshold);
 // mặc định TẮT (chỉ đo) để hiệu chỉnh trước. Threshold theo thang EyeOpenScore (0..1).
 public record EyeOpenConfigDto(bool Enforce, double Threshold);
@@ -302,7 +316,7 @@ public record LivenessPanelDto(AntiSpoofDto AntiSpoof, List<LivenessMetricDto> M
 
 /// <summary>
 /// Kết quả chấm công theo loạt ảnh. <see cref="Status"/>:
-/// ok | posture (sai tư thế) | lowquality | noface | spoof | unknown.
+/// ok | posture (sai tư thế) | eyesclosed | nosmile | lowquality | noface | spoof | unknown.
 /// <see cref="Guidance"/> là hướng dẫn sửa tư thế/điều kiện chụp (nếu có).
 /// </summary>
 /// <remarks>
