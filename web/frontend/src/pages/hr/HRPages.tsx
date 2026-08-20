@@ -34,6 +34,7 @@ import {
   type PayslipHistoryEnvelope,
   type PayslipHistoryEvent,
   type PayslipLifecycleStatus,
+  type PublishedPayslipMonthPage,
   type Penalty,
   type PenaltyRefund,
   type PenaltyType,
@@ -651,14 +652,20 @@ function PenaltyModal({ penalty, onClose, onSaved }: { penalty: Penalty | null; 
 }
 
 export function HRPayrollPage() {
-  const [tab, setTab] = useState<"salary" | "payslip">("salary");
+  const [tab, setTab] = useState<"salary" | "published" | "payslip">("salary");
+  const [payslipTarget, setPayslipTarget] = useState<{ employeeId: string; period: string } | null>(null);
   const { can } = useAccess();
   const canManagePayroll = can(PERM.payrollManage);
+  const openPublishedPayslip = (employeeId: string, period: string) => {
+    setPayslipTarget({ employeeId, period });
+    setTab("payslip");
+  };
   return (
     <HrPage eyebrow="Quản trị" title="Bảng lương" className="hr-page--payroll">
       <div className="hr-tabs">
         {[
           ["salary", "Mức lương"],
+          ["published", "Phiếu đã phát hành"],
           ["payslip", "Lập & lịch sử phiếu"],
         ].map(([key, label]) => (
           <button key={key} type="button" data-active={tab === key} onClick={() => setTab(key as typeof tab)}>{label}</button>
@@ -666,8 +673,126 @@ export function HRPayrollPage() {
       </div>
       {tab === "salary"
         ? <SalaryAdmin canManage={canManagePayroll} />
-        : <PayslipMaker canManage={canManagePayroll} />}
+        : tab === "published"
+          ? <PublishedPayslipsMonth onOpen={openPublishedPayslip} />
+          : <PayslipMaker
+              canManage={canManagePayroll}
+              initialEmployeeId={payslipTarget?.employeeId}
+              initialPeriod={payslipTarget?.period}
+            />}
     </HrPage>
+  );
+}
+
+function PublishedPayslipsMonth({ onOpen }: { onOpen: (employeeId: string, period: string) => void }) {
+  const [period, setPeriod] = useState(currentMonth());
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<"all" | "pending" | "acknowledged">("all");
+  const [page, setPage] = useState(1);
+  const path = `/api/payroll/payslips/published?period=${encodeURIComponent(period)}&search=${encodeURIComponent(search)}&status=${status}&page=${page}&pageSize=50`;
+  const { data, loading, error } = useApi<PublishedPayslipMonthPage>(path, [period, search, status, page]);
+  const view = data?.period === period && data.search === search && data.status === status && data.page === page ? data : null;
+
+  const applySearch = () => {
+    setPage(1);
+    setSearch(searchDraft.trim());
+  };
+
+  return (
+    <>
+      <HrCard className="hr-payroll-filter-card">
+        <form className="hr-published-payroll-filters" onSubmit={(e) => { e.preventDefault(); applySearch(); }}>
+          <Field label="Kỳ lương">
+            <Input type="month" value={period} onChange={(e) => { setPeriod(e.target.value); setPage(1); }} />
+          </Field>
+          <Field label="Tìm nhân viên">
+            <Input value={searchDraft} placeholder="Tên, mã, phòng ban hoặc chi nhánh" onChange={(e) => setSearchDraft(e.target.value)} />
+          </Field>
+          <Field label="Trạng thái xác nhận">
+            <Select value={status} onChange={(e) => { setStatus(e.target.value as typeof status); setPage(1); }}>
+              <option value="all">Tất cả phiếu đã phát hành</option>
+              <option value="pending">Chờ nhân viên xác nhận</option>
+              <option value="acknowledged">Nhân viên đã xác nhận</option>
+            </Select>
+          </Field>
+          <HrButton type="submit" tone="secondary">Tìm kiếm</HrButton>
+        </form>
+      </HrCard>
+
+      {loading && !view ? <HrCard><HrEmpty text="Đang tải phiếu lương đã phát hành..." /></HrCard> : error && !view ? (
+        <HrCard><HrEmpty text={error} /></HrCard>
+      ) : view ? (
+        <>
+          <div className="hr-grid-4 hr-published-payroll-stats">
+            <HrStat
+              label="Đã phát hành"
+              value={`${view.summary.publishedCount}/${view.summary.activeEmployeeCount}`}
+              hint="phiếu / nhân sự đang hoạt động"
+              tone="neutral"
+            />
+            <HrStat label="Đã xác nhận" value={`${view.summary.acknowledgedCount}`} hint="nhân viên đã xem phiếu" tone="success" />
+            <HrStat label="Chờ xác nhận" value={`${view.summary.pendingAcknowledgementCount}`} hint="cần theo dõi" tone={view.summary.pendingAcknowledgementCount > 0 ? "warning" : "neutral"} />
+            <HrStat label="Tổng thực nhận" value={moneyVnd(view.summary.totalNetPay)} hint={`Kỳ ${addMonths(view.period, 0)}`} tone="success" />
+          </div>
+
+          <HrCard className="hr-published-payroll-balance">
+            <div><span>Tổng thu nhập</span><strong>{moneyVnd(view.summary.totalEarnings)}</strong></div>
+            <b>−</b>
+            <div><span>Tổng khấu trừ</span><strong>{moneyVnd(view.summary.totalDeductions)}</strong></div>
+            <b>=</b>
+            <div data-net><span>Tổng thực nhận</span><strong>{moneyVnd(view.summary.totalNetPay)}</strong></div>
+          </HrCard>
+
+          <HrCard className="hr-published-payroll-card">
+            <div className="hr-published-payroll-head">
+              <div>
+                <strong>Phiếu đã phát hành · {addMonths(view.period, 0)}</strong>
+                <small>{view.totalItems} kết quả{search ? ` cho “${search}”` : ""}</small>
+              </div>
+              <span>Trang {view.page}/{view.totalPages}</span>
+            </div>
+            {view.items.length === 0 ? <HrEmpty text="Không có phiếu lương phù hợp bộ lọc." /> : (
+              <div className="hr-published-payroll-list">
+                {view.items.map((row) => (
+                  <article key={row.id} className="hr-published-payroll-row">
+                    <div className="hr-published-payroll-person">
+                      <span>{row.employeeCode}</span>
+                      <strong>{row.employeeName}</strong>
+                      <small>{[row.departmentName, row.locationName].filter(Boolean).join(" · ") || "Chưa phân phòng ban"}</small>
+                    </div>
+                    <div className="hr-published-payroll-money">
+                      <div><span>Thu nhập</span><b>{moneyVnd(row.totalEarnings)}</b></div>
+                      <div><span>Khấu trừ</span><b data-deduction>−{moneyVnd(row.totalDeductions)}</b></div>
+                      <div><span>Thực nhận</span><b data-net>{moneyVnd(row.netPay)}</b></div>
+                    </div>
+                    <div className="hr-published-payroll-meta">
+                      <small>Tăng ca {row.overtimeHours} giờ</small>
+                      <small>Cập nhật {dateTime(row.updatedAt)}</small>
+                    </div>
+                    <div className="hr-published-payroll-actions">
+                      <HrStatus status={row.status === "Acknowledged" ? "success" : "warning"}>
+                        {row.status === "Acknowledged" ? "Đã xác nhận" : "Chờ xác nhận"}
+                      </HrStatus>
+                      <HrButton tone="secondary" onClick={() => onOpen(row.employeeId, row.period)}>
+                        <Pencil className="h-4 w-4" /> Xem / điều chỉnh
+                      </HrButton>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+            {view.totalPages > 1 && (
+              <div className="hr-published-payroll-pagination">
+                <HrButton tone="secondary" disabled={view.page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang trước</HrButton>
+                <span>Trang {view.page} / {view.totalPages}</span>
+                <HrButton tone="secondary" disabled={view.page >= view.totalPages} onClick={() => setPage((p) => Math.min(view.totalPages, p + 1))}>Trang sau</HrButton>
+              </div>
+            )}
+          </HrCard>
+        </>
+      ) : null}
+    </>
   );
 }
 
@@ -805,11 +930,19 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
   );
 }
 
-function PayslipMaker({ canManage }: { canManage: boolean }) {
-  const { notify } = useAppNotifications();
+function PayslipMaker({
+  canManage,
+  initialEmployeeId = "",
+  initialPeriod = currentMonth(),
+}: {
+  canManage: boolean;
+  initialEmployeeId?: string;
+  initialPeriod?: string;
+}) {
+  const { notify, confirm } = useAppNotifications();
   const { data: employees } = useApi<EmployeeCard[]>("/api/hr/employees");
-  const [employeeId, setEmployeeId] = useState("");
-  const [period, setPeriod] = useState(currentMonth());
+  const [employeeId, setEmployeeId] = useState(initialEmployeeId);
+  const [period, setPeriod] = useState(initialPeriod);
   const [published, setPublished] = useState(true);
   const [adjustments, setAdjustments] = useState<SalaryComponent[]>([]);
   const [otSelected, setOtSelected] = useState<Set<string>>(new Set());
@@ -819,7 +952,7 @@ function PayslipMaker({ canManage }: { canManage: boolean }) {
     canQuery ? `/api/payroll/compute?employeeId=${employeeId}&period=${period}` : null,
     [employeeId, period],
   );
-  const { data: savedPayslip, loading: historyLoading, reload: reloadHistory } = useApi<PayslipHistoryEnvelope>(
+  const { data: savedPayslip, loading: historyLoading, reload: reloadHistory, setData: setSavedPayslip } = useApi<PayslipHistoryEnvelope>(
     canQuery ? `/api/payroll/payslips/history?employeeId=${employeeId}&period=${period}` : null,
     [employeeId, period],
   );
@@ -828,6 +961,7 @@ function PayslipMaker({ canManage }: { canManage: boolean }) {
   // Chỉ reset khi TẬP ngày đổi (đổi nhân viên/kỳ), không reset khi dữ liệu chỉ được nạp lại ngầm.
   const otDayKey = (compute?.overtimeDays ?? []).map((d) => d.date).join(",");
   const [otSeededKey, setOtSeededKey] = useState<string | null>(null);
+  const [deletingPayslipId, setDeletingPayslipId] = useState<string | null>(null);
   if (otSeededKey !== otDayKey) {
     setOtSeededKey(otDayKey);
     setOtSelected(new Set(otDayKey ? otDayKey.split(",") : []));
@@ -881,6 +1015,45 @@ function PayslipMaker({ canManage }: { canManage: boolean }) {
     }
   };
 
+  const deleteSavedPayslip = async () => {
+    const current = savedPayslip?.payslip;
+    if (!current || !canManage || deletingPayslipId) return;
+    const isDraft = current.status === "Draft";
+    const acknowledged = current.status === "Acknowledged";
+    const ok = await confirm({
+      title: isDraft ? "Xóa phiếu lương nháp?" : "Thu hồi và xóa phiếu lương đã phát hành?",
+      description: isDraft
+        ? `Phiếu nháp kỳ ${addMonths(current.period, 0)} của ${current.employeeName} sẽ bị xóa.`
+        : `Phiếu kỳ ${addMonths(current.period, 0)} của ${current.employeeName} sẽ không còn hiển thị cho nhân viên. Sau đó bạn có thể điều chỉnh và phát hành lại.`,
+      detail: acknowledged
+        ? "Nhân viên đã xác nhận xem phiếu này. Sự kiện xóa và toàn bộ bản chụp số liệu cũ vẫn được giữ trong lịch sử kiểm toán. Phiếu chi đã duyệt hoặc đã chi sẽ không thể xóa."
+        : "Phiếu chi lương liên quan sẽ được hủy nếu chưa duyệt/chưa chi. Lịch sử và bản chụp số liệu cũ vẫn được giữ để kiểm toán.",
+      confirmLabel: isDraft ? "Xóa bản nháp" : "Thu hồi & xóa",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    setDeletingPayslipId(current.id);
+    try {
+      await api.del(`/api/hr/payslips/${current.id}`);
+      // Nạp trực tiếp trạng thái mới để nút xóa biến mất ngay và timeline hiện sự kiện Deleted,
+      // không phải chờ tín hiệu realtime/refetch nền.
+      const next = await api.get<PayslipHistoryEnvelope>(
+        `/api/payroll/payslips/history?employeeId=${employeeId}&period=${period}`,
+      );
+      setSavedPayslip(next);
+      notify.success(
+        isDraft
+          ? "Đã xóa phiếu lương nháp."
+          : "Đã thu hồi và xóa phiếu lương. Bạn có thể điều chỉnh số liệu rồi phát hành lại.",
+      );
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : "Không xóa được phiếu lương.");
+    } finally {
+      setDeletingPayslipId(null);
+    }
+  };
+
   return (
     <>
       <HrCard className="hr-payroll-filter-card">
@@ -896,7 +1069,15 @@ function PayslipMaker({ canManage }: { canManage: boolean }) {
       </HrCard>
 
       {canQuery && (
-        <PayslipHistoryPanel data={savedPayslip} loading={historyLoading} employeeId={employeeId} period={period} />
+        <PayslipHistoryPanel
+          data={savedPayslip}
+          loading={historyLoading}
+          employeeId={employeeId}
+          period={period}
+          canManage={canManage}
+          deleting={Boolean(deletingPayslipId)}
+          onDelete={deleteSavedPayslip}
+        />
       )}
 
       {!canQuery ? (
@@ -1019,11 +1200,17 @@ function PayslipHistoryPanel({
   loading,
   employeeId,
   period,
+  canManage,
+  deleting,
+  onDelete,
 }: {
   data: PayslipHistoryEnvelope | null;
   loading: boolean;
   employeeId: string;
   period: string;
+  canManage: boolean;
+  deleting: boolean;
+  onDelete: () => void;
 }) {
   // useApi giữ dữ liệu cũ trong lúc đổi bộ lọc để tránh chớp trang. Với lương thì không được hiện tạm
   // phiếu của người vừa chọn trước dưới tên người mới, nên chặn dữ liệu không khớp ngay tại đây.
@@ -1048,6 +1235,23 @@ function PayslipHistoryPanel({
         </div>
         <HrStatus status={payslipStatusTone(current?.status)}>{payslipStatusLabel(current?.status ?? (data.history[0]?.statusAfter))}</HrStatus>
       </div>
+
+      {current && canManage && (
+        <div className="hr-payroll-history-actions" data-published={current.status !== "Draft"}>
+          <div>
+            <strong>{current.status === "Draft" ? "Không dùng phiếu nháp này?" : "Cần điều chỉnh phiếu đã phát hành?"}</strong>
+            <small>
+              {current.status === "Draft"
+                ? "Xóa bản nháp để lập lại từ đầu."
+                : "Thu hồi và xóa phiếu hiện tại, sau đó sửa khoản cộng/trừ hoặc tăng ca rồi phát hành lại."}
+            </small>
+          </div>
+          <HrButton tone="danger" onClick={onDelete} disabled={deleting}>
+            <Trash2 className="h-4 w-4" />
+            {deleting ? "Đang xóa..." : current.status === "Draft" ? "Xóa bản nháp" : "Thu hồi & xóa"}
+          </HrButton>
+        </div>
+      )}
 
       <div className="hr-payroll-timeline-title"><Clock3 className="h-4 w-4" /><strong>Lịch sử thay đổi</strong><span>{data.history.length} sự kiện</span></div>
       <ol className="hr-payroll-timeline">

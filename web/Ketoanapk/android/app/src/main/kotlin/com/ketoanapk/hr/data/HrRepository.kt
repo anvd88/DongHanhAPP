@@ -307,7 +307,9 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun cancelPayoutVoucher(id: String, reason: String) = callUnit { api.cancelPayoutVoucher(id, CancelPayoutBody(reason)) }
 
     suspend fun myPayslips(): List<PayslipItem> = call { api.myPayslips() }
-    suspend fun acknowledgePayslip(id:String)=callUnit{api.acknowledgePayslip(id)}
+    suspend fun payslipRequirement(): PayslipRequirement = call { api.payslipRequirement() }
+    suspend fun acknowledgePayslip(id: String, expectedRevision: String) =
+        callUnit { api.acknowledgePayslip(id, expectedRevision.takeIf { it.isNotBlank() }) }
     suspend fun payslipInquiry(id:String,line:String,message:String)=callUnit{api.payslipInquiry(id,PayslipInquiryBody(line,message))}
     suspend fun downloadPayslipPdf(context:Context,item:PayslipItem):File=withContext(Dispatchers.IO){val response=api.payslipPdf(item.id);if(!response.isSuccessful)throw HttpException(response);val dir=File(context.cacheDir,"payslips").apply{mkdirs()};val file=File(dir,"Payslip_${item.period}.pdf");response.body()?.byteStream()?.use{input->file.outputStream().use{input.copyTo(it)}}?:throw IOException("Phản hồi PDF rỗng");file}
     suspend fun managerSummary(date: String, month: String): ManagerSummary =
@@ -517,7 +519,7 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun syncOfflineAttendance(): Int {
         var synced = 0
         for (item in offlineStore.all()) {
-            val ok = runCatching {
+            val result = runCatching {
                 attendanceApi.chamCong(
                     ChamCongBurstRequest(
                         images = item.frames,
@@ -529,7 +531,12 @@ class HrRepository(context: Context, background: Boolean = false) {
                     ),
                 )
             }
-            if (ok.isSuccess) {
+            val response = result.getOrNull()
+            if (response?.status == "payslip_required") {
+                // Giữ nguyên bản chấm ngoại tuyến; sau khi xác nhận lương, nhịp đồng bộ kế tiếp mới gửi lại.
+                break
+            }
+            if (response != null) {
                 offlineStore.remove(item.id)
                 synced++
             } else {

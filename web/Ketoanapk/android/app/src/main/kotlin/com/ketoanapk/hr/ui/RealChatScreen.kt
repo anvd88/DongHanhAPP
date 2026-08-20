@@ -60,6 +60,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
@@ -180,11 +181,21 @@ private fun ChatMiniApp(vm: HrViewModel, state: RealChatUiState) {
 
 @Composable
 private fun ChatTabBar(current: ChatTab, unread: Int, onSelect: (ChatTab) -> Unit) {
-    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+    NavigationBar(
+        containerColor = Color.Transparent,
+        tonalElevation = 0.dp,
+    ) {
         ChatTab.entries.forEach { tab ->
             NavigationBarItem(
                 selected = current == tab,
                 onClick = { onSelect(tab) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f),
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
                 icon = {
                     val icon = when (tab) {
                         ChatTab.Conversations -> Icons.Filled.Chat

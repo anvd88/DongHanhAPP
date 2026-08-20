@@ -247,7 +247,13 @@ interface HrApi {
 
     @GET("api/payroll/my-payslips")
     suspend fun myPayslips(): List<com.ketoanapk.hr.data.PayslipItem>
-    @POST("api/payroll/my-payslips/{id}/ack") suspend fun acknowledgePayslip(@Path("id") id:String):retrofit2.Response<Unit>
+    @GET("api/payroll/my-payslips/requirement")
+    suspend fun payslipRequirement(): com.ketoanapk.hr.data.PayslipRequirement
+    @POST("api/payroll/my-payslips/{id}/ack")
+    suspend fun acknowledgePayslip(
+        @Path("id") id: String,
+        @Query("expectedRevision") expectedRevision: String?,
+    ): retrofit2.Response<Unit>
     @POST("api/payroll/my-payslips/{id}/inquiries") suspend fun payslipInquiry(@Path("id") id:String,@Body body:com.ketoanapk.hr.data.PayslipInquiryBody):retrofit2.Response<Unit>
     @Streaming @GET("api/payroll/my-payslips/{id}/pdf") suspend fun payslipPdf(@Path("id") id:String):retrofit2.Response<ResponseBody>
 

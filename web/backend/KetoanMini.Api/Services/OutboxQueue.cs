@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Threading.Channels;
 using KetoanMini.Api.Data;
+using Npgsql;
 
 namespace KetoanMini.Api.Services;
 
@@ -87,16 +88,7 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
         try
         {
             await using var conn = await db.OpenAsync(ct);
-            await conn.Cmd("""
-                INSERT INTO app_outbox (kind, payload, dedupe_key)
-                VALUES (@kind, @payload::jsonb, @dedupe)
-                ON CONFLICT DO NOTHING
-                """)
-                .With("@kind", kind)
-                .With("@payload", JsonSerializer.Serialize(payload))
-                .With("@dedupe", dedupeKey)
-                .ExecuteNonQueryAsync(ct);
-            _wake.Writer.TryWrite(0);
+            await EnqueueAsync(conn, null, kind, payload, dedupeKey, ct);
         }
         catch (Exception ex)
         {
@@ -104,6 +96,30 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
             // cảnh báo vì đây LÀ mất thông báo — không im lặng nuốt.
             log.LogWarning("Không xếp được việc {Kind} vào hàng chờ: {Msg}", kind, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Ghi việc vào cùng transaction với nghiệp vụ nguồn. Khác overload công khai, lỗi ở đây phải nổi
+    /// lên để transaction rollback: không được phép chốt nghiệp vụ nhưng làm rơi thông báo tương ứng.
+    /// </summary>
+    internal async Task<bool> EnqueueAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string kind,
+        object payload, string dedupeKey, CancellationToken ct = default)
+    {
+        var inserted = await new NpgsqlCommand("""
+            INSERT INTO app_outbox (kind, payload, dedupe_key)
+            VALUES (@kind, @payload::jsonb, @dedupe)
+            ON CONFLICT DO NOTHING
+            """, conn, tx)
+        {
+            Parameters =
+            {
+                new("@kind", kind),
+                new("@payload", JsonSerializer.Serialize(payload)),
+                new("@dedupe", dedupeKey),
+            }
+        }.ExecuteNonQueryAsync(ct) > 0;
+        _wake.Writer.TryWrite(0);
+        return inserted;
     }
 
     /// <summary>
@@ -162,6 +178,22 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
         if (dead)
             log.LogError("Việc {Id} đã bỏ sau {Attempts} lần thử — thông báo này KHÔNG tới nơi: {Err}",
                 id, attempts, error);
+    }
+
+    /// <summary>
+    /// Hoãn mà không tiêu retry budget (ví dụ FCM chưa được cấu hình). Việc vẫn Pending và không bao
+    /// giờ bị đánh done/dead chỉ vì hạ tầng delivery đang tắt.
+    /// </summary>
+    public async Task DeferAsync(long id, string reason, CancellationToken ct = default)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        await conn.Cmd("""
+            UPDATE app_outbox
+               SET status='pending',attempts=GREATEST(attempts-1,0),
+                   available_at=CURRENT_TIMESTAMP + INTERVAL '15 minutes',last_error=@reason
+             WHERE id=@id
+            """).With("@id", id).With("@reason", reason.Length > 500 ? reason[..500] : reason)
+            .ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>

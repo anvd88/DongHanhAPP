@@ -34,7 +34,13 @@ class NotificationWorker(
         if (token.isNullOrBlank()) return Result.success()
 
         val user = runCatching { repo.me() }.getOrNull() ?: return Result.success()
-        val month = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM"))
+        // Lấy ngày Việt Nam theo đồng hồ đã đồng bộ từ header Date của server, tránh máy người dùng
+        // chỉnh sai ngày/giờ làm nhắc nhầm một ngày.
+        val nowVietnam = ServerClock.nowVietnam()
+        val today = nowVietnam.toLocalDate()
+        val monthFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
+        val month = today.format(monthFormatter)
+        // Ngày hôm qua có thể nằm ở tháng trước (ví dụ chạy ngày 01/09 để kiểm tra 31/08).
 
         val myRequests = runCatching { repo.requests("mine") }.getOrDefault(emptyList())
         val canApproveRequests = user.can(AppPermissions.RequestsApprove)
@@ -43,10 +49,25 @@ class NotificationWorker(
         val penalties = runCatching {
             repo.penalties(if (canManagePenalties) "all" else "mine", if (canManagePenalties) month else null)
         }.getOrDefault(emptyList())
+        // Catch-up bền qua mất mạng/Doze: lấy đủ các tháng phủ cửa sổ lookback, không chỉ "hôm qua".
+        val attendanceSheets = missedCheckoutMonthKeys(today).mapNotNull { reminderMonth ->
+            runCatching { repo.myTimesheet(reminderMonth) }.getOrNull()
+        }
 
-        val center = NotificationCenter(applicationContext)
-        val fresh = center.sync(myRequests, inbox, penalties, canManagePenalties)
-        fresh.forEach { AppNotifier.show(applicationContext, it) }
+        val center = NotificationCenter(applicationContext, user.username)
+        val fresh = center.sync(
+            myRequests,
+            inbox,
+            penalties,
+            canManagePenalties,
+            attendanceSheets = attendanceSheets,
+            nowVietnam = nowVietnam,
+        )
+        val delivered = fresh.filter { it.kind != NotificationKind.Attendance }
+            .filter { AppNotifier.show(applicationContext, it, user.username) }
+            .map { it.id }
+        center.markSystemDelivered(delivered)
+        center.deliverPendingSystemAttendance()
         runCatching { notifyShiftIfNeeded(repo, center) }
         return Result.success()
     }
@@ -70,7 +91,7 @@ class NotificationWorker(
             else -> null
         } ?: return
         center.ingestFromPush(notification.id, notification.kind, notification.title, notification.body, notification.target)
-            ?.let { AppNotifier.show(applicationContext, it) }
+            ?.let { center.deliverPendingSystemAttendance() }
     }
 
     companion object {

@@ -13,6 +13,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
+private val RealtimeRefreshScopes = setOf(
+    "hr", "data", "chat", "tasks", "portal", "config", "audit", "talent", "attendance", "release", "all",
+)
+
+internal fun shouldForwardRealtimeRefreshScope(scopeName: String): Boolean =
+    scopeName in RealtimeRefreshScopes
+
 /**
  * Client SignalR cho app native — kết nối `/hubs/changes` của backend GIỐNG bản web để nhận tín hiệu
  * "changed" và làm mới NGAY (qua [AppEvents]) khi có thay đổi nghiệp vụ (đơn từ được duyệt/từ chối…).
@@ -22,10 +29,6 @@ import kotlinx.coroutines.runBlocking
  * (backend đọc ở `Program.cs` cho đường `/hubs`).
  */
 class RealtimeClient(private val tokenStore: TokenStore) {
-    private companion object {
-        val RefreshScopes = setOf("hr", "data", "chat", "tasks", "portal", "config", "audit", "talent", "attendance", "all")
-    }
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var hub: HubConnection? = null
     private var job: Job? = null
@@ -110,7 +113,7 @@ class RealtimeClient(private val tokenStore: TokenStore) {
             { scopeName: String ->
                 // Giữ nguyên scope để ViewModel chỉ nạp đúng phần bị cũ. Trước đây một tin chat cũng
                 // kéo lại đơn từ + công việc, tạo nhiều request không cần thiết trên server.
-                if (scopeName in RefreshScopes)
+                if (shouldForwardRealtimeRefreshScope(scopeName))
                     AppEvents.signalDataChanged(scopeName)
             },
             String::class.java,

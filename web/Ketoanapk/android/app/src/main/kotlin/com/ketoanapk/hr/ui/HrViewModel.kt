@@ -50,6 +50,7 @@ import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.AuditEntry
 import com.ketoanapk.hr.data.AppEvents
 import com.ketoanapk.hr.data.AppNotification
+import com.ketoanapk.hr.data.APP_UPDATE_NOTIFICATION_TARGET
 import com.ketoanapk.hr.data.CallManager
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
@@ -79,6 +80,8 @@ import com.ketoanapk.hr.data.ManagerSummary
 import com.ketoanapk.hr.data.MobileAppLoginChallenge
 import com.ketoanapk.hr.data.NotificationCenter
 import com.ketoanapk.hr.data.NotificationWorker
+import com.ketoanapk.hr.data.missedCheckoutMonthKeys
+import com.ketoanapk.hr.data.notificationAccountScope
 import com.ketoanapk.hr.data.Penalty
 import com.ketoanapk.hr.data.PortalFeed
 import com.ketoanapk.hr.data.PortalPost
@@ -89,6 +92,7 @@ import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
 import com.ketoanapk.hr.data.PayEstimate
 import com.ketoanapk.hr.data.PayslipItem
+import com.ketoanapk.hr.data.PayslipRequirement
 import com.ketoanapk.hr.data.CreatePayoutBody
 import com.ketoanapk.hr.data.PayoutCategory
 import com.ketoanapk.hr.data.PayoutRecipient
@@ -115,7 +119,11 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.YearMonth
 
 /** Tab trong mini app Chat. Chat chiếm trọn màn nên có thanh tab riêng, không dùng thanh dưới của HR. */
@@ -220,7 +228,46 @@ data class HomeUiState(
     val penalties: List<Penalty> = emptyList(),
     val salaries: List<SalaryListItem> = emptyList(),
     val requestTypes: List<RequestType> = emptyList(),
+    val payslipRequirement: PayslipRequirement = PayslipRequirement(),
 )
+
+/**
+ * Khi app đã nhận được hạn từ máy chủ, vẫn chuyển sang khóa đúng 00:00 nếu mạng rớt đúng thời điểm đó.
+ * Lớp chặn API chấm công vẫn là nguồn xác nhận cuối cùng khi có kết nối.
+ */
+internal fun payslipRequirementAt(
+    requirement: PayslipRequirement,
+    now: Instant = Instant.now(),
+): PayslipRequirement {
+    if (requirement.mustAcknowledge) return requirement
+    val item = requirement.payslip ?: return requirement
+    val dueAt = item.acknowledgementDueAt.takeIf(String::isNotBlank)?.let { raw ->
+        runCatching { OffsetDateTime.parse(raw).toInstant() }
+            .recoverCatching { Instant.parse(raw) }
+            .getOrNull()
+    } ?: return requirement
+    if (now.isBefore(dueAt)) return requirement
+    return requirement.copy(
+        pendingCount = maxOf(1, requirement.pendingCount),
+        overdueCount = maxOf(1, requirement.overdueCount),
+        mustAcknowledge = true,
+        payslip = item.copy(overdue = true),
+    )
+}
+
+/**
+ * Chọn đúng phiếu cho màn xác nhận. Requirement mới có id thì tuyệt đối không fallback theo kỳ vì
+ * admin có thể đã xóa/phát hành lại cùng tháng; fallback period chỉ dành cho cache/API di sản thiếu id.
+ */
+internal fun findPayslipForConfirmation(
+    items: List<PayslipItem>,
+    targetId: String?,
+    legacyPeriod: String?,
+): PayslipItem? {
+    if (!targetId.isNullOrBlank()) return items.firstOrNull { it.id == targetId }
+    if (legacyPeriod.isNullOrBlank()) return null
+    return items.firstOrNull { it.period == legacyPeriod && it.acknowledgedAt == null }
+}
 
 /**
  * Trạng thái xem chi tiết một đơn (mở khi id != null). canCancel = đơn của chính mình còn chờ duyệt
@@ -404,7 +451,8 @@ enum class ConnectionStatus { Online, NoInternet, ServerUnreachable }
 
 class HrViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = HrRepository.foreground(application)
-    private val notificationCenter = NotificationCenter(application)
+    // Được thay bằng instance immutable theo username ngay khi xác thực; không dùng chung seen/items.
+    private var notificationCenter = NotificationCenter(application, "signed-out")
     private val tokenStore = TokenStore(application)
     private val anniversaryStore = com.ketoanapk.hr.data.AnniversaryGreetingStore(application)
     // Client SignalR (realtime tức thì khi app đang mở, như bản web). Bật/tắt theo foreground.
@@ -485,8 +533,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // trên web mà không cần người dùng kéo làm mới. Dừng khi app xuống nền để tiết kiệm pin
     // (nền đã có WorkManager + push FCM lo thông báo).
     private var foregroundPollJob: Job? = null
+    private var payslipRequirementJob: Job? = null
+    private val payslipRequirementMutex = Mutex()
+    private var payslipRequirementServerGeneration = 0L
+    private var foregroundUpdateMonitorJob: Job? = null
+    private var releaseUpdateDebounceJob: Job? = null
     private var pendingTarget: HrDestination? = null
     private var pendingEntityId: String? = null
+    private var pendingNotificationId: String? = null
+    private var pendingNotificationAccountScope: String? = null
     private var pushToken: String? = null
     private var captureOffline = false   // lượt chấm hiện tại là ngoại tuyến (mất mạng) hay trực tuyến
 
@@ -538,6 +593,16 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // Kỳ (yyyy-MM) của phiếu lương đang mở chi tiết (null = đang xem danh sách thẻ tháng).
     var payslipOpenPeriod: String? by mutableStateOf(null)
         private set
+    // Phiếu đang được đưa sang MÀN XÁC NHẬN RIÊNG. Khi app bị khóa, id từ requirement của máy chủ
+    // luôn được ưu tiên; biến này chỉ dùng khi nhân viên chủ động xác nhận sớm từ kho phiếu.
+    private var requestedPayslipConfirmationId: String? by mutableStateOf(null)
+    var payslipAcknowledgingId: String? by mutableStateOf(null)
+        private set
+    var payslipConfirmationError: String? by mutableStateOf(null)
+        private set
+    var payslipConfirmationMessage: String? by mutableStateOf(null)
+        private set
+    private var acknowledgedPayslipAwaitingSyncId: String? by mutableStateOf(null)
     var portalState by mutableStateOf(PortalUiState())
         private set
     // Bài đang mở ở màn chi tiết cổng thông tin (null = đang xem danh sách).
@@ -573,6 +638,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var requestDraftValues: Map<String, String> by mutableStateOf(emptyMap())
         private set
+    var requestDraftNonce: Long by mutableStateOf(0L)
+        private set
+    var requestDraftRestoreSaved: Boolean by mutableStateOf(true)
+        private set
+    val currentAccountId: String get() = (authState as? AuthState.SignedIn)?.user?.username.orEmpty()
     private var editingRequestId: String? = null
     var managerState by mutableStateOf(ManagerUiState())
         private set
@@ -671,7 +741,14 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Đang ở mạng tính phí và gói khá lớn → bảng cập nhật hỏi lại trước khi tốn cước. */
     var updateNeedsMeteredConsent by mutableStateOf(false)
         private set
-    private var lastUpdateCheckAt = 0L        // mốc lần kiểm tra gần nhất (chống gọi dồn)
+    private var lastSuccessfulUpdateCheckAt = 0L
+    private var updateCheckJob: Job? = null
+    private var pendingForcedUpdateCheck = false
+    private var pendingUpdateOpenDetails = false
+    private var pendingManualUpdateCheck = false
+    private var updateCheckSession = 0L
+    private var loggingOut = false
+    private var notificationLoadJob: Job? = null
 
     val unreadCount: Int get() = notifications.count { !it.read }
 
@@ -756,8 +833,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         // FCM báo có dữ liệu đổi từ máy chủ → làm mới NGAY màn đang xem (đơn từ tức thì, không chờ poll).
         viewModelScope.launch {
             AppEvents.dataChanged.collect { changeScope ->
-                if (authState is AuthState.SignedIn) {
+                if (authState is AuthState.SignedIn && !loggingOut) {
                     pollLiveData(changeScope)
+                    if (changeScope == "release") schedulePublishedReleaseCheck()
+                    // "all" phát sau khi SignalR nối lại: kiểm tra theo throttle để bắt bản đã lỡ lúc mất mạng.
+                    if (changeScope == "all") autoCheckForUpdate(force = true)
                     if ((changeScope == "chat" || changeScope == "all") && selected == HrDestination.Chat)
                         refreshChatRealtime()
                     if (changeScope == "config" || changeScope == "all") loadAppConfig(force = true)
@@ -846,9 +926,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun onSignedIn(user: HrUser) {
         authState = AuthState.SignedIn(user)
+        activateNotificationAccount(user.username)
         resetToHome()
         startHeartbeat()
         startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
+        startPayslipRequirementMonitor()
+        startForegroundUpdateMonitor()
         CallManager.setSelfIdentity(user.displayName) // tên thật (DB) gửi kèm lời mời gọi
         realtime.start(user.username) // realtime + kênh tín hiệu gọi (app đang mở lúc đăng nhập)
         viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } // TURN sẵn sàng trước cuộc gọi đầu
@@ -920,13 +1003,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val enabled = repo.pushNotificationsEnabled()
             val permissionGranted = hasNotificationPermission()
-            val effectiveEnabled = enabled && permissionGranted
-            if (enabled && !permissionGranted) {
-                repo.setPushNotificationsEnabled(false)
-            }
-            settingsState = settingsState.copy(pushNotificationsEnabled = effectiveEnabled)
-            if (effectiveEnabled) {
+            // `enabled` là lựa chọn bền của người dùng; quyền Android chỉ là cổng giao hiện tại. Không
+            // ghi đè lựa chọn thành false khi quyền bị thu hồi, nếu không cấp lại quyền từ Settings sẽ
+            // không thể giao các reminder đã phát hiện trong khoảng bị chặn.
+            settingsState = settingsState.copy(pushNotificationsEnabled = enabled)
+            if (enabled) {
                 startPushDelivery()
+                if (permissionGranted) deliverPendingAttendanceNotifications()
             } else {
                 // Tắt thông báo NGHIỆP VỤ nhưng GIỮ token đã đăng ký để vẫn nhận được CUỘC GỌI.
                 stopPushDelivery(unregister = false)
@@ -947,14 +1030,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repo.setPushNotificationsEnabled(enabled)
             if (enabled) {
+                // Vẫn nhận/sync dữ liệu khi quyền hệ thống đang chặn để có thể backfill sau khi cấp lại.
+                startPushDelivery()
                 if (hasNotificationPermission()) {
-                    startPushDelivery()
+                    deliverPendingAttendanceNotifications()
                     actionMessage = "Đã bật thông báo push của ứng dụng."
                 } else {
-                    repo.setPushNotificationsEnabled(false)
-                    settingsState = settingsState.copy(pushNotificationsEnabled = false)
-                    stopPushDelivery(unregister = false) // giữ token để vẫn nhận cuộc gọi
-                    actionMessage = "Chưa cấp quyền thông báo nên push vẫn đang tắt."
+                    actionMessage = "Đã ghi nhớ lựa chọn bật. Hãy cấp quyền thông báo để nhận nhắc nhở."
                 }
             } else {
                 stopPushDelivery(unregister = false) // giữ token để vẫn nhận cuộc gọi
@@ -964,11 +1046,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onNotificationPermissionDenied() {
-        settingsState = settingsState.copy(pushNotificationsEnabled = false)
+        // Người dùng vừa chủ động bật nhưng Android chưa cho phép: giữ ý định bật để khi họ cấp quyền
+        // trong Settings, onResume có thể giao ngay reminder còn tồn thay vì bắt bật công tắc lần nữa.
+        settingsState = settingsState.copy(pushNotificationsEnabled = true)
         viewModelScope.launch {
-            repo.setPushNotificationsEnabled(false)
-            stopPushDelivery(unregister = true)
-            actionMessage = "Chưa cấp quyền thông báo nên push vẫn đang tắt."
+            repo.setPushNotificationsEnabled(true)
+            startPushDelivery()
+            actionMessage = "Chưa có quyền hệ thống. App sẽ giao các nhắc nhở còn tồn sau khi bạn cấp quyền."
         }
     }
 
@@ -1021,53 +1105,108 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * hạn) — hiện lý do ở màn đăng nhập. Bỏ qua nếu đã đăng xuất rồi (chống gọi trùng từ heartbeat + SignalR).
      */
     fun logout(kickedMessage: String? = null) {
-        if (authState is AuthState.SignedOut) return
+        if (authState is AuthState.SignedOut || loggingOut) return
+        loggingOut = true
+        // Vô hiệu hóa request phiên bản ngay trước mọi suspend của luồng logout để response cũ không
+        // kịp ghi lại settings/notification của tài khoản vừa rời.
+        updateCheckSession++
+        updateCheckJob?.cancel()
+        updateCheckJob = null
+        releaseUpdateDebounceJob?.cancel()
+        releaseUpdateDebounceJob = null
+        val pendingNotificationLoad = notificationLoadJob
+        pendingNotificationLoad?.cancel()
+        notificationLoadJob = null
+        pendingForcedUpdateCheck = false
+        pendingUpdateOpenDetails = false
+        pendingManualUpdateCheck = false
+        pendingTarget = null
+        pendingEntityId = null
+        pendingNotificationId = null
+        pendingNotificationAccountScope = null
+        lastSuccessfulUpdateCheckAt = 0L
+        val centerAtLogout = notificationCenter
         viewModelScope.launch {
-            pushToken?.let { runCatching { repo.unregisterPushToken(it) } }
-            pushToken = null
-            repo.logout()
-            stopHeartbeat()
-            onAppPaused() // dừng vòng poll foreground
-            NotificationWorker.cancel(getApplication<Application>())
-            notificationCenter.reset()
-            notifications = emptyList()
-            authState = AuthState.SignedOut
-            resetToHome()
-            homeState = HomeUiState()
-            timesheetLoadJob?.cancel()
-            timesheetLoadJob = null
-            timesheetCache.clear()
-            timesheetPrefetching.clear()
-            timesheetState = TimesheetUiState()
-            payEstimateState = PayEstimateUiState()
-            payslipsState = PayslipsUiState()
-            payslipOpenPeriod = null
-            // Sổ chi có tên + số tiền của người khác: phải xóa sạch khi đăng xuất.
-            payoutState = PayoutUiState()
-            managerState = ManagerUiState()
-            settingsState = SettingsUiState()
-            attendanceServer = AttendanceServerState.Checking
-            attendanceCapture = AttendanceCapture.Idle
-            faceRegistered = null
-            faceEnrollmentPending = false
-            faceEnrollmentStatus = null
-            faceEnrollmentReviewNote = null
-            faceEnroll = FaceEnrollCapture.Idle
-            openFaceEnroll = false
-            appConfig = AppConfig()
-            lastConfigFetchAt = 0L
-            availableUpdate = null
-            updateSheetVisible = false
-            updateStage = UpdateStage.Idle
-            updateNeedsMeteredConsent = false
-            lastUpdateCheckAt = 0L
-            loginError = kickedMessage // hiện lý do bị đá (nếu có) trên màn đăng nhập
+            try {
+                // Đợi tác vụ đọc kho chuông đã hủy kết thúc trước khi reset để nó không thể ghi dữ liệu cũ trở lại.
+                pendingNotificationLoad?.join()
+                pushToken?.let { runCatching { repo.unregisterPushToken(it) } }
+                pushToken = null
+                repo.logout()
+                stopHeartbeat()
+                onAppPaused() // dừng vòng poll foreground
+                NotificationWorker.cancel(getApplication<Application>())
+                centerAtLogout.reset() // đồng thời gỡ toàn bộ notification khay thuộc tài khoản này
+                notificationCenter = NotificationCenter(getApplication<Application>(), "signed-out")
+                notifications = emptyList()
+                authState = AuthState.SignedOut
+                resetToHome()
+                homeState = HomeUiState()
+                timesheetLoadJob?.cancel()
+                timesheetLoadJob = null
+                timesheetCache.clear()
+                timesheetPrefetching.clear()
+                timesheetState = TimesheetUiState()
+                payEstimateState = PayEstimateUiState()
+                payslipsState = PayslipsUiState()
+                payslipOpenPeriod = null
+                requestedPayslipConfirmationId = null
+                payslipAcknowledgingId = null
+                payslipConfirmationError = null
+                payslipConfirmationMessage = null
+                acknowledgedPayslipAwaitingSyncId = null
+                // Sổ chi có tên + số tiền của người khác: phải xóa sạch khi đăng xuất.
+                payoutState = PayoutUiState()
+                managerState = ManagerUiState()
+                settingsState = SettingsUiState()
+                attendanceServer = AttendanceServerState.Checking
+                attendanceCapture = AttendanceCapture.Idle
+                faceRegistered = null
+                faceEnrollmentPending = false
+                faceEnrollmentStatus = null
+                faceEnrollmentReviewNote = null
+                faceEnroll = FaceEnrollCapture.Idle
+                openFaceEnroll = false
+                appConfig = AppConfig()
+                lastConfigFetchAt = 0L
+                availableUpdate = null
+                updateSheetVisible = false
+                updateStage = UpdateStage.Idle
+                updateNeedsMeteredConsent = false
+                loginError = kickedMessage // hiện lý do bị đá (nếu có) trên màn đăng nhập
+            } finally {
+                loggingOut = false
+            }
         }
     }
 
     // ── Thông báo (chuông) ──────────────────────────────────────────────────────
     private fun loadNotifications() {
-        viewModelScope.launch { notifications = notificationCenter.load() }
+        if (loggingOut) return
+        val account = (authState as? AuthState.SignedIn)?.user?.username ?: return
+        val session = updateCheckSession
+        val center = notificationCenter
+        notificationLoadJob?.cancel()
+        notificationLoadJob = viewModelScope.launch {
+            val installed = AppUpdater.installedVersionCode(getApplication())
+            val loaded = center.load(installed)
+            val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+            if (session == updateCheckSession && !loggingOut && activeAccount.equals(account, ignoreCase = true) &&
+                notificationCenter.accountScope == center.accountScope
+            ) {
+                notifications = loaded
+            }
+        }
+    }
+
+    private fun activateNotificationAccount(username: String) {
+        val expected = notificationAccountScope(username)
+        if (notificationCenter.accountScope != expected) {
+            notificationLoadJob?.cancel()
+            notificationLoadJob = null
+            notifications = emptyList()
+            notificationCenter = NotificationCenter(getApplication<Application>(), username)
+        }
     }
 
     /**
@@ -1076,14 +1215,18 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * Chống trùng với push đã đến nhờ chữ ký `callmiss:{callId}`.
      */
     fun syncMissedCalls() {
+        val account = (authState as? AuthState.SignedIn)?.user?.username ?: return
+        val center = notificationCenter
         viewModelScope.launch {
             val missed = repo.fetchMissedCalls()
+            val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+            if (!activeAccount.equals(account, ignoreCase = true)) return@launch
             if (missed.isEmpty()) return@launch
             var added = false
             for (m in missed) {
                 val kind = if (m.media.equals("video", true)) "video" else "thoại"
                 val sig = "callmiss:" + m.callId.ifBlank { m.id.toString() }
-                val n = notificationCenter.ingestFromPush(
+                val n = center.ingestFromPush(
                     sig,
                     com.ketoanapk.hr.data.NotificationKind.System,
                     "Cuộc gọi nhỡ",
@@ -1093,21 +1236,50 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 if (n != null) added = true
             }
             repo.markMissedCallsSeen()
-            if (added) notifications = notificationCenter.current
+            if (added && notificationCenter.accountScope == center.accountScope) notifications = center.current
         }
     }
 
     private fun syncNotifications(user: HrUser, state: HomeUiState) {
+        val center = notificationCenter
         viewModelScope.launch {
-            val fresh = notificationCenter.sync(
+            val nowVietnam = com.ketoanapk.hr.data.ServerClock.nowVietnam()
+            val monthKeys = missedCheckoutMonthKeys(nowVietnam.toLocalDate())
+            val cachedByMonth = listOfNotNull(state.timesheet).associateBy { it.period.take(7) }
+            val attendanceSheets = monthKeys.mapNotNull { month ->
+                cachedByMonth[month] ?: runCatching { repo.myTimesheet(month) }.getOrNull()
+            }
+            val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+            if (!activeAccount.equals(user.username, ignoreCase = true) || center.accountScope != notificationCenter.accountScope)
+                return@launch
+            val fresh = center.sync(
                 state.requests,
                 state.inbox,
                 state.penalties,
                 user.can(AppPermissions.PenaltyManage),
+                attendanceSheets = attendanceSheets,
+                nowVietnam = nowVietnam,
             )
-            notifications = notificationCenter.current
             if (repo.pushNotificationsEnabled() && hasNotificationPermission()) {
-                fresh.forEach { AppNotifier.show(getApplication<Application>(), it) }
+                val delivered = fresh.filter { it.kind != com.ketoanapk.hr.data.NotificationKind.Attendance }.filter {
+                    AppNotifier.show(getApplication<Application>(), it, user.username)
+                }.map { it.id }
+                center.markSystemDelivered(delivered)
+                notifications = center.deliverPendingSystemAttendance()
+            } else {
+                notifications = center.current
+            }
+        }
+    }
+
+    /** Cấp quyền sau lúc phát hiện vẫn đưa các nhắc công chưa giao lên khay đúng một lần. */
+    private fun deliverPendingAttendanceNotifications() {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return
+        val center = notificationCenter
+        viewModelScope.launch {
+            if (!repo.pushNotificationsEnabled() || !hasNotificationPermission()) return@launch
+            if (notificationCenter.accountScope == center.accountScope) {
+                notifications = center.deliverPendingSystemAttendance()
             }
         }
     }
@@ -1132,47 +1304,119 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun markNotificationRead(id: String) {
-        viewModelScope.launch { notifications = notificationCenter.markRead(id) }
+        val center = notificationCenter
+        viewModelScope.launch {
+            val updated = center.markRead(id)
+            if (center.accountScope == notificationCenter.accountScope) notifications = updated
+        }
     }
 
     fun markAllNotificationsRead() {
-        viewModelScope.launch { notifications = notificationCenter.markAllRead() }
+        val center = notificationCenter
+        viewModelScope.launch {
+            val updated = center.markAllRead()
+            if (center.accountScope == notificationCenter.accountScope) notifications = updated
+        }
     }
 
     fun clearNotifications() {
-        viewModelScope.launch { notifications = notificationCenter.clearAll() }
+        val center = notificationCenter
+        viewModelScope.launch {
+            val updated = center.clearAll()
+            if (center.accountScope == notificationCenter.accountScope) notifications = updated
+        }
     }
 
     /** Điều hướng theo thông báo hệ thống (deep-link) khi mở app từ khay thông báo. */
-    fun navigateTo(target: String?, entityId: String? = null) {
+    fun navigateTo(
+        target: String?,
+        entityId: String? = null,
+        notificationId: String? = null,
+        accountScope: String? = null,
+    ) {
         // Thông báo "bản cập nhật mới" → kiểm tra lại ngay và mở bảng cập nhật (không phải điều hướng).
         // Bỏ qua mốc hoãn: người dùng vừa chủ động bấm vào thông báo thì đương nhiên muốn xem bản mới.
-        if (target == UPDATE_TARGET) { autoCheckForUpdate(force = true, openDetails = true); return }
+        val user = (authState as? AuthState.SignedIn)?.user
+        if (target == UPDATE_TARGET) {
+            if (user != null && !accountScope.isNullOrBlank() && accountScope != notificationAccountScope(user.username)) {
+                actionMessage = "Thông báo này thuộc một tài khoản khác và đã được bỏ qua."
+                return
+            }
+            if (user != null) notificationId?.let(::markNotificationRead)
+            autoCheckForUpdate(force = true, openDetails = true)
+            return
+        }
         // "WorkTasks" là tên màn CŨ (trước khi gộp vào "Việc cần làm") — thông báo do máy chủ bản cũ
         // gửi vẫn còn mang tên này nên phải quy về màn mới, nếu không bấm vào sẽ không đi đâu cả.
         val name = if (target == "WorkTasks") HrDestination.Tasks.name else target
         val dest = name?.let { runCatching { HrDestination.valueOf(it) }.getOrNull() } ?: return
-        val user = (authState as? AuthState.SignedIn)?.user
-        if (user == null) { pendingTarget = dest; pendingEntityId = entityId; return }
+        if (user == null) {
+            keepPendingNotification(dest, entityId, notificationId, accountScope)
+            return
+        }
+        if (!accountScope.isNullOrBlank() && accountScope != notificationAccountScope(user.username)) {
+            actionMessage = "Thông báo này thuộc một tài khoản khác và đã được bỏ qua."
+            return
+        }
+        if (payslipAccessLocked) {
+            keepPendingNotification(dest, entityId, notificationId, accountScope)
+            openRequiredPayslip(showMessage = true)
+            return
+        }
         if (!dest.isAvailableTo(user)) return
+        notificationId?.let(::markNotificationRead)
         select(dest)
         openNotificationEntity(dest, entityId)
+    }
+
+    private fun keepPendingNotification(
+        destination: HrDestination,
+        entityId: String?,
+        notificationId: String?,
+        accountScope: String?,
+    ) {
+        pendingTarget = destination
+        pendingEntityId = entityId
+        pendingNotificationId = notificationId
+        pendingNotificationAccountScope = accountScope
     }
 
     private fun consumePendingTarget(user: HrUser) {
         val dest = pendingTarget ?: return
         val entityId = pendingEntityId
-        pendingTarget = null
-        pendingEntityId = null
-        if (!dest.isAvailableTo(user)) return
+        val notificationId = pendingNotificationId
+        val requiredScope = pendingNotificationAccountScope
+        if (!requiredScope.isNullOrBlank() && requiredScope != notificationAccountScope(user.username)) {
+            clearPendingNotification()
+            actionMessage = "Thông báo này thuộc một tài khoản khác và đã được bỏ qua."
+            return
+        }
+        if (!dest.isAvailableTo(user)) { clearPendingNotification(); return }
+        if (payslipAccessLocked) {
+            openRequiredPayslip(showMessage = true)
+            return
+        }
+        clearPendingNotification()
+        notificationId?.let(::markNotificationRead)
         goTo(dest)
         openNotificationEntity(dest, entityId)
+    }
+
+    private fun clearPendingNotification() {
+        pendingTarget = null
+        pendingEntityId = null
+        pendingNotificationId = null
+        pendingNotificationAccountScope = null
     }
 
     private fun openNotificationEntity(destination: HrDestination, entityId: String?) {
         val id = entityId?.takeIf { it.isNotBlank() } ?: return
         when (destination) {
-            HrDestination.Requests -> openRequestDetail(id)
+            HrDestination.Requests -> {
+                val missedDate = com.ketoanapk.hr.data.missedCheckoutDateFromEntityId(id)
+                if (missedDate != null) startForgotCheckinDraft(missedDate, direction = "out")
+                else openRequestDetail(id)
+            }
             HrDestination.Approval -> openStaffDetail(id)
             HrDestination.Chat -> openChatNotification(id)
             else -> Unit
@@ -1197,6 +1441,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * bỏ sót màn đó. Chặn lịch sử ở 20 để bấm qua lại nhiều lần không tích thành hàng dài vô tận.
      */
     private fun goTo(destination: HrDestination) {
+        if (payslipAccessLocked) {
+            openRequiredPayslip(showMessage = true)
+            return
+        }
         if (destination == selected) return
         if (destination == HrDestination.Home) {
             history.clear()
@@ -1205,6 +1453,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             if (history.size > 20) history.removeAt(0)
         }
         selected = destination
+        if (destination == HrDestination.MyPayslips && payslipsState.items.isEmpty() && !payslipsState.loading)
+            loadMyPayslips()
     }
 
     /** Về Trang chủ với lịch sử sạch (dùng khi đăng nhập/đăng xuất). */
@@ -1259,10 +1509,83 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Còn chỗ để lùi ở cấp màn hình hay không. Trang chủ + lịch sử rỗng = hết, để hệ thống thoát app. */
-    val canGoBack: Boolean get() = history.isNotEmpty() || selected != HrDestination.Home
+    val payslipAccessLocked: Boolean get() = homeState.payslipRequirement.mustAcknowledge
+
+    /** Id phiếu mà màn xác nhận độc lập đang xử lý; phiếu quá hạn của server luôn thắng lựa chọn tay. */
+    val payslipConfirmationId: String?
+        get() {
+            val required = homeState.payslipRequirement.payslip
+            if (payslipAccessLocked) {
+                return required?.id?.takeIf(String::isNotBlank)
+                    ?: required?.period?.let { period ->
+                        payslipsState.items.firstOrNull { it.period == period && it.acknowledgedAt == null }?.id
+                    }
+            }
+            return requestedPayslipConfirmationId
+        }
+
+    val payslipConfirmationVisible: Boolean
+        get() = payslipAccessLocked || requestedPayslipConfirmationId != null
+
+    /** Chỉ ghép theo period cho dữ liệu requirement cũ không có id; id mới tuyệt đối không fallback. */
+    val payslipConfirmationItem: PayslipItem?
+        get() {
+            val legacyPeriod = homeState.payslipRequirement.payslip?.period.takeIf { payslipAccessLocked }
+            val item = findPayslipForConfirmation(payslipsState.items, payslipConfirmationId, legacyPeriod)
+            val requirement = homeState.payslipRequirement.payslip
+            return item?.takeIf {
+                !payslipAccessLocked || requirement == null || when {
+                    requirement.revisionToken.isNotBlank() -> it.revisionToken == requirement.revisionToken
+                    requirement.updatedAt.isNotBlank() -> it.updatedAt == requirement.updatedAt
+                    else -> true
+                }
+            }
+        }
+
+    /** Key của một lượt xem: đổi khi nội dung phiếu đổi để bắt nhập PIN và tích xác nhận lại. */
+    val payslipConfirmationReviewKey: String
+        get() {
+            val required = homeState.payslipRequirement.payslip
+            if (payslipAccessLocked && required != null) {
+                val version = required.revisionToken.ifBlank {
+                    required.updatedAt.ifBlank { required.publishedAt }
+                }
+                // Dùng kỳ làm identity để cache requirement cũ thiếu id không khiến PIN bật hai lần sau khi tải list.
+                return "required:${required.period}:$version"
+            }
+            val item = payslipConfirmationItem
+            val version = item?.let { it.revisionToken.ifBlank { it.updatedAt } }.orEmpty()
+            return "voluntary:${requestedPayslipConfirmationId.orEmpty()}:$version"
+        }
+
+    val payslipConfirmationRemainingCount: Int
+        get() = if (payslipAccessLocked) homeState.payslipRequirement.overdueCount.coerceAtLeast(1) else 1
+
+    val payslipConfirmationAwaitingSync: Boolean
+        get() = acknowledgedPayslipAwaitingSyncId != null
+
+    val payslipConfirmationPeriod: String
+        get() = if (payslipAccessLocked) {
+            homeState.payslipRequirement.payslip?.period.orEmpty()
+        } else {
+            payslipConfirmationItem?.period.orEmpty()
+        }
+
+    val payslipConfirmationDueAt: String
+        get() = if (payslipAccessLocked) {
+            homeState.payslipRequirement.payslip?.acknowledgementDueAt.orEmpty()
+        } else {
+            payslipConfirmationItem?.acknowledgementDueAt.orEmpty()
+        }
+
+    val canGoBack: Boolean get() = !payslipAccessLocked && (history.isNotEmpty() || selected != HrDestination.Home)
 
     /** Back cấp màn hình: lùi về màn trước, hết lịch sử thì về Trang chủ. Ở Trang chủ thì không làm gì. */
     fun goBack() {
+        if (payslipAccessLocked) {
+            openRequiredPayslip(showMessage = true)
+            return
+        }
         val target = when {
             history.isNotEmpty() -> history.removeAt(history.lastIndex)
             selected != HrDestination.Home -> HrDestination.Home
@@ -1275,6 +1598,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun select(destination: HrDestination) {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
         if (!destination.isAvailableTo(user)) return
+        if (payslipAccessLocked && destination != HrDestination.MyPayslips) {
+            openRequiredPayslip(showMessage = true)
+            return
+        }
         goTo(destination)
         enterDestination(destination, user)
     }
@@ -1784,6 +2111,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun consumeAppealDraft() { appealDraft = null }
 
     fun startShiftSwap(date: String?) {
+        requestDraftNonce++
+        requestDraftRestoreSaved = true
         requestDraftType = "shift_swap"
         requestDraftValues = date?.takeIf { it.isNotBlank() }?.let { mapOf("date" to it) } ?: emptyMap()
         select(HrDestination.Requests)
@@ -1791,12 +2120,29 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Mở form "Báo quên chấm công" (loại forgot_checkin) điền sẵn ngày đang chọn ở bảng công. */
     fun startForgotCheckin(date: String?) {
+        startForgotCheckinDraft(date)
+    }
+
+    /** Mở từ nhắc thiếu giờ ra: điền sẵn cả ngày và lựa chọn "Giờ ra". */
+    private fun startForgotCheckinDraft(date: String?, direction: String? = null) {
+        // Deep-link có thể đến khi màn Đơn từ đang giữ chi tiết/nháp cũ trong back stack. Dọn trạng thái
+        // đó để lần bấm nhắc nào cũng mở đúng một đơn MỚI thay vì hiện lại đơn đang xem/sửa.
+        closeRequestDetail()
+        editingRequestId = null
+        appealDraft = null
+        requestDraftNonce++ // cùng ngày bấm lại vẫn dựng một form mới, không giữ state Compose đã sửa
+        requestDraftRestoreSaved = direction == null
         requestDraftType = "forgot_checkin"
-        requestDraftValues = date?.takeIf { it.isNotBlank() }?.let { mapOf("date" to it) } ?: emptyMap()
+        requestDraftValues = buildMap {
+            date?.takeIf { it.isNotBlank() }?.let { put("date", it) }
+            direction?.takeIf { it == "in" || it == "out" }?.let { put("direction", it) }
+        }
         select(HrDestination.Requests)
     }
 
     fun startAttendanceExplanation(result: ChamCongResult) {
+        requestDraftNonce++
+        requestDraftRestoreSaved = false
         requestDraftType = "attendance_fix"
         requestDraftValues = mapOf(
             "date" to java.time.LocalDate.now().toString(),
@@ -1809,10 +2155,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun consumeRequestDraft() {
         requestDraftType = null
         requestDraftValues = emptyMap()
+        requestDraftRestoreSaved = true
         editingRequestId = null
     }
 
     fun copyRequest(detail: RequestDetail) {
+        requestDraftNonce++
+        requestDraftRestoreSaved = false
         requestDraftType = detail.request.type
         requestDraftValues = detail.request.payload.mapNotNull { (key, value) ->
             if (key == "requesterSignature") null else value.jsonPrimitive.contentOrNull?.let { key to it }
@@ -1821,6 +2170,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun editRequest(detail: RequestDetail) {
+        requestDraftNonce++
+        requestDraftRestoreSaved = false
         editingRequestId = detail.request.id
         requestDraftType = detail.request.type
         requestDraftValues = detail.request.payload.mapNotNull { (key, value) ->
@@ -1846,6 +2197,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             }
                 .onSuccess {
                     actionMessage = if (it.requestNo.isBlank()) "Đã cập nhật đơn." else "Đã gửi đơn ${it.requestNo}. Bạn có thể theo dõi trạng thái ở đây."
+                    val requestDate = payload["date"]?.jsonPrimitive?.contentOrNull
+                    val direction = payload["direction"]?.jsonPrimitive?.contentOrNull
+                    if (type == "forgot_checkin" && direction == "out" && !requestDate.isNullOrBlank()) {
+                        val center = notificationCenter
+                        val updated = center.resolveMissedCheckout(requestDate)
+                        if (center.accountScope == notificationCenter.accountScope) notifications = updated
+                    }
                     refreshHome(user, silent = true)
                     onDone(true)
                 }
@@ -1983,12 +2341,73 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Tải danh sách phiếu lương ĐÃ NHẬN của chính nhân viên (mỗi kỳ một thẻ). */
     fun loadMyPayslips() {
+        if (payslipsState.loading) return
+        payslipsState = payslipsState.copy(loading = true, error = null)
         viewModelScope.launch {
-            payslipsState = payslipsState.copy(loading = true, error = null)
             runCatching { repo.myPayslips() }
                 .onSuccess { payslipsState = PayslipsUiState(loading = false, items = it) }
                 .onFailure { payslipsState = payslipsState.copy(loading = false, error = readable(it)) }
         }
+    }
+
+    private fun applyPayslipRequirement(requirement: PayslipRequirement) {
+        val effective = payslipRequirementAt(requirement)
+        val wasLocked = homeState.payslipRequirement.mustAcknowledge
+        // serverNow đổi ở mỗi poll nhưng không phải thay đổi nghiệp vụ; không ghi cache xuống đĩa mỗi phút.
+        val requirementChanged = homeState.payslipRequirement.copy(serverNow = "") !=
+            effective.copy(serverNow = "")
+        val previous = homeState.payslipRequirement.payslip
+        val previousVersion = previous?.let { it.revisionToken.ifBlank { it.updatedAt } }.orEmpty()
+        val next = effective.payslip
+        val nextVersion = next?.let { it.revisionToken.ifBlank { it.updatedAt } }.orEmpty()
+        if (previous?.id != next?.id || previousVersion != nextVersion) {
+            payslipConfirmationError = null
+        }
+        homeState = homeState.copy(payslipRequirement = effective)
+        if (requirementChanged) {
+            (authState as? AuthState.SignedIn)?.user?.username?.let { username ->
+                persistHomeSnapshot(username, homeState)
+            }
+        }
+        if (!effective.mustAcknowledge) {
+            if (wasLocked) (authState as? AuthState.SignedIn)?.user?.let(::consumePendingTarget)
+            return
+        }
+        // Không đổi route sang kho phiếu cũ. HrShell dựng một màn xác nhận độc lập phủ toàn app.
+        openRequiredPayslip(showMessage = false)
+    }
+
+    private suspend fun refreshPayslipRequirementNow(): Boolean = payslipRequirementMutex.withLock {
+        // Chỉ cho một GET requirement chạy tại một thời điểm. Nếu request cũ bắt đầu trước ACK nhưng
+        // về sau request hậu-ACK, nó phải hoàn tất trước để response mới luôn là trạng thái cuối cùng.
+        val account = (authState as? AuthState.SignedIn)?.user?.username ?: return@withLock false
+        applyPayslipRequirement(homeState.payslipRequirement)
+        val response = runCatching { repo.payslipRequirement() }
+        val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+        if (!activeAccount.equals(account, ignoreCase = true)) return@withLock false
+        response.onSuccess { requirement ->
+            payslipRequirementServerGeneration++
+            applyPayslipRequirement(requirement)
+        }.isSuccess
+    }
+
+    private fun refreshPayslipRequirement() {
+        if (authState !is AuthState.SignedIn) return
+        viewModelScope.launch { refreshPayslipRequirementNow() }
+    }
+
+    private fun openRequiredPayslip(showMessage: Boolean) {
+        if (!homeState.payslipRequirement.mustAcknowledge) return
+        if (showMessage)
+            actionMessage = "Phiếu lương đã quá hạn xác nhận. Hãy hoàn tất màn xác nhận bảo mật để mở khóa ứng dụng."
+        val required = homeState.payslipRequirement.payslip
+        val loaded = findPayslipForConfirmation(payslipsState.items, required?.id, required?.period)
+        val versionMatches = when {
+            required?.revisionToken?.isNotBlank() == true -> loaded?.revisionToken == required.revisionToken
+            required?.updatedAt?.isNotBlank() == true -> loaded?.updatedAt == required.updatedAt
+            else -> true
+        }
+        if ((loaded == null || !versionMatches) && !payslipsState.loading) loadMyPayslips()
     }
 
     // ---------------- Phiếu chi tiền mặt ----------------
@@ -2160,8 +2579,109 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Đóng chi tiết, quay lại danh sách thẻ tháng. */
     fun closePayslip() { payslipOpenPeriod = null }
 
-    fun acknowledgePayslip(id:String)=viewModelScope.launch{runCatching{repo.acknowledgePayslip(id)}.onSuccess{loadMyPayslips();actionMessage="Đã xác nhận nhận phiếu lương."}.onFailure{actionMessage=readable(it)}}
-    fun sendPayslipInquiry(id:String,line:String,message:String)=viewModelScope.launch{runCatching{repo.payslipInquiry(id,line,message)}.onSuccess{actionMessage="Đã gửi thắc mắc tới bộ phận lương."}.onFailure{actionMessage=readable(it)}}
+    /** Mọi thao tác xác nhận đều đi qua màn riêng, kể cả xác nhận sớm từ kho phiếu. */
+    fun openPayslipConfirmation(id: String) {
+        val item = payslipsState.items.firstOrNull { it.id == id && it.acknowledgedAt == null } ?: return
+        requestedPayslipConfirmationId = item.id
+        payslipConfirmationError = null
+        payslipConfirmationMessage = null
+    }
+
+    fun closePayslipConfirmation() {
+        if (payslipAccessLocked || payslipAcknowledgingId != null) return
+        requestedPayslipConfirmationId = null
+        payslipConfirmationError = null
+        payslipConfirmationMessage = null
+    }
+
+    /** Chỉ ghi nhận đúng snapshot đang vẽ; requirement đổi giữa lúc bấm sẽ buộc tải/xem lại. */
+    fun confirmPayslipFromConfirmationScreen(displayed: PayslipItem) {
+        val current = payslipConfirmationItem
+        val sameRevision = if (current?.revisionToken?.isNotBlank() == true || displayed.revisionToken.isNotBlank())
+            current?.revisionToken == displayed.revisionToken
+        else current?.updatedAt == displayed.updatedAt
+        if (current == null || current.id != displayed.id || !sameRevision) {
+            payslipConfirmationError = "Phiếu lương vừa thay đổi. Vui lòng tải lại và kiểm tra số liệu mới trước khi xác nhận."
+            payslipConfirmationMessage =
+                "Phiếu vừa được cập nhật. Ứng dụng đã tải lại bản mới; hãy xác thực và kiểm tra lại trước khi xác nhận."
+            reloadPayslipConfirmation(clearError = false)
+            return
+        }
+        if (acknowledgedPayslipAwaitingSyncId == displayed.id) return
+        acknowledgePayslip(displayed)
+    }
+
+    private fun acknowledgePayslip(item: PayslipItem) {
+        if (payslipAcknowledgingId != null) return
+        payslipAcknowledgingId = item.id
+        payslipConfirmationError = null
+        payslipConfirmationMessage = null
+        viewModelScope.launch {
+            runCatching { repo.acknowledgePayslip(item.id, item.revisionToken) }
+                .onSuccess {
+                    requestedPayslipConfirmationId = null
+                    acknowledgedPayslipAwaitingSyncId = item.id
+                    // Chờ requirement mới trước khi bỏ màn khóa. Nếu còn nhiều phiếu quá hạn, server
+                    // trả phiếu tiếp theo và màn xác nhận tự chuyển sang id đó.
+                    val synced = refreshPayslipRequirementNow()
+                    loadMyPayslips()
+                    if (!synced) {
+                        payslipConfirmationError =
+                            "Máy chủ đã ghi nhận phiếu này nhưng chưa đồng bộ được trạng thái mở khóa. Kiểm tra mạng và bấm Thử lại; không cần xác nhận lần nữa."
+                    } else {
+                        acknowledgedPayslipAwaitingSyncId = null
+                        val message = if (homeState.payslipRequirement.mustAcknowledge)
+                            "Đã ghi nhận phiếu này. Bạn còn phiếu lương quá hạn khác cần xác nhận."
+                        else "Đã xác nhận đã xem/nhận phiếu lương. Ứng dụng đã được mở khóa."
+                        payslipConfirmationMessage = message
+                        actionMessage = message
+                    }
+                }
+                .onFailure {
+                    payslipConfirmationError = readable(it)
+                    if (it is retrofit2.HttpException && it.code() == 409) {
+                        payslipConfirmationMessage =
+                            "Phiếu vừa được cập nhật. Ứng dụng đã tải lại bản mới; hãy xác thực và kiểm tra lại trước khi xác nhận."
+                    }
+                    // 409 do phiếu vừa sửa cũng đi qua đây; tải lại sẽ đổi review key và bắt xem/PIN lại.
+                    refreshPayslipRequirement()
+                    loadMyPayslips()
+                }
+            payslipAcknowledgingId = null
+        }
+    }
+
+    fun retryPayslipConfirmation() {
+        reloadPayslipConfirmation(clearError = true)
+    }
+
+    private fun reloadPayslipConfirmation(clearError: Boolean) {
+        if (payslipAcknowledgingId != null) return
+        if (clearError) payslipConfirmationError = null
+        viewModelScope.launch {
+            val synced = refreshPayslipRequirementNow()
+            if (synced) acknowledgedPayslipAwaitingSyncId = null
+            loadMyPayslips()
+            if (!synced && (clearError || payslipConfirmationError == null))
+                payslipConfirmationError = "Chưa kết nối được máy chủ. Vui lòng kiểm tra mạng rồi thử lại."
+        }
+    }
+
+    fun sendPayslipInquiry(id: String, line: String, message: String) = viewModelScope.launch {
+        runCatching { repo.payslipInquiry(id, line, message) }
+            .onSuccess {
+                val text = "Đã gửi thắc mắc tới bộ phận lương."
+                if (payslipConfirmationVisible && payslipConfirmationItem?.id == id)
+                    payslipConfirmationMessage = text
+                actionMessage = text
+            }
+            .onFailure {
+                val text = readable(it)
+                if (payslipConfirmationVisible && payslipConfirmationItem?.id == id)
+                    payslipConfirmationError = text
+                actionMessage = text
+            }
+    }
     fun downloadPayslip(item:PayslipItem)=viewModelScope.launch{runCatching{repo.downloadPayslipPdf(getApplication(),item)}.onSuccess{file->
         val context=getApplication<Application>();val uri=androidx.core.content.FileProvider.getUriForFile(context,"${context.packageName}.fileprovider",file);val intent=android.content.Intent(android.content.Intent.ACTION_VIEW).apply{setDataAndType(uri,"application/pdf");addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)};runCatching{context.startActivity(intent)}.onFailure{actionMessage="Đã tải PDF nhưng thiết bị không có ứng dụng mở PDF."}
     }.onFailure{actionMessage=readable(it)}}
@@ -2262,10 +2782,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun restoreSession() {
         viewModelScope.launch {
+            // Giữ scope trước khi restore có thể xoá cached user do phiên 401/hết hạn.
+            val previousAccount = tokenStore.cachedUser()?.username
             when (val restored = repo.restoreSession()) {
                 is SessionRestore.Online -> enterSignedIn(restored.user)
                 is SessionRestore.Offline -> enterSignedIn(restored.user)
                 is SessionRestore.SignedOut -> {
+                    previousAccount?.takeIf { it.isNotBlank() }?.let { oldAccount ->
+                        NotificationCenter(getApplication<Application>(), oldAccount).reset()
+                    }
                     authState = AuthState.SignedOut
                     homeState = HomeUiState()
                     loginError = if (pendingQrLoginCode != null || pendingMobileAppLoginCode != null) {
@@ -2281,8 +2806,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     /** Dựng toàn bộ trạng thái sau khi đã xác định được người dùng (dù trực tuyến hay ngoại tuyến). */
     private fun enterSignedIn(user: HrUser) {
         authState = AuthState.SignedIn(user)
+        activateNotificationAccount(user.username)
         startHeartbeat()
         startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
+        startPayslipRequirementMonitor()
+        startForegroundUpdateMonitor()
         CallManager.setSelfIdentity(user.displayName) // tên thật (DB) gửi kèm lời mời gọi
         realtime.start(user.username) // realtime + kênh tín hiệu gọi (khôi phục phiên)
         viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } // TURN sẵn sàng
@@ -2295,11 +2823,20 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         // (lần đầu) thì tải bình thường. refreshHome ghi lại ảnh chụp sau mỗi lần tải thành công. Xem
         // [com.ketoanapk.hr.data.HomeCacheStore].
         viewModelScope.launch {
+            val requirementGenerationBeforeCacheLoad = payslipRequirementServerGeneration
             // Chỉ khôi phục khi Trang chủ còn trống (mở app mới), tránh đè lên dữ liệu đã có trong bộ nhớ.
             val snapshot = if (homeState.employee == null)
                 runCatching { repo.loadHomeSnapshot(user.username) }.getOrNull() else null
+            val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+            if (!activeAccount.equals(user.username, ignoreCase = true)) return@launch
             val restored = snapshot != null
             if (snapshot != null) {
+                val cachedPayslipRequirement = payslipRequirementAt(snapshot.payslipRequirement)
+                // Realtime/monitor có thể hoàn tất GET trong lúc đọc cache. Khi đó luôn giữ kết quả server mới,
+                // không cho ảnh chụp cũ tạm mở khóa hoặc khóa lại ứng dụng.
+                val effectivePayslipRequirement = if (
+                    requirementGenerationBeforeCacheLoad == payslipRequirementServerGeneration
+                ) cachedPayslipRequirement else homeState.payslipRequirement
                 applyServerRequestFields(snapshot.requestTypes)
                 homeState = HomeUiState(
                     loading = false,
@@ -2310,7 +2847,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                     penalties = snapshot.penalties,
                     salaries = snapshot.salaries,
                     requestTypes = snapshot.requestTypes,
+                    payslipRequirement = effectivePayslipRequirement,
                 )
+                if (effectivePayslipRequirement.mustAcknowledge) openRequiredPayslip(showMessage = false)
                 snapshot.timesheet?.let { sheet ->
                     val key = runCatching { YearMonth.parse(sheet.period.take(7)).toString() }
                         .getOrElse { currentMonthKey() }
@@ -2331,6 +2870,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
         loadAppConfig(force = true)
         consumePendingTarget(user)
+        // MainActivity.onResume thường chạy khi restoreSession vẫn còn Loading nên lần kiểm tra ở đó bị
+        // bỏ qua. Khôi phục phiên thành công phải tự kiểm tra để cold start không bỏ lỡ bản phát hành.
+        autoCheckForUpdate(force = true)
     }
 
     private fun refreshHome(user: HrUser, silent: Boolean) {
@@ -2361,26 +2903,21 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                         penalties = penalties.await(),
                         salaries = salaries.await(),
                         requestTypes = types,
+                        // Requirement được tải bằng coordinator riêng để response Home cũ không thể
+                        // ghi đè trạng thái mới sau khi nhân viên vừa ACK.
+                        payslipRequirement = homeState.payslipRequirement,
                     )
                 }
             }.onSuccess {
-                homeState = it
-                syncNotifications(user, it)
+                val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+                if (!activeAccount.equals(user.username, ignoreCase = true)) return@onSuccess
+                val refreshed = it.copy(payslipRequirement = homeState.payslipRequirement)
+                homeState = refreshed
+                syncNotifications(user, refreshed)
                 // Ghi ảnh chụp để lần mở app sau hiện ngay, không phụ thuộc mạng. Best-effort. Xem [enterSignedIn].
-                runCatching {
-                    repo.saveHomeSnapshot(
-                        com.ketoanapk.hr.data.HomeSnapshot(
-                            username = user.username,
-                            employee = it.employee,
-                            timesheet = it.timesheet,
-                            requests = it.requests,
-                            inbox = it.inbox,
-                            penalties = it.penalties,
-                            salaries = it.salaries,
-                            requestTypes = it.requestTypes,
-                        ),
-                    )
-                }
+                persistHomeSnapshot(user.username, refreshed)
+                if (refreshed.payslipRequirement.mustAcknowledge) openRequiredPayslip(showMessage = false)
+                refreshPayslipRequirement()
             }
                 .onFailure {
                     // Đã có dữ liệu sẵn (từ ảnh chụp/ lần tải trước) thì đừng phủ lỗi lên trên — giữ dữ liệu
@@ -2390,6 +2927,27 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                         error = if (homeState.employee == null) readable(it) else null,
                     )
                 }
+        }
+    }
+
+    private fun persistHomeSnapshot(username: String, state: HomeUiState) {
+        if (username.isBlank() || state.employee == null) return
+        viewModelScope.launch {
+            runCatching {
+                repo.saveHomeSnapshot(
+                    com.ketoanapk.hr.data.HomeSnapshot(
+                        username = username,
+                        employee = state.employee,
+                        timesheet = state.timesheet,
+                        requests = state.requests,
+                        inbox = state.inbox,
+                        penalties = state.penalties,
+                        salaries = state.salaries,
+                        requestTypes = state.requestTypes,
+                        payslipRequirement = state.payslipRequirement,
+                    ),
+                )
+            }
         }
     }
 
@@ -2457,9 +3015,14 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         refreshCurrentAccess()  // role/quyền có thể vừa được quản trị thay đổi khi app ở nền
         loadAppConfig()         // lấy remote config mới (tiết chế 60s)
         startForegroundPoll()
+        startPayslipRequirementMonitor()
+        startForegroundUpdateMonitor()
         CallManager.setSelfIdentity(signedIn.user.displayName) // tên thật (DB) gửi kèm lời mời gọi
         realtime.start(signedIn.user.username) // realtime + kênh tín hiệu gọi khi app đang mở
         syncMissedCalls() // cuộc gọi nhỡ đã lưu server (mỗi lần vào lại app)
+        val forceUpdateCheck = pendingForcedUpdateCheck
+        pendingForcedUpdateCheck = false
+        autoCheckForUpdate(force = forceUpdateCheck)
     }
 
     /** Nạp lại UserDto do server tính; không suy quyền từ role/cached UI và đóng màn vừa bị thu quyền. */
@@ -2485,6 +3048,13 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun onAppPaused() {
         foregroundPollJob?.cancel()
         foregroundPollJob = null
+        payslipRequirementJob?.cancel()
+        payslipRequirementJob = null
+        foregroundUpdateMonitorJob?.cancel()
+        foregroundUpdateMonitorJob = null
+        if (releaseUpdateDebounceJob?.isActive == true) pendingForcedUpdateCheck = true
+        releaseUpdateDebounceJob?.cancel()
+        releaseUpdateDebounceJob = null
         stopHeartbeat()
         realtime.stop()
     }
@@ -2498,6 +3068,47 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 // pollLiveData) tức thì nên poll định kỳ là THỪA. Đây chỉ còn là lưới dự phòng khi mất WS.
                 if (authState is AuthState.SignedIn && !realtime.isConnected()) pollLiveData()
             }
+        }
+    }
+
+    /**
+     * Hạn xác nhận có thể tự chuyển sang quá hạn lúc 00:00 dù không có sự kiện realtime nào phát sinh. Vì vậy app
+     * kiểm tra riêng mỗi phút khi ở foreground; xuống nền thì dừng và kiểm tra ngay khi người dùng quay lại.
+     */
+    private fun startPayslipRequirementMonitor() {
+        if (payslipRequirementJob?.isActive == true || authState !is AuthState.SignedIn) return
+        payslipRequirementJob = viewModelScope.launch {
+            while (isActive) {
+                refreshPayslipRequirementNow()
+                delay(60_000)
+            }
+        }
+    }
+
+    /**
+     * Lưới dự phòng cho trường hợp FCM bị tắt/mất token và SignalR không nhận được trigger. App để mở
+     * liên tục vẫn hỏi bản mới mỗi 10 phút; [autoCheckForUpdate] tự tiết chế và lỗi mạng hoàn toàn im lặng.
+     */
+    private fun startForegroundUpdateMonitor() {
+        if (foregroundUpdateMonitorJob?.isActive == true || authState !is AuthState.SignedIn) return
+        foregroundUpdateMonitorJob = viewModelScope.launch {
+            while (isActive) {
+                delay(FOREGROUND_UPDATE_CHECK_MS)
+                // Vòng này đã tự giãn đúng 10 phút nên ép kiểm tra để không trượt sang nhịp 20 phút
+                // chỉ vì timestamp lệch vài mili-giây so với lần đăng nhập.
+                autoCheckForUpdate(force = true)
+            }
+        }
+    }
+
+    /** INSERT release + ghi xong APK tạo hai sự kiện gần nhau; debounce để chỉ hỏi khi file đã sẵn sàng. */
+    private fun schedulePublishedReleaseCheck() {
+        if (loggingOut) return
+        releaseUpdateDebounceJob?.cancel()
+        releaseUpdateDebounceJob = viewModelScope.launch {
+            delay(350)
+            loadNotifications() // FCM có thể vừa ghi kho chuông bằng một NotificationCenter khác.
+            autoCheckForUpdate(force = true)
         }
     }
 
@@ -2552,6 +3163,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         // làm mới IM LẶNG khi đang xem tab Bảng công để số liệu đổi tại chỗ (admin sửa công, duyệt đơn…).
         // Chỉ nạp lương khi nhân viên đã mở khoá (data != null) để không lộ/không gọi thừa lúc còn che.
         if (changeScope == "attendance" || changeScope == "hr" || changeScope == "data" || changeScope == "all") {
+            refreshPayslipRequirement()
             if (selected == HrDestination.Timesheet) {
                 loadTimesheet(timesheetState.month, silent = true)
                 if (payEstimateState.data != null) loadMyEstimate()
@@ -2753,21 +3365,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun checkForUpdate(context: Context) {
-        viewModelScope.launch {
-            settingsState = settingsState.copy(checkingUpdate = true, updateMessage = null)
-            val current = AppUpdater.installedVersionCode(context)
-            runCatching { repo.latestRelease(current) }
-                .onSuccess {
-                    settingsState = settingsState.copy(
-                        checkingUpdate = false,
-                        updateChecked = true,
-                        updateInfo = if (it.hasUpdate) it else null,
-                        updateMessage = if (it.hasUpdate) "Có bản cập nhật ${it.version}." else "Bạn đang dùng phiên bản mới nhất.",
-                    )
-                }
-                .onFailure { settingsState = settingsState.copy(checkingUpdate = false, updateChecked = true, updateMessage = readable(it)) }
-        }
+    fun checkForUpdate() {
+        if (loggingOut) return
+        settingsState = settingsState.copy(checkingUpdate = true, updateMessage = null)
+        pendingManualUpdateCheck = true
+        autoCheckForUpdate(force = true)
     }
 
     /**
@@ -2776,15 +3378,42 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * Lỗi mạng thì im lặng — người dùng vẫn có nút "Kiểm tra cập nhật" thủ công trong Cài đặt.
      */
     fun autoCheckForUpdate(force: Boolean = false, openDetails: Boolean = false) {
-        if (authState !is AuthState.SignedIn) return
+        if (loggingOut) return
+        if (openDetails) pendingUpdateOpenDetails = true
+        val signedIn = authState as? AuthState.SignedIn
+        if (signedIn == null) {
+            if (force || openDetails) pendingForcedUpdateCheck = true
+            return
+        }
         val now = System.currentTimeMillis()
-        if (!force && now - lastUpdateCheckAt < 10 * 60 * 1000L) return
-        lastUpdateCheckAt = now
-        viewModelScope.launch {
+        if (!force && now - lastSuccessfulUpdateCheckAt < 10 * 60 * 1000L) {
+            if (openDetails && availableUpdate != null) {
+                pendingUpdateOpenDetails = false
+                openUpdateSheet()
+            }
+            return
+        }
+        if (updateCheckJob?.isActive == true) {
+            if (force || openDetails) pendingForcedUpdateCheck = true
+            return
+        }
+        if (force) pendingForcedUpdateCheck = false
+        val account = signedIn.user.username
+        val session = updateCheckSession
+        updateCheckJob = viewModelScope.launch {
             val ctx = getApplication<Application>()
             val current = AppUpdater.installedVersionCode(ctx)
-            runCatching { repo.latestRelease(current) }
+            val result = runCatching { repo.latestRelease(current) }
+            if (session != updateCheckSession) return@launch
+            result
                 .onSuccess { info ->
+                    val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+                    if (!activeAccount.equals(account, ignoreCase = true)) return@onSuccess
+                    lastSuccessfulUpdateCheckAt = System.currentTimeMillis()
+                    notifications = notificationCenter.markObsoleteAppUpdatesRead(
+                        installedVersionCode = current,
+                        noUpdateAvailable = !info.hasUpdate,
+                    )
                     if (!info.hasUpdate) {
                         availableUpdate = null
                         settingsState = settingsState.copy(
@@ -2792,6 +3421,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                             updateChecked = true,
                             updateMessage = "Bạn đang dùng phiên bản mới nhất.",
                         )
+                        // Nếu có follow-up (release/deep-link tới trong lúc request cũ chạy), giữ nguyên
+                        // intent mở chi tiết và spinner thủ công cho response kế tiếp mới được consume.
+                        if (!pendingForcedUpdateCheck) {
+                            pendingUpdateOpenDetails = false
+                            if (pendingManualUpdateCheck) {
+                                pendingManualUpdateCheck = false
+                                settingsState = settingsState.copy(checkingUpdate = false)
+                            }
+                        }
                         if (updateStage is UpdateStage.Idle) updateSheetVisible = false
                         return@onSuccess
                     }
@@ -2802,15 +3440,39 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                         updateChecked = true,
                         updateMessage = "Có bản cập nhật ${info.version}.",
                     )
+                    val shouldOpenDetails = pendingUpdateOpenDetails
+                    pendingUpdateOpenDetails = false
+                    if (pendingManualUpdateCheck && !pendingForcedUpdateCheck) {
+                        pendingManualUpdateCheck = false
+                        settingsState = settingsState.copy(checkingUpdate = false)
+                    }
                     // Đang tải/đang cài thì đừng dựng lại bảng đè lên tiến trình đang chạy.
                     if (updateStage !is UpdateStage.Idle) return@onSuccess
                     // Bản thường chỉ hiện thanh nhỏ để không chặn công việc. Bản bắt buộc vẫn mở bảng;
                     // openDetails=true là lúc người dùng chủ động bấm thông báo phát hành ngoài hệ thống.
-                    if (info.isMandatory || openDetails) {
+                    if (info.isMandatory || shouldOpenDetails) {
                         updateNeedsMeteredConsent = needsMeteredConsent(ctx, info)
                         updateSheetVisible = true
                     }
                 }
+            result.exceptionOrNull()?.let { error ->
+                if (pendingManualUpdateCheck && !pendingForcedUpdateCheck) {
+                    pendingManualUpdateCheck = false
+                    settingsState = settingsState.copy(
+                        checkingUpdate = false,
+                        updateChecked = true,
+                        updateMessage = readable(error),
+                    )
+                }
+            }
+            updateCheckJob = null
+            // Sự kiện release/all tới trong lúc request đang chạy không bị bỏ: hoàn tất response hiện
+            // tại trước, rồi hỏi lại một lần để bắt trạng thái APK mới nhất. Request lỗi không cập nhật
+            // mốc throttle nên reconnect/resume kế tiếp sẽ thử ngay.
+            if (pendingForcedUpdateCheck && authState is AuthState.SignedIn && !loggingOut) {
+                pendingForcedUpdateCheck = false
+                autoCheckForUpdate(force = true)
+            }
         }
     }
 
@@ -3234,11 +3896,12 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         /** Sentinel target của thông báo "bản cập nhật mới" (khớp với backend PushService). */
-        const val UPDATE_TARGET = "AppUpdate"
+        const val UPDATE_TARGET = APP_UPDATE_NOTIFICATION_TARGET
         /** Bấm "Để sau" thì im 24 giờ (bản bắt buộc không áp dụng). */
         private const val AUDIT_PAGE_SIZE = 50
         /** Khi SignalR đang mở (foreground): chỉ ping HTTP thưa cỡ này làm lưới an toàn phát hiện phiên
          *  bị thu hồi phòng khi lỡ sự kiện "kicked". Presence + banner lúc đó đã do kết nối SignalR lo. */
         private const val HEARTBEAT_BACKSTOP_MS = 5 * 60_000L
+        private const val FOREGROUND_UPDATE_CHECK_MS = 10 * 60_000L
     }
 }

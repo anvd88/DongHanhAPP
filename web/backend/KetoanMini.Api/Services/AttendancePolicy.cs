@@ -46,30 +46,39 @@ public static class AttendancePolicy
         // đúng thời điểm chấm thật (lúc mất mạng), không phải thời điểm gửi lên.
         var nowUtc = atUtc?.ToUniversalTime() ?? DateTime.UtcNow;
         var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, VietnamTimeZone);
-        var dayStartLocal = nowLocal.Date;
-        var dayEndLocal = dayStartLocal.AddDays(1);
-        var dayStartUtc = TimeZoneInfo.ConvertTimeToUtc(dayStartLocal, VietnamTimeZone);
-        var dayEndUtc = TimeZoneInfo.ConvertTimeToUtc(dayEndLocal, VietnamTimeZone);
+        var workDay = DateOnly.FromDateTime(nowLocal);
+        var overnightDay = await conn.Cmd("""
+            SELECT a.work_date
+            FROM hr_employees e
+            JOIN hr_shift_assignments a ON a.employee_id=e.id
+            JOIN hr_shifts s ON s.id=a.shift_id AND s.is_overnight=TRUE
+            WHERE lower(e.username)=lower(@u)
+              AND @localAt >= a.work_date + s.start_time
+              AND @localAt <= (a.work_date + 1) + s.end_time
+                  + make_interval(mins => s.checkout_grace_minutes)
+            ORDER BY a.work_date DESC LIMIT 1
+            """).With("@u", username).With("@localAt", nowLocal).ExecuteScalarAsync(ct);
+        if (overnightDay is DateOnly assignedDay) workDay = assignedDay;
 
         // M\u00f4 h\u00ecnh chu\u1ea9n: l\u1ea7n ch\u1ea5m \u0110\u1ea6U ng\u00e0y = gi\u1edd V\u00e0o; c\u00e1c l\u1ea7n sau = gi\u1edd Ra v\u00e0 L\u1ea4Y MU\u1ed8N NH\u1ea4T. Kh\u00f4ng ph\u00e2n
         // lo\u1ea1i theo m\u1ed1c 17:00 n\u1eefa n\u00ean \u1edf l\u1ea1i t\u0103ng ca ch\u1ea5m l\u1ea1i th\u00ec c\u1eadp nh\u1eadt \u0111\u01b0\u1ee3c gi\u1edd ra mu\u1ed9n h\u01a1n, v\u00e0 v\u1ec1 s\u1edbm
         // v\u1eabn ghi \u0111\u01b0\u1ee3c gi\u1edd ra. \u0110\u1ecdc gi\u1edd ch\u1ea5m \u0111\u1ea7u (MIN) v\u00e0 gi\u1edd ch\u1ea5m g\u1ea7n nh\u1ea5t trong ng\u00e0y (b\u1ea5t k\u1ec3 loai \u2014 kh\u1edbp
         // \u0111\u00fang c\u00e1ch b\u1ea3ng c\u00f4ng t\u00ednh gi\u1edd v\u00e0o = MIN, gi\u1edd ra = MAX c\u1ee7a m\u1ecdi l\u1ea7n ch\u1ea5m).
         DateTime? firstAt = null, lastAt = null;
-        await using (var reader = await conn.Cmd(
-            @"SELECT occurred_at FROM cham_cong_log
-              WHERE username=@u AND occurred_at >= @startUtc AND occurred_at < @endUtc
-              ORDER BY occurred_at ASC")
+        await using (var reader = await conn.Cmd("""
+            SELECT MIN(occurred_at) FILTER (WHERE loai='Vào') AS first_in,
+                   MAX(occurred_at) FILTER (WHERE loai='Ra') AS last_out
+            FROM hr_effective_attendance_log
+            WHERE lower(username)=lower(@u) AND logical_work_date=@workDay
+            """)
             .With("@u", username)
-            .With("@startUtc", dayStartUtc)
-            .With("@endUtc", dayEndUtc)
+            .With("@workDay", workDay)
             .ExecuteReaderAsync(ct))
         {
-            while (await reader.ReadAsync(ct))
+            if (await reader.ReadAsync(ct))
             {
-                var at = reader.Dt("occurred_at");
-                firstAt ??= at;
-                lastAt = at;
+                firstAt = reader.DtNull("first_in");
+                lastAt = reader.DtNull("last_out");
             }
         }
 

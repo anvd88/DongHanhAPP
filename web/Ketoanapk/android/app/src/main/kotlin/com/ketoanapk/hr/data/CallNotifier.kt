@@ -11,7 +11,7 @@ import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.ketoanapk.hr.MainActivity
+import com.ketoanapk.hr.NotificationEntryActivity
 import com.ketoanapk.hr.R
 
 /** Cờ app có đang ở tiền cảnh (foreground) — để FCM biết cuộc gọi đến nên hiện overlay hay thông báo toàn màn hình. */
@@ -61,7 +61,7 @@ object CallNotifier {
         val display = name.ifBlank { from }
         val isVideo = media.equals("video", ignoreCase = true)
 
-        val openIntent = Intent(context, MainActivity::class.java).apply {
+        val openIntent = Intent(context, NotificationEntryActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CALL_FROM, from)

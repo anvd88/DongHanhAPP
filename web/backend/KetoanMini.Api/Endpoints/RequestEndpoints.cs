@@ -1,3 +1,5 @@
+using System.Data;
+using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
 using KetoanMini.Api.Data;
@@ -240,6 +242,85 @@ public static class RequestEndpoints
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS ix_hr_request_attachments_request ON hr_request_attachments(request_id, id);
+
+            -- Dọn các đơn quên chấm bị nhân đôi từ phiên bản cũ trước khi dựng chốt duy nhất. Không xóa
+            -- lịch sử: bản đến sau được chuyển Cancelled để vẫn tra cứu được.
+            WITH ranked AS (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY employee_id, payload->>'date', payload->>'direction'
+                    ORDER BY created_at, id) AS rn
+                FROM hr_requests
+                WHERE req_type='forgot_checkin' AND status='Pending'
+            )
+            UPDATE hr_requests r
+               SET status='Cancelled', updated_at=CURRENT_TIMESTAMP
+              FROM ranked d WHERE r.id=d.id AND d.rn > 1;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_requests_pending_forgot
+                ON hr_requests (employee_id, (payload->>'date'), (payload->>'direction'))
+                WHERE req_type='forgot_checkin' AND status='Pending';
+
+            -- Điều chỉnh là sổ bổ sung bất biến; tuyệt đối không xóa/chỉnh log khuôn mặt/QR gốc.
+            CREATE TABLE IF NOT EXISTS hr_attendance_corrections (
+                id bigserial PRIMARY KEY,
+                request_id uuid NOT NULL REFERENCES hr_requests(id) ON DELETE RESTRICT,
+                request_no varchar(20) NOT NULL,
+                employee_id uuid NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,
+                username varchar(128) NOT NULL,
+                full_name varchar(200) NOT NULL DEFAULT '',
+                work_date date NOT NULL,
+                loai varchar(10) NOT NULL CHECK (loai IN ('Vào','Ra')),
+                corrected_time time NOT NULL,
+                occurred_at timestamptz NOT NULL,
+                previous_occurred_at timestamptz NULL,
+                previous_source varchar(24) NOT NULL DEFAULT 'missing',
+                reason text NOT NULL DEFAULT '',
+                approved_by varchar(128) NOT NULL,
+                applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (request_id, loai)
+            );
+            ALTER TABLE hr_attendance_corrections
+                ADD COLUMN IF NOT EXISTS previous_occurred_at timestamptz NULL;
+            ALTER TABLE hr_attendance_corrections
+                ADD COLUMN IF NOT EXISTS previous_source varchar(24) NOT NULL DEFAULT 'missing';
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid='hr_attendance_corrections'::regclass
+                      AND conname='hr_attendance_corrections_request_id_fkey'
+                      AND confdeltype='c'
+                ) THEN
+                    ALTER TABLE hr_attendance_corrections
+                        DROP CONSTRAINT hr_attendance_corrections_request_id_fkey;
+                    ALTER TABLE hr_attendance_corrections
+                        ADD CONSTRAINT hr_attendance_corrections_request_id_fkey
+                        FOREIGN KEY (request_id) REFERENCES hr_requests(id) ON DELETE RESTRICT;
+                END IF;
+            END $$;
+            CREATE INDEX IF NOT EXISTS ix_hr_attendance_corrections_employee_date
+                ON hr_attendance_corrections (employee_id, work_date, loai, applied_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS ix_hr_attendance_corrections_user_date
+                ON hr_attendance_corrections (lower(username), work_date, loai, applied_at DESC, id DESC);
+
+            CREATE TABLE IF NOT EXISTS hr_attendance_reminders (
+                id uuid PRIMARY KEY,
+                employee_id uuid NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,
+                username varchar(128) NOT NULL,
+                work_date date NOT NULL,
+                direction varchar(8) NOT NULL CHECK (direction IN ('in','out')),
+                status varchar(24) NOT NULL DEFAULT 'Pending'
+                    CHECK (status IN ('Pending','RequestCreated','Resolved')),
+                request_id uuid NULL REFERENCES hr_requests(id) ON DELETE SET NULL,
+                notification_id varchar(160) NOT NULL,
+                detected_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_checked_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                notification_enqueued_at timestamptz NULL,
+                resolved_at timestamptz NULL,
+                resolution_source varchar(32) NOT NULL DEFAULT '',
+                UNIQUE (employee_id, work_date, direction)
+            );
+            CREATE INDEX IF NOT EXISTS ix_hr_attendance_reminders_status
+                ON hr_attendance_reminders (status, work_date, employee_id);
             """).ExecuteNonQueryAsync(ct);
     }
 
@@ -464,7 +545,8 @@ public static class RequestEndpoints
             return Results.File((byte[])r.GetValue(r.GetOrdinal("content")), r.Str("mime_type"), r.Str("file_name"));
         });
 
-        g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, PushService push) =>
+        g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, PushService push,
+            IConfiguration config) =>
         {
             if (string.IsNullOrWhiteSpace(req.Type) || Array.FindIndex(Types, t => t.Type == req.Type) < 0)
                 return Results.BadRequest(new { message = "Loại đơn không hợp lệ." });
@@ -498,6 +580,16 @@ public static class RequestEndpoints
             var reqId = Guid.NewGuid();
             var no = $"DT{Convert.ToInt64(await conn.Cmd("SELECT nextval('hr_request_seq')").ExecuteScalarAsync()):D5}";
             var payloadJson = req.Payload.HasValue ? req.Payload.Value.GetRawText() : "{}";
+
+            if (req.Type == "forgot_checkin")
+            {
+                var validation = await ValidateForgotCheckinAsync(conn, null, empId, payloadJson,
+                    requireMissing: true, lookbackDays: GetForgotLookbackDays(config));
+                if (validation is not null)
+                    return validation.Conflict
+                        ? Results.Conflict(new { message = validation.Message })
+                        : Results.BadRequest(new { message = validation.Message });
+            }
 
             if (req.Type == "shift_swap")
             {
@@ -543,8 +635,28 @@ public static class RequestEndpoints
                     await InsertStep(conn, tx, reqId, step++, "", mgrUsername, mgrName);
                 }
                 await InsertStep(conn, tx, reqId, step, FinalApprovalQueue, "", "Nhân sự / quản trị");
+                await AssociateReminderWithRequestAsync(conn, tx, reqId, empId, req.Type, payloadJson);
+
+                var pushBody = $"{me} · {TypeLabel(req.Type)}";
+                var inboxSig = $"inbox:{reqId}";
+                if (!string.IsNullOrWhiteSpace(mgrUsername)
+                    && !string.Equals(mgrUsername, me, StringComparison.OrdinalIgnoreCase))
+                    await push.EnqueueToUserAsync(conn, tx, mgrUsername, "Đơn mới chờ duyệt", pushBody,
+                        inboxSig, "Approval");
+                else
+                    await EnqueueToPermissionHoldersAsync(conn, tx, push, Permissions.RequestsManage,
+                        "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
 
                 await tx.CommitAsync();
+            }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation
+                                                && ex.ConstraintName == "ux_hr_requests_pending_forgot")
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new
+                {
+                    message = "Bạn đã có đơn báo quên chấm công đang chờ cho ngày và chiều chấm này."
+                });
             }
             catch
             {
@@ -554,73 +666,140 @@ public static class RequestEndpoints
 
             await db.RecordAudit(me, "Gửi đơn từ", "Request", no, $"{TypeLabel(req.Type)} (web).");
 
-            // Đẩy thông báo tới người sẽ duyệt bước đầu tiên (quản lý trực tiếp, hoặc quản trị).
-            var pushBody = $"{me} · {TypeLabel(req.Type)}";
-            var inboxSig = $"inbox:{reqId}";
-            if (!string.IsNullOrWhiteSpace(mgrUsername) && !string.Equals(mgrUsername, me, StringComparison.OrdinalIgnoreCase))
-                await push.SendToUserAsync(mgrUsername, "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
-            else
-                await SendToPermissionHoldersAsync(conn, push, Permissions.RequestsManage,
-                    "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
-
             return Results.Ok(new { id = reqId, requestNo = no });
         });
 
-        g.MapPut("/{id:guid}", async (Guid id, CreateRequestReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPut("/{id:guid}", async (Guid id, CreateRequestReq req, ClaimsPrincipal u, Database db,
+            IConfiguration config) =>
         {
             if (string.IsNullOrWhiteSpace(req.Type) || Array.FindIndex(Types, t => t.Type == req.Type) < 0)
                 return Results.BadRequest(new { message = "Loại đơn không hợp lệ." });
             var payload = req.Payload.HasValue ? req.Payload.Value.GetRawText() : "{}";
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("""
-                UPDATE hr_requests SET req_type=@type,title=@title,payload=@payload::jsonb,updated_at=CURRENT_TIMESTAMP
-                WHERE id=@id AND requester_username=@u AND status='Pending'
-                """).With("@id", id).With("@u", u.Username()).With("@type", req.Type)
-                .With("@title", string.IsNullOrWhiteSpace(req.Title) ? TypeLabel(req.Type) : req.Title.Trim())
-                .With("@payload", payload).ExecuteNonQueryAsync();
-            if (n == 0) return Results.BadRequest(new { message = "Đơn không còn đủ điều kiện chỉnh sửa." });
+            await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+            string oldType = "", oldPayload = "{}", owner = "", status = "";
+            Guid employeeId = default;
+            await using (var row = await conn.Cmd("""
+                SELECT req_type, payload::text AS payload, requester_username, status, employee_id
+                FROM hr_requests WHERE id=@id FOR UPDATE
+                """, tx).With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await row.ReadAsync()) return Results.NotFound();
+                oldType = row.Str("req_type");
+                oldPayload = row.Str("payload");
+                owner = row.Str("requester_username");
+                status = row.Str("status");
+                employeeId = row.Guid("employee_id");
+            }
+            if (!string.Equals(owner, u.Username(), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            if (status != "Pending")
+                return Results.Conflict(new { message = "Đơn không còn ở trạng thái chờ duyệt." });
+            var decidedSteps = Convert.ToInt32(await conn.Cmd("""
+                SELECT COUNT(*) FROM hr_request_approvals WHERE request_id=@id AND status<>'Pending'
+                """, tx).With("@id", id).ExecuteScalarAsync());
+            if (decidedSteps > 0)
+                return Results.Conflict(new { message = "Không thể sửa đơn sau khi một cấp đã xử lý." });
+            if (req.Type == "forgot_checkin")
+            {
+                var validation = await ValidateForgotCheckinAsync(conn, tx, employeeId, payload,
+                    requireMissing: true, lookbackDays: GetForgotLookbackDays(config));
+                if (validation is not null)
+                    return validation.Conflict
+                        ? Results.Conflict(new { message = validation.Message })
+                        : Results.BadRequest(new { message = validation.Message });
+            }
+            try
+            {
+                await conn.Cmd("""
+                    UPDATE hr_requests SET req_type=@type,title=@title,payload=@payload::jsonb,updated_at=CURRENT_TIMESTAMP
+                    WHERE id=@id AND status='Pending'
+                    """, tx).With("@id", id).With("@type", req.Type)
+                    .With("@title", string.IsNullOrWhiteSpace(req.Title) ? TypeLabel(req.Type) : req.Title.Trim())
+                    .With("@payload", payload).ExecuteNonQueryAsync();
+                await ReconcileReminderForEditedRequestAsync(conn, tx, id, employeeId, oldType, oldPayload,
+                    req.Type, payload);
+                await tx.CommitAsync();
+            }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation
+                                                && ex.ConstraintName == "ux_hr_requests_pending_forgot")
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new
+                {
+                    message = "Bạn đã có đơn báo quên chấm công đang chờ cho ngày và chiều chấm này."
+                });
+            }
             await db.RecordAudit(u.Username(), "Sửa đơn từ", "Request", id.ToString(), TypeLabel(req.Type));
             return Results.NoContent();
         });
 
-        g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push) =>
-            await Decide(id, req, u, db, push, approve: true))
+        g.MapPost("/{id:guid}/approve", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db,
+            PushService push, IConfiguration config) =>
+            await Decide(id, req, u, db, push, config, approve: true))
             .RequireAnyPermission(Permissions.RequestsApprove, Permissions.RequestsManage);
 
-        g.MapPost("/{id:guid}/reject", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push) =>
-            await Decide(id, req, u, db, push, approve: false))
+        g.MapPost("/{id:guid}/reject", async (Guid id, DecideReq req, ClaimsPrincipal u, Database db,
+            PushService push, IConfiguration config) =>
+            await Decide(id, req, u, db, push, config, approve: false))
             .RequireAnyPermission(Permissions.RequestsApprove, Permissions.RequestsManage);
 
-        g.MapPost("/{id:guid}/cancel", async (Guid id, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/{id:guid}/cancel", async (Guid id, ClaimsPrincipal u, Database db, PushService push) =>
         {
             await using var conn = await db.OpenAsync();
-            var n = await conn.Cmd("""
-                UPDATE hr_requests SET status='Cancelled', updated_at=CURRENT_TIMESTAMP
-                WHERE id=@id AND requester_username=@me AND status='Pending'
-                """).With("@id", id).With("@me", u.Username()).ExecuteNonQueryAsync();
-            if (n == 0) return Results.BadRequest(new { message = "Chỉ hủy được đơn của bạn khi còn chờ duyệt." });
+            await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+            string owner = "", status = "", reqType = "", payload = "{}";
+            Guid employeeId = default;
+            await using (var row = await conn.Cmd("""
+                SELECT requester_username,status,req_type,payload::text AS payload,employee_id
+                FROM hr_requests WHERE id=@id FOR UPDATE
+                """, tx).With("@id", id).ExecuteReaderAsync())
+            {
+                if (!await row.ReadAsync()) return Results.NotFound();
+                owner = row.Str("requester_username");
+                status = row.Str("status");
+                reqType = row.Str("req_type");
+                payload = row.Str("payload");
+                employeeId = row.Guid("employee_id");
+            }
+            if (!string.Equals(owner, u.Username(), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            if (status != "Pending")
+                return Results.Conflict(new { message = "Chỉ hủy được đơn khi còn chờ duyệt." });
+            await conn.Cmd("UPDATE hr_requests SET status='Cancelled', updated_at=CURRENT_TIMESTAMP WHERE id=@id", tx)
+                .With("@id", id).ExecuteNonQueryAsync();
+            await RearmReminderAfterClosedRequestAsync(conn, tx, push, id, employeeId, reqType, payload,
+                "cancelled");
+            await tx.CommitAsync();
             return Results.NoContent();
         });
 
         g.MapPost("/{id:guid}/remind", async (Guid id, ClaimsPrincipal u, Database db, PushService push) =>
         {
             await using var conn = await db.OpenAsync();
+            await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
             string approver = "", no = "";
             await using (var r = await conn.Cmd("""
                 SELECT r.request_no, COALESCE(a.approver_username,'') approver, r.last_reminded_at
                 FROM hr_requests r LEFT JOIN hr_request_approvals a ON a.request_id=r.id AND a.step_no=r.current_step
                 WHERE r.id=@id AND r.requester_username=@u AND r.status='Pending'
-                """).With("@id", id).With("@u", u.Username()).ExecuteReaderAsync())
+                FOR UPDATE OF r
+                """, tx).With("@id", id).With("@u", u.Username()).ExecuteReaderAsync())
             {
                 if (!await r.ReadAsync()) return Results.BadRequest(new { message = "Đơn không còn chờ duyệt." });
                 if (r.DtNull("last_reminded_at") is DateTime last && last > DateTime.UtcNow.AddHours(-24))
                     return Results.StatusCode(StatusCodes.Status429TooManyRequests);
                 approver = r.Str("approver"); no = r.Str("request_no");
             }
-            await conn.Cmd("UPDATE hr_requests SET last_reminded_at=CURRENT_TIMESTAMP WHERE id=@id").With("@id", id).ExecuteNonQueryAsync();
-            if (approver.Length > 0) await push.SendToUserAsync(approver, "Nhắc duyệt đơn", $"{no} đang chờ bạn xử lý.", $"inbox:{id}:remind", "Approval");
-            else await SendToPermissionHoldersAsync(conn, push, Permissions.RequestsManage,
-                "Nhắc duyệt đơn", $"{no} đang chờ xử lý.", $"inbox:{id}:remind", "Approval");
+            await conn.Cmd("UPDATE hr_requests SET last_reminded_at=CURRENT_TIMESTAMP WHERE id=@id", tx)
+                .With("@id", id).ExecuteNonQueryAsync();
+            var generation = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7)).ToString("yyyyMMdd");
+            var notifId = $"inbox:{id}:remind:{generation}";
+            if (approver.Length > 0)
+                await push.EnqueueToUserAsync(conn, tx, approver, "Nhắc duyệt đơn",
+                    $"{no} đang chờ bạn xử lý.", notifId, "Approval");
+            else
+                await EnqueueToPermissionHoldersAsync(conn, tx, push, Permissions.RequestsManage,
+                    "Nhắc duyệt đơn", $"{no} đang chờ xử lý.", notifId, "Approval");
+            await tx.CommitAsync();
             return Results.NoContent();
         });
 
@@ -700,11 +879,10 @@ public static class RequestEndpoints
         return Permissions.For(roles).Contains(permission);
     }
 
-    private static async Task SendToPermissionHoldersAsync(
-        NpgsqlConnection conn, PushService push, string permission,
+    private static async Task EnqueueToPermissionHoldersAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, PushService push, string permission,
         string title, string body, string notifId, string? target)
     {
-        if (!push.Enabled) return;
         var recipients = new List<string>();
         await using (var r = await conn.Cmd("""
             SELECT u.username, u.role,
@@ -716,7 +894,7 @@ public static class RequestEndpoints
             WHERE u.is_active=TRUE
               AND COALESCE(u.is_deleted,FALSE)=FALSE
               AND u.approval_status='Approved'
-            """).ExecuteReaderAsync())
+            """, tx).ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
             {
@@ -726,22 +904,25 @@ public static class RequestEndpoints
         }
 
         foreach (var recipient in recipients.Distinct(StringComparer.OrdinalIgnoreCase))
-            await push.SendToUserAsync(recipient, title, body, notifId, target);
+            await push.EnqueueToUserAsync(conn, tx, recipient, title, body, notifId, target);
     }
 
-    private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db, PushService push, bool approve)
+    private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db,
+        PushService push, IConfiguration config, bool approve)
     {
         await using var conn = await db.OpenAsync();
+        await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
         var me = u.Username();
 
-        // Nạp trạng thái đơn.
+        // Khóa đơn trước khi đọc bước hiện tại. Cancel/Edit/Approve trên thiết bị khác vì thế được
+        // tuần tự hóa và chỉ một giao dịch có thể chuyển đơn khỏi Pending.
         string reqStatus = "", reqType = "", requester = "", requestNo = "", payloadJson = "{}";
         int currentStep = 0;
         Guid employeeId = default;
         await using (var r = await conn.Cmd("""
             SELECT status, req_type, requester_username, request_no, current_step, employee_id, payload::text AS payload
-            FROM hr_requests WHERE id=@id
-            """).With("@id", id).ExecuteReaderAsync())
+            FROM hr_requests WHERE id=@id FOR UPDATE
+            """, tx).With("@id", id).ExecuteReaderAsync())
         {
             if (!await r.ReadAsync()) return Results.NotFound();
             reqStatus = r.Str("status");
@@ -752,7 +933,8 @@ public static class RequestEndpoints
             employeeId = r.Guid("employee_id");
             payloadJson = r.Str("payload");
         }
-        if (reqStatus != "Pending") return Results.BadRequest(new { message = "Đơn không còn ở trạng thái chờ duyệt." });
+        if (reqStatus != "Pending")
+            return Results.Conflict(new { message = "Đơn không còn ở trạng thái chờ duyệt." });
 
         // Từ chối BẮT BUỘC nêu lý do (ghi vào comment) — để người gửi biết vì sao và có dấu vết xử lý.
         var comment = (req.Comment ?? "").Trim();
@@ -766,7 +948,8 @@ public static class RequestEndpoints
         await using (var r = await conn.Cmd("""
             SELECT id, approver_role, approver_username, status FROM hr_request_approvals
             WHERE request_id=@id AND step_no=@step
-            """).With("@id", id).With("@step", currentStep).ExecuteReaderAsync())
+            FOR UPDATE
+            """, tx).With("@id", id).With("@step", currentStep).ExecuteReaderAsync())
         {
             if (!await r.ReadAsync()) return Results.BadRequest(new { message = "Không tìm thấy bước duyệt hiện tại." });
             stepId = r.Long("id");
@@ -782,14 +965,34 @@ public static class RequestEndpoints
         if (stepStatus != "Pending")
             return Results.Conflict(new { message = "Bước duyệt này vừa được người khác xử lý. Vui lòng tải lại." });
 
-        // GHI QUYẾT ĐỊNH KIỂU "GIÀNH CHỖ" NGUYÊN TỬ: chỉ đổi được khi bước còn 'Pending'. Nếu hai thiết bị
-        // cùng duyệt, PostgreSQL tuần tự hóa UPDATE này nên đúng MỘT lệnh chạm 1 dòng; lệnh thua chạm 0 dòng
-        // → trả 409 và các tác động phụ (trừ phép, hoàn phạt, bù công…) chỉ chạy đúng một lần cho người thắng.
+        var nextValue = await conn.Cmd("""
+            SELECT MIN(step_no) FROM hr_request_approvals
+            WHERE request_id=@id AND status='Pending' AND id<>@stepId
+            """, tx).With("@id", id).With("@stepId", stepId).ExecuteScalarAsync();
+        int? nextStep = nextValue is null or DBNull ? null : Convert.ToInt32(nextValue);
+
+        // Ở bước cuối phải kiểm tra lại trong cùng transaction, ngay trước khi ghi quyết định. Nếu người
+        // dùng vừa chấm Ra thật ở thiết bị khác thì không được duyệt một correction đã hết điều kiện.
+        if (approve && nextStep is null && reqType == "forgot_checkin")
+        {
+            // Predicate "chưa có mốc này" không thể khóa bằng SELECT FOR UPDATE khi dòng còn thiếu.
+            // Khóa ghi bảng log trong đoạn cực ngắn này đóng phantom race: lượt chấm đã bắt đầu phải
+            // commit trước để validation nhìn thấy, hoặc chờ correction commit sau quyết định.
+            await conn.Cmd("LOCK TABLE cham_cong_log IN SHARE ROW EXCLUSIVE MODE", tx)
+                .ExecuteNonQueryAsync();
+            var validation = await ValidateForgotCheckinAsync(conn, tx, employeeId, payloadJson,
+                requireMissing: true, lookbackDays: GetForgotLookbackDays(config));
+            if (validation is not null)
+                return validation.Conflict
+                    ? Results.Conflict(new { message = validation.Message })
+                    : Results.BadRequest(new { message = validation.Message });
+        }
+
         var newStepStatus = approve ? "Approved" : "Rejected";
         var claimed = await conn.Cmd("""
             UPDATE hr_request_approvals SET status=@st, decided_at=CURRENT_TIMESTAMP, decided_by=@me,
                 comment=@comment, signature=@sig WHERE id=@id AND status='Pending'
-            """)
+            """, tx)
             .With("@st", newStepStatus).With("@me", me).With("@comment", comment)
             .With("@sig", (object?)req.Signature ?? DBNull.Value).With("@id", stepId)
             .ExecuteNonQueryAsync();
@@ -799,43 +1002,48 @@ public static class RequestEndpoints
         var pushBody = $"{TypeLabel(reqType)} · {requestNo}";
         if (!approve)
         {
-            await conn.Cmd("UPDATE hr_requests SET status='Rejected', updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'")
+            var changed = await conn.Cmd("UPDATE hr_requests SET status='Rejected', updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'", tx)
                 .With("@id", id).ExecuteNonQueryAsync();
-            await push.SendToUserAsync(requester, "Đơn bị từ chối", pushBody, $"req:{id}:rejected", "Requests");
+            if (changed != 1) return Results.Conflict(new { message = "Đơn vừa được xử lý. Vui lòng tải lại." });
+            await RearmReminderAfterClosedRequestAsync(conn, tx, push, id, employeeId, reqType, payloadJson,
+                "rejected");
+            await push.EnqueueToUserAsync(conn, tx, requester, "Đơn bị từ chối", pushBody,
+                $"req:{id}:rejected", "Requests");
         }
         else
         {
-            // Còn bước kế tiếp?
-            var next = await conn.Cmd("SELECT MIN(step_no) FROM hr_request_approvals WHERE request_id=@id AND status='Pending'")
-                .With("@id", id).ExecuteScalarAsync();
-            if (next is int nextStep)
+            if (nextStep is int followingStep)
             {
-                await conn.Cmd("UPDATE hr_requests SET current_step=@s, updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'")
-                    .With("@s", nextStep).With("@id", id).ExecuteNonQueryAsync();
+                var changed = await conn.Cmd("UPDATE hr_requests SET current_step=@s, updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'", tx)
+                    .With("@s", followingStep).With("@id", id).ExecuteNonQueryAsync();
+                if (changed != 1) return Results.Conflict(new { message = "Đơn vừa được xử lý. Vui lòng tải lại." });
 
                 // Đẩy thông báo tới người duyệt của bước kế tiếp.
                 string nextRole = "", nextUser = "";
-                await using (var r = await conn.Cmd("SELECT approver_role, approver_username FROM hr_request_approvals WHERE request_id=@id AND step_no=@s")
-                    .With("@id", id).With("@s", nextStep).ExecuteReaderAsync())
+                await using (var r = await conn.Cmd("SELECT approver_role, approver_username FROM hr_request_approvals WHERE request_id=@id AND step_no=@s", tx)
+                    .With("@id", id).With("@s", followingStep).ExecuteReaderAsync())
                 {
                     if (await r.ReadAsync()) { nextRole = r.Str("approver_role"); nextUser = r.Str("approver_username"); }
                 }
                 var nextSig = $"inbox:{id}";
                 if (!string.IsNullOrWhiteSpace(nextUser))
-                    await push.SendToUserAsync(nextUser, "Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
+                    await push.EnqueueToUserAsync(conn, tx, nextUser, "Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
                 else if (IsFinalApprovalQueue(nextRole))
-                    await SendToPermissionHoldersAsync(conn, push, Permissions.RequestsManage,
+                    await EnqueueToPermissionHoldersAsync(conn, tx, push, Permissions.RequestsManage,
                         "Đơn chờ bạn duyệt", pushBody, nextSig, "Approval");
             }
             else
             {
-                await conn.Cmd("UPDATE hr_requests SET status='Approved', updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'")
+                await ApplyApprovedEffects(conn, tx, id, reqType, employeeId, payloadJson, req, requestNo, me);
+                var changed = await conn.Cmd("UPDATE hr_requests SET status='Approved', updated_at=CURRENT_TIMESTAMP WHERE id=@id AND status='Pending'", tx)
                     .With("@id", id).ExecuteNonQueryAsync();
-                await ApplyApprovedEffects(conn, reqType, employeeId, payloadJson, req, requestNo, me);
-                await push.SendToUserAsync(requester, "Đơn đã được duyệt", pushBody, $"req:{id}:approved", "Requests");
+                if (changed != 1) return Results.Conflict(new { message = "Đơn vừa được xử lý. Vui lòng tải lại." });
+                await push.EnqueueToUserAsync(conn, tx, requester, "Đơn đã được duyệt", pushBody,
+                    $"req:{id}:approved", "Requests");
             }
         }
 
+        await tx.CommitAsync();
         await db.RecordAudit(me, approve ? "Duyệt đơn từ" : "Từ chối đơn từ", "Request", requestNo,
             approve ? TypeLabel(reqType) : $"{TypeLabel(reqType)} — Lý do từ chối: {comment}");
         // Báo cho người gửi biết đơn đã được xử lý (tín hiệu chung + nhắm riêng người gửi).
@@ -843,27 +1051,27 @@ public static class RequestEndpoints
     }
 
     /// <summary>Tác động phụ khi đơn được duyệt hoàn tất (vd. trừ ngày phép, ghi bù chấm công, xử lý phạt).</summary>
-    private static async Task ApplyApprovedEffects(NpgsqlConnection conn, string reqType, Guid employeeId,
-        string payloadJson, DecideReq req, string requestNo, string decidedBy)
+    private static async Task ApplyApprovedEffects(NpgsqlConnection conn, NpgsqlTransaction tx, Guid requestId,
+        string reqType, Guid employeeId, string payloadJson, DecideReq req, string requestNo, string decidedBy)
     {
         // Khiếu nại án phạt: bác bỏ (miễn) hoặc giảm tiền phạt; nếu tiền đã trừ → sinh khoản hoàn cho kế toán.
         if (reqType == "penalty_appeal")
         {
-            await ApplyPenaltyAppeal(conn, employeeId, payloadJson, req, requestNo, decidedBy);
+            await ApplyPenaltyAppeal(conn, tx, employeeId, payloadJson, req, requestNo, decidedBy);
             return;
         }
 
         // Báo quên chấm công: ghi (đè) giờ nhân viên khai vào nhật ký chấm công của hệ thống.
         if (reqType == "forgot_checkin")
         {
-            await ApplyForgotCheckin(conn, employeeId, payloadJson);
+            await ApplyForgotCheckin(conn, tx, requestId, requestNo, employeeId, payloadJson, decidedBy);
             return;
         }
 
         // Điều chỉnh chấm công: ghi đè giờ Vào/Ra đúng do nhân viên khai vào nhật ký chấm công.
         if (reqType == "attendance_fix")
         {
-            await ApplyAttendanceFix(conn, employeeId, payloadJson);
+            await ApplyAttendanceFix(conn, tx, requestId, requestNo, employeeId, payloadJson, decidedBy);
             return;
         }
 
@@ -876,7 +1084,7 @@ public static class RequestEndpoints
             INSERT INTO hr_leave_balances (id, employee_id, year, leave_type, total_days, used_days)
             VALUES (@id, @emp, @year, @type, 0, @days)
             ON CONFLICT (employee_id, year, leave_type) DO UPDATE SET used_days = hr_leave_balances.used_days + @days
-            """)
+            """, tx)
             .With("@id", Guid.NewGuid()).With("@emp", employeeId).With("@year", year)
             .With("@type", leaveType).With("@days", days)
             .ExecuteNonQueryAsync();
@@ -887,8 +1095,8 @@ public static class RequestEndpoints
     /// đã bị trừ vào các phiếu lương đã phát hành thì sinh một khoản hoàn (chờ kế toán duyệt) cho phần
     /// chênh: bác bỏ → hoàn toàn bộ đã trừ; giảm → hoàn phần đã trừ vượt quá mức mới.
     /// </summary>
-    private static async Task ApplyPenaltyAppeal(NpgsqlConnection conn, Guid employeeId, string payloadJson,
-        DecideReq req, string requestNo, string decidedBy)
+    private static async Task ApplyPenaltyAppeal(NpgsqlConnection conn, NpgsqlTransaction tx, Guid employeeId,
+        string payloadJson, DecideReq req, string requestNo, string decidedBy)
     {
         var penaltyNo = ReadString(payloadJson, "penaltyNo");
         if (string.IsNullOrWhiteSpace(penaltyNo)) return;
@@ -900,7 +1108,7 @@ public static class RequestEndpoints
         await using (var r = await conn.Cmd("""
             SELECT id, amount, installments, note FROM hr_penalties
             WHERE penalty_no=@no AND employee_id=@emp AND penalty_type='fine' AND status IN ('Active','Settled')
-            """).With("@no", penaltyNo).With("@emp", employeeId).ExecuteReaderAsync())
+            """, tx).With("@no", penaltyNo).With("@emp", employeeId).ExecuteReaderAsync())
         {
             if (await r.ReadAsync())
             {
@@ -914,7 +1122,7 @@ public static class RequestEndpoints
         if (!found) return;
 
         // Đã thu bao nhiêu (sổ cái) — nền tảng để chốt: tổng thực thu KHÔNG BAO GIỜ vượt mức phạt hiện tại.
-        var collected = await PenaltyEndpoints.GetCollectedAsync(conn, penaltyId);
+        var collected = await PenaltyEndpoints.GetCollectedAsync(conn, penaltyId, tx: tx);
 
         // Hình thức xử lý: ưu tiên chỉ định của người duyệt (web admin); nếu không có thì theo ĐỀ NGHỊ
         // của nhân viên ghi trong đơn (appealKind): dispute → bác bỏ, reduce → giảm tiền, installment → chia đóng.
@@ -936,7 +1144,7 @@ public static class RequestEndpoints
             months = Math.Clamp(months, 1, 60);
             // collected < amount vì tổng không đổi → giữ Active để thu nốt phần còn thiếu theo nhịp mới.
             var status = collected >= amount ? "Settled" : "Active";
-            await conn.Cmd("UPDATE hr_penalties SET installments=@inst, status=@st, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+            await conn.Cmd("UPDATE hr_penalties SET installments=@inst, status=@st, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id", tx)
                 .With("@id", penaltyId).With("@inst", months).With("@st", status)
                 .With("@note", Append(note, $"Chia đóng {months} tháng theo khiếu nại {requestNo}"))
                 .ExecuteNonQueryAsync();
@@ -960,7 +1168,7 @@ public static class RequestEndpoints
                 // DỪNG HẲN các kỳ sau; nếu chưa đủ → còn hiệu lực để thu nốt (mức mới − đã thu).
                 refund = Math.Max(0, collected - newAmount);
                 var status = collected >= newAmount ? "Settled" : "Active";
-                await conn.Cmd("UPDATE hr_penalties SET amount=@amt, status=@st, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                await conn.Cmd("UPDATE hr_penalties SET amount=@amt, status=@st, note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id", tx)
                     .With("@id", penaltyId).With("@amt", newAmount).With("@st", status)
                     .With("@note", Append(note, $"Giảm còn {newAmount:0} theo khiếu nại {requestNo}"))
                     .ExecuteNonQueryAsync();
@@ -969,7 +1177,7 @@ public static class RequestEndpoints
             else
             {
                 // Bác bỏ = miễn toàn bộ + hoàn TẤT CẢ phần đã thu (mặc định, kể cả khi mức giảm không hợp lệ).
-                await conn.Cmd("UPDATE hr_penalties SET status='Waived', note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
+                await conn.Cmd("UPDATE hr_penalties SET status='Waived', note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id", tx)
                     .With("@id", penaltyId)
                     .With("@note", Append(note, $"Miễn theo khiếu nại {requestNo}"))
                     .ExecuteNonQueryAsync();
@@ -980,91 +1188,424 @@ public static class RequestEndpoints
 
         if (refund > 0)
             await PenaltyRefundEndpoints.CreateAsync(conn, employeeId, penaltyId, penaltyNo, requestNo, refund,
-                $"Hoàn tiền phạt {penaltyNo} ({appended}, khiếu nại {requestNo} được duyệt)", decidedBy);
+                $"Hoàn tiền phạt {penaltyNo} ({appended}, khiếu nại {requestNo} được duyệt)", decidedBy, tx);
     }
 
     private static string Append(string note, string extra) =>
         string.IsNullOrWhiteSpace(note) ? extra : $"{note} | {extra}";
 
     /// <summary>
-    /// Ghi bù chấm công từ đơn "Báo quên chấm công" đã duyệt: lấy ngày + giờ thực tế nhân viên khai,
-    /// dùng loại Vào/Ra do người khai chọn (thiếu thì suy ra theo giờ trong ngày) rồi GHI ĐÈ
-    /// (xóa bản ghi cùng loại trong ngày, chèn bản mới) vào cham_cong_log để bảng công phản ánh đúng.
+    /// Ghi bù theo mô hình append-only. Log gốc từ khuôn mặt/QR luôn được giữ nguyên; mọi báo cáo đọc
+    /// mốc hiệu lực từ correction mới nhất và audit được request, người duyệt, giá trị trước/sau.
     /// </summary>
-    private static async Task ApplyForgotCheckin(NpgsqlConnection conn, Guid employeeId, string payloadJson)
+    private static async Task ApplyForgotCheckin(NpgsqlConnection conn, NpgsqlTransaction tx, Guid requestId,
+        string requestNo, Guid employeeId, string payloadJson, string decidedBy)
     {
-        var dateStr = ReadString(payloadJson, "date");
-        var timeStr = ReadString(payloadJson, "time");
-        if (!DateOnly.TryParse(dateStr, out var day) || !TimeOnly.TryParse(timeStr, out var time))
-            return;
-
-        var (username, fullName) = await LoadEmployeeUser(conn, employeeId);
-        if (string.IsNullOrWhiteSpace(username)) return;
-
-        // Ưu tiên loại Vào/Ra do người khai chọn; nếu không có thì suy ra theo giờ trong ngày.
-        var direction = ReadString(payloadJson, "direction");
-        var loai = direction switch
-        {
-            "in" => AttendancePolicy.CheckInTypeIn,
-            "out" => AttendancePolicy.CheckInTypeOut,
-            _ => AttendancePolicy.LoaiForLocalTime(time.ToTimeSpan()),
-        };
-
-        await OverwriteAttendance(conn, username, fullName, day, loai, time, "Bù công theo đơn báo quên chấm công");
+        if (!TryParseForgotCheckin(payloadJson, out var forgot, out var error))
+            throw new InvalidOperationException(error);
+        var loai = forgot.Direction == "in"
+            ? AttendancePolicy.CheckInTypeIn
+            : AttendancePolicy.CheckInTypeOut;
+        await AppendAttendanceCorrectionAsync(conn, tx, requestId, requestNo, employeeId, forgot.Date,
+            loai, forgot.Time, forgot.Reason, decidedBy);
+        await conn.Cmd("""
+            UPDATE hr_attendance_reminders
+               SET status='Resolved', request_id=@request, last_checked_at=CURRENT_TIMESTAMP,
+                   resolved_at=CURRENT_TIMESTAMP, resolution_source='approved_request'
+             WHERE employee_id=@employee AND work_date=@date AND direction=@direction
+            """, tx).With("@request", requestId).With("@employee", employeeId)
+            .With("@date", forgot.Date).With("@direction", forgot.Direction).ExecuteNonQueryAsync();
     }
 
-    /// <summary>
-    /// Điều chỉnh chấm công đã duyệt: ghi đè giờ Vào và/hoặc giờ Ra đúng do nhân viên khai vào
-    /// cham_cong_log cho đúng ngày (bảng công tự tính lại từ log). Trường để trống thì giữ nguyên.
-    /// </summary>
-    private static async Task ApplyAttendanceFix(NpgsqlConnection conn, Guid employeeId, string payloadJson)
+    private static async Task ApplyAttendanceFix(NpgsqlConnection conn, NpgsqlTransaction tx, Guid requestId,
+        string requestNo, Guid employeeId, string payloadJson, string decidedBy)
     {
-        var dateStr = ReadString(payloadJson, "date");
-        if (!DateOnly.TryParse(dateStr, out var day)) return;
-
-        var (username, fullName) = await LoadEmployeeUser(conn, employeeId);
-        if (string.IsNullOrWhiteSpace(username)) return;
-
+        if (!DateOnly.TryParseExact(ReadString(payloadJson, "date"), "yyyy-MM-dd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var day)) return;
+        var reason = ReadString(payloadJson, "reason").Trim();
         if (TimeOnly.TryParse(ReadString(payloadJson, "checkIn"), out var checkIn))
-            await OverwriteAttendance(conn, username, fullName, day, AttendancePolicy.CheckInTypeIn, checkIn,
-                "Điều chỉnh giờ vào theo đơn đã duyệt");
+            await AppendAttendanceCorrectionAsync(conn, tx, requestId, requestNo, employeeId, day,
+                AttendancePolicy.CheckInTypeIn, checkIn,
+                string.IsNullOrWhiteSpace(reason) ? "Điều chỉnh giờ vào theo đơn đã duyệt" : reason, decidedBy);
 
         if (TimeOnly.TryParse(ReadString(payloadJson, "checkOut"), out var checkOut))
-            await OverwriteAttendance(conn, username, fullName, day, AttendancePolicy.CheckInTypeOut, checkOut,
-                "Điều chỉnh giờ ra theo đơn đã duyệt");
+            await AppendAttendanceCorrectionAsync(conn, tx, requestId, requestNo, employeeId, day,
+                AttendancePolicy.CheckInTypeOut, checkOut,
+                string.IsNullOrWhiteSpace(reason) ? "Điều chỉnh giờ ra theo đơn đã duyệt" : reason, decidedBy);
     }
 
-    private static async Task<(string Username, string FullName)> LoadEmployeeUser(NpgsqlConnection conn, Guid employeeId)
+    private sealed record EmployeeAttendanceContext(
+        string Username, string FullName, bool IsOvernight, TimeOnly ShiftStart, TimeOnly ShiftEnd,
+        int CheckoutGraceMinutes);
+
+    private static async Task<EmployeeAttendanceContext?> LoadEmployeeAttendanceContextAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, Guid employeeId, DateOnly day)
     {
-        await using var r = await conn.Cmd("SELECT username, full_name FROM hr_employees WHERE id=@id")
-            .With("@id", employeeId).ExecuteReaderAsync();
-        if (await r.ReadAsync()) return (r.Str("username"), r.Str("full_name"));
-        return ("", "");
+        await using var r = await conn.Cmd("""
+            SELECT e.username, e.full_name, COALESCE(s.is_overnight,FALSE) AS is_overnight,
+                   COALESCE(s.start_time,TIME '00:00') AS start_time,
+                   COALESCE(s.end_time,TIME '23:59') AS end_time,
+                   COALESCE(s.checkout_grace_minutes,0) AS checkout_grace_minutes
+            FROM hr_employees e
+            LEFT JOIN hr_shift_assignments a ON a.employee_id=e.id AND a.work_date=@date
+            LEFT JOIN hr_shifts s ON s.id=a.shift_id
+            WHERE e.id=@id
+            LIMIT 1
+            """, tx).With("@id", employeeId).With("@date", day).ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new EmployeeAttendanceContext(r.Str("username"), r.Str("full_name"), r.Bool("is_overnight"),
+            ReadDbTime(r.GetValue(r.GetOrdinal("start_time"))), ReadDbTime(r.GetValue(r.GetOrdinal("end_time"))),
+            r.Int("checkout_grace_minutes"));
     }
 
-    /// <summary>
-    /// Ghi đè một mốc chấm công (Vào/Ra) của nhân viên trong đúng ngày (giờ VN): xóa bản ghi cùng loại
-    /// trong ngày rồi chèn giờ đã khai. Dùng chung cho báo quên chấm công &amp; điều chỉnh chấm công.
-    /// </summary>
-    private static async Task OverwriteAttendance(NpgsqlConnection conn, string username, string fullName,
-        DateOnly day, string loai, TimeOnly time, string note)
+    private static async Task AppendAttendanceCorrectionAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, Guid requestId, string requestNo, Guid employeeId,
+        DateOnly day, string loai, TimeOnly correctedTime, string reason, string decidedBy)
     {
-        var occurredUtc = AttendancePolicy.LocalToUtc(day.ToDateTime(time));
+        var employee = await LoadEmployeeAttendanceContextAsync(conn, tx, employeeId, day)
+            ?? throw new InvalidOperationException("Không tìm thấy nhân viên của đơn chấm công.");
+        if (string.IsNullOrWhiteSpace(employee.Username))
+            throw new InvalidOperationException("Nhân viên chưa được liên kết tài khoản chấm công.");
+
+        var eventDay = employee.IsOvernight && loai == AttendancePolicy.CheckInTypeOut
+                       && correctedTime < employee.ShiftStart
+            ? day.AddDays(1)
+            : day;
+        var occurredUtc = AttendancePolicy.LocalToUtc(eventDay.ToDateTime(correctedTime));
+
+        DateTime? previous = null;
+        var previousSource = "missing";
+        var correctionValue = await conn.Cmd("""
+            SELECT occurred_at FROM hr_attendance_corrections
+            WHERE employee_id=@employee AND work_date=@date AND loai=@loai AND request_id<>@request
+            ORDER BY applied_at DESC, id DESC LIMIT 1
+            """, tx).With("@employee", employeeId).With("@date", day).With("@loai", loai)
+            .With("@request", requestId).ExecuteScalarAsync();
+        if (correctionValue is DateTime correctedBefore)
+        {
+            previous = correctedBefore;
+            previousSource = "correction";
+        }
+        else
+        {
+            NpgsqlCommand raw;
+            if (employee.IsOvernight && loai == AttendancePolicy.CheckInTypeOut)
+            {
+                var windowStart = day.ToDateTime(employee.ShiftStart);
+                var windowEnd = day.AddDays(1).ToDateTime(employee.ShiftEnd)
+                    .AddMinutes(employee.CheckoutGraceMinutes);
+                raw = conn.Cmd("""
+                    SELECT occurred_at FROM cham_cong_log
+                    WHERE lower(username)=lower(@u) AND loai=@loai
+                      AND (occurred_at AT TIME ZONE @tz)>=@from
+                      AND (occurred_at AT TIME ZONE @tz)<=@to
+                    ORDER BY occurred_at DESC LIMIT 1
+                    """, tx).With("@from", windowStart).With("@to", windowEnd);
+            }
+            else
+            {
+                var order = loai == AttendancePolicy.CheckInTypeIn ? "ASC" : "DESC";
+                raw = conn.Cmd($"""
+                    SELECT occurred_at FROM cham_cong_log
+                    WHERE lower(username)=lower(@u) AND loai=@loai
+                      AND (occurred_at AT TIME ZONE @tz)::date=@date
+                    ORDER BY occurred_at {order} LIMIT 1
+                    """, tx).With("@date", day);
+            }
+            var rawValue = await raw.With("@u", employee.Username).With("@loai", loai)
+                .With("@tz", AttendancePolicy.TzId).ExecuteScalarAsync();
+            if (rawValue is DateTime rawBefore)
+            {
+                previous = rawBefore;
+                previousSource = "raw";
+            }
+        }
 
         await conn.Cmd("""
-            DELETE FROM cham_cong_log
-            WHERE username=@u AND loai=@loai AND (occurred_at AT TIME ZONE @tz)::date = @date
-            """)
-            .With("@u", username).With("@loai", loai).With("@tz", AttendancePolicy.TzId).With("@date", day)
-            .ExecuteNonQueryAsync();
+            INSERT INTO hr_attendance_corrections
+                (request_id,request_no,employee_id,username,full_name,work_date,loai,corrected_time,
+                 occurred_at,previous_occurred_at,previous_source,reason,approved_by)
+            VALUES
+                (@request,@requestNo,@employee,@username,@fullName,@date,@loai,@time,
+                 @occurred,@previous,@previousSource,@reason,@approvedBy)
+            ON CONFLICT (request_id,loai) DO NOTHING
+            """, tx).With("@request", requestId).With("@requestNo", requestNo)
+            .With("@employee", employeeId).With("@username", employee.Username)
+            .With("@fullName", employee.FullName).With("@date", day).With("@loai", loai)
+            .With("@time", correctedTime).With("@occurred", occurredUtc)
+            .With("@previous", (object?)previous ?? DBNull.Value).With("@previousSource", previousSource)
+            .With("@reason", reason).With("@approvedBy", decidedBy).ExecuteNonQueryAsync();
+    }
 
+    private sealed record ForgotCheckinData(DateOnly Date, string Direction, TimeOnly Time, string Reason);
+    private sealed record ForgotValidationFailure(string Message, bool Conflict = false);
+    private sealed record AttendanceState(
+        DateTime? CheckIn, DateTime? CheckOut, bool ShiftEnded, bool IsOvernight, TimeOnly ShiftStart)
+    {
+        public bool HasIn => CheckIn is not null;
+        public bool HasOut => CheckOut is not null;
+    }
+
+    private static int GetForgotLookbackDays(IConfiguration config)
+        => Math.Clamp(config.GetValue<int?>("AttendanceReminder:LookbackDays") ?? 31, 1, 366);
+
+    private static bool TryParseForgotCheckin(string payloadJson, out ForgotCheckinData data, out string error)
+    {
+        data = default!;
+        error = "Dữ liệu đơn báo quên chấm công không hợp lệ.";
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
+            var dateText = ReadString(payloadJson, "date").Trim();
+            var direction = ReadString(payloadJson, "direction").Trim().ToLowerInvariant();
+            var timeText = ReadString(payloadJson, "time").Trim();
+            var reason = ReadString(payloadJson, "reason").Trim();
+            if (!DateOnly.TryParseExact(dateText, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var day))
+            {
+                error = "Ngày quên chấm phải đúng định dạng yyyy-MM-dd.";
+                return false;
+            }
+            if (direction is not ("in" or "out"))
+            {
+                error = "Chiều chấm công chỉ được là giờ vào hoặc giờ ra.";
+                return false;
+            }
+            if (!TimeOnly.TryParseExact(timeText, "HH:mm", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var time))
+            {
+                error = "Giờ thực tế phải đúng định dạng HH:mm.";
+                return false;
+            }
+            if (reason.Length == 0 || reason.Length > 2000)
+            {
+                error = "Lý do là bắt buộc và không được dài quá 2000 ký tự.";
+                return false;
+            }
+            data = new ForgotCheckinData(day, direction, time, reason);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task<ForgotValidationFailure?> ValidateForgotCheckinAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, Guid employeeId, string payloadJson, bool requireMissing,
+        int lookbackDays)
+    {
+        if (!TryParseForgotCheckin(payloadJson, out var data, out var error))
+            return new ForgotValidationFailure(error);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+        if (data.Date >= today)
+            return new ForgotValidationFailure("Chỉ được báo quên chấm cho ngày đã kết thúc.");
+        if (today.DayNumber - data.Date.DayNumber > lookbackDays)
+            return new ForgotValidationFailure(
+                $"Chỉ được báo quên chấm trong vòng {lookbackDays} ngày gần nhất.", true);
+        var locked = await Command(conn, tx, """
+            SELECT EXISTS(
+                SELECT 1 FROM hr_payslips
+                WHERE employee_id=@employee AND period=@period AND published=TRUE
+            )
+            """).With("@employee", employeeId)
+            .With("@period", data.Date.ToString("yyyy-MM", CultureInfo.InvariantCulture)).ExecuteScalarAsync();
+        if (locked is true)
+            return new ForgotValidationFailure("Kỳ lương của ngày này đã phát hành, không thể điều chỉnh chấm công.", true);
+
+        var state = await ReadAttendanceStateAsync(conn, tx, employeeId, data.Date);
+        if (!state.ShiftEnded)
+            return new ForgotValidationFailure("Ca làm của ngày này chưa kết thúc thời gian chờ chấm ra.", true);
+        var requestedExists = data.Direction == "in" ? state.HasIn : state.HasOut;
+        if (requireMissing && requestedExists)
+            return new ForgotValidationFailure(
+                data.Direction == "in" ? "Ngày này đã có giờ vào." : "Ngày này đã có giờ ra.", true);
+        if (data.Direction == "out" && !state.HasIn)
+            return new ForgotValidationFailure("Không thể báo thiếu giờ ra khi ngày này chưa có giờ vào.", true);
+        if (data.Direction == "in" && !state.HasOut)
+            return new ForgotValidationFailure("Không thể báo thiếu giờ vào khi ngày này chưa có giờ ra.", true);
+        var candidateDay = state.IsOvernight && data.Direction == "out" && data.Time < state.ShiftStart
+            ? data.Date.AddDays(1)
+            : data.Date;
+        var candidateAt = AttendancePolicy.LocalToUtc(candidateDay.ToDateTime(data.Time));
+        if (data.Direction == "out" && state.CheckIn is { } checkIn && candidateAt <= checkIn)
+            return new ForgotValidationFailure("Giờ ra phải sau giờ vào đã ghi nhận.", true);
+        if (data.Direction == "in" && state.CheckOut is { } checkOut && candidateAt >= checkOut)
+            return new ForgotValidationFailure("Giờ vào phải trước giờ ra đã ghi nhận.", true);
+        return null;
+    }
+
+    private static async Task<AttendanceState> ReadAttendanceStateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, Guid employeeId, DateOnly day)
+    {
+        string username = "";
+        var overnight = false;
+        var start = new TimeOnly(0, 0);
+        var end = new TimeOnly(23, 59);
+        var checkoutGrace = 0;
+        var hasShift = false;
+        await using (var r = await Command(conn, tx, """
+            SELECT e.username, s.id AS shift_id, s.start_time, s.end_time,
+                   COALESCE(s.is_overnight,FALSE) AS is_overnight,
+                   COALESCE(s.checkout_grace_minutes,0) AS checkout_grace_minutes
+            FROM hr_employees e
+            LEFT JOIN hr_shift_assignments a ON a.employee_id=e.id AND a.work_date=@date
+            LEFT JOIN hr_shifts s ON s.id=a.shift_id
+            WHERE e.id=@id
+            """).With("@id", employeeId).With("@date", day).ExecuteReaderAsync())
+        {
+            if (await r.ReadAsync())
+            {
+                username = r.Str("username");
+                hasShift = !r.IsDBNull(r.GetOrdinal("shift_id"));
+                if (!r.IsDBNull(r.GetOrdinal("start_time"))) start = ReadDbTime(r.GetValue(r.GetOrdinal("start_time")));
+                if (!r.IsDBNull(r.GetOrdinal("end_time"))) end = ReadDbTime(r.GetValue(r.GetOrdinal("end_time")));
+                overnight = r.Bool("is_overnight");
+                checkoutGrace = r.Int("checkout_grace_minutes");
+            }
+        }
+
+        var shiftEndsAt = hasShift
+            ? (overnight ? day.AddDays(1) : day).ToDateTime(end).AddMinutes(checkoutGrace)
+            : day.AddDays(1).ToDateTime(new TimeOnly(6, 0));
+        var shiftEnded = DateTime.UtcNow.AddHours(7) >= shiftEndsAt;
+        async Task<DateTime?> ReadMarker(string loai)
+        {
+            var corrected = await Command(conn, tx, """
+                SELECT occurred_at FROM hr_attendance_corrections
+                WHERE employee_id=@id AND work_date=@date AND loai=@loai
+                ORDER BY applied_at DESC,id DESC LIMIT 1
+                """).With("@id", employeeId).With("@date", day).With("@loai", loai).ExecuteScalarAsync();
+            if (corrected is DateTime correctedAt) return correctedAt;
+            if (string.IsNullOrWhiteSpace(username)) return null;
+
+            var cmd = loai == AttendancePolicy.CheckInTypeOut && overnight
+                ? Command(conn, tx, """
+                    SELECT MAX(occurred_at) FROM cham_cong_log
+                    WHERE lower(username)=lower(@u) AND loai=@loai
+                      AND (occurred_at AT TIME ZONE @tz) >= @startAt
+                      AND (occurred_at AT TIME ZONE @tz) <= @endAt
+                    """).With("@startAt", day.ToDateTime(start)).With("@endAt", shiftEndsAt)
+                : Command(conn, tx, """
+                    SELECT CASE WHEN @loai='Vào' THEN MIN(occurred_at) ELSE MAX(occurred_at) END
+                    FROM cham_cong_log
+                    WHERE lower(username)=lower(@u) AND loai=@loai
+                      AND (occurred_at AT TIME ZONE @tz)::date=@date
+                    """).With("@date", day);
+            var value = await cmd.With("@u", username).With("@loai", loai)
+                .With("@tz", AttendancePolicy.TzId).ExecuteScalarAsync();
+            return value is DateTime marker ? marker : null;
+        }
+
+        return new AttendanceState(
+            await ReadMarker(AttendancePolicy.CheckInTypeIn),
+            await ReadMarker(AttendancePolicy.CheckInTypeOut),
+            shiftEnded,
+            overnight,
+            start);
+    }
+
+    private static NpgsqlCommand Command(NpgsqlConnection conn, NpgsqlTransaction? tx, string sql)
+        => tx is null ? conn.Cmd(sql) : conn.Cmd(sql, tx);
+
+    private static TimeOnly ReadDbTime(object value) => value switch
+    {
+        TimeOnly time => time,
+        TimeSpan span => TimeOnly.FromTimeSpan(span),
+        DateTime dateTime => TimeOnly.FromDateTime(dateTime),
+        _ => TimeOnly.Parse(Convert.ToString(value, CultureInfo.InvariantCulture) ?? "00:00",
+            CultureInfo.InvariantCulture),
+    };
+
+    private static async Task AssociateReminderWithRequestAsync(NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid requestId, Guid employeeId, string reqType, string payloadJson)
+    {
+        if (reqType != "forgot_checkin"
+            || !TryParseForgotCheckin(payloadJson, out var forgot, out _)) return;
         await conn.Cmd("""
-            INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
-            VALUES (@u, @fn, @loai, 0, @at, @note)
-            """)
-            .With("@u", username).With("@fn", fullName).With("@loai", loai)
-            .With("@at", occurredUtc).With("@note", note)
+            INSERT INTO hr_attendance_reminders
+                (id,employee_id,username,work_date,direction,status,request_id,notification_id,
+                 detected_at,last_checked_at,resolution_source)
+            SELECT @id,e.id,e.username,@date,@direction,'RequestCreated',@request,@notification,
+                   CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'request'
+              FROM hr_employees e WHERE e.id=@employee
+            ON CONFLICT (employee_id,work_date,direction) DO UPDATE
+               SET username=EXCLUDED.username,status='RequestCreated',request_id=@request,
+                   last_checked_at=CURRENT_TIMESTAMP,resolved_at=NULL,resolution_source='request'
+            """, tx).With("@id", Guid.NewGuid()).With("@request", requestId).With("@employee", employeeId)
+            .With("@date", forgot.Date).With("@direction", forgot.Direction)
+            .With("@notification", $"attendance:missing-{(forgot.Direction == "out" ? "checkout" : "checkin")}:{forgot.Date:yyyy-MM-dd}")
             .ExecuteNonQueryAsync();
+    }
+
+    private sealed record ReleasedReminder(string Username, DateOnly WorkDate, string Direction, string NotificationId);
+
+    private static async Task<ReleasedReminder?> ReleaseReminderRequestAsync(NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid requestId, Guid employeeId, string reqType, string payloadJson)
+    {
+        if (reqType != "forgot_checkin"
+            || !TryParseForgotCheckin(payloadJson, out var forgot, out _)) return null;
+        var notificationId = $"attendance:missing-{(forgot.Direction == "out" ? "checkout" : "checkin")}:" +
+                             $"{forgot.Date:yyyy-MM-dd}:retry:{requestId}";
+        await using var r = await conn.Cmd("""
+            UPDATE hr_attendance_reminders
+               SET status='Pending', request_id=@request, notification_id=@notification,
+                   notification_enqueued_at=NULL,last_checked_at=CURRENT_TIMESTAMP,
+                   resolved_at=NULL,resolution_source='request_closed'
+             WHERE employee_id=@employee AND work_date=@date AND direction=@direction
+               AND request_id=@request AND status='RequestCreated'
+            RETURNING username,work_date,direction,notification_id
+            """, tx).With("@request", requestId).With("@notification", notificationId)
+            .With("@employee", employeeId).With("@date", forgot.Date).With("@direction", forgot.Direction)
+            .ExecuteReaderAsync();
+        return await r.ReadAsync()
+            ? new ReleasedReminder(r.Str("username"), r.GetFieldValue<DateOnly>(r.GetOrdinal("work_date")),
+                r.Str("direction"), r.Str("notification_id"))
+            : null;
+    }
+
+    private static async Task RearmReminderAfterClosedRequestAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, PushService push, Guid requestId, Guid employeeId,
+        string reqType, string payloadJson, string source)
+    {
+        var reminder = await ReleaseReminderRequestAsync(conn, tx, requestId, employeeId, reqType, payloadJson);
+        if (reminder is null) return;
+        var state = await ReadAttendanceStateAsync(conn, tx, employeeId, reminder.WorkDate);
+        var markerExists = reminder.Direction == "out" ? state.HasOut : state.HasIn;
+        if (markerExists)
+        {
+            await conn.Cmd("""
+                UPDATE hr_attendance_reminders
+                   SET status='Resolved',last_checked_at=CURRENT_TIMESTAMP,resolved_at=CURRENT_TIMESTAMP,
+                       resolution_source='actual_scan'
+                 WHERE employee_id=@employee AND work_date=@date AND direction=@direction
+                """, tx).With("@employee", employeeId).With("@date", reminder.WorkDate)
+                .With("@direction", reminder.Direction).ExecuteNonQueryAsync();
+            return;
+        }
+        if (!state.ShiftEnded) return;
+
+        var label = reminder.Direction == "out" ? "giờ ra" : "giờ vào";
+        await push.EnqueueToUserAsync(conn, tx, reminder.Username, $"Bạn chưa chấm {label}",
+            $"Ngày {reminder.WorkDate:dd/MM/yyyy} đang thiếu {label}. Chạm để tạo đơn báo quên chấm công.",
+            reminder.NotificationId, "Requests");
+        await conn.Cmd("""
+            UPDATE hr_attendance_reminders
+               SET notification_enqueued_at=CURRENT_TIMESTAMP,last_checked_at=CURRENT_TIMESTAMP,
+                   resolution_source=@source
+             WHERE employee_id=@employee AND work_date=@date AND direction=@direction
+               AND notification_id=@notification
+            """, tx).With("@employee", employeeId).With("@date", reminder.WorkDate)
+            .With("@direction", reminder.Direction).With("@notification", reminder.NotificationId)
+            .With("@source", source).ExecuteNonQueryAsync();
+    }
+
+    private static async Task ReconcileReminderForEditedRequestAsync(NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid requestId, Guid employeeId, string oldType, string oldPayload, string newType, string newPayload)
+    {
+        _ = await ReleaseReminderRequestAsync(conn, tx, requestId, employeeId, oldType, oldPayload);
+        await AssociateReminderWithRequestAsync(conn, tx, requestId, employeeId, newType, newPayload);
     }
 
     private static string ReadString(string json, string prop)

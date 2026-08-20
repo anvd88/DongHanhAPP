@@ -14,7 +14,6 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -38,11 +37,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -53,6 +52,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
@@ -123,6 +123,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -147,6 +150,11 @@ fun HrApp(vm: HrViewModel) {
     AppPersonalization.init(personalizationContext)
     val dark=when(AppPersonalization.themeMode){"dark"->true;"light"->false;else->androidx.compose.foundation.isSystemInDarkTheme()}
     KetoanTheme(darkTheme=dark,fontScale=AppPersonalization.fontScale) {
+        val rootContext = LocalContext.current
+        LaunchedEffect(dark) {
+            val window = rootContext.findActivity()?.window ?: return@LaunchedEffect
+            WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = !dark
+        }
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
         // Keep one QR controller at the app root so deep-link dialogs can appear above every overlay.
         val qrScanner = rememberQrScanController(vm)
@@ -264,7 +272,7 @@ fun HrApp(vm: HrViewModel) {
                     )
                 }
 
-                if (!showIntro && showPermissionOnboarding && !hasPendingWebLogin) {
+                if (!showIntro && showPermissionOnboarding && !hasPendingWebLogin && !vm.payslipConfirmationVisible) {
                     PermissionOnboardingDialog(
                         onSkip = ::finishPermissionOnboarding,
                         onDone = ::finishPermissionOnboarding,
@@ -277,7 +285,8 @@ fun HrApp(vm: HrViewModel) {
                     vm.authState is AuthState.SignedIn &&
                     !showIntro &&
                     !showPermissionOnboarding &&
-                    !hasPendingWebLogin
+                    !hasPendingWebLogin &&
+                    !vm.payslipConfirmationVisible
                 ) {
                     vm.anniversaryGreeting?.let { greeting ->
                         AnniversaryLetterDialog(
@@ -287,12 +296,13 @@ fun HrApp(vm: HrViewModel) {
                     }
                 }
 
-                // Lớp phủ cuộc gọi (thoại/video) — luôn trên cùng, hiện khi có cuộc gọi đến/đi.
-                CallHost(vm)
-
-                // Keep the web-login confirmation above intro, onboarding and all feature dialogs.
-                QrScanDialog(qrScanner)
-                MobileAppLoginDialog(vm)
+                // Màn xác nhận lương là một nhánh độc quyền: không cho call/QR/web-login tạo lớp phủ
+                // hoặc semantics tương tác khác cho tới khi xác nhận xong (hoặc đóng lượt tự nguyện).
+                if (!vm.payslipConfirmationVisible) {
+                    CallHost(vm)
+                    QrScanDialog(qrScanner)
+                    MobileAppLoginDialog(vm)
+                }
                 }
             }
         }
@@ -590,9 +600,19 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
     val shellContext = LocalContext.current
     LaunchedEffect(vm.selected, statusBarDark) {
         val window = shellContext.findActivity()?.window ?: return@LaunchedEffect
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
         // isAppearanceLightStatusBars = true → nền sáng → icon tối. Chỉ dùng icon tối khi nền sáng và KHÔNG ở Trang chủ.
-        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars =
-            !statusBarDark && vm.selected != HrDestination.Home
+        controller.isAppearanceLightStatusBars = !statusBarDark && vm.selected != HrDestination.Home
+        // Footer không còn nền đặc nên màu icon thanh điều hướng cũng phải theo theme của app,
+        // không theo theme hệ thống vốn có thể đang ngược sáng/tối.
+        controller.isAppearanceLightNavigationBars = !statusBarDark
+    }
+
+    // Đây là rẽ nhánh root, không phải một Box phủ lên màn cũ. Vì vậy camera/dialog/semantics và
+    // vùng bấm của app bên dưới hoàn toàn không được compose trong thời gian xác nhận.
+    if (vm.payslipConfirmationVisible) {
+        PayslipConfirmationRoute(user = user, vm = vm)
+        return
     }
 
     val isRefreshing = when (vm.selected) {
@@ -616,6 +636,9 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
         // thanh dưới của HR ở đây.
         val chatFullScreen = vm.selected == HrDestination.Chat
         Scaffold(
+            // Khóa vùng nội dung vào safe drawing kể cả trong lúc màn camera phủ ngoài Scaffold đổi
+            // trạng thái; tiêu đề và kết quả chấm công luôn nằm dưới status bar/navigation bar.
+            contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = {
                 SnackbarHost(
                     hostState = snackbar,
@@ -796,7 +819,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         username = user.username,
                         onOpen = vm::openPayslip,
                         onClose = vm::closePayslip,
-                        onAcknowledge = vm::acknowledgePayslip,
+                        onOpenConfirmation = vm::openPayslipConfirmation,
                         onInquiry = vm::sendPayslipInquiry,
                         onDownload = vm::downloadPayslip,
                         onVerifyAccountPassword = vm::verifyAccountPassword,
@@ -911,6 +934,30 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
         }
 
     }
+}
+
+@Composable
+private fun PayslipConfirmationRoute(user: HrUser, vm: HrViewModel) {
+    PayslipConfirmationScreen(
+        reviewKey = vm.payslipConfirmationReviewKey,
+        period = vm.payslipConfirmationPeriod,
+        dueAt = vm.payslipConfirmationDueAt,
+        required = vm.payslipAccessLocked,
+        remainingOverdueCount = vm.payslipConfirmationRemainingCount,
+        payslip = vm.payslipConfirmationItem,
+        loading = vm.payslipsState.loading,
+        loadError = vm.payslipConfirmationError ?: vm.payslipsState.error,
+        statusMessage = vm.payslipConfirmationMessage,
+        submitting = vm.payslipAcknowledgingId != null,
+        awaitingSync = vm.payslipConfirmationAwaitingSync,
+        username = user.username,
+        onRetry = vm::retryPayslipConfirmation,
+        onConfirm = vm::confirmPayslipFromConfirmationScreen,
+        onInquiry = vm::sendPayslipInquiry,
+        onDownload = vm::downloadPayslip,
+        onClose = vm::closePayslipConfirmation,
+        onVerifyAccountPassword = vm::verifyAccountPassword,
+    )
 }
 
 /** Header biến thành ô nhập khi đang tìm kiếm. Tự bật bàn phím để gõ được ngay, khỏi chạm thêm lần nữa. */
@@ -1183,11 +1230,17 @@ private fun FaceEnrollBanner(onEnroll: () -> Unit, onDismiss: () -> Unit) {
 
 @Composable
 private fun NotificationBell(count: Int, onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.semantics {
+            contentDescription = "Thông báo"
+            stateDescription = if (count > 0) "$count thông báo chưa đọc" else "Không có thông báo chưa đọc"
+        },
+    ) {
         BadgedBox(badge = { if (count > 0) CountBadge(count) }) {
             Icon(
                 if (count > 0) Icons.Filled.Notifications else Icons.Filled.NotificationsNone,
-                contentDescription = "Thông báo",
+                contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurface,
             )
         }
@@ -1195,8 +1248,8 @@ private fun NotificationBell(count: Int, onClick: () -> Unit) {
 }
 
 /**
- * Footer nổi: capsule chọn tab trượt thật giữa 5 ô, icon/nhãn spring nhẹ và QR thương hiệu ở giữa.
- * Giữ nguyên kích thước cũ để toàn bộ màn hình không bị thay đổi vùng nội dung.
+ * Footer nổi: khôi phục khung bo tròn bao toàn bộ thanh; tab đang chọn chỉ đổi màu/độ đậm và có
+ * gạch nhỏ bên dưới, không còn khung chữ nhật chạy theo từng tab. QR thương hiệu vẫn nổi ở giữa.
  */
 @Composable
 private fun BottomBar(
@@ -1209,25 +1262,9 @@ private fun BottomBar(
 ) {
     if (items.isEmpty()) return
 
-    val selectedIndex = items.indexOf(selected).takeIf { it >= 0 && selected != HrDestination.Scan } ?: -1
-    var indicatorIndex by remember(items) {
-        mutableIntStateOf(selectedIndex.takeIf { it >= 0 } ?: items.indexOfFirst { it != HrDestination.Scan }.coerceAtLeast(0))
-    }
-    LaunchedEffect(selectedIndex) {
-        if (selectedIndex >= 0) indicatorIndex = selectedIndex
-    }
-    val indicatorAlpha by animateFloatAsState(
-        targetValue = if (selectedIndex >= 0) 1f else 0f,
-        animationSpec = tween(160),
-        label = "footer-indicator-alpha",
-    )
-
     val navShape = RoundedCornerShape(28.dp)
-    val activeShape = RoundedCornerShape(19.dp)
     val surface = MaterialTheme.colorScheme.surface
     val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
-    val primary = MaterialTheme.colorScheme.primary
-    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
 
     Box(
         modifier = modifier
@@ -1238,7 +1275,7 @@ private fun BottomBar(
             .padding(horizontal = 14.dp)
             .height(84.dp),
     ) {
-        BoxWithConstraints(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp)
@@ -1253,38 +1290,6 @@ private fun BottomBar(
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.72f), navShape),
         ) {
             val rowPadding = 8.dp
-            val slotWidth = (maxWidth - rowPadding * 2f) / items.size.toFloat()
-            val indicatorWidth = (slotWidth - 12.dp).coerceAtLeast(0.dp)
-            // Tính từ tâm ô thay vì cộng bù theo mép để capsule luôn trùng tâm icon/nhãn.
-            val targetIndicatorX =
-                rowPadding + slotWidth * (indicatorIndex.toFloat() + 0.5f) - indicatorWidth / 2f
-            val indicatorX by animateDpAsState(
-                targetValue = targetIndicatorX,
-                animationSpec = tween(
-                    durationMillis = 240,
-                    easing = CubicBezierEasing(0.2f, 0f, 0f, 1f),
-                ),
-                label = "footer-indicator-x",
-            )
-
-            // Capsule chạy phía sau tab; khi đi xuyên qua giữa sẽ lướt dưới nút QR nổi.
-            Box(
-                modifier = Modifier
-                    .offset(x = indicatorX, y = 8.dp)
-                    .width(indicatorWidth)
-                    .height(48.dp)
-                    .graphicsLayer { alpha = indicatorAlpha }
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                primaryContainer.copy(alpha = 0.96f),
-                                primary.copy(alpha = 0.13f),
-                            ),
-                        ),
-                        activeShape,
-                    )
-                    .border(1.dp, primary.copy(alpha = 0.14f), activeShape),
-            )
 
             Box(
                 Modifier

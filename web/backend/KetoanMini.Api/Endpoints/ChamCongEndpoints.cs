@@ -373,6 +373,11 @@ public static class ChamCongEndpoints
         {
             if (string.IsNullOrWhiteSpace(req.Token)) return Results.BadRequest(new { message = "Mã QR trống." });
             await using var conn = await db.OpenAsync();
+            var username = u.Username();
+            if (await PayrollEndpoints.ReadPendingPayslipRequirement(conn, username, overdueOnly: true) is { } overdue)
+            {
+                return Results.Ok(PayslipAcknowledgementRequired(overdue));
+            }
             string site = "", project = "";
             await using (var r = await conn.Cmd("SELECT name, project_name FROM cham_cong_qr_sites WHERE qr_token=@t AND active=TRUE")
                 .With("@t", req.Token.Trim()).ExecuteReaderAsync())
@@ -380,12 +385,13 @@ public static class ChamCongEndpoints
                 if (!await r.ReadAsync()) return Results.BadRequest(new { message = "Mã QR không hợp lệ hoặc đã bị thu hồi." });
                 site = r.Str("name"); project = r.Str("project_name");
             }
-            var username = u.Username();
             var fullName = await conn.Cmd("SELECT full_name FROM hr_employees WHERE username=@u LIMIT 1")
                 .With("@u", username).ExecuteScalarAsync() as string ?? username;
-            var last = await conn.Cmd("SELECT loai FROM cham_cong_log WHERE username=@u AND (occurred_at AT TIME ZONE @tz)::date=(CURRENT_TIMESTAMP AT TIME ZONE @tz)::date ORDER BY occurred_at DESC LIMIT 1")
-                .With("@u", username).With("@tz", "Asia/Ho_Chi_Minh").ExecuteScalarAsync() as string;
-            var loai = string.Equals(last, "Vào", StringComparison.OrdinalIgnoreCase) ? "Ra" : "Vào";
+            var decision = await AttendancePolicy.DecideAsync(conn, username, fullName);
+            if (!decision.ShouldRecord)
+                return Results.Ok(new ChamCongResult("ok", true, username, fullName, 1, decision.Loai,
+                    decision.ExistingAt, 1, decision.Message, null));
+            var loai = decision.Loai;
             var note = $"QR dự phòng · {site}" + (project.Length > 0 ? $" · Công trình: {project}" : "");
             await conn.Cmd("INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu) VALUES (@u,@n,@l,1,CURRENT_TIMESTAMP,@note)")
                 .With("@u", username).With("@n", fullName).With("@l", loai).With("@note", note).ExecuteNonQueryAsync();
@@ -1161,6 +1167,16 @@ public static class ChamCongEndpoints
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
         g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, LivenessMetricsLog livenessLog, AttendancePreviewTokens previewTokens, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http) =>
         {
+            var currentUser = u.Username();
+            var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.Can(Permissions.AttendanceManage);
+            // Kiosk ẩn danh vẫn hoạt động; mọi tài khoản đang đăng nhập (kể cả quản lý) phải xác nhận
+            // phiếu lương của chính mình trước khi dùng luồng chấm công trong app.
+            if (!string.IsNullOrWhiteSpace(currentUser))
+            {
+                await using var gateConn = await db.OpenAsync();
+                if (await PayrollEndpoints.ReadPendingPayslipRequirement(gateConn, currentUser, overdueOnly: true) is { } overdue)
+                    return Results.Ok(PayslipAcknowledgementRequired(overdue));
+            }
             if (!FaceAntiSpoofSecurity.IsOperational(engine))
                 return Results.Json(new { message = "Hệ thống chống giả mạo đang không khả dụng. Chấm công khuôn mặt đã được khóa an toàn." }, statusCode: 503);
             // ── XÁC NHẬN BẰNG TOKEN XEM TRƯỚC ────────────────────────────────────────────────────
@@ -1234,8 +1250,6 @@ public static class ChamCongEndpoints
             // CHẶN CỨNG chế độ "chỉ chấm cho chính mình": xác định TỪ TOKEN phía server, KHÔNG tin cờ
             // client (req.SelfOnly). Mọi tài khoản ĐÃ đăng nhập không có attendance.manage đều bắt buộc
             // chỉ chấm cho CHÍNH MÌNH. Người quản lý chấm công được chấm hộ; kiosk ẩn danh vẫn so khớp mở.
-            var currentUser = u.Username();
-            var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.Can(Permissions.AttendanceManage);
             // Ẩn danh (kiosk, chưa đăng nhập) ⇒ che username/họ tên trong phản hồi để tránh thu thập danh tính.
             var anon = string.IsNullOrWhiteSpace(currentUser);
 
@@ -1729,6 +1743,12 @@ public static class ChamCongEndpoints
             return Results.Ok(new { message = "Đã lưu cấu hình." });
         }).RequirePermission(Permissions.AttendanceManage);
     }
+
+    private static ChamCongResult PayslipAcknowledgementRequired(
+        PayrollEndpoints.PendingPayslipRequirement requirement) =>
+        new("payslip_required", false, null, null, 0, null, null, 0,
+            $"Phiếu lương kỳ {requirement.Period} đã quá hạn xác nhận.",
+            "Mở mục Phiếu lương, kiểm tra chi tiết và bấm Xác nhận trước khi chấm công.");
 
     private static async Task SetSettingAsync(NpgsqlConnection conn, string key, string value, string by)
     {

@@ -172,9 +172,14 @@ class EdgeBackGestureUiTest {
                                 days = listOf(TimesheetDay(date = "2026-07-01", workedHours = 8.0)),
                             ),
                         ),
+                        payEstimate = PayEstimateUiState(),
+                        username = "ui-test",
                         onMonthOffset = { monthOffset.intValue = it },
                         onSelectMonth = {},
                         onShiftSwap = {},
+                        onForgotCheckin = {},
+                        onLoadSalary = {},
+                        onVerifyAccountPassword = { _, result -> result(true, null) },
                     )
                 }
             }

@@ -373,6 +373,7 @@ export type ChamCongStatus =
   | "spoof"
   | "unknown"
   | "proxy" // khớp khuôn mặt nhân viên KHÁC khi chấm công cho chính mình → bị chặn
+  | "payslip_required" // phiếu lương đã quá hạn xác nhận → phải xem/xác nhận trước khi chấm công
   | "offline"
   | "pending"; // đồng bộ ngoại tuyến → chờ quản lý duyệt
 

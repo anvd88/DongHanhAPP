@@ -20,6 +20,14 @@
             android:theme="@style/QrCaptureTheme"
             android:windowSoftInputMode="stateAlwaysHidden" />
 
+        <!-- PendingIntent chỉ đi qua cổng nội bộ này; MainActivity exported không còn tin extras trực tiếp. -->
+        <activity
+            android:name=".NotificationEntryActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"

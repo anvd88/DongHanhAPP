@@ -1289,12 +1289,13 @@ public static class HrEndpoints
             var net = req.BaseSalary + req.Allowance + req.OvertimePay - totalDeductions;
 
             var pid = (Guid)(await conn.Cmd("""
-                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, published, created_by, updated_by, updated_at, acknowledged_at)
-                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @pub, @by, @by, CURRENT_TIMESTAMP, NULL)
+                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, published, created_by, updated_by, updated_at, published_at, acknowledged_at)
+                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @pub, @by, @by, CURRENT_TIMESTAMP, CASE WHEN @pub THEN CURRENT_TIMESTAMP ELSE NULL END, NULL)
                 ON CONFLICT (employee_id, period) DO UPDATE SET
                     work_days=@wd, overtime_hours=@ot, base_salary=@base, allowance=@allow,
                     overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, published=@pub,
-                    updated_by=@by, updated_at=CURRENT_TIMESTAMP, acknowledged_at=NULL
+                    updated_by=@by, updated_at=CURRENT_TIMESTAMP,
+                    published_at=CASE WHEN @pub THEN CURRENT_TIMESTAMP ELSE NULL END, acknowledged_at=NULL
                 RETURNING id
                 """)
                 .With("@id", Guid.NewGuid()).With("@emp", id).With("@period", period)
@@ -1555,12 +1556,12 @@ public static class HrEndpoints
             ),
             logs AS (
                 SELECT e.id AS employee_id,
-                       MIN(l.occurred_at AT TIME ZONE @tz) AS first_in,
-                       MAX(l.occurred_at AT TIME ZONE @tz) AS last_out,
-                       COUNT(*) AS cnt
-                FROM cham_cong_log l
-                JOIN active e ON e.username=l.username
-                WHERE (l.occurred_at AT TIME ZONE @tz)::date=@day
+                       MIN(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Vào') AS first_in,
+                       MAX(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Ra') AS last_out,
+                       COUNT(DISTINCT l.loai) AS cnt
+                FROM hr_effective_attendance_log l
+                JOIN active e ON lower(e.username)=lower(l.username)
+                WHERE l.logical_work_date=@day
                 GROUP BY e.id
             ),
             shifts AS (
@@ -1702,10 +1703,10 @@ public static class HrEndpoints
             ),
             logs AS (
                 SELECT e.id AS employee_id,
-                       MIN(l.occurred_at AT TIME ZONE @tz) AS first_in
-                FROM cham_cong_log l
-                JOIN active e ON e.username=l.username
-                WHERE (l.occurred_at AT TIME ZONE @tz)::date=@day
+                       MIN(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Vào') AS first_in
+                FROM hr_effective_attendance_log l
+                JOIN active e ON lower(e.username)=lower(l.username)
+                WHERE l.logical_work_date=@day
                 GROUP BY e.id
             ),
             shifts AS (
@@ -1788,12 +1789,12 @@ public static class HrEndpoints
             ),
             logs AS (
                 SELECT e.id AS employee_id,
-                       MIN(l.occurred_at AT TIME ZONE @tz) AS first_in,
-                       MAX(l.occurred_at AT TIME ZONE @tz) AS last_out,
-                       COUNT(*) AS cnt
-                FROM cham_cong_log l
-                JOIN active e ON e.username=l.username
-                WHERE (l.occurred_at AT TIME ZONE @tz)::date=@day
+                       MIN(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Vào') AS first_in,
+                       MAX(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Ra') AS last_out,
+                       COUNT(DISTINCT l.loai) AS cnt
+                FROM hr_effective_attendance_log l
+                JOIN active e ON lower(e.username)=lower(l.username)
+                WHERE l.logical_work_date=@day
                 GROUP BY e.id
             ),
             shifts AS (
@@ -1961,14 +1962,14 @@ public static class HrEndpoints
                   AND {EmployeeScopeSql(scope, "e")}
             ),
             logs AS (
-                SELECT e.id AS employee_id, (l.occurred_at AT TIME ZONE @tz)::date AS d,
-                       MIN(l.occurred_at AT TIME ZONE @tz) AS first_in,
-                       MAX(l.occurred_at AT TIME ZONE @tz) AS last_out,
-                       COUNT(*) AS cnt
-                FROM cham_cong_log l
-                JOIN active e ON e.username=l.username
-                WHERE (l.occurred_at AT TIME ZONE @tz)::date BETWEEN @from AND @to
-                GROUP BY e.id, (l.occurred_at AT TIME ZONE @tz)::date
+                SELECT e.id AS employee_id, l.logical_work_date AS d,
+                       MIN(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Vào') AS first_in,
+                       MAX(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Ra') AS last_out,
+                       COUNT(DISTINCT l.loai) AS cnt
+                FROM hr_effective_attendance_log l
+                JOIN active e ON lower(e.username)=lower(l.username)
+                WHERE l.logical_work_date BETWEEN @from AND @to
+                GROUP BY e.id, l.logical_work_date
             ),
             assignments AS (
                 SELECT a.employee_id, a.work_date, s.start_time, s.break_minutes, s.late_grace_minutes, s.standard_hours
@@ -2160,12 +2161,12 @@ public static class HrEndpoints
                 WHERE e.status='Active' AND {EmployeeScopeSql(scope, "e")}
             ),
             logs AS (
-                SELECT e.id AS employee_id, (l.occurred_at AT TIME ZONE @tz)::date AS d,
-                       MIN(l.occurred_at AT TIME ZONE @tz) AS first_in
-                FROM cham_cong_log l
-                JOIN active e ON e.username=l.username
-                WHERE (l.occurred_at AT TIME ZONE @tz)::date BETWEEN @from AND @to
-                GROUP BY e.id, (l.occurred_at AT TIME ZONE @tz)::date
+                SELECT e.id AS employee_id, l.logical_work_date AS d,
+                       MIN(l.occurred_at AT TIME ZONE @tz) FILTER (WHERE l.loai='Vào') AS first_in
+                FROM hr_effective_attendance_log l
+                JOIN active e ON lower(e.username)=lower(l.username)
+                WHERE l.logical_work_date BETWEEN @from AND @to
+                GROUP BY e.id, l.logical_work_date
             ),
             assignments AS (
                 SELECT a.employee_id, a.work_date, s.start_time, s.late_grace_minutes

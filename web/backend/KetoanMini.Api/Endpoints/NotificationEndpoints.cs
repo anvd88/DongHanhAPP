@@ -43,12 +43,12 @@ public static class NotificationEndpoints
             return Results.NoContent();
         });
 
-        g.MapPost("/unregister-token", async (TokenReq req, Database db) =>
+        g.MapPost("/unregister-token", async (TokenReq req, ClaimsPrincipal u, Database db) =>
         {
             if (string.IsNullOrWhiteSpace(req.Token)) return Results.NoContent();
             await using var conn = await db.OpenAsync();
-            await conn.Cmd("DELETE FROM hr_device_tokens WHERE token=@t")
-                .With("@t", req.Token!.Trim()).ExecuteNonQueryAsync();
+            await conn.Cmd("DELETE FROM hr_device_tokens WHERE token=@t AND lower(username)=lower(@u)")
+                .With("@t", req.Token!.Trim()).With("@u", u.Username()).ExecuteNonQueryAsync();
             return Results.NoContent();
         });
     }

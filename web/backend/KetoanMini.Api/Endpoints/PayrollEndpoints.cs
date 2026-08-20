@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
 using ClosedXML.Excel;
@@ -37,6 +38,7 @@ public static class PayrollEndpoints
             ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS created_by varchar(128) NOT NULL DEFAULT '';
             ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS updated_by varchar(128) NOT NULL DEFAULT '';
             ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
+            ALTER TABLE hr_payslips ADD COLUMN IF NOT EXISTS published_at timestamptz NULL;
 
             CREATE TABLE IF NOT EXISTS hr_payslip_history (
                 id uuid PRIMARY KEY,
@@ -97,6 +99,15 @@ public static class PayrollEndpoints
             LEFT JOIN hr_employees e ON e.id=p.employee_id
             WHERE NOT EXISTS (SELECT 1 FROM hr_payslip_history h WHERE h.payslip_id=p.id)
             ON CONFLICT (payslip_id, revision) DO NOTHING;
+
+            -- Dữ liệu cũ chưa có mốc phát hành riêng: ưu tiên sự kiện đầu tiên đưa phiếu sang Published/Acknowledged,
+            -- rồi mới lùi về updated_at/created_at. Từ phiên bản này trở đi published_at được ghi chính xác lúc phát hành.
+            UPDATE hr_payslips p
+               SET published_at = COALESCE(
+                   (SELECT MIN(h.occurred_at) FROM hr_payslip_history h
+                     WHERE h.payslip_id=p.id AND h.status_after IN ('Published','Acknowledged')),
+                   p.updated_at, p.created_at)
+             WHERE p.published=TRUE AND p.published_at IS NULL;
             """).ExecuteNonQueryAsync(ct);
     }
 
@@ -211,7 +222,10 @@ public static class PayrollEndpoints
             var list = new List<object>();
             await using var r = await conn.Cmd("""
                 SELECT id, period, overtime_hours, base_salary, allowance, overtime_pay,
-                       deductions, net_pay, note, details::text AS details, created_at, acknowledged_at
+                       deductions, net_pay, note, details::text AS details, created_at, published_at, updated_at,
+                       (((published_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date + 2)::timestamp
+                           AT TIME ZONE 'Asia/Ho_Chi_Minh') AS acknowledgement_due_at,
+                       acknowledged_at
                 FROM hr_payslips
                 WHERE employee_id=@id AND published = TRUE
                 ORDER BY period DESC
@@ -235,6 +249,9 @@ public static class PayrollEndpoints
                     workedDays = det.WorkedDays,
                     absentDays = det.AbsentDays,
                     lateDays = det.LateDays,
+                    totalWorkedHours = det.TotalWorkedHours,
+                    overtimeRate = det.OvertimeRate,
+                    overtimeDays = det.OvertimeDays,
                     earnings = det.Earnings,
                     deductions = det.Deductions,
                     totalEarnings = det.TotalEarnings > 0 ? det.TotalEarnings : baseSalary + allowance + overtimePay,
@@ -242,13 +259,170 @@ public static class PayrollEndpoints
                     netPay = det.NetPay != 0 ? det.NetPay : colNet,
                     note = r.Str("note"),
                     createdAt = r.Dt("created_at"),
+                    publishedAt = r.Dt("published_at"),
+                    updatedAt = r.Dt("updated_at"),
+                    revisionToken = PayslipRevisionToken(r.Dt("updated_at")),
+                    acknowledgementDueAt = r.Dt("acknowledgement_due_at"),
+                    acknowledgementOverdue = r.DtNull("acknowledged_at") is null
+                        && r.Dt("acknowledgement_due_at") <= DateTime.UtcNow,
                     acknowledgedAt = r.DtNull("acknowledged_at"),
                 });
             }
             return Results.Ok(list);
         });
 
-        g.MapPost("/my-payslips/{id:guid}/ack", async (Guid id, ClaimsPrincipal u, Database db) =>
+        // Trạng thái nhắc/xác nhận gọn để app kiểm tra ở Trang chủ và dựng cổng bắt buộc khi quá hạn.
+        // Quy tắc theo NGÀY Việt Nam: phát hành ngày D -> được xác nhận hết ngày D+1 -> khóa từ 00:00 ngày D+2.
+        g.MapGet("/my-payslips/requirement", async (ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var requirement = await ReadPendingPayslipRequirement(conn, u.Username());
+            return Results.Ok(new
+            {
+                pendingCount = requirement?.PendingCount ?? 0,
+                overdueCount = requirement?.OverdueCount ?? 0,
+                mustAcknowledge = requirement?.Overdue ?? false,
+                serverNow = DateTime.UtcNow,
+                payslip = requirement is null ? null : new
+                {
+                    id = requirement.Id,
+                    period = requirement.Period,
+                    publishedAt = requirement.PublishedAt,
+                    updatedAt = requirement.UpdatedAt,
+                    revisionToken = PayslipRevisionToken(requirement.UpdatedAt),
+                    acknowledgementDueAt = requirement.DueAt,
+                    overdue = requirement.Overdue,
+                },
+            });
+        });
+
+        // Sổ phiếu lương đã phát hành theo tháng cho quản trị/đối soát. Phân trang ngay ở DB để màn
+        // tổng hợp vẫn dùng được khi doanh nghiệp có hàng nghìn nhân viên.
+        g.MapGet("/payslips/published", async (
+            ClaimsPrincipal u, Database db, string period, string? search, string? status,
+            int? page, int? pageSize) =>
+        {
+            if (!u.Can(Permissions.PayrollRead)) return Results.Forbid();
+            if (!ValidPeriod(period))
+                return Results.BadRequest(new { message = "Kỳ lương phải có định dạng yyyy-MM." });
+
+            var statusKey = (status ?? "all").Trim().ToLowerInvariant();
+            if (statusKey is not ("all" or "pending" or "acknowledged"))
+                return Results.BadRequest(new { message = "Trạng thái phiếu lương không hợp lệ." });
+
+            var currentPage = Math.Max(1, page ?? 1);
+            var take = Math.Clamp(pageSize ?? 50, 10, 200);
+            var skip = (currentPage - 1) * take;
+            var query = (search ?? "").Trim();
+            var where = "p.period=@period AND p.published=TRUE";
+            if (query.Length > 0)
+                where += " AND (e.full_name ILIKE @search OR e.employee_code ILIKE @search OR COALESCE(d.name,'') ILIKE @search OR COALESCE(l.name,'') ILIKE @search)";
+            if (statusKey == "pending") where += " AND p.acknowledged_at IS NULL";
+            if (statusKey == "acknowledged") where += " AND p.acknowledged_at IS NOT NULL";
+
+            await using var conn = await db.OpenAsync();
+            NpgsqlCommand BindListParameters(NpgsqlCommand cmd)
+            {
+                cmd.With("@period", period);
+                if (query.Length > 0) cmd.With("@search", $"%{query}%");
+                return cmd;
+            }
+
+            int activeEmployees;
+            await using (var activeCmd = conn.Cmd("SELECT COUNT(*)::int FROM hr_employees WHERE status='Active'"))
+                activeEmployees = Convert.ToInt32(await activeCmd.ExecuteScalarAsync());
+
+            int publishedCount, acknowledgedCount;
+            decimal totalEarnings, totalDeductions, totalNetPay;
+            await using (var summary = await conn.Cmd("""
+                SELECT COUNT(*)::int AS published_count,
+                       COUNT(*) FILTER (WHERE acknowledged_at IS NOT NULL)::int AS acknowledged_count,
+                       COALESCE(SUM(net_pay + deductions),0) AS total_earnings,
+                       COALESCE(SUM(deductions),0) AS total_deductions,
+                       COALESCE(SUM(net_pay),0) AS total_net_pay
+                FROM hr_payslips
+                WHERE period=@period AND published=TRUE
+                """).With("@period", period).ExecuteReaderAsync())
+            {
+                await summary.ReadAsync();
+                publishedCount = summary.Int("published_count");
+                acknowledgedCount = summary.Int("acknowledged_count");
+                totalEarnings = summary.Dec("total_earnings");
+                totalDeductions = summary.Dec("total_deductions");
+                totalNetPay = summary.Dec("total_net_pay");
+            }
+
+            var countCmd = BindListParameters(conn.Cmd($"""
+                SELECT COUNT(*)::int
+                FROM hr_payslips p
+                JOIN hr_employees e ON e.id=p.employee_id
+                LEFT JOIN hr_departments d ON d.id=e.department_id
+                LEFT JOIN hr_locations l ON l.id=e.location_id
+                WHERE {where}
+                """));
+            var totalItems = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
+
+            var items = new List<object>();
+            var listCmd = BindListParameters(conn.Cmd($"""
+                SELECT p.id, p.employee_id, e.employee_code, e.full_name,
+                       COALESCE(d.name,'') AS department_name, COALESCE(l.name,'') AS location_name,
+                       p.period, p.overtime_hours, p.net_pay + p.deductions AS total_earnings,
+                       p.deductions AS total_deductions, p.net_pay, p.acknowledged_at, p.updated_at
+                FROM hr_payslips p
+                JOIN hr_employees e ON e.id=p.employee_id
+                LEFT JOIN hr_departments d ON d.id=e.department_id
+                LEFT JOIN hr_locations l ON l.id=e.location_id
+                WHERE {where}
+                ORDER BY d.name NULLS FIRST, e.full_name, e.employee_code
+                LIMIT @take OFFSET @skip
+                """)).With("@take", take).With("@skip", skip);
+            await using (var r = await listCmd.ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync())
+                    items.Add(new
+                    {
+                        id = r.Guid("id"),
+                        employeeId = r.Guid("employee_id"),
+                        employeeCode = r.Str("employee_code"),
+                        employeeName = r.Str("full_name"),
+                        departmentName = r.Str("department_name"),
+                        locationName = r.Str("location_name"),
+                        period = r.Str("period"),
+                        overtimeHours = r.Dec("overtime_hours"),
+                        totalEarnings = r.Dec("total_earnings"),
+                        totalDeductions = r.Dec("total_deductions"),
+                        netPay = r.Dec("net_pay"),
+                        status = r.DtNull("acknowledged_at") is null ? "Published" : "Acknowledged",
+                        acknowledgedAt = r.DtNull("acknowledged_at"),
+                        updatedAt = r.Dt("updated_at"),
+                    });
+            }
+
+            return Results.Ok(new
+            {
+                period,
+                search = query,
+                status = statusKey,
+                page = currentPage,
+                pageSize = take,
+                totalItems,
+                totalPages = Math.Max(1, (int)Math.Ceiling(totalItems / (double)take)),
+                summary = new
+                {
+                    activeEmployeeCount = activeEmployees,
+                    publishedCount,
+                    acknowledgedCount,
+                    pendingAcknowledgementCount = publishedCount - acknowledgedCount,
+                    totalEarnings,
+                    totalDeductions,
+                    totalNetPay,
+                },
+                items,
+            });
+        });
+
+        g.MapPost("/my-payslips/{id:guid}/ack", async (
+            Guid id, string? expectedRevision, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
@@ -258,6 +432,21 @@ public static class PayrollEndpoints
             {
                 await tx.RollbackAsync();
                 return Results.NotFound();
+            }
+
+            // Client mới gửi phiên bản phiếu đã thực sự hiển thị. Nếu quản trị vừa sửa số liệu trong
+            // lúc nhân viên đang đọc, tuyệt đối không ghi nhận xác nhận cho phiên bản chưa được xem.
+            // Query revision là tùy chọn để các APK cũ vẫn tương thích trong giai đoạn chuyển tiếp.
+            if (!string.IsNullOrWhiteSpace(expectedRevision) &&
+                !string.Equals(PayslipRevisionToken(before.UpdatedAt), expectedRevision,
+                    StringComparison.Ordinal))
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new
+                {
+                    message = "Phiếu lương vừa được cập nhật. Vui lòng tải lại và kiểm tra số liệu mới trước khi xác nhận.",
+                    code = "payslip_changed",
+                });
             }
 
             // Idempotent: mở lại cùng phiếu không tạo thêm sự kiện giả.
@@ -347,12 +536,13 @@ public static class PayrollEndpoints
             // RETURNING id: lập lại phiếu của kỳ cũ thì DO UPDATE trả về id của DÒNG ĐANG CÓ, không phải
             // guid vừa sinh — phiếu chi lương bám theo id này nên phải là id thật.
             var pid = (Guid)(await conn.Cmd("""
-                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, details, published, created_by, updated_by, updated_at, acknowledged_at)
-                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @details::jsonb, @pub, @by, @by, CURRENT_TIMESTAMP, NULL)
+                INSERT INTO hr_payslips (id, employee_id, period, work_days, overtime_hours, base_salary, allowance, overtime_pay, deductions, net_pay, note, details, published, created_by, updated_by, updated_at, published_at, acknowledged_at)
+                VALUES (@id, @emp, @period, @wd, @ot, @base, @allow, @otp, @ded, @net, @note, @details::jsonb, @pub, @by, @by, CURRENT_TIMESTAMP, CASE WHEN @pub THEN CURRENT_TIMESTAMP ELSE NULL END, NULL)
                 ON CONFLICT (employee_id, period) DO UPDATE SET
                     work_days=@wd, overtime_hours=@ot, base_salary=@base, allowance=@allow,
                     overtime_pay=@otp, deductions=@ded, net_pay=@net, note=@note, details=@details::jsonb,
-                    published=@pub, updated_by=@by, updated_at=CURRENT_TIMESTAMP, acknowledged_at=NULL
+                    published=@pub, updated_by=@by, updated_at=CURRENT_TIMESTAMP,
+                    published_at=CASE WHEN @pub THEN CURRENT_TIMESTAMP ELSE NULL END, acknowledged_at=NULL
                 RETURNING id
                 """)
                 .With("@id", Guid.NewGuid()).With("@emp", req.EmployeeId).With("@period", req.Period)
@@ -420,6 +610,57 @@ public static class PayrollEndpoints
     {
         public string Status => !Published ? "Draft" : AcknowledgedAt is not null ? "Acknowledged" : "Published";
     }
+
+    internal sealed record PendingPayslipRequirement(
+        Guid Id, string Period, DateTime PublishedAt, DateTime UpdatedAt, DateTime DueAt, bool Overdue,
+        int PendingCount, int OverdueCount);
+
+    /// <summary>
+    /// Phiếu chưa xác nhận cấp bách nhất của một tài khoản. Hạn được tính theo ngày tại Việt Nam, không phải
+    /// cộng cứng 24/48 giờ: phát hành bất kỳ lúc nào trong ngày D thì khóa từ 00:00 ngày D+2.
+    /// </summary>
+    internal static async Task<PendingPayslipRequirement?> ReadPendingPayslipRequirement(
+        NpgsqlConnection conn, string username, bool overdueOnly = false)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return null;
+        await using var r = await conn.Cmd("""
+            WITH pending AS (
+                SELECT p.id, p.period, p.published_at, p.updated_at,
+                       (((p.published_at AT TIME ZONE @tz)::date + 2)::timestamp AT TIME ZONE @tz) AS due_at
+                  FROM hr_payslips p
+                  JOIN hr_employees e ON e.id=p.employee_id
+                 WHERE lower(e.username)=lower(@username)
+                   AND p.published=TRUE
+                   AND p.acknowledged_at IS NULL
+                   AND p.published_at IS NOT NULL
+            ), counted AS (
+                SELECT *,
+                       COUNT(*) OVER ()::int AS pending_count,
+                       COUNT(*) FILTER (WHERE due_at <= CURRENT_TIMESTAMP) OVER ()::int AS overdue_count
+                  FROM pending
+            )
+            SELECT id, period, published_at, updated_at, due_at,
+                   due_at <= CURRENT_TIMESTAMP AS overdue, pending_count, overdue_count
+              FROM counted
+             WHERE (NOT @overdue_only) OR due_at <= CURRENT_TIMESTAMP
+             ORDER BY (due_at <= CURRENT_TIMESTAMP) DESC, due_at, period
+             LIMIT 1
+            """)
+            .With("@tz", "Asia/Ho_Chi_Minh")
+            .With("@username", username.Trim())
+            .With("@overdue_only", overdueOnly)
+            .ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new PendingPayslipRequirement(
+            r.Guid("id"), r.Str("period"), r.Dt("published_at"), r.Dt("updated_at"),
+            r.Dt("due_at"), r.Bool("overdue"),
+            r.Int("pending_count"), r.Int("overdue_count"));
+    }
+
+    // JSON date của ứng dụng được cấu hình hiển thị đến mili-giây, trong khi PostgreSQL giữ micro-giây.
+    // Gửi ticks dạng chuỗi làm opaque revision để so sánh chính xác, không phụ thuộc timezone/format.
+    private static string PayslipRevisionToken(DateTime updatedAt) =>
+        DateTime.SpecifyKind(updatedAt, DateTimeKind.Utc).Ticks.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Khóa logic theo nhân viên+kỳ, kể cả khi chưa có dòng hr_payslips. Nhờ vậy hai request lập phiếu
@@ -563,8 +804,9 @@ public static class PayrollEndpoints
         catch { return JsonDocument.Parse("{}").RootElement.Clone(); }
     }
 
-    private sealed record PayslipDetail(List<object> Earnings, List<object> Deductions,
+    private sealed record PayslipDetail(List<object> Earnings, List<object> Deductions, List<object> OvertimeDays,
         decimal WorkedDays, decimal AbsentDays, decimal LateDays, decimal OvertimeHours,
+        decimal TotalWorkedHours, decimal OvertimeRate,
         decimal TotalEarnings, decimal TotalDeductions, decimal NetPay);
 
     private static byte[] SimplePdf(IEnumerable<string> lines)
@@ -585,7 +827,9 @@ public static class PayrollEndpoints
     {
         var earnings = new List<object>();
         var deductions = new List<object>();
+        var overtimeDays = new List<object>();
         decimal workedDays = 0, absentDays = 0, lateDays = 0, overtimeHours = 0;
+        decimal totalWorkedHours = 0, overtimeRate = 0;
         decimal totalEarnings = 0, totalDeductions = 0, netPay = 0;
         try
         {
@@ -599,14 +843,41 @@ public static class PayrollEndpoints
                 absentDays = NumProp(ts, "absentDays");
                 lateDays = NumProp(ts, "lateDays");
                 overtimeHours = NumProp(ts, "overtimeHours");
+                totalWorkedHours = NumProp(ts, "totalWorkedHours");
             }
+            overtimeRate = NumProp(root, "overtimeRate");
+            overtimeDays = ReadOvertimeDays(root);
             totalEarnings = NumProp(root, "totalEarnings");
             totalDeductions = NumProp(root, "totalDeductions");
             netPay = NumProp(root, "netPay");
         }
         catch { /* details hỏng → trả rỗng, số liệu lấy từ cột phiếu */ }
-        return new PayslipDetail(earnings, deductions, workedDays, absentDays, lateDays, overtimeHours,
+        return new PayslipDetail(earnings, deductions, overtimeDays, workedDays, absentDays, lateDays, overtimeHours,
+            totalWorkedHours, overtimeRate,
             totalEarnings, totalDeductions, netPay);
+    }
+
+    private static List<object> ReadOvertimeDays(JsonElement root)
+    {
+        var list = new List<object>();
+        if (!root.TryGetProperty("overtimeDays", out var days) || days.ValueKind != JsonValueKind.Array)
+            return list;
+
+        foreach (var day in days.EnumerateArray())
+        {
+            list.Add(new
+            {
+                date = day.TryGetProperty("date", out var date) ? date.GetString() ?? "" : "",
+                checkIn = day.TryGetProperty("checkIn", out var checkIn) ? checkIn.GetString() ?? "" : "",
+                checkOut = day.TryGetProperty("checkOut", out var checkOut) && checkOut.ValueKind != JsonValueKind.Null
+                    ? checkOut.GetString() ?? ""
+                    : "",
+                minutes = day.TryGetProperty("minutes", out var minutes) && minutes.TryGetInt32(out var value)
+                    ? value
+                    : 0,
+            });
+        }
+        return list;
     }
 
     private static List<object> ReadPayLines(JsonElement root, string prop)
@@ -677,9 +948,10 @@ public static class PayrollEndpoints
         // Tăng ca trước 08:00 và sau 17:00, mỗi khoảng tối thiểu 15 phút.
         // null = tính tất cả; ngược lại chỉ các ngày đã duyệt.
         var otCandidates = DetectOvertimeDays(tsDays);
-        var otMinutes = otCandidates
+        var approvedOvertimeDays = otCandidates
             .Where(o => approvedOtDates is null || approvedOtDates.Contains(o.Date))
-            .Sum(o => o.Minutes);
+            .ToList();
+        var otMinutes = approvedOvertimeDays.Sum(o => o.Minutes);
         var overtimeHours = Math.Round(otMinutes / 60m, 2);
         var overtimePay = Math.Round(salary.OvertimeRate * otMinutes / 60m, 0);
 
@@ -756,7 +1028,9 @@ public static class PayrollEndpoints
                 overtimeHours,
                 totalWorkedHours = ts.TotalWorkedHours,
             },
-            overtimeDays = otCandidates.ConvertAll(o => new { date = o.Date, checkIn = o.CheckIn, checkOut = o.CheckOut, minutes = o.Minutes }),
+            // Chỉ lưu các ngày đã được duyệt vào phiếu. Danh sách ứng viên đầy đủ vẫn được trả ở
+            // PayrollResult.OvertimeDays để màn lập lương cho phép quản trị chọn/bỏ chọn từng ngày.
+            overtimeDays = approvedOvertimeDays.ConvertAll(o => new { date = o.Date, checkIn = o.CheckIn, checkOut = o.CheckOut, minutes = o.Minutes }),
             overtimeRate = salary.OvertimeRate,
             penaltyTotal,
             totalEarnings,

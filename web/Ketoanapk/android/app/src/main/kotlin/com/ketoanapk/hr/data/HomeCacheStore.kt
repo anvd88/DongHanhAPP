@@ -28,6 +28,7 @@ data class HomeSnapshot(
     val penalties: List<Penalty> = emptyList(),
     val salaries: List<SalaryListItem> = emptyList(),
     val requestTypes: List<RequestType> = emptyList(),
+    val payslipRequirement: PayslipRequirement = PayslipRequirement(),
 )
 
 /**

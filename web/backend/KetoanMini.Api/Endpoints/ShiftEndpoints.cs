@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
+using KetoanMini.Api.Services;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -44,8 +45,10 @@ public static class ShiftEndpoints
                 late_grace_minutes integer NOT NULL DEFAULT 5,
                 standard_hours numeric(5,2) NOT NULL DEFAULT 8,
                 is_overnight boolean NOT NULL DEFAULT FALSE,
+                checkout_grace_minutes integer NOT NULL DEFAULT 120,
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            ALTER TABLE hr_shifts ADD COLUMN IF NOT EXISTS checkout_grace_minutes integer NOT NULL DEFAULT 120;
 
             CREATE TABLE IF NOT EXISTS hr_shift_assignments (
                 id uuid PRIMARY KEY,
@@ -76,6 +79,51 @@ public static class ShiftEndpoints
             SELECT @id, 'HC', 'Ca hành chính', '08:00', '17:00', 60, 5, 8
             WHERE NOT EXISTS (SELECT 1 FROM hr_shifts)
             """).With("@id", Guid.NewGuid()).ExecuteNonQueryAsync(ct);
+
+        // Một nguồn đọc hiệu lực dùng chung cho bảng công, dashboard và policy. Log thiết bị vẫn bất biến;
+        // correction mới nhất chỉ che mốc cùng chiều/ngày trong lớp đọc. Ra của ca đêm được gắn về work_date
+        // hôm trước để mọi downstream consumer thống nhất với bảng công chi tiết.
+        await conn.Cmd("""
+            CREATE OR REPLACE VIEW hr_effective_attendance_log AS
+            WITH raw_mapped AS (
+                SELECT l.id,l.username,l.full_name,l.loai,l.similarity,l.anh,l.occurred_at,l.ghi_chu,
+                       COALESCE((
+                           SELECT a.work_date
+                           FROM hr_employees e
+                           JOIN hr_shift_assignments a ON a.employee_id=e.id
+                           JOIN hr_shifts s ON s.id=a.shift_id AND s.is_overnight=TRUE
+                           WHERE lower(e.username)=lower(l.username) AND l.loai='Ra'
+                             AND (l.occurred_at AT TIME ZONE 'Asia/Ho_Chi_Minh') >=
+                                 a.work_date + s.start_time
+                             AND (l.occurred_at AT TIME ZONE 'Asia/Ho_Chi_Minh') <=
+                                 (a.work_date + 1) + s.end_time
+                                 + make_interval(mins => s.checkout_grace_minutes)
+                           ORDER BY a.work_date DESC LIMIT 1
+                       ), (l.occurred_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date) AS logical_work_date
+                FROM cham_cong_log l
+                WHERE l.loai IN ('Vào','Ra')
+            ), latest_correction AS (
+                SELECT DISTINCT ON (employee_id,work_date,loai)
+                       c.id,c.request_id,c.employee_id,c.username,c.full_name,c.work_date,c.loai,
+                       c.occurred_at,c.reason,c.applied_at
+                FROM hr_attendance_corrections c
+                ORDER BY employee_id,work_date,loai,applied_at DESC,id DESC
+            )
+            SELECT r.id,r.username,r.full_name,r.loai,r.similarity,r.anh,r.occurred_at,r.ghi_chu,
+                   r.logical_work_date,FALSE AS is_correction,NULL::uuid AS request_id
+            FROM raw_mapped r
+            WHERE NOT EXISTS (
+                SELECT 1 FROM latest_correction c
+                JOIN hr_employees e ON e.id=c.employee_id
+                WHERE lower(e.username)=lower(r.username)
+                  AND c.work_date=r.logical_work_date AND c.loai=r.loai
+            )
+            UNION ALL
+            SELECT -c.id,e.username,e.full_name,c.loai,0::double precision,NULL::text,c.occurred_at,
+                   c.reason,c.work_date,TRUE,c.request_id
+            FROM latest_correction c
+            JOIN hr_employees e ON e.id=c.employee_id
+            """).ExecuteNonQueryAsync(ct);
     }
 
     public static void MapShifts(this WebApplication app)
@@ -88,7 +136,8 @@ public static class ShiftEndpoints
             await using var conn = await db.OpenAsync();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
-                SELECT id, code, name, start_time, end_time, break_minutes, late_grace_minutes, standard_hours, is_overnight
+                SELECT id, code, name, start_time, end_time, break_minutes, late_grace_minutes,
+                       standard_hours, is_overnight, checkout_grace_minutes
                 FROM hr_shifts ORDER BY start_time
                 """).ExecuteReaderAsync();
             while (await r.ReadAsync())
@@ -103,6 +152,7 @@ public static class ShiftEndpoints
                     lateGraceMinutes = r.Int("late_grace_minutes"),
                     standardHours = r.Dec("standard_hours"),
                     isOvernight = r.Bool("is_overnight"),
+                    checkoutGraceMinutes = r.Int("checkout_grace_minutes"),
                 });
             return Results.Ok(list);
         });
@@ -111,15 +161,19 @@ public static class ShiftEndpoints
         {
             if (!TryTime(req.StartTime, out var start) || !TryTime(req.EndTime, out var end))
                 return Results.BadRequest(new { message = "Giờ vào/ra không hợp lệ (HH:mm)." });
+            if (req.CheckoutGraceMinutes is < 0 or > 720)
+                return Results.BadRequest(new { message = "Thời gian chờ chấm ra phải từ 0 đến 720 phút." });
             await using var conn = await db.OpenAsync();
             var id = Guid.NewGuid();
             await conn.Cmd("""
-                INSERT INTO hr_shifts (id, code, name, start_time, end_time, break_minutes, late_grace_minutes, standard_hours, is_overnight)
-                VALUES (@id, @code, @name, @start, @end, @brk, @grace, @std, @overnight)
+                INSERT INTO hr_shifts (id, code, name, start_time, end_time, break_minutes, late_grace_minutes,
+                                       standard_hours, is_overnight, checkout_grace_minutes)
+                VALUES (@id, @code, @name, @start, @end, @brk, @grace, @std, @overnight, @checkoutGrace)
                 """)
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", req.Name ?? "")
                 .With("@start", start).With("@end", end).With("@brk", req.BreakMinutes)
                 .With("@grace", req.LateGraceMinutes).With("@std", req.StandardHours).With("@overnight", req.IsOvernight)
+                .With("@checkoutGrace", req.CheckoutGraceMinutes)
                 .ExecuteNonQueryAsync();
             await Signal(db, u, "Tạo ca làm", "Shift", req.Name ?? "");
             return Results.Ok(new { id });
@@ -129,15 +183,19 @@ public static class ShiftEndpoints
         {
             if (!TryTime(req.StartTime, out var start) || !TryTime(req.EndTime, out var end))
                 return Results.BadRequest(new { message = "Giờ vào/ra không hợp lệ (HH:mm)." });
+            if (req.CheckoutGraceMinutes is < 0 or > 720)
+                return Results.BadRequest(new { message = "Thời gian chờ chấm ra phải từ 0 đến 720 phút." });
             await using var conn = await db.OpenAsync();
             var n = await conn.Cmd("""
                 UPDATE hr_shifts SET code=@code, name=@name, start_time=@start, end_time=@end,
-                    break_minutes=@brk, late_grace_minutes=@grace, standard_hours=@std, is_overnight=@overnight
+                    break_minutes=@brk, late_grace_minutes=@grace, standard_hours=@std,
+                    is_overnight=@overnight, checkout_grace_minutes=@checkoutGrace
                 WHERE id=@id
                 """)
                 .With("@id", id).With("@code", req.Code ?? "").With("@name", req.Name ?? "")
                 .With("@start", start).With("@end", end).With("@brk", req.BreakMinutes)
                 .With("@grace", req.LateGraceMinutes).With("@std", req.StandardHours).With("@overnight", req.IsOvernight)
+                .With("@checkoutGrace", req.CheckoutGraceMinutes)
                 .ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Cập nhật ca làm", "Shift", req.Name ?? "");
@@ -344,7 +402,10 @@ public static class ShiftEndpoints
         DateOnly Date, string ShiftName, string HolidayName, string HolidayType,
         string ShiftStart, string ShiftEnd, string EventType,
         string? CheckIn, string? CheckOut, int LateMinutes, int EarlyMinutes,
-        int OvertimeMinutes, double WorkedHours, string Status);
+        int OvertimeMinutes, double WorkedHours, string Status,
+        bool IsOvernight = false, int CheckoutGraceMinutes = 0,
+        string? MissingCheckoutRequestStatus = null, bool? HasOpenCheckoutRequest = null,
+        Guid? MissingCheckoutRequestId = null);
 
     private static async Task<object> BuildTimesheet(NpgsqlConnection conn, Guid employeeId, string? month)
     {
@@ -379,6 +440,11 @@ public static class ShiftEndpoints
                 overtimeMinutes = d.OvertimeMinutes,
                 workedHours = d.WorkedHours,
                 status = d.Status,
+                isOvernight = d.IsOvernight,
+                checkoutGraceMinutes = d.CheckoutGraceMinutes,
+                missingCheckoutRequestStatus = d.MissingCheckoutRequestStatus,
+                hasOpenCheckoutRequest = d.HasOpenCheckoutRequest,
+                missingCheckoutRequestId = d.MissingCheckoutRequestId,
             }),
         };
     }
@@ -398,35 +464,107 @@ public static class ShiftEndpoints
 
         var username = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", employeeId).ExecuteScalarAsync() as string ?? "";
 
-        // 1) Log chấm công gom theo ngày (giờ địa phương).
-        var logs = new Dictionary<DateOnly, (DateTime In, DateTime Out, int Count)>();
-        if (!string.IsNullOrWhiteSpace(username))
-        {
-            await using var r = await conn.Cmd($"""
-                SELECT (occurred_at AT TIME ZONE @tz)::date AS d,
-                       MIN(occurred_at AT TIME ZONE @tz) AS first_in,
-                       MAX(occurred_at AT TIME ZONE @tz) AS last_out,
-                       COUNT(*) AS cnt
-                FROM cham_cong_log
-                WHERE username=@u AND (occurred_at AT TIME ZONE @tz)::date BETWEEN @from AND @to
-                GROUP BY 1
-                """).With("@tz", Tz).With("@u", username).With("@from", from).With("@to", to).ExecuteReaderAsync();
-            while (await r.ReadAsync())
-                logs[r.DateOnly("d")] = (r.Dt("first_in"), r.Dt("last_out"), r.Int("cnt"));
-        }
-
-        // 2) Phân ca theo ngày.
+        // 1) Phân ca phải được nạp trước log để một lượt Ra sau nửa đêm được gắn về đúng ngày công
+        // của ca qua đêm, thay vì biến thành một lượt Vào giả của ngày hôm sau.
         var shifts = new Dictionary<DateOnly, ShiftInfo>();
         await using (var r = await conn.Cmd("""
-            SELECT a.work_date, s.name, s.start_time, s.end_time, s.break_minutes, s.late_grace_minutes, s.standard_hours
+            SELECT a.work_date, s.name, s.start_time, s.end_time, s.break_minutes, s.late_grace_minutes,
+                   s.standard_hours, s.is_overnight, s.checkout_grace_minutes
             FROM hr_shift_assignments a JOIN hr_shifts s ON s.id=a.shift_id
-            WHERE a.employee_id=@id AND a.work_date BETWEEN @from AND @to
-            """).With("@id", employeeId).With("@from", from).With("@to", to).ExecuteReaderAsync())
+            WHERE a.employee_id=@id AND a.work_date BETWEEN @shiftFrom AND @to
+            """).With("@id", employeeId).With("@shiftFrom", from.AddDays(-1)).With("@to", to).ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
                 shifts[r.DateOnly("work_date")] = new ShiftInfo(
                     r.Str("name"), ReadTime(r, "start_time"), ReadTime(r, "end_time"),
-                    r.Int("break_minutes"), r.Int("late_grace_minutes"), r.Dec("standard_hours"));
+                    r.Int("break_minutes"), r.Int("late_grace_minutes"), r.Dec("standard_hours"),
+                    r.Bool("is_overnight"), r.Int("checkout_grace_minutes"));
+        }
+
+        // Trạng thái đơn gần nhất cho phép mobile triệt nhắc cũ giữa nhiều thiết bị. Rejected/Cancelled
+        // vẫn được trả cùng request id để hai phía dùng chung generation retry của notification.
+        var checkoutRequests = new Dictionary<DateOnly, CheckoutRequestInfo>();
+        await using (var r = await conn.Cmd("""
+            SELECT DISTINCT ON (payload->>'date')
+                   payload->>'date' AS work_date, id, status
+            FROM hr_requests
+            WHERE employee_id=@id AND req_type='forgot_checkin' AND payload->>'direction'='out'
+              AND payload->>'date' BETWEEN @fromText AND @toText
+            ORDER BY payload->>'date', created_at DESC, id DESC
+            """).With("@id", employeeId).With("@fromText", from.ToString("yyyy-MM-dd"))
+            .With("@toText", to.ToString("yyyy-MM-dd")).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+            {
+                if (!DateOnly.TryParseExact(r.Str("work_date"), "yyyy-MM-dd",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var requestDate)) continue;
+                var requestStatus = r.Str("status");
+                checkoutRequests[requestDate] = new CheckoutRequestInfo(r.Guid("id"), requestStatus,
+                    requestStatus is "Pending" or "Approved" or "Resolved" or "Completed");
+            }
+        }
+
+        // 2) Log gốc là bất biến. Tách Vào/Ra theo cột loai; correction mới nhất của từng chiều sẽ
+        // thay thế về mặt tính toán nhưng không xóa bằng chứng khuôn mặt/QR.
+        var logs = new Dictionary<DateOnly, AttendanceBucket>();
+        AttendanceBucket Bucket(DateOnly date)
+        {
+            if (!logs.TryGetValue(date, out var bucket)) logs[date] = bucket = new AttendanceBucket();
+            return bucket;
+        }
+
+        if (!string.IsNullOrWhiteSpace(username))
+        {
+            await using (var r = await conn.Cmd("""
+                SELECT loai, occurred_at AT TIME ZONE @tz AS local_at
+                FROM cham_cong_log
+                WHERE lower(username)=lower(@u)
+                  AND loai IN ('Vào','Ra')
+                  AND (occurred_at AT TIME ZONE @tz)::date BETWEEN @from AND @rawTo
+                ORDER BY occurred_at
+                """).With("@tz", Tz).With("@u", username).With("@from", from)
+                .With("@rawTo", to.AddDays(1)).ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync())
+                {
+                    var localAt = r.Dt("local_at");
+                    var localDate = DateOnly.FromDateTime(localAt);
+                    var loai = r.Str("loai");
+                    var workDate = localDate;
+                    if (loai == AttendancePolicy.CheckInTypeOut)
+                    {
+                        var previous = localDate.AddDays(-1);
+                        if (shifts.TryGetValue(previous, out var previousShift) && previousShift.Overnight)
+                        {
+                            var startsAt = previous.ToDateTime(previousShift.Start);
+                            var endsAt = previous.AddDays(1).ToDateTime(previousShift.End)
+                                .AddMinutes(previousShift.CheckoutGrace);
+                            if (localAt >= startsAt && localAt <= endsAt) workDate = previous;
+                        }
+                    }
+                    if (workDate < from || workDate > to) continue;
+                    if (loai == AttendancePolicy.CheckInTypeIn) Bucket(workDate).RawIns.Add(localAt);
+                    else if (loai == AttendancePolicy.CheckInTypeOut) Bucket(workDate).RawOuts.Add(localAt);
+                }
+            }
+
+            await using var corrections = await conn.Cmd("""
+                SELECT DISTINCT ON (work_date, loai)
+                       work_date, loai, occurred_at AT TIME ZONE @tz AS local_at
+                FROM hr_attendance_corrections
+                WHERE employee_id=@id AND work_date BETWEEN @from AND @to
+                ORDER BY work_date, loai, applied_at DESC, id DESC
+                """).With("@tz", Tz).With("@id", employeeId).With("@from", from).With("@to", to)
+                .ExecuteReaderAsync();
+            while (await corrections.ReadAsync())
+            {
+                var bucket = Bucket(corrections.DateOnly("work_date"));
+                if (corrections.Str("loai") == AttendancePolicy.CheckInTypeIn)
+                    bucket.CorrectedIn = corrections.Dt("local_at");
+                else
+                    bucket.CorrectedOut = corrections.Dt("local_at");
+            }
         }
 
         // 3) Duyệt từng ngày có dữ liệu.
@@ -487,14 +625,15 @@ public static class ShiftEndpoints
         double totalWorkedHours = 0;
 
         var allDates = new SortedSet<DateOnly>(logs.Keys);
-        foreach (var d in shifts.Keys) allDates.Add(d);
+        foreach (var d in shifts.Keys.Where(d => d >= from && d <= to)) allDates.Add(d);
         foreach (var d in holidays.Keys) allDates.Add(d);
         foreach (var d in calendarEvents.Keys) allDates.Add(d);
 
         foreach (var d in allDates)
         {
             shifts.TryGetValue(d, out var shift);
-            var hasLog = logs.TryGetValue(d, out var log);
+            var log = logs.GetValueOrDefault(d);
+            var hasLog = log?.HasAny == true;
             holidays.TryGetValue(d, out var holiday);
             calendarEvents.TryGetValue(d, out var eventType);
             string status;
@@ -502,40 +641,55 @@ public static class ShiftEndpoints
             double workedH = 0;
             string? checkIn = null, checkOut = null;
 
-            if (hasLog)
+            if (log is not null && hasLog)
             {
-                checkIn = log.In.ToString("HH:mm");
-                var hasOut = log.Count > 1 && log.Out > log.In;
-                checkOut = hasOut ? log.Out.ToString("HH:mm") : null;
-                var workedMinutes = hasOut ? (int)(log.Out - log.In).TotalMinutes : 0;
-                var inTod = TimeOnly.FromDateTime(log.In);
-                var outTod = hasOut ? TimeOnly.FromDateTime(log.Out) : (TimeOnly?)null;
-                otMin = CalculateOvertimeMinutes(inTod, outTod);
+                var inAt = log.CheckIn;
+                var outAt = log.CheckOut;
+                var hasIn = inAt is not null;
+                var hasOut = outAt is not null;
+                var validPair = hasIn && hasOut && outAt > inAt;
+                checkIn = inAt?.ToString("HH:mm");
+                checkOut = outAt?.ToString("HH:mm");
+                var workedMinutes = validPair ? (int)(outAt!.Value - inAt!.Value).TotalMinutes : 0;
+                var inTod = hasIn ? TimeOnly.FromDateTime(inAt!.Value) : (TimeOnly?)null;
+                var outTod = hasOut ? TimeOnly.FromDateTime(outAt!.Value) : (TimeOnly?)null;
+                if (inTod is { } overtimeIn && shift?.Overnight != true)
+                    otMin = CalculateOvertimeMinutes(overtimeIn, outTod);
 
                 if (shift is not null)
                 {
-                    var lateThreshold = shift.Start.AddMinutes(shift.Grace);
-                    if (inTod > lateThreshold) lateMin = (int)(inTod - shift.Start).TotalMinutes;
+                    var expectedStart = d.ToDateTime(shift.Start);
+                    var expectedEnd = (shift.Overnight ? d.AddDays(1) : d).ToDateTime(shift.End);
+                    var lateThreshold = expectedStart.AddMinutes(shift.Grace);
+                    if (inAt is { } actualIn && actualIn > lateThreshold)
+                        lateMin = (int)(actualIn - expectedStart).TotalMinutes;
 
-                    if (hasOut)
+                    if (outAt is { } actualOut)
                     {
-                        if (outTod!.Value < shift.End) earlyMin = (int)(shift.End - outTod.Value).TotalMinutes;
+                        if (actualOut < expectedEnd) earlyMin = (int)(expectedEnd - actualOut).TotalMinutes;
                         var netWorked = Math.Max(0, workedMinutes - shift.Break);
                         workedH = Math.Round(netWorked / 60.0, 2);
                     }
-                    status = lateMin > 0 && earlyMin > 0 ? "Đi muộn & về sớm"
+                    status = !hasIn ? "Thiếu giờ vào"
+                        : !hasOut ? "Thiếu giờ ra"
+                        : !validPair ? "Giờ ra không hợp lệ"
+                        : lateMin > 0 && earlyMin > 0 ? "Đi muộn & về sớm"
                         : lateMin > 0 ? "Đi muộn"
                         : earlyMin > 0 ? "Về sớm"
-                        : hasOut ? "Đủ công" : "Thiếu giờ ra";
+                        : "Đủ công";
                 }
                 else
                 {
-                    workedH = hasOut ? Math.Round(workedMinutes / 60.0, 2) : 0;
-                    status = hasOut ? "Không phân ca" : "Thiếu giờ ra";
+                    workedH = validPair ? Math.Round(workedMinutes / 60.0, 2) : 0;
+                    status = !hasIn ? "Thiếu giờ vào"
+                        : !hasOut ? "Thiếu giờ ra"
+                        : !validPair ? "Giờ ra không hợp lệ"
+                        : "Không phân ca";
                 }
-                if (holiday is not null && shift is null)
+                if (holiday is not null && shift is null && validPair)
                     status = WorkedHolidayStatus(holiday);
-                workedDays++;
+                if (hasIn) workedDays++;
+                else absentDays++;
                 if (lateMin > 0) lateDays++;
                 if (earlyMin > 0) earlyDays++;
                 totalLate += lateMin; totalEarly += earlyMin; totalOt += otMin; totalWorkedHours += workedH;
@@ -558,6 +712,8 @@ public static class ShiftEndpoints
                 absentDays = Math.Max(0, absentDays - 1);
             }
 
+            checkoutRequests.TryGetValue(d, out var checkoutRequest);
+
             days.Add(new TimesheetDayInfo(
                 d,
                 shift?.Name ?? "",
@@ -572,7 +728,12 @@ public static class ShiftEndpoints
                 earlyMin,
                 otMin,
                 workedH,
-                status));
+                status,
+                shift?.Overnight ?? false,
+                shift?.CheckoutGrace ?? 0,
+                checkoutRequest?.Status,
+                checkoutRequest?.SuppressReminder,
+                checkoutRequest?.RequestId));
         }
 
         var summary = new TimesheetSummary(
@@ -581,7 +742,19 @@ public static class ShiftEndpoints
         return (summary, days);
     }
 
-    private sealed record ShiftInfo(string Name, TimeOnly Start, TimeOnly End, int Break, int Grace, decimal StandardHours);
+    private sealed record ShiftInfo(string Name, TimeOnly Start, TimeOnly End, int Break, int Grace,
+        decimal StandardHours, bool Overnight, int CheckoutGrace);
+    private sealed record CheckoutRequestInfo(Guid RequestId, string Status, bool SuppressReminder);
+    private sealed class AttendanceBucket
+    {
+        public List<DateTime> RawIns { get; } = [];
+        public List<DateTime> RawOuts { get; } = [];
+        public DateTime? CorrectedIn { get; set; }
+        public DateTime? CorrectedOut { get; set; }
+        public DateTime? CheckIn => CorrectedIn ?? (RawIns.Count == 0 ? null : RawIns.Min());
+        public DateTime? CheckOut => CorrectedOut ?? (RawOuts.Count == 0 ? null : RawOuts.Max());
+        public bool HasAny => CheckIn is not null || CheckOut is not null;
+    }
     private sealed record HolidayInfo(string Name, string Type);
 
     private static string ReadJsonString(string json, string name)
@@ -716,7 +889,8 @@ public static class ShiftEndpoints
         => await db.RecordAudit(u.Username(), action, entity, name, $"{action} (web).");
 
     public record SaveShiftReq(string? Code, string? Name, string? StartTime, string? EndTime,
-        int BreakMinutes, int LateGraceMinutes, decimal StandardHours, bool IsOvernight);
+        int BreakMinutes, int LateGraceMinutes, decimal StandardHours, bool IsOvernight,
+        int CheckoutGraceMinutes = 120);
     public record AssignShiftReq(Guid EmployeeId, Guid ShiftId, DateOnly WorkDate, string? Note);
     public record SaveHolidayReq(DateOnly HolidayDate, string? Name, string? HolidayType, string? Note);
 }

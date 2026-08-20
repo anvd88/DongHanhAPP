@@ -8,9 +8,15 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 /** Nháp đơn tự động, mã hóa AES-GCM bằng Android Keystore. */
-class RequestDraftStore(context: Context) {
-    private val file = File(context.filesDir, "request_drafts.bin")
+class RequestDraftStore(context: Context, accountId: String) {
+    // Hash account trong tên file: nháp được giữ riêng cho từng nhân viên nhưng không lộ username trên đĩa.
+    private val file = File(context.noBackupFilesDir, "request_drafts_${notificationAccountScope(accountId)}.bin")
     private val json = Json { ignoreUnknownKeys = true }
+
+    init {
+        // Bản cũ không gắn chủ tài khoản; không được phép nhập nháp đó vào tài khoản đang đăng nhập.
+        runCatching { File(context.filesDir, "request_drafts.bin").delete() }
+    }
 
     suspend fun load(type: String): Map<String, String> = withContext(Dispatchers.IO) {
         runCatching {

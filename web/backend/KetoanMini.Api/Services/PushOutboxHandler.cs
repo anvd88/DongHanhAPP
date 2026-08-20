@@ -25,6 +25,10 @@ public sealed class PushOutboxHandler(PushService push, ILogger<PushOutboxHandle
             return true;
         }
 
+        if (!push.Enabled)
+            throw new OutboxDeferredException(
+                "FCM chưa cấu hình hoặc khởi tạo thất bại; giữ Pending để gửi lại khi hạ tầng sẵn sàng.");
+
         return message.Kind switch
         {
             OutboxQueue.KindUserPush => await push.DispatchUserAsync(job.Username, job.Title, job.Body, job.NotifId, job.Target),

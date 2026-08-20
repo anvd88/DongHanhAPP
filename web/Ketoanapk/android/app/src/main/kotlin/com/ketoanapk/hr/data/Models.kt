@@ -519,6 +519,16 @@ data class TimesheetDay(
     val shiftName: String = "",
     val shiftStart: String = "",
     val shiftEnd: String = "",
+    /** null với server cũ; khi có thì là nguồn chuẩn thay cho suy luận end <= start. */
+    val isOvernight: Boolean? = null,
+    /** Khoảng chờ sau giờ kết ca trước khi kết luận thiếu giờ ra; null dùng fallback tương thích. */
+    val checkoutGraceMinutes: Int? = null,
+    /** Trạng thái đơn bù giờ ra hiện hữu do server join theo ngày; null với server cũ. */
+    val missingCheckoutRequestStatus: String? = null,
+    /** Id đơn gần nhất dùng làm generation khi đơn bị từ chối/hủy để re-arm reminder đúng một lần. */
+    val missingCheckoutRequestId: String? = null,
+    /** Alias boolean cho contract triển khai tối giản; true nghĩa là không được nhắc/tạo đơn trùng. */
+    val hasOpenCheckoutRequest: Boolean? = null,
     val eventType: String = "",
     val holidayName: String = "",
     val holidayType: String = "",
@@ -687,6 +697,36 @@ data class PayLine(
     val amount: Double = 0.0,
 )
 
+/** Một ngày tăng ca đã được duyệt và chốt vào phiếu lương. */
+@Serializable
+data class PayslipOvertimeDay(
+    val date: String = "",
+    val checkIn: String = "",
+    val checkOut: String = "",
+    val minutes: Int = 0,
+)
+
+/** Phiếu chưa xác nhận cấp bách nhất và trạng thái khóa ứng dụng do máy chủ tính theo giờ Việt Nam. */
+@Serializable
+data class PayslipRequirementItem(
+    val id: String = "",
+    val period: String = "",
+    val publishedAt: String = "",
+    val updatedAt: String = "",
+    val revisionToken: String = "",
+    val acknowledgementDueAt: String = "",
+    val overdue: Boolean = false,
+)
+
+@Serializable
+data class PayslipRequirement(
+    val pendingCount: Int = 0,
+    val overdueCount: Int = 0,
+    val mustAcknowledge: Boolean = false,
+    val serverNow: String = "",
+    val payslip: PayslipRequirementItem? = null,
+)
+
 /** Một phiếu lương ĐÃ PHÁT HÀNH của chính nhân viên (mỗi kỳ yyyy-MM một phiếu). */
 @Serializable
 data class PayslipItem(
@@ -699,6 +739,9 @@ data class PayslipItem(
     val workedDays: Int = 0,
     val absentDays: Int = 0,
     val lateDays: Int = 0,
+    val totalWorkedHours: Double = 0.0,
+    val overtimeRate: Double = 0.0,
+    val overtimeDays: List<PayslipOvertimeDay> = emptyList(),
     val earnings: List<PayLine> = emptyList(),
     val deductions: List<PayLine> = emptyList(),
     val totalEarnings: Double = 0.0,
@@ -706,6 +749,11 @@ data class PayslipItem(
     val netPay: Double = 0.0,
     val note: String = "",
     val createdAt: String = "",
+    val publishedAt: String = "",
+    val updatedAt: String = "",
+    val revisionToken: String = "",
+    val acknowledgementDueAt: String = "",
+    val acknowledgementOverdue: Boolean = false,
     val acknowledgedAt: String? = null,
 )
 

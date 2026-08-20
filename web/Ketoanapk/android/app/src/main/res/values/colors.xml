@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Màu nền cho theme AppCompat/splash (đỏ VNeID). Trước đây do Capacitor cung cấp. -->
-    <color name="colorPrimary">#C62828</color>
-    <color name="colorPrimaryDark">#8E1B1B</color>
-    <color name="colorAccent">#C62828</color>
+    <!-- Màu hệ thống AppCompat đồng bộ với bảng màu sky-blue của Compose. -->
+    <color name="colorPrimary">#0369A1</color>
+    <color name="colorPrimaryDark">#075985</color>
+    <color name="colorAccent">#0284C7</color>
     <!-- Nền splash = IntroBg (#F4F4F2) để OS splash nối liền mạch vào màn intro. -->
     <color name="splash_background">#F4F4F2</color>
 </resources>

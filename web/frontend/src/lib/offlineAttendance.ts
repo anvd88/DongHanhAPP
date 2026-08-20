@@ -155,6 +155,7 @@ export async function syncOfflineAttendance(): Promise<SyncSummary> {
           occurredAt: item.capturedAt,
           selfOnly: item.selfOnly ?? false,
         });
+        if (res.status === "payslip_required") break;
         // Server đã xử lý (dù nhận diện được hay không) → không giữ lại nữa.
         await removeItem(item.id!);
         synced++;

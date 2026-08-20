@@ -65,12 +65,17 @@ class TimesheetSwipeUiTest {
                             days = listOf(TimesheetDay(date = "$period-01", workedHours = 8.0)),
                         ),
                     ),
+                    payEstimate = PayEstimateUiState(),
+                    username = "ui-test",
                     onMonthOffset = { offset ->
                         onMonthOffset(offset)
                         displayedMonth.value = YearMonth.parse(period).plusMonths(offset.toLong()).toString()
                     },
                     onSelectMonth = {},
                     onShiftSwap = {},
+                    onForgotCheckin = {},
+                    onLoadSalary = {},
+                    onVerifyAccountPassword = { _, result -> result(true, null) },
                 )
             }
         }

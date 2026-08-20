@@ -1478,6 +1478,138 @@ html[data-theme="dark"] .hr-status[data-tone="danger"] { background: #3b211f; co
 .hr-payslip-net span { color: var(--hr-muted); font-size: 0.86rem; font-weight: 800; }
 .hr-payslip-net strong { color: var(--hr-success); font-size: 1.3rem; font-weight: 900; line-height: 1.15; overflow-wrap: anywhere; }
 
+.hr-published-payroll-filters {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.65fr) minmax(260px, 1.4fr) minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.hr-published-payroll-stats {
+  margin-top: 0;
+}
+
+.hr-published-payroll-balance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.hr-published-payroll-balance > div {
+  display: grid;
+  gap: 4px;
+}
+
+.hr-published-payroll-balance > div span {
+  color: var(--hr-muted);
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.hr-published-payroll-balance > div strong {
+  color: var(--hr-text);
+  font-size: 1rem;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.hr-published-payroll-balance > div[data-net] strong { color: var(--hr-success); }
+.hr-published-payroll-balance > b { color: var(--hr-muted); font-size: 1.2rem; }
+
+.hr-published-payroll-card,
+.hr-published-payroll-list {
+  display: grid;
+  gap: 12px;
+}
+
+.hr-published-payroll-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hr-published-payroll-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.hr-published-payroll-head strong { color: var(--hr-text); font-size: 0.98rem; }
+.hr-published-payroll-head small,
+.hr-published-payroll-head > span { color: var(--hr-muted); font-size: 0.76rem; font-weight: 700; }
+
+.hr-published-payroll-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.15fr) minmax(340px, 1.7fr) minmax(150px, 0.75fr) auto;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--hr-border);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--hr-surface-2);
+}
+
+.hr-published-payroll-person,
+.hr-published-payroll-meta,
+.hr-published-payroll-actions {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.hr-published-payroll-person > span {
+  color: var(--hr-primary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.hr-published-payroll-person > strong {
+  color: var(--hr-text);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.hr-published-payroll-person > small,
+.hr-published-payroll-meta > small {
+  color: var(--hr-muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.hr-published-payroll-money {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hr-published-payroll-money > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.hr-published-payroll-money span { color: var(--hr-muted); font-size: 0.7rem; font-weight: 750; }
+.hr-published-payroll-money b { color: var(--hr-text); font-size: 0.82rem; overflow-wrap: anywhere; }
+.hr-published-payroll-money b[data-deduction] { color: var(--hr-danger); }
+.hr-published-payroll-money b[data-net] { color: var(--hr-success); font-size: 0.9rem; }
+
+.hr-published-payroll-actions {
+  justify-items: end;
+}
+
+.hr-published-payroll-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border-top: 1px solid var(--hr-border);
+  padding-top: 14px;
+}
+
+.hr-published-payroll-pagination > span { color: var(--hr-muted); font-size: 0.78rem; font-weight: 750; }
+
 .hr-payroll-history-card {
   display: grid;
   gap: 14px;
@@ -1512,6 +1644,29 @@ html[data-theme="dark"] .hr-status[data-tone="danger"] { background: #3b211f; co
   font-size: 0.98rem;
   overflow-wrap: anywhere;
 }
+
+.hr-payroll-history-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--hr-border);
+  border-left: 4px solid var(--hr-warning);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--hr-surface-2);
+}
+
+.hr-payroll-history-actions[data-published="true"] { border-left-color: var(--hr-danger); }
+
+.hr-payroll-history-actions > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.hr-payroll-history-actions strong { color: var(--hr-text); font-size: 0.84rem; }
+.hr-payroll-history-actions small { color: var(--hr-muted); font-size: 0.74rem; line-height: 1.45; }
 
 .hr-payroll-timeline-title {
   display: flex;
@@ -2304,6 +2459,26 @@ html[data-theme="dark"] .hr-attendance-sync-btn {
   .hr-payroll-preview-card .hr-payslip-lines {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .hr-published-payroll-filters,
+  .hr-published-payroll-balance,
+  .hr-published-payroll-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hr-published-payroll-filters .hr-button,
+  .hr-published-payroll-actions .hr-button,
+  .hr-payroll-history-actions .hr-button {
+    width: 100%;
+  }
+
+  .hr-published-payroll-balance > b { display: none; }
+  .hr-published-payroll-balance > div { border-bottom: 1px solid var(--hr-border); padding-bottom: 10px; }
+  .hr-published-payroll-balance > div:last-child { border-bottom: 0; padding-bottom: 0; }
+  .hr-published-payroll-money { grid-template-columns: minmax(0, 1fr); }
+  .hr-published-payroll-money > div { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
+  .hr-published-payroll-actions { justify-items: stretch; }
+  .hr-payroll-history-actions { display: grid; }
 
   .hr-page--payroll .hr-salary-components-head {
     display: grid;

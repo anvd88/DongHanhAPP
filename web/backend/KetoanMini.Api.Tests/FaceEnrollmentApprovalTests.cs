@@ -15,7 +15,7 @@ using Xunit;
 namespace KetoanMini.Api.Tests;
 
 [Collection(ApiCollection.Name)]
-public sealed class FaceEnrollmentApprovalTests(ApiFactory factory)
+public sealed class FaceEnrollmentApprovalTests(ApiFactory factory) : IAsyncLifetime
 {
     private const byte Front = 1;
     private const byte SidePositive = 2;
@@ -31,6 +31,9 @@ public sealed class FaceEnrollmentApprovalTests(ApiFactory factory)
     private const byte VerificationSplitA = 40;
     private const byte VerificationSplitB = 41;
     private const byte VerificationSpoof = 42;
+
+    public Task InitializeAsync() => CleanupStaleFaceFixturesAsync(factory.Services);
+    public Task DisposeAsync() => Task.CompletedTask;
 
     [Fact]
     public async Task SelfEnrollment_IsEncryptedPending_AndOnlyLiveMatchingHrDecisionCanActivateIt()
@@ -504,6 +507,29 @@ public sealed class FaceEnrollmentApprovalTests(ApiFactory factory)
                 .With("@u", usernames).ExecuteNonQueryAsync();
         }
         catch { /* cleanup best effort */ }
+    }
+
+    private static async Task CleanupStaleFaceFixturesAsync(IServiceProvider services)
+    {
+        // The PostgreSQL integration database intentionally survives between test processes. If a
+        // previous process was interrupted, its fixed fake embedding would otherwise be recognized by
+        // a later run and make these security tests depend on database history. Only test-only
+        // usernames in the isolated *_test database are removed here.
+        await using var conn = await Db(services).OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        await conn.Cmd("DELETE FROM cham_cong_face_enrollments WHERE username LIKE 'face-%'", tx)
+            .ExecuteNonQueryAsync();
+        await conn.Cmd("DELETE FROM cham_cong_log WHERE username LIKE 'face-%'", tx)
+            .ExecuteNonQueryAsync();
+        await conn.Cmd("DELETE FROM cham_cong_face WHERE username LIKE 'face-%'", tx)
+            .ExecuteNonQueryAsync();
+        await conn.Cmd("DELETE FROM audit_logs WHERE username LIKE 'face-%' OR entity_name LIKE 'face-%'", tx)
+            .ExecuteNonQueryAsync();
+        await conn.Cmd("DELETE FROM user_sessions WHERE username LIKE 'face-%'", tx)
+            .ExecuteNonQueryAsync();
+        await conn.Cmd("DELETE FROM app_users WHERE username LIKE 'face-%'", tx)
+            .ExecuteNonQueryAsync();
+        await tx.CommitAsync();
     }
 
     private sealed class EnrollmentFaceEngine : IFaceEngine

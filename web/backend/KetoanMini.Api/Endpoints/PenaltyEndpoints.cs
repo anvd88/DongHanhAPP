@@ -209,11 +209,12 @@ public static class PenaltyEndpoints
     }
 
     /// <summary>Tổng đã thu (sổ cái) của MỘT phạt; <paramref name="excludePeriod"/> để loại kỳ đang lập lại.</summary>
-    public static async Task<decimal> GetCollectedAsync(NpgsqlConnection conn, Guid penaltyId, string? excludePeriod = null)
+    public static async Task<decimal> GetCollectedAsync(NpgsqlConnection conn, Guid penaltyId,
+        string? excludePeriod = null, NpgsqlTransaction? tx = null)
     {
         var sql = "SELECT COALESCE(SUM(amount),0)::numeric FROM hr_penalty_ledger WHERE penalty_id=@id"
             + (excludePeriod is null ? "" : " AND period <> @ex");
-        var cmd = conn.Cmd(sql).With("@id", penaltyId);
+        var cmd = (tx is null ? conn.Cmd(sql) : conn.Cmd(sql, tx)).With("@id", penaltyId);
         if (excludePeriod is not null) cmd.With("@ex", excludePeriod);
         var v = await cmd.ExecuteScalarAsync();
         return v is null or DBNull ? 0m : Convert.ToDecimal(v);

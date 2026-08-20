@@ -3,6 +3,8 @@ using FirebaseAdmin.Messaging;
 using Google.Apis.Auth.OAuth2;
 using KetoanMini.Api.Data;
 using Npgsql;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace KetoanMini.Api.Services;
 
@@ -60,10 +62,21 @@ public sealed class PushService
     /// </summary>
     public async Task SendToUserAsync(string? username, string title, string body, string notifId, string? target = null)
     {
-        if (!_enabled || string.IsNullOrWhiteSpace(username)) return;
+        if (string.IsNullOrWhiteSpace(username)) return;
         await _outbox.EnqueueAsync(OutboxQueue.KindUserPush,
             new PushJob(username, title, body, notifId, target),
             DedupeKey(OutboxQueue.KindUserPush, username, notifId));
+    }
+
+    /// <summary>Xếp push trong cùng transaction với thay đổi nghiệp vụ nguồn.</summary>
+    internal async Task<bool> EnqueueToUserAsync(NpgsqlConnection conn, NpgsqlTransaction tx,
+        string username, string title, string body, string notifId, string? target = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return false;
+        return await _outbox.EnqueueAsync(conn, tx, OutboxQueue.KindUserPush,
+            new PushJob(username, title, body, notifId, target),
+            DedupeKey(OutboxQueue.KindUserPush, username, notifId), ct);
     }
 
     /// <summary>
@@ -71,7 +84,6 @@ public sealed class PushService
     /// </summary>
     public async Task SendToAllAsync(string title, string body, string notifId, string? target = null)
     {
-        if (!_enabled) return;
         await _outbox.EnqueueAsync(OutboxQueue.KindAllPush,
             new PushJob(null, title, body, notifId, target),
             DedupeKey(OutboxQueue.KindAllPush, null, notifId));
@@ -80,7 +92,6 @@ public sealed class PushService
     /// <summary>Đẩy tới mọi quản trị viên đang hoạt động (cho bước duyệt cấp Admin).</summary>
     public async Task SendToAdminsAsync(string title, string body, string notifId, string? target = null)
     {
-        if (!_enabled) return;
         await _outbox.EnqueueAsync(OutboxQueue.KindAdminsPush,
             new PushJob(null, title, body, notifId, target),
             DedupeKey(OutboxQueue.KindAdminsPush, null, notifId));
@@ -97,43 +108,57 @@ public sealed class PushService
             ? $"{kind}|{notifId}"
             : $"{kind}|{recipient.ToLowerInvariant()}|{notifId}";
 
-    /// <summary>Gửi THẲNG, không qua hàng chờ — dùng cho việc đã tới hạn xử lý (worker) hoặc cuộc gọi.</summary>
-    private async Task<bool> SendNowAsync(List<string> tokens, string title, string body, string notifId, string? target)
+    internal static string RecipientScope(string? username)
     {
-        if (!_enabled || tokens.Count == 0) return true; // không có gì để làm → coi như xong, đừng thử lại
-        return await DispatchAsync(tokens, title, body, notifId, target);
+        if (string.IsNullOrWhiteSpace(username)) return "";
+        var normalized = username.Trim().ToLowerInvariant();
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+        return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
+    }
+
+    /// <summary>Gửi THẲNG, không qua hàng chờ — dùng cho việc đã tới hạn xử lý (worker) hoặc cuộc gọi.</summary>
+    private async Task<bool> SendNowAsync(List<string> tokens, string title, string body, string notifId,
+        string? target, string recipientScope)
+    {
+        if (!_enabled)
+        {
+            _log.LogWarning("FCM chưa sẵn sàng; giữ việc push {NotifId} trong outbox để retry.", notifId);
+            return false;
+        }
+        if (tokens.Count == 0) return true;
+        return await DispatchAsync(tokens, title, body, notifId, target, recipientScope);
     }
 
     internal async Task<bool> DispatchUserAsync(string? username, string title, string body, string notifId, string? target)
     {
-        if (!_enabled || string.IsNullOrWhiteSpace(username)) return true;
+        if (string.IsNullOrWhiteSpace(username)) return true;
+        if (!_enabled) return await SendNowAsync([], title, body, notifId, target, RecipientScope(username));
         var tokens = await LoadTokensAsync(
             "SELECT token FROM hr_device_tokens WHERE lower(username)=lower(@u)", ("@u", username!));
-        return await SendNowAsync(tokens, title, body, notifId, target);
+        return await SendNowAsync(tokens, title, body, notifId, target, RecipientScope(username));
     }
 
     internal async Task<bool> DispatchAllAsync(string title, string body, string notifId, string? target)
     {
-        if (!_enabled) return true;
+        if (!_enabled) return await SendNowAsync([], title, body, notifId, target, "");
         var tokens = await LoadTokensAsync("SELECT token FROM hr_device_tokens");
-        return await SendNowAsync(tokens, title, body, notifId, target);
+        return await SendNowAsync(tokens, title, body, notifId, target, "");
     }
 
     internal async Task<bool> DispatchAdminsAsync(string title, string body, string notifId, string? target)
     {
-        if (!_enabled) return true;
+        if (!_enabled) return await SendNowAsync([], title, body, notifId, target, "");
         var tokens = await LoadTokensAsync("""
             SELECT dt.token FROM hr_device_tokens dt
             JOIN app_users u ON lower(u.username) = lower(dt.username)
             WHERE u.role = 'admin' AND u.is_active = TRUE AND COALESCE(u.is_deleted, FALSE) = FALSE
             """);
-        return await SendNowAsync(tokens, title, body, notifId, target);
+        return await SendNowAsync(tokens, title, body, notifId, target, "");
     }
 
     /// <summary>Đẩy tới nhân viên theo employeeId (tra username qua kết nối sẵn có).</summary>
     public async Task SendToEmployeeAsync(NpgsqlConnection conn, Guid employeeId, string title, string body, string notifId, string? target = null)
     {
-        if (!_enabled) return;
         var username = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
             .With("@id", employeeId).ExecuteScalarAsync() as string;
         await SendToUserAsync(username, title, body, notifId, target);
@@ -157,6 +182,7 @@ public sealed class PushService
             ["caller"] = fromUsername,
             ["caller_name"] = callerName,
             ["media"] = media,
+            ["recipient_scope"] = RecipientScope(toUsername),
         });
     }
 
@@ -171,6 +197,7 @@ public sealed class PushService
             ["type"] = "call_cancel",
             ["call_id"] = callId,
             ["caller"] = fromUsername, // "from" là khóa bị cấm trong FCM data payload
+            ["recipient_scope"] = RecipientScope(toUsername),
         });
     }
 
@@ -202,21 +229,14 @@ public sealed class PushService
     private async Task<List<string>> LoadTokensAsync(string sql, params (string Name, object Value)[] ps)
     {
         var tokens = new List<string>();
-        try
+        await using var conn = await _db.OpenAsync();
+        var cmd = conn.Cmd(sql);
+        foreach (var (name, value) in ps) cmd.With(name, value);
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
         {
-            await using var conn = await _db.OpenAsync();
-            var cmd = conn.Cmd(sql);
-            foreach (var (name, value) in ps) cmd.With(name, value);
-            await using var r = await cmd.ExecuteReaderAsync();
-            while (await r.ReadAsync())
-            {
-                var t = r.Str(0);
-                if (!string.IsNullOrWhiteSpace(t)) tokens.Add(t);
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.LogDebug("PushService nạp token lỗi: {Msg}", ex.Message);
+            var t = r.Str(0);
+            if (!string.IsNullOrWhiteSpace(t)) tokens.Add(t);
         }
         return tokens;
     }
@@ -226,7 +246,8 @@ public sealed class PushService
     /// chỗ này nuốt lỗi, nên bên ngoài không thể biết thông báo có tới hay không.
     /// Token hỏng lẻ tẻ KHÔNG tính là hỏng: đó là thiết bị đã gỡ app, dọn đi là xong, thử lại vô ích.
     /// </summary>
-    private async Task<bool> DispatchAsync(List<string> tokens, string title, string body, string notifId, string? target)
+    private async Task<bool> DispatchAsync(List<string> tokens, string title, string body, string notifId,
+        string? target, string recipientScope)
     {
         if (tokens.Count == 0) return true;
         var ok = true;
@@ -247,11 +268,20 @@ public sealed class PushService
                         ["body"] = body,
                         ["notif_id"] = notifId,
                         ["notif_target"] = target ?? "",
+                        ["recipient_scope"] = recipientScope,
                     },
                     Android = new AndroidConfig { Priority = Priority.High },
                 };
                 var response = await FirebaseMessaging.DefaultInstance.SendEachForMulticastAsync(message);
-                if (response.FailureCount > 0) await PruneDeadTokensAsync(batch, response);
+                if (response.FailureCount > 0)
+                {
+                    await PruneDeadTokensAsync(batch, response);
+                    // Unregistered là lỗi vĩnh viễn của riêng token và đã được dọn. Mọi lỗi còn lại
+                    // có thể là FCM/mạng/payload tạm thời: giữ job pending để worker thử lại.
+                    if (response.Responses.Any(r =>
+                            !r.IsSuccess && r.Exception?.MessagingErrorCode is not MessagingErrorCode.Unregistered))
+                        ok = false;
+                }
             }
             catch (Exception ex)
             {

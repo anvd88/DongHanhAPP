@@ -1,5 +1,9 @@
 package com.ketoanapk.hr.ui
 
+import android.os.Build
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -36,6 +41,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,10 +51,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.AppPinStore
 import com.ketoanapk.hr.data.AppPinVerification
@@ -56,6 +65,7 @@ import com.ketoanapk.hr.ui.theme.Danger
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 enum class AppPinGateMode { Unlock, Manage }
 
@@ -79,6 +89,8 @@ fun AppPinGate(
     if (!visible) return
 
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val view = LocalView.current
     val store = remember(context) { AppPinStore(context) }
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -88,8 +100,11 @@ fun AppPinGate(
     var password by remember(visible, username, mode) { mutableStateOf("") }
     var error by remember(visible, username, mode) { mutableStateOf<String?>(null) }
     var busy by remember(visible, username, mode) { mutableStateOf(false) }
+    var rejectingPin by remember(visible, username, mode) { mutableStateOf(false) }
+    var rejectionEvent by remember(visible, username, mode) { mutableIntStateOf(0) }
     var lockUntil by remember(visible, username, mode) { mutableLongStateOf(0L) }
     var clock by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val pinShake = remember(visible, username, mode) { Animatable(0f) }
 
     LaunchedEffect(visible, username, mode) {
         phase = AppPinPhase.Loading
@@ -109,6 +124,25 @@ fun AppPinGate(
             delay(1_000)
         }
         clock = System.currentTimeMillis()
+    }
+
+    LaunchedEffect(rejectionEvent) {
+        if (rejectionEvent == 0) return@LaunchedEffect
+        val activeEvent = rejectionEvent
+        val distance = with(density) { 12.dp.toPx() }
+        view.performHapticFeedback(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.REJECT
+            else HapticFeedbackConstants.LONG_PRESS,
+        )
+        pinShake.snapTo(0f)
+        listOf(-1f, 1f, -0.75f, 0.75f, -0.4f, 0.4f).forEach { direction ->
+            pinShake.animateTo(direction * distance, animationSpec = tween(42))
+        }
+        pinShake.animateTo(0f, animationSpec = tween(60))
+        if (rejectionEvent == activeEvent) {
+            pin = ""
+            rejectingPin = false
+        }
     }
 
     fun finish() {
@@ -145,9 +179,10 @@ fun AppPinGate(
             AppPinPhase.Confirm -> {
                 if (value != firstPin) {
                     firstPin = null
-                    pin = ""
                     phase = AppPinPhase.Create
                     error = "Hai lần nhập chưa khớp. Vui lòng tạo mã lại."
+                    rejectingPin = true
+                    rejectionEvent++
                 } else {
                     saveConfirmedPin(value)
                 }
@@ -157,8 +192,9 @@ fun AppPinGate(
                 error = null
                 when (val result = runCatching { store.verify(username, value) }.getOrElse {
                     busy = false
-                    pin = ""
                     error = it.message ?: "Không thể xác minh mã bảo mật."
+                    rejectingPin = true
+                    rejectionEvent++
                     return@launch
                 }) {
                     AppPinVerification.Success -> {
@@ -171,14 +207,16 @@ fun AppPinGate(
                     }
                     is AppPinVerification.Incorrect -> {
                         busy = false
-                        pin = ""
                         error = "Mã không đúng. Còn ${result.attemptsBeforeLock} lần trước khi tạm khóa."
+                        rejectingPin = true
+                        rejectionEvent++
                     }
                     is AppPinVerification.Locked -> {
                         busy = false
-                        pin = ""
                         lockUntil = result.retryAtMillis
                         clock = System.currentTimeMillis()
+                        rejectingPin = true
+                        rejectionEvent++
                     }
                 }
             }
@@ -187,7 +225,7 @@ fun AppPinGate(
     }
 
     fun appendDigit(digit: Int) {
-        if (busy || phase !in listOf(AppPinPhase.Unlock, AppPinPhase.Create, AppPinPhase.Confirm)) return
+        if (busy || rejectingPin || phase !in listOf(AppPinPhase.Unlock, AppPinPhase.Create, AppPinPhase.Confirm)) return
         if (lockUntil > clock || pin.length >= 6) return
         val next = pin + digit.toString()
         pin = next
@@ -300,7 +338,11 @@ fun AppPinGate(
                         modifier = Modifier.padding(horizontal = 28.dp),
                     )
                     Spacer(Modifier.height(22.dp))
-                    PinDots(pin.length, error != null || secondsLeft > 0)
+                    PinDots(
+                        filled = pin.length,
+                        error = error != null || secondsLeft > 0,
+                        modifier = Modifier.offset { IntOffset(pinShake.value.roundToInt(), 0) },
+                    )
                     Box(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
                         contentAlignment = Alignment.Center,
@@ -329,7 +371,7 @@ fun AppPinGate(
                                 error = null
                                 phase = AppPinPhase.Recover
                             },
-                            enabled = !busy,
+                            enabled = !busy && !rejectingPin,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text("Quên mã bảo mật?", fontSize = 16.sp) }
                     } else {
@@ -337,10 +379,10 @@ fun AppPinGate(
                     }
                 }
                 NumericPinPad(
-                    enabled = !busy && secondsLeft <= 0,
+                    enabled = !busy && !rejectingPin && secondsLeft <= 0,
                     canDelete = pin.isNotEmpty(),
                     onDigit = ::appendDigit,
-                    onDelete = { if (!busy && pin.isNotEmpty()) pin = pin.dropLast(1) },
+                    onDelete = { if (!busy && !rejectingPin && pin.isNotEmpty()) pin = pin.dropLast(1) },
                 )
             }
         }
@@ -348,8 +390,8 @@ fun AppPinGate(
 }
 
 @Composable
-private fun PinDots(filled: Int, error: Boolean) {
-    Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+private fun PinDots(filled: Int, error: Boolean, modifier: Modifier = Modifier) {
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
         repeat(6) { index ->
             Surface(
                 modifier = Modifier.size(34.dp),

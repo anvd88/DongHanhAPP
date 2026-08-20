@@ -44,24 +44,44 @@ class HrMessagingService : FirebaseMessagingService() {
         val target = data["notif_target"]?.takeIf { it.isNotBlank() }
         val notifId = data["notif_id"].orEmpty()
         val kind = kindOf(notifId, target)
+        val isAppUpdate = target == APP_UPDATE_NOTIFICATION_TARGET
+        // Scope push theo hồ sơ đã xác thực gần nhất. Không có phiên thì không ghi vào một kho dùng chung
+        // mơ hồ; server sẽ gửi lại/sync fallback sau khi đăng nhập.
+        val accountId = runBlocking { TokenStore(applicationContext).cachedUser()?.username }.orEmpty()
+        if (accountId.isBlank()) return
+        val currentScope = notificationAccountScope(accountId)
+        val recipientScope = data["recipient_scope"].orEmpty().trim().lowercase()
+        if (!notificationRecipientMatches(kind, currentScope, recipientScope)) return
 
         // Tắt thông báo chỉ tắt phần HIỂN THỊ, không được tắt tín hiệu đồng bộ dữ liệu. Nếu không,
         // tin chat/voice đã tới FCM nhưng màn đang mở vẫn đứng im khi SignalR vừa reconnect.
         val pushEnabled = runBlocking { HrRepository(applicationContext).pushNotificationsEnabled() }
         if (!pushEnabled) {
-            if (kind != NotificationKind.System) AppEvents.signalDataChanged()
+            // Công tắc push chỉ tắt THÔNG BÁO KHAY. Khi app đang mở, phát hành APK vẫn phải dựng
+            // thanh/bảng cập nhật trong app; nếu bỏ sự kiện System ở đây thì người dùng không biết gì.
+            if (isAppUpdate) AppEvents.signalDataChanged("release")
+            else if (kind != NotificationKind.System) AppEvents.signalDataChanged()
             return
         }
 
         // Chạy đồng bộ để chắc chắn kho "chữ ký" đã lưu trước khi trả về (đảm bảo chống trùng).
-        val created = runBlocking {
-            NotificationCenter(applicationContext).ingestFromPush(notifId, kind, title, body, target)
+        val center = NotificationCenter(applicationContext, accountId)
+        val created = runBlocking { center.ingestFromPush(notifId, kind, title, body, target) }
+        created?.let {
+            // Khi app đang mở, update đã có banner/sheet nội bộ; không bắn thêm heads-up/tray cho
+            // cùng một bản phát hành. Vẫn lưu vào chuông để người dùng xem lại.
+            if (kind == NotificationKind.Attendance) {
+                runBlocking { center.deliverPendingSystemAttendance() }
+            } else if (!isAppUpdate || !AppForeground.isForeground) {
+                val delivered = AppNotifier.show(applicationContext, it, accountId)
+                if (delivered) runBlocking { center.markSystemDelivered(listOf(it.id)) }
+            }
         }
-        created?.let { AppNotifier.show(applicationContext, it) }
 
         // Push này báo dữ liệu đổi (đơn duyệt/từ chối, đơn mới chờ duyệt, phạt…) → nếu app đang mở,
         // làm mới NGAY màn đang xem thay vì chờ nhịp poll (đơn từ cập nhật gần như tức thì).
-        if (kind != NotificationKind.System) AppEvents.signalDataChanged()
+        if (isAppUpdate) AppEvents.signalDataChanged("release")
+        else if (kind != NotificationKind.System) AppEvents.signalDataChanged()
     }
 
     /** Lời mời gọi đến: dựng phiên "đang đổ chuông" + reo toàn màn hình (nếu app không ở tiền cảnh). */
@@ -92,6 +112,7 @@ class HrMessagingService : FirebaseMessagingService() {
         notifId.startsWith("inbox:") -> NotificationKind.Approval
         notifId.startsWith("pen:") -> NotificationKind.Penalty
         notifId.startsWith("chat:") -> NotificationKind.Chat
+        notifId.startsWith("attendance:") -> NotificationKind.Attendance
         target == "Requests" -> NotificationKind.Request
         target == "Approval" -> NotificationKind.Approval
         target == "Penalty" -> NotificationKind.Penalty

@@ -90,6 +90,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -119,7 +120,10 @@ import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.data.PayEstimate
+import com.ketoanapk.hr.data.PayLine
 import com.ketoanapk.hr.data.PayslipItem
+import com.ketoanapk.hr.data.PayslipOvertimeDay
+import com.ketoanapk.hr.data.PayslipRequirement
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
@@ -137,6 +141,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.absoluteValue
 import kotlinx.coroutines.delay
@@ -161,23 +168,41 @@ fun HomeScreen(
 
     val checkedIn = !today?.checkIn.isNullOrBlank()
     val checkedOut = !today?.checkOut.isNullOrBlank()
+    var homeClockMinute by remember { mutableLongStateOf(ServerClock.nowMillis() / 60_000L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            homeClockMinute = ServerClock.nowMillis() / 60_000L
+        }
+    }
+    val nowVietnam = remember(homeClockMinute) { ServerClock.nowVietnam() }
     // Danh sách thông báo cho hiệu ứng gõ chữ: gộp thông báo điều hành + lời nhắc admin sửa từ xa +
     // thông báo nghiệp vụ + nhắc việc + lời nhắc gắn sẵn.
-    val notices = remember(announcement, serverNotices, notifications, today, name) {
-        homeNotices(announcement, serverNotices, notifications, name, checkedIn, checkedOut)
+    val payslipRequirement = state.payslipRequirement
+    val notices = remember(announcement, serverNotices, notifications, today, name, payslipRequirement, nowVietnam) {
+        homeNotices(announcement, serverNotices, notifications, name, checkedIn, checkedOut, payslipRequirement, nowVietnam)
     }
     // Lời chào theo buổi (sáng/trưa/chiều/tối) tính từ GIỜ MÁY CHỦ, luôn đứng đầu dải thông báo. Tính
     // mỗi lần dựng lại giao diện (rẻ); chuỗi ổn định trong cùng một buổi nên không làm hiệu ứng gõ khởi
     // động lại vô cớ, và tự đổi khi qua buổi mới hoặc khi đồng hồ máy chủ vừa đồng bộ xong.
-    val greeting = timeGreetingLine(name)
-    val tickerMessages = remember(greeting, notices) { listOf(greeting) + notices }
+    val greeting = timeGreetingLine(name, nowVietnam)
+    val tickerMessages = remember(greeting, notices, payslipRequirement) {
+        prioritizedHomeTickerMessages(greeting, notices, payslipRequirement)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { NotificationTickerCard(messages = tickerMessages, onClick = onOpenNotifications) }
+        item {
+            NotificationTickerCard(
+                messages = tickerMessages,
+                onClick = if (payslipRequirement.pendingCount > 0) {
+                    { onSelect(HrDestination.MyPayslips) }
+                } else onOpenNotifications,
+            )
+        }
 
         item { CheckInCard(today) { onSelect(HrDestination.Scan) } }
 
@@ -381,8 +406,11 @@ private fun homeNotices(
     name: String,
     checkedIn: Boolean,
     checkedOut: Boolean,
+    payslipRequirement: PayslipRequirement,
+    nowVietnam: ZonedDateTime,
 ): List<String> {
     val out = ArrayList<String>()
+    payslipReminderLine(payslipRequirement)?.let(out::add)
     announcement.trim().takeIf { it.isNotEmpty() }?.let { out.add(it) }
     serverNotices.forEach { it.trim().takeIf { s -> s.isNotEmpty() }?.let(out::add) }
     notifications.asSequence()
@@ -402,8 +430,46 @@ private fun homeNotices(
         !checkedIn -> out.add("Bạn chưa chấm công vào hôm nay. Đừng quên chấm công khi bắt đầu ca nhé!")
         checkedIn && !checkedOut -> out.add("Bạn đã vào ca. Nhớ chấm công ra khi tan làm nhé!")
     }
-    out.addAll(builtInReminders())
+    out.addAll(builtInReminders(nowVietnam))
     return out.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+}
+
+/** Nội dung ưu tiên trên dải gõ chữ; hạn do server tính, app chỉ định dạng để tránh lệch múi giờ. */
+internal fun payslipReminderLine(requirement: PayslipRequirement): String? {
+    val item = requirement.payslip ?: return null
+    if (requirement.pendingCount <= 0 || item.period.isBlank()) return null
+    val periodLabel = runCatching {
+        val parts = item.period.split("-")
+        "tháng ${parts[1].toInt()}/${parts[0]}"
+    }.getOrDefault("kỳ ${item.period}")
+    val dueLabel = runCatching {
+        OffsetDateTime.parse(item.acknowledgementDueAt)
+            .atZoneSameInstant(ZoneId.of("Asia/Ho_Chi_Minh"))
+            .format(DateTimeFormatter.ofPattern("HH:mm 'ngày' dd/MM/yyyy"))
+    }.getOrDefault(item.acknowledgementDueAt)
+    val more = if (requirement.pendingCount > 1) " Bạn còn ${requirement.pendingCount} phiếu chưa xác nhận." else ""
+    return if (requirement.mustAcknowledge || item.overdue) {
+        "⛔ Phiếu lương $periodLabel đã quá hạn xác nhận. Hãy mở phiếu, kiểm tra và bấm Xác nhận để tiếp tục sử dụng ứng dụng.$more"
+    } else {
+        "📄 Phiếu lương $periodLabel đã phát hành. Vui lòng xem và xác nhận trước $dueLabel.$more"
+    }
+}
+
+/**
+ * Phiếu lương chưa xác nhận luôn là câu đầu tiên của thanh gõ chữ. Nếu để lời chào đứng trước,
+ * người dùng phải chờ hết cả chu kỳ gõ/giữ/xóa mới thấy nhắc lương và dễ tưởng là không có.
+ */
+internal fun prioritizedHomeTickerMessages(
+    greeting: String,
+    notices: List<String>,
+    requirement: PayslipRequirement,
+): List<String> {
+    val reminder = payslipReminderLine(requirement)
+    return buildList {
+        if (reminder != null) add(reminder)
+        add(greeting)
+        addAll(notices)
+    }.map(String::trim).filter(String::isNotEmpty).distinct()
 }
 
 /**
@@ -411,9 +477,10 @@ private fun homeNotices(
  * một câu theo THỨ trong tuần (tính từ GIỜ MÁY CHỦ). Admin có thể thêm lời nhắc riêng qua trang Hệ thống
  * ([AppConfig.notices]); hai nguồn được gộp & khử trùng lặp ở [homeNotices].
  */
-private fun builtInReminders(): List<String> {
+private fun builtInReminders(nowVietnam: ZonedDateTime): List<String> {
     val out = ArrayList<String>()
-    when (ServerClock.nowVietnam().dayOfWeek) {
+    weekendGreeting(nowVietnam)?.let(out::add)
+    when (nowVietnam.dayOfWeek) {
         DayOfWeek.MONDAY -> out.add("Chào tuần mới! Lên kế hoạch cho một tuần suôn sẻ nào 🚀")
         DayOfWeek.FRIDAY -> out.add("Sắp hết tuần rồi — cố lên và nhớ tổng kết công việc nhé 💪")
         else -> {}
@@ -429,9 +496,21 @@ private fun builtInReminders(): List<String> {
  * giờ Việt Nam — không lệ thuộc đồng hồ máy có thể bị chỉnh sai. Chưa đồng bộ được giờ máy chủ (mới mở
  * app/offline) thì tạm dùng giờ máy.
  */
-private fun timeGreetingLine(name: String): String {
+internal fun weekendGreeting(nowVietnam: ZonedDateTime): String? {
+    val isWeekend = nowVietnam.dayOfWeek == DayOfWeek.SUNDAY ||
+        (nowVietnam.dayOfWeek == DayOfWeek.SATURDAY && nowVietnam.hour >= 12)
+    if (!isWeekend) return null
+    val lines = listOf(
+        "Cuối tuần rồi — chúc bạn có thời gian thư giãn, vui vẻ bên gia đình 🌿",
+        "Chúc bạn một cuối tuần thật nhiều niềm vui và năng lượng tích cực ☀️",
+        "Tạm gác công việc, tận hưởng cuối tuần và nạp lại năng lượng nhé 😊",
+    )
+    return lines[nowVietnam.dayOfYear % lines.size]
+}
+
+private fun timeGreetingLine(name: String, nowVietnam: ZonedDateTime): String {
     val who = name.trim().ifEmpty { "bạn" }
-    val (part, emoji) = when (ServerClock.nowVietnam().hour) {
+    val (part, emoji) = when (nowVietnam.hour) {
         in 5..10 -> "buổi sáng" to "☀️"
         in 11..12 -> "buổi trưa" to "🌤️"
         in 13..17 -> "buổi chiều" to "🌇"
@@ -1673,7 +1752,7 @@ private fun timesheetMonthStart(period: String?): LocalDate {
     }.getOrElse { LocalDate.now().withDayOfMonth(1) }
 }
 
-private fun formatTimesheetPeriod(period: String?): String {
+internal fun formatTimesheetPeriod(period: String?): String {
     if (period.isNullOrBlank()) return "Tháng hiện tại"
     return runCatching {
         val start = timesheetMonthStart(period)
@@ -1786,10 +1865,10 @@ fun timesheetTone(status: String?): Tone {
     }
 }
 
-// ── Phiếu lương của tôi (các phiếu lương đã nhận, mỗi tháng một thẻ) ───────────
+// ── Phiếu lương của tôi ───────────────────────────────────────────────────────
 /**
- * Danh sách phiếu lương ĐÃ PHÁT HÀNH của chính nhân viên. Giao diện: mỗi kỳ (yyyy-MM) là một thẻ ghi
- * "Tháng MM/yyyy" + thực nhận; bấm vào thẻ mở chi tiết phiếu lương của đúng tháng đó (khoản cộng/trừ).
+ * Kho phiếu lương đã phát hành của chính nhân viên. Danh sách chỉ hiện kỳ và trạng thái; toàn bộ số
+ * tiền được đặt sau AppPinGate để người đứng cạnh không đọc được lương từ màn hình danh sách.
  */
 @Composable
 fun MyPayslipsScreen(
@@ -1798,7 +1877,7 @@ fun MyPayslipsScreen(
     username: String,
     onOpen: (String) -> Unit,
     onClose: () -> Unit,
-    onAcknowledge: (String) -> Unit,
+    onOpenConfirmation: (String) -> Unit,
     onInquiry: (String, String, String) -> Unit,
     onDownload: (PayslipItem) -> Unit,
     onVerifyAccountPassword: (String, (Boolean, String?) -> Unit) -> Unit,
@@ -1810,14 +1889,14 @@ fun MyPayslipsScreen(
     BackHandler(enabled = openPeriod != null) { onClose() }
     if (opened != null) {
         val previous = state.items.getOrNull(state.items.indexOf(opened)+1)
-        PayslipDetailView(opened, previous, onClose, onAcknowledge, onInquiry, onDownload)
+        PayslipDetailView(opened, previous, onClose, onOpenConfirmation, onInquiry, onDownload)
         return
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (state.loading && state.items.isEmpty()) item { LoadingBlock() }
         if (state.items.isEmpty() && !state.loading) {
@@ -1827,6 +1906,9 @@ fun MyPayslipsScreen(
                     state.error ?: "Khi quản trị phát hành phiếu lương, các tháng sẽ hiện ở đây.",
                 )
             }
+        }
+        if (state.items.isNotEmpty()) {
+            item { PayslipArchiveHeader(state.items.size) }
         }
         items(state.items, key = { it.period }) { p -> PayslipMonthCard(p) { period ->
             pendingPeriod = period
@@ -1846,7 +1928,45 @@ fun MyPayslipsScreen(
     )
 }
 
-/** Thẻ tháng: bấm vào mở phiếu lương của kỳ đó. */
+@Composable
+private fun PayslipArchiveHeader(count: Int) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    "Kho phiếu lương bảo mật",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    "$count kỳ lương đã phát hành · Xác thực để xem số tiền",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
+                )
+            }
+        }
+    }
+}
+
+/** Thẻ kỳ lương: ưu tiên trạng thái xử lý, không làm lộ số lương trước khi xác thực. */
 @Composable
 private fun PayslipMonthCard(p: PayslipItem, onOpen: (String) -> Unit) {
     Surface(
@@ -1857,145 +1977,491 @@ private fun PayslipMonthCard(p: PayslipItem, onOpen: (String) -> Unit) {
         shadowElevation = 1.dp,
         onClick = { onOpen(p.period) },
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Filled.ReceiptLong, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.ReceiptLong, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                }
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(formatTimesheetPeriod(p.period), fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        if (p.publishedAt.isBlank() && p.createdAt.isBlank()) "Phiếu đã phát hành"
+                        else "Phát hành ${formatPayslipLocalDate(p.publishedAt.ifBlank { p.createdAt })}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                val status = when {
+                    p.acknowledgedAt != null -> "Đã xác nhận" to Tone.Success
+                    p.acknowledgementOverdue -> "Quá hạn" to Tone.Danger
+                    else -> "Chờ xác nhận" to Tone.Warning
+                }
+                StatusChip(status.first, status.second)
             }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(formatTimesheetPeriod(p.period), fontSize = 17.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                Text("Thực nhận ${formatMoney(p.netPay)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                 Text(
-                    "Đã phát hành" + (if (p.createdAt.isNotBlank()) " · ${formatIsoDate(p.createdAt)}" else ""),
+                    "  Chạm để xem lương, tăng ca và khấu trừ",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
                 )
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
-/** Chi tiết một phiếu lương của một kỳ: thực nhận + ngày công/tăng ca + khoản cộng/trừ + ghi chú. */
+/** Chi tiết một kỳ lương theo cấu trúc đối soát: tổng thu − tổng trừ = thực nhận. */
 @Composable
-private fun PayslipDetailView(p: PayslipItem, previous: PayslipItem?, onClose: () -> Unit, onAcknowledge:(String)->Unit,onInquiry:(String,String,String)->Unit,onDownload:(PayslipItem)->Unit) {
-    val context=LocalContext.current
-    var inquiryLine by remember{mutableStateOf<String?>(null)};var inquiryText by remember{mutableStateOf("")}
-    DisposableEffect(Unit){val activity=generateSequence<Context>(context){(it as? ContextWrapper)?.baseContext}.filterIsInstance<Activity>().firstOrNull();activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE);onDispose{activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)}}
+private fun PayslipDetailView(
+    p: PayslipItem,
+    previous: PayslipItem?,
+    onClose: () -> Unit,
+    onOpenConfirmation: (String) -> Unit,
+    onInquiry: (String, String, String) -> Unit,
+    onDownload: (PayslipItem) -> Unit,
+) {
+    val context = LocalContext.current
+    var inquiryLine by remember { mutableStateOf<String?>(null) }
+    var inquiryText by remember { mutableStateOf("") }
+    DisposableEffect(Unit) {
+        val activity = generateSequence<Context>(context) { (it as? ContextWrapper)?.baseContext }
+            .filterIsInstance<Activity>()
+            .firstOrNull()
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+    }
+    val earnings = payslipDisplayEarnings(p)
+    val deductions = payslipDisplayDeductions(p)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    onClick = onClose,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                        contentDescription = "Quay lại",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(9.dp).size(22.dp),
-                    )
-                }
-                Column {
-                    Text("Phiếu lương", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                    Text(formatTimesheetPeriod(p.period), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+            PayslipDetailTopBar(p, onClose)
         }
-
-        // Thực nhận nổi bật.
         item {
-            HrCard {
-                Text("Thực nhận", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    formatMoney(p.netPay),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-                previous?.let { prev ->
-                    val diff=p.netPay-prev.netPay
-                    Text("So với ${formatTimesheetPeriod(prev.period)}: ${if(diff>=0)"+" else ""}${formatMoney(diff)}",style=MaterialTheme.typography.bodySmall,color=if(diff>=0) Success else Danger)
-                }
-                Text(
-                    "Tổng thu ${formatMoney(p.totalEarnings)} − Khấu trừ ${formatMoney(p.totalDeductions)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            PayslipNetHero(p, previous)
         }
-
+        item { SectionTitle("Đối soát phiếu lương", modifier = Modifier.padding(start = 4.dp)) }
+        item { PayslipEquationCard(p) }
+        item { SectionTitle("Dữ liệu công", modifier = Modifier.padding(start = 4.dp)) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                StatTile(Icons.Filled.EventAvailable, "Ngày công", "${p.workedDays}", Success, Modifier.weight(1f))
-                StatTile(Icons.Filled.Schedule, "Tăng ca", "${trimNum(p.overtimeHours)}h", InfoBlue, Modifier.weight(1f))
-            }
+            PayslipWorkSummary(p)
         }
-
-        item { SectionTitle("Khoản cộng", modifier = Modifier.padding(start = 4.dp)) }
+        item { SectionTitle("Tăng ca đã duyệt", modifier = Modifier.padding(start = 4.dp)) }
+        item { PayslipOvertimeCard(p) { inquiryLine = "Tăng ca" } }
+        item { SectionTitle("Lương & các khoản thu nhập", modifier = Modifier.padding(start = 4.dp)) }
         item {
-            HrCard {
-                if (p.earnings.isEmpty()) {
-                    Text("Không có khoản cộng.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    p.earnings.forEach { line -> Row(Modifier.fillMaxWidth()){Column(Modifier.weight(1f)){LabelValue(line.label, formatMoney(line.amount))};TextButton({inquiryLine=line.label}){Text("Hỏi")}} }
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                LabelValue("Tổng thu nhập", formatMoney(p.totalEarnings))
-            }
+            PayslipLinesCard(
+                lines = earnings,
+                emptyText = "Không có dữ liệu khoản thu nhập.",
+                totalLabel = "Tổng thu nhập",
+                total = p.totalEarnings,
+                amountTone = Success,
+                negative = false,
+                onInquiry = { inquiryLine = it },
+            )
         }
-
-        item { SectionTitle("Khoản trừ", modifier = Modifier.padding(start = 4.dp)) }
+        item { SectionTitle("Thuế, bảo hiểm & khấu trừ", modifier = Modifier.padding(start = 4.dp)) }
         item {
-            HrCard {
-                if (p.deductions.isEmpty()) {
-                    Text("Không có khoản trừ.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    p.deductions.forEach { line -> Row(Modifier.fillMaxWidth()){Column(Modifier.weight(1f)){LabelValue(line.label, "− ${formatMoney(line.amount)}")};TextButton({inquiryLine=line.label}){Text("Hỏi")}} }
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                LabelValue("Tổng khấu trừ", "− ${formatMoney(p.totalDeductions)}")
-            }
+            PayslipLinesCard(
+                lines = deductions,
+                emptyText = "Kỳ này không có khoản khấu trừ.",
+                totalLabel = "Tổng khấu trừ",
+                total = p.totalDeductions,
+                amountTone = Danger,
+                negative = true,
+                onInquiry = { inquiryLine = it },
+            )
         }
-
         if (p.note.isNotBlank()) {
+            item { SectionTitle("Ghi chú từ bộ phận lương", modifier = Modifier.padding(start = 4.dp)) }
             item {
                 HrCard {
-                    Text("Ghi chú", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(p.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(Icons.Filled.Info, contentDescription = null, tint = InfoBlue, modifier = Modifier.size(20.dp))
+                        Text(p.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    }
                 }
             }
         }
-
+        item { SectionTitle("Xác nhận & chứng từ", modifier = Modifier.padding(start = 4.dp)) }
+        item { PayslipAcknowledgementCard(p) }
         item {
-            Row(horizontalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth()){
-                OutlinedButton({onDownload(p)},Modifier.weight(1f)){Text("Tải PDF")}
-                Button({onAcknowledge(p.id)},enabled=p.acknowledgedAt==null,modifier=Modifier.weight(1f)){Text(if(p.acknowledgedAt==null)"Xác nhận đã nhận" else "Đã xác nhận")}
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { onDownload(p) }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Filled.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Tải PDF")
+                }
+                if (p.acknowledgedAt == null) {
+                    Button(onClick = { onOpenConfirmation(p.id) }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Mở màn xác nhận")
+                    }
+                }
             }
         }
         item {
             Text(
-                "Phiếu lương đã phát hành" + (if (p.createdAt.isNotBlank()) " ngày ${formatIsoDate(p.createdAt)}" else "") + ".",
+                "Nếu số liệu chưa đúng, chọn “Thắc mắc” tại đúng khoản cần kiểm tra. Bộ phận lương sẽ nhận được tên khoản và nội dung bạn gửi.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
         }
+        item { Spacer(Modifier.height(8.dp)) }
     }
-    inquiryLine?.let{line->AlertDialog(onDismissRequest={inquiryLine=null},title={Text("Thắc mắc: $line")},text={OutlinedTextField(inquiryText,{inquiryText=it},minLines=4,modifier=Modifier.fillMaxWidth())},confirmButton={Button(enabled=inquiryText.isNotBlank(),onClick={onInquiry(p.id,line,inquiryText);inquiryLine=null;inquiryText=""}){Text("Gửi")}},dismissButton={TextButton({inquiryLine=null}){Text("Hủy")}})}
+    inquiryLine?.let { line ->
+        AlertDialog(
+            onDismissRequest = { inquiryLine = null },
+            title = { Text("Thắc mắc về $line") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Mô tả điểm bạn cần bộ phận lương kiểm tra.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(
+                        value = inquiryText,
+                        onValueChange = { inquiryText = it },
+                        placeholder = { Text("Ví dụ: Số giờ hoặc đơn giá chưa đúng…") },
+                        minLines = 4,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = inquiryText.isNotBlank(),
+                    onClick = {
+                        onInquiry(p.id, line, inquiryText.trim())
+                        inquiryLine = null
+                        inquiryText = ""
+                    },
+                ) { Text("Gửi thắc mắc") }
+            },
+            dismissButton = { TextButton(onClick = { inquiryLine = null }) { Text("Hủy") } },
+        )
+    }
+}
+
+@Composable
+private fun PayslipDetailTopBar(p: PayslipItem, onClose: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            onClick = onClose,
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                contentDescription = "Quay lại",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(9.dp).size(22.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Chi tiết phiếu lương", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+            Text(formatTimesheetPeriod(p.period), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        val status = when {
+            p.acknowledgedAt != null -> "Đã xác nhận" to Tone.Success
+            p.acknowledgementOverdue -> "Quá hạn" to Tone.Danger
+            else -> "Chờ xác nhận" to Tone.Warning
+        }
+        StatusChip(status.first, status.second)
+    }
+}
+
+@Composable
+private fun PayslipNetHero(p: PayslipItem, previous: PayslipItem?) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+    ) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("THỰC NHẬN", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f), fontWeight = FontWeight.ExtraBold)
+                    Text(
+                        formatMoney(p.netPay),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.Payments, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
+                }
+            }
+            previous?.let { prev ->
+                val diff = p.netPay - prev.netPay
+                val tone = if (diff >= 0) Success else Danger
+                Text(
+                    "${if (diff >= 0) "Tăng" else "Giảm"} ${formatMoney(diff.absoluteValue)} so với ${formatTimesheetPeriod(prev.period).lowercase()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tone,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Text(
+                "Số tiền sau toàn bộ khoản thu nhập, thuế, bảo hiểm và khấu trừ.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PayslipEquationCard(p: PayslipItem) {
+    val difference = payslipBalanceDifference(p)
+    val balanced = difference.absoluteValue <= 1.0
+    HrCard {
+        PayrollEquationRow("Tổng thu nhập", formatMoney(p.totalEarnings), Success)
+        PayrollEquationRow("Tổng khấu trừ", "− ${formatMoney(p.totalDeductions)}", Danger)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        PayrollEquationRow("Thực nhận", formatMoney(p.netPay), MaterialTheme.colorScheme.primary, emphasized = true)
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = (if (balanced) Success else Warning).copy(alpha = 0.10f),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(if (balanced) Icons.Filled.CheckCircle else Icons.Filled.Info, contentDescription = null, tint = if (balanced) Success else Warning, modifier = Modifier.size(18.dp))
+                Text(
+                    if (balanced) "Số liệu đã khớp: tổng thu − tổng trừ = thực nhận."
+                    else "Có chênh lệch ${formatMoney(difference.absoluteValue)} cần bộ phận lương kiểm tra.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PayrollEquationRow(label: String, value: String, color: Color, emphasized: Boolean = false) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = if (emphasized) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        Text(value, style = if (emphasized) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleSmall, color = color, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.End)
+    }
+}
+
+@Composable
+private fun PayslipWorkSummary(p: PayslipItem) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            PayrollWorkMetric(Icons.Filled.EventAvailable, "Ngày công", trimNum(p.workedDays.toDouble()), Success, Modifier.weight(1f))
+            PayrollWorkMetric(Icons.Filled.Timer, "Giờ làm", if (p.totalWorkedHours > 0) "${trimNum(p.totalWorkedHours)}h" else "--", Color(0xFF0D9488), Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            PayrollWorkMetric(Icons.Filled.PersonOff, "Ngày vắng", p.absentDays.toString(), Danger, Modifier.weight(1f))
+            PayrollWorkMetric(Icons.Filled.Schedule, "Đi muộn", "${p.lateDays} ngày", Warning, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun PayrollWorkMetric(icon: ImageVector, label: String, value: String, accent: Color, modifier: Modifier = Modifier) {
+    Surface(modifier = modifier, shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(21.dp))
+            Text(value, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.ExtraBold)
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun PayslipOvertimeCard(p: PayslipItem, onInquiry: () -> Unit) {
+    val rate = payslipResolvedOvertimeRate(p)
+    HrCard {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(modifier = Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(InfoBlue.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Schedule, contentDescription = null, tint = InfoBlue, modifier = Modifier.size(22.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("${trimNum(p.overtimeHours)} giờ tăng ca", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.ExtraBold)
+                Text(if (rate > 0) "Đơn giá ${formatMoney(rate)}/giờ" else "Chưa có thông tin đơn giá", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(formatMoney(p.overtimePay), style = MaterialTheme.typography.titleMedium, color = InfoBlue, fontWeight = FontWeight.ExtraBold)
+        }
+        if (p.overtimeDays.isEmpty()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Text(
+                if (p.overtimeHours > 0) "Phiếu cũ chỉ lưu tổng giờ tăng ca, chưa có chi tiết từng ngày."
+                else "Kỳ này không có ngày tăng ca được duyệt.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            p.overtimeDays.forEachIndexed { index, day ->
+                if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f))
+                PayslipOvertimeDayRow(day, rate)
+            }
+        }
+        TextButton(onClick = onInquiry, modifier = Modifier.align(Alignment.End)) { Text("Thắc mắc về tăng ca") }
+    }
+}
+
+@Composable
+private fun PayslipOvertimeDayRow(day: PayslipOvertimeDay, rate: Double) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(formatIsoDate(day.date), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+            Text(
+                "${payrollClock(day.checkIn)} → ${payrollClock(day.checkOut)} · ${formatMinutes(day.minutes)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (rate > 0) {
+            Text(formatMoney(rate * day.minutes / 60.0), style = MaterialTheme.typography.bodyMedium, color = InfoBlue, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun PayslipLinesCard(
+    lines: List<PayLine>,
+    emptyText: String,
+    totalLabel: String,
+    total: Double,
+    amountTone: Color,
+    negative: Boolean,
+    onInquiry: (String) -> Unit,
+) {
+    HrCard {
+        if (lines.isEmpty()) {
+            Text(emptyText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            lines.forEachIndexed { index, line ->
+                if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f))
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(line.label.ifBlank { "Khoản khác" }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+                        TextButton(onClick = { onInquiry(line.label.ifBlank { totalLabel }) }) { Text("Thắc mắc") }
+                    }
+                    Text(
+                        (if (negative) "− " else "+ ") + formatMoney(line.amount.absoluteValue),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = amountTone,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(totalLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text((if (negative) "− " else "") + formatMoney(total), style = MaterialTheme.typography.titleMedium, color = amountTone, fontWeight = FontWeight.ExtraBold)
+        }
+    }
+}
+
+@Composable
+private fun PayslipAcknowledgementCard(p: PayslipItem) {
+    val acknowledged = p.acknowledgedAt != null
+    val accent = when {
+        acknowledged -> Success
+        p.acknowledgementOverdue -> Danger
+        else -> Warning
+    }
+    Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = accent.copy(alpha = 0.10f)) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(if (acknowledged) Icons.Filled.CheckCircle else Icons.Filled.Info, contentDescription = null, tint = accent, modifier = Modifier.size(24.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    when {
+                        acknowledged -> "Bạn đã xác nhận nhận phiếu"
+                        p.acknowledgementOverdue -> "Phiếu đã quá hạn xác nhận"
+                        else -> "Phiếu đang chờ bạn xác nhận"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    if (acknowledged) "Xác nhận lúc ${formatIsoDateTime(p.acknowledgedAt)}"
+                    else buildString {
+                        val published = p.publishedAt.ifBlank { p.createdAt }
+                        append("Phát hành")
+                        if (published.isNotBlank()) append(" ngày ${formatPayslipLocalDate(published)}")
+                        if (p.acknowledgementDueAt.isNotBlank())
+                            append(" · Hạn ${formatPayslipDeadline(p.acknowledgementDueAt)}")
+                        append(". Hãy kiểm tra trước khi xác nhận.")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private fun formatPayslipDeadline(value: String): String = runCatching {
+    OffsetDateTime.parse(value)
+        .atZoneSameInstant(ZoneId.of("Asia/Ho_Chi_Minh"))
+        .format(DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy"))
+}.getOrDefault(formatIsoDateTime(value))
+
+private fun formatPayslipLocalDate(value: String): String = runCatching {
+    OffsetDateTime.parse(value)
+        .atZoneSameInstant(ZoneId.of("Asia/Ho_Chi_Minh"))
+        .format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+}.getOrDefault(formatIsoDate(value))
+
+internal fun payslipDisplayEarnings(p: PayslipItem): List<PayLine> {
+    if (p.earnings.isNotEmpty()) return p.earnings
+    return buildList {
+        if (p.baseSalary != 0.0) add(PayLine("Lương cơ bản", p.baseSalary))
+        if (p.allowance != 0.0) add(PayLine("Phụ cấp", p.allowance))
+        if (p.overtimePay != 0.0) add(PayLine("Tăng ca (${trimNum(p.overtimeHours)} giờ)", p.overtimePay))
+    }
+}
+
+internal fun payslipDisplayDeductions(p: PayslipItem): List<PayLine> = when {
+    p.deductions.isNotEmpty() -> p.deductions
+    p.totalDeductions != 0.0 -> listOf(PayLine("Tổng khấu trừ", p.totalDeductions))
+    else -> emptyList()
+}
+
+internal fun payslipBalanceDifference(p: PayslipItem): Double =
+    p.totalEarnings - p.totalDeductions - p.netPay
+
+internal fun payslipResolvedOvertimeRate(p: PayslipItem): Double = when {
+    p.overtimeRate > 0 -> p.overtimeRate
+    p.overtimeHours > 0 && p.overtimePay > 0 -> p.overtimePay / p.overtimeHours
+    else -> 0.0
+}
+
+private fun payrollClock(value: String): String = when {
+    value.isBlank() -> "--"
+    value.contains('T') -> formatIsoTimeLocal(value)
+    value.length >= 5 -> value.take(5)
+    else -> value
 }

@@ -3,8 +3,12 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="datastore/ketoanapk_session.preferences_pb" />
+        <exclude domain="file" path="datastore/ketoanapk_notifications.preferences_pb" />
+        <exclude domain="file" path="request_drafts.bin" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="datastore/ketoanapk_session.preferences_pb" />
+        <exclude domain="file" path="datastore/ketoanapk_notifications.preferences_pb" />
+        <exclude domain="file" path="request_drafts.bin" />
     </device-transfer>
 </data-extraction-rules>

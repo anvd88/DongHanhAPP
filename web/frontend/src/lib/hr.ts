@@ -186,6 +186,43 @@ export interface PayslipHistoryEnvelope {
   history: PayslipHistoryEvent[];
 }
 
+export interface PublishedPayslipMonthItem {
+  id: string;
+  employeeId: string;
+  employeeCode: string;
+  employeeName: string;
+  departmentName: string;
+  locationName: string;
+  period: string;
+  overtimeHours: number;
+  totalEarnings: number;
+  totalDeductions: number;
+  netPay: number;
+  status: "Published" | "Acknowledged";
+  acknowledgedAt?: string | null;
+  updatedAt: string;
+}
+
+export interface PublishedPayslipMonthPage {
+  period: string;
+  search: string;
+  status: "all" | "pending" | "acknowledged";
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  summary: {
+    activeEmployeeCount: number;
+    publishedCount: number;
+    acknowledgedCount: number;
+    pendingAcknowledgementCount: number;
+    totalEarnings: number;
+    totalDeductions: number;
+    totalNetPay: number;
+  };
+  items: PublishedPayslipMonthItem[];
+}
+
 export interface SalaryComponent {
   label: string;
   amount: number;

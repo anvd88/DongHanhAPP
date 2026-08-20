@@ -568,6 +568,9 @@ private fun NotificationSettings(vm: HrViewModel, onBack: () -> Unit) {
                         if (systemAllowed) {
                             vm.setPushNotificationsEnabled(true)
                         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            // Ghi nhận ý định bật trước khi Android mở dialog. Nếu người dùng từ chối
+                            // rồi cấp lại trong Settings, app vẫn biết cần backfill notification còn tồn.
+                            vm.setPushNotificationsEnabled(true)
                             permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         } else {
                             vm.onNotificationPermissionDenied()
@@ -644,6 +647,7 @@ private fun PermissionCenterScreen(vm: HrViewModel, onBack: () -> Unit) {
                 granted = notificationsGranted,
                 actionLabel = if (notificationDenied) "Mở cài đặt" else "Cho phép",
                 onAction = {
+                    vm.setPushNotificationsEnabled(true)
                     if (notificationDenied || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) openAppSettings()
                     else notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 },
@@ -792,7 +796,7 @@ private fun AppVersionScreen(vm: HrViewModel, onBack: () -> Unit) {
 
         item {
             OutlinedButton(
-                onClick = { vm.checkForUpdate(context) },
+                onClick = vm::checkForUpdate,
                 enabled = !state.checkingUpdate,
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier

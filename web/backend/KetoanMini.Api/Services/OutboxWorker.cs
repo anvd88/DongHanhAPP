@@ -7,10 +7,15 @@ namespace KetoanMini.Api.Services;
 public interface IOutboxHandler
 {
     /// <summary>
-    /// Trả true nếu đã xong (kể cả trường hợp "không có gì để làm", vd chưa cấu hình Firebase hoặc
-    /// người nhận không có thiết bị nào). Trả false / ném lỗi khi HỎNG TẠM THỜI và nên thử lại.
+    /// Trả true nếu đã xong (kể cả trường hợp người nhận không có thiết bị nào). Trả false khi hỏng
+    /// tạm thời; ném <see cref="OutboxDeferredException"/> khi delivery chưa được cấu hình để hoãn mà
+    /// không tiêu retry budget.
     /// </summary>
     Task<bool> HandleAsync(OutboxMessage message, CancellationToken ct);
+}
+
+public sealed class OutboxDeferredException(string message) : Exception(message)
+{
 }
 
 /// <summary>
@@ -101,6 +106,10 @@ public sealed class OutboxWorker(
                 {
                     // Đang tắt máy chủ: KHÔNG đánh dấu hỏng. Hết hạn thuê lượt việc tự quay lại hàng chờ.
                     throw;
+                }
+                catch (OutboxDeferredException ex)
+                {
+                    await queue.DeferAsync(message.Id, ex.Message, ct);
                 }
                 catch (Exception ex)
                 {

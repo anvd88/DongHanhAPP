@@ -84,6 +84,8 @@ public static class DatabaseChangePublisher
         ("hr_request_approvals", ["hr"]),
         ("hr_request_attachments", ["hr"]),
         ("hr_approval_delegations", ["hr"]),
+        ("hr_attendance_corrections", ["attendance", "hr"]),
+        ("hr_attendance_reminders", ["attendance", "hr"]),
         ("hr_locations", ["hr"]),
         ("hr_holidays", ["hr"]),
         ("cham_cong_offline", ["attendance", "hr"]),

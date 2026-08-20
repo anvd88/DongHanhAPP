@@ -38,6 +38,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -106,7 +110,11 @@ private fun NotificationRow(n: AppNotification, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .clickable(onClick = onClick),
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                stateDescription = if (n.read) "Đã đọc" else "Chưa đọc"
+            }
+            .clickable(onClickLabel = "Mở thông báo", role = Role.Button, onClick = onClick),
         shape = RoundedCornerShape(22.dp),
         color = rowColor,
         border = BorderStroke(1.dp, if (n.read) MaterialTheme.colorScheme.outline else accent.copy(alpha = 0.35f)),

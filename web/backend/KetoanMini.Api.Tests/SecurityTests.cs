@@ -28,7 +28,7 @@ namespace KetoanMini.Api.Tests;
 ///
 /// QrLoginServiceTests là unit test thuần (không chạm DB) nên KHÔNG thuộc collection này và vẫn chạy song song.
 /// </summary>
-[CollectionDefinition(Name)]
+[CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class ApiCollection : ICollectionFixture<ApiFactory>
 {
     public const string Name = "api-db";
@@ -41,6 +41,12 @@ public sealed class ApiCollection : ICollectionFixture<ApiFactory>
 /// </summary>
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
+    // Collection-level serialization only coordinates classes inside one testhost. Developers and CI
+    // can still start several `dotnet test` processes against the same PostgreSQL test database. Hold
+    // an OS file lease for this testhost's lifetime so schema setup/cleanup cannot overlap cross-process.
+    // File handles are released by the OS even when a test process crashes.
+    private static readonly FileStream DatabaseProcessLease = AcquireDatabaseProcessLease();
+
     // Mỗi test class nhận một ApiFactory RIÊNG (IClassFixture) và các class chạy SONG SONG trên CÙNG
     // một DB test. EmpUser từng là hằng dùng chung, nên Dispose của BẤT KỲ class nào cũng xóa
     // '__test_employee__' — kể cả class không hề dùng tới — trong khi SecurityTests đang dùng dở.
@@ -54,8 +60,37 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private static readonly string ReleaseBlobDirectory =
         Path.Combine(Path.GetTempPath(), $"ketoanmini-apk-tests-{Environment.ProcessId}");
 
+    private static FileStream AcquireDatabaseProcessLease()
+    {
+        var lockPath = Path.Combine(Path.GetTempPath(), "ketoanmini-api-tests-postgres.lock");
+        var deadline = DateTime.UtcNow.AddMinutes(10);
+        while (true)
+        {
+            try
+            {
+                return new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.DeleteOnClose);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // On Windows, a competing DeleteOnClose handle may surface as access denied.
+                if (DateTime.UtcNow >= deadline)
+                    throw new TimeoutException(
+                        $"Timed out waiting for the shared PostgreSQL test lease at '{lockPath}'. " +
+                        "Another dotnet test process may still be running.", ex);
+                Thread.Sleep(250);
+            }
+        }
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        _ = DatabaseProcessLease;
         builder.UseEnvironment("Development");
         // Không ghi Windows Event Log từ TestServer: CI/sandbox không có quyền tạo event source.
         builder.ConfigureLogging(logging => logging.ClearProviders());
@@ -70,6 +105,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 ["Security:RequireHttps"] = "false",  // TestServer là http → tránh 307 redirect
                 ["Security:SessionIdleDays"] = "0",   // không để phiên test hết hạn giữa chừng
                 ["Security:KioskApiKey"] = "",        // gate kiosk tắt cho test
+                // Integration tests invoke ReconcileAsync with a fixed clock. Never let the hosted
+                // reminder worker race fixture seed/cleanup against the real wall clock.
+                ["AttendanceReminder:Enabled"] = "false",
                 ["Chat:BlobDirectory"] = ChatBlobDirectory,
                 ["Releases:BlobDirectory"] = ReleaseBlobDirectory,
                 ["QrScanner:AllowedHttpsHosts:0"] = "example.com",

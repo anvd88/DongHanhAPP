@@ -10,12 +10,10 @@ Last automated verification: 2026-07-15.
 - Every API route must explicitly select authenticated or anonymous access.
 - Approval authorization, rejection reason, and concurrent decisions are tested.
 - Audit authorization/filtering/redaction, app config, worklist, directory, schedule, survey, help, and account security have integration coverage.
-- CI performs a custom-format PostgreSQL backup, restores it into a separate database, and validates migration history.
-- Security workflow performs secret scanning and dependency audits.
 
 ## Source-complete domains
 
-All 23 requested domains have corresponding API/schema or operational implementation. The principal endpoint files are under `backend/KetoanMini.Api/Endpoints`; infrastructure evidence is in `backend/KetoanMini.Api.Tests`, `.github/workflows`, `deploy/database`, and this documentation directory.
+All 23 requested domains have corresponding API/schema or operational implementation. The principal endpoint files are under `backend/KetoanMini.Api/Endpoints`; infrastructure evidence is in `backend/KetoanMini.Api.Tests`, `deploy/database`, and this documentation directory.
 
 ## External acceptance still required before production sign-off
 

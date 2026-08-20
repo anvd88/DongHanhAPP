@@ -107,6 +107,8 @@ builder.Services.AddSingleton<OutboxQueue>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<IOutboxHandler, PushOutboxHandler>();
 builder.Services.AddHostedService<OutboxWorker>();
+builder.Services.AddSingleton<AttendanceReminderService>();
+builder.Services.AddHostedService<AttendanceReminderWorker>();
 
 // Bộ máy nhận diện khuôn mặt cho chấm công: YuNet + căn chỉnh 5 điểm + AdaFace R50 ONNX Runtime.
 // Development dựng lười ở request đầu; Production chủ động nạp lúc khởi động để kiểm chứng đủ model.
@@ -816,7 +818,11 @@ catch (Exception ex)
 }
 
 try { await RequestEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
-catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang don tu luc khoi dong: {Msg}", ex.Message); }
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "Khong khoi tao duoc bang don tu/correction/reminder bat buoc; dung khoi dong.");
+    throw;
+}
 
 // Giao viec & nghiem thu — sau hr_employees (danh sach nguoi nhan viec).
 try { await TaskAssignmentEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
@@ -826,7 +832,11 @@ try { await NotificationEndpoints.EnsureTables(app.Services.GetRequiredService<D
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang token thiet bi luc khoi dong: {Msg}", ex.Message); }
 
 try { await ShiftEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
-catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang ca lam luc khoi dong: {Msg}", ex.Message); }
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "Khong khoi tao duoc ca lam/effective attendance view bat buoc; dung khoi dong.");
+    throw;
+}
 
 try { await PenaltyEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang phat/ky luat luc khoi dong: {Msg}", ex.Message); }
@@ -864,7 +874,11 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang khao sat luc k
 
 // Bảng hàng chờ phải có TRƯỚC khi OutboxWorker chạy (worker khởi động cùng app.Run() bên dưới).
 try { await OutboxQueue.EnsureTables(app.Services.GetRequiredService<Database>()); }
-catch (Exception ex) { app.Logger.LogWarning("Không tạo được bảng hàng chờ: {Msg}", ex.Message); }
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "Không tạo được outbox bền bắt buộc; dừng khởi động để không mất thông báo.");
+    throw;
+}
 
 try { await HelpEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang FAQ tro giup luc khoi dong: {Msg}", ex.Message); }

@@ -44,10 +44,12 @@ public static class PenaltyRefundEndpoints
 
     /// <summary>Sinh một khoản hoàn tiền phạt (trạng thái chờ kế toán duyệt). Dùng khi khiếu nại được duyệt.</summary>
     public static async Task CreateAsync(NpgsqlConnection conn, Guid employeeId, Guid? penaltyId,
-        string penaltyNo, string appealRequestNo, decimal amount, string reason, string createdBy)
+        string penaltyNo, string appealRequestNo, decimal amount, string reason, string createdBy,
+        NpgsqlTransaction? tx = null)
     {
-        var no = $"HP{Convert.ToInt64(await conn.Cmd("SELECT nextval('hr_penalty_refund_seq')").ExecuteScalarAsync()):D5}";
-        await conn.Cmd("""
+        NpgsqlCommand Cmd(string sql) => tx is null ? conn.Cmd(sql) : conn.Cmd(sql, tx);
+        var no = $"HP{Convert.ToInt64(await Cmd("SELECT nextval('hr_penalty_refund_seq')").ExecuteScalarAsync()):D5}";
+        await Cmd("""
             INSERT INTO hr_penalty_refunds (id, refund_no, employee_id, penalty_id, penalty_no, appeal_request_no,
                 amount, reason, status, created_by)
             VALUES (@id, @no, @emp, @pid, @pno, @ano, @amount, @reason, 'PendingAccounting', @by)

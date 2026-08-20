@@ -96,6 +96,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.Penalty
@@ -148,18 +153,24 @@ fun RequestsScreen(vm: HrViewModel) {
         }
         creating -> {
             BackHandler { leaveCreate() }
-            CreateRequestFlow(
-                types = vm.homeState.requestTypes,
-                penalties = vm.homeState.penalties,
-                saving = vm.creatingRequest,
-                initialDraft = appealDraft,
-                initialType = requestDraftType,
-                initialValues = vm.requestDraftValues,
-                onClose = { leaveCreate() },
-                onSubmit = { type, title, payload, attachments ->
-                    vm.submitRequest(type, title, payload, attachments) { ok -> if (ok) leaveCreate() }
-                },
-            )
+            // Một deep-link mới có thể tới khi state lưu của màn Đơn từ vẫn giữ form trước đó. Key theo
+            // dữ liệu nháp để Compose dựng lại form và áp dụng chính xác ngày/hướng chấm công mới.
+            androidx.compose.runtime.key(requestDraftType, vm.requestDraftValues, appealDraft, vm.requestDraftNonce) {
+                CreateRequestFlow(
+                    types = vm.homeState.requestTypes,
+                    penalties = vm.homeState.penalties,
+                    saving = vm.creatingRequest,
+                    initialDraft = appealDraft,
+                    initialType = requestDraftType,
+                    initialValues = vm.requestDraftValues,
+                    draftAccountId = vm.currentAccountId,
+                    restoreSavedDraft = vm.requestDraftRestoreSaved,
+                    onClose = { leaveCreate() },
+                    onSubmit = { type, title, payload, attachments ->
+                        vm.submitRequest(type, title, payload, attachments) { ok -> if (ok) leaveCreate() }
+                    },
+                )
+            }
         }
         else -> RequestListView(
             state = vm.homeState,
@@ -304,6 +315,8 @@ private fun CreateRequestFlow(
     initialDraft: AppealDraft?,
     initialType: String?,
     initialValues: Map<String, String>,
+    draftAccountId: String,
+    restoreSavedDraft: Boolean,
     onClose: () -> Unit,
     onSubmit: (type: String, title: String, payload: kotlinx.serialization.json.JsonObject, attachments: List<android.net.Uri>) -> Unit,
 ) {
@@ -330,6 +343,8 @@ private fun CreateRequestFlow(
                 penalties = penalties,
                 saving = saving,
                 initialValues = draftValues,
+                draftAccountId = draftAccountId,
+                restoreSavedDraft = restoreSavedDraft,
                 // Từ nháp khiếu nại: nút quay lại thoát hẳn luồng (không có bước chọn loại để lùi về).
                 onBack = { if (initialDraft != null || initialType != null) onClose() else selectedType = null },
                 onSubmit = { title, payload, attachments -> onSubmit(chosen.type, title, payload, attachments) },
@@ -402,6 +417,8 @@ private fun RequestFormStep(
     penalties: List<Penalty>,
     saving: Boolean,
     initialValues: Map<String, String>,
+    draftAccountId: String,
+    restoreSavedDraft: Boolean,
     onBack: () -> Unit,
     onSubmit: (title: String, payload: kotlinx.serialization.json.JsonObject, attachments: List<android.net.Uri>) -> Unit,
 ) {
@@ -423,7 +440,7 @@ private fun RequestFormStep(
         }
     }
     val context = LocalContext.current
-    val draftStore = remember { RequestDraftStore(context) }
+    val draftStore = remember(draftAccountId) { RequestDraftStore(context, draftAccountId) }
     val draftScope = rememberCoroutineScope()
     var draftLoaded by remember { mutableStateOf(false) }
     val attachmentUris = remember { mutableStateListOf<android.net.Uri>() }
@@ -432,9 +449,11 @@ private fun RequestFormStep(
         attachmentUris.addAll(uris.take(8))
     }
     val signaturePoints = remember { mutableStateListOf<Offset>() }
-    LaunchedEffect(type.type) {
-        val saved = draftStore.load(type.type)
-        saved.forEach { (key, value) -> if (values[key].isNullOrBlank()) values[key] = value }
+    LaunchedEffect(type.type, draftAccountId, restoreSavedDraft) {
+        if (restoreSavedDraft) {
+            val saved = draftStore.load(type.type)
+            saved.forEach { (key, value) -> if (values[key].isNullOrBlank()) values[key] = value }
+        }
         draftLoaded = true
     }
     LaunchedEffect(values.toMap(), draftLoaded) {
@@ -899,7 +918,13 @@ private fun ChoiceChip(label: String, selected: Boolean, modifier: Modifier = Mo
     val border = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     val fg = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
     Surface(
-        modifier = modifier.height(50.dp),
+        modifier = modifier
+            .height(50.dp)
+            .semantics {
+                role = Role.RadioButton
+                this.selected = selected
+                stateDescription = if (selected) "Đã chọn" else "Chưa chọn"
+            },
         shape = RoundedCornerShape(14.dp),
         color = bg,
         border = BorderStroke(if (selected) 2.dp else 1.dp, border),

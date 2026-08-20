@@ -10,60 +10,68 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// Bảng màu thương hiệu lấy cảm hứng từ VNeID: đỏ trầm, chuyên nghiệp, dễ nhìn (không chói).
-val BrandRed = Color(0xFFC62828)
-val BrandRedDark = Color(0xFF8E1B1B)
-val BrandRedDeep = Color(0xFF6E1212)
-val BrandRedLight = Color(0xFFE05B57)
-// Dải gradient đỏ dùng cho header/đăng nhập (giống nền đỏ chuyển sắc của VNeID).
-val BrandGradientTop = Color(0xFFD1362F)
-val BrandGradientBottom = Color(0xFF9E1B1B)
+// Bảng màu thương hiệu xanh da trời. Màu chính dùng sky-700 để chữ/nút trắng vẫn đủ tương phản.
+val BrandSky = Color(0xFF0369A1)
+val BrandSkyDark = Color(0xFF075985)
+val BrandSkyDeep = Color(0xFF0C4A6E)
+val BrandSkyLight = Color(0xFF7DD3FC)
+val BrandGradientTop = Color(0xFF0EA5E9)
+val BrandGradientBottom = Color(0xFF0369A1)
+
+// Alias tương thích cho các màn cũ đang dùng màu thương hiệu trực tiếp. Danger/Warning bên dưới
+// vẫn là màu ngữ nghĩa riêng và không bị đổi sang xanh.
+val BrandRed = BrandSky
+val BrandRedDark = BrandSkyDark
+val BrandRedDeep = BrandSkyDeep
+val BrandRedLight = BrandSkyLight
 
 val Success = Color(0xFF15803D)
 val Warning = Color(0xFFB7791F)
 val Danger = Color(0xFFB42318)
-val InfoBlue = Color(0xFF2563EB)
+val InfoBlue = BrandSky
 
-// Nền tối gradient dùng chung cho các thẻ "hero" (Trang chủ, Hồ sơ).
-val HeroTop = Color(0xFF1B2A41)
-val HeroBottom = Color(0xFF0E1826)
+// Gradient xanh sâu dùng chung cho các thẻ "hero" (Trang chủ, Hồ sơ).
+val HeroTop = Color(0xFF075985)
+val HeroBottom = Color(0xFF0C4A6E)
 
 private val LightColors = lightColorScheme(
-    primary = BrandRed,
+    primary = BrandSky,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFFBE3E3),
-    onPrimaryContainer = BrandRedDeep,
-    secondary = BrandRedDark,
+    primaryContainer = Color(0xFFE0F2FE),
+    onPrimaryContainer = BrandSkyDeep,
+    secondary = BrandSky,
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFF7D9D9),
-    onSecondaryContainer = BrandRedDeep,
-    background = Color(0xFFF5F6F8),
-    onBackground = Color(0xFF1B1D21),
+    secondaryContainer = Color(0xFFBAE6FD),
+    onSecondaryContainer = BrandSkyDeep,
+    background = Color(0xFFF0F9FF),
+    onBackground = Color(0xFF0F2940),
     surface = Color.White,
-    onSurface = Color(0xFF1B1D21),
-    surfaceVariant = Color(0xFFF0F1F4),
-    onSurfaceVariant = Color(0xFF6B7280),
-    outline = Color(0xFFE1E4EA),
+    onSurface = Color(0xFF0F2940),
+    surfaceVariant = Color(0xFFEAF6FC),
+    onSurfaceVariant = Color(0xFF4A6575),
+    outline = Color(0xFF7893A3),
+    outlineVariant = Color(0xFFBAE6FD),
     error = Danger,
     onError = Color.White,
 )
 
 private val DarkColors = darkColorScheme(
-    primary = BrandRedLight,
-    onPrimary = Color(0xFF3A0808),
-    primaryContainer = Color(0xFF3A1414),
-    onPrimaryContainer = Color(0xFFF6C6C4),
-    secondary = BrandRedLight,
-    onSecondary = Color(0xFF3A0808),
-    secondaryContainer = Color(0xFF3A1414),
-    onSecondaryContainer = Color(0xFFF6C6C4),
-    background = Color(0xFF121316),
-    onBackground = Color(0xFFF2F4F7),
-    surface = Color(0xFF1B1D21),
-    onSurface = Color(0xFFF2F4F7),
-    surfaceVariant = Color(0xFF262A30),
-    onSurfaceVariant = Color(0xFFA6AFBD),
-    outline = Color(0xFF32373F),
+    primary = BrandSkyLight,
+    onPrimary = Color(0xFF082F49),
+    primaryContainer = BrandSkyDark,
+    onPrimaryContainer = Color(0xFFE0F2FE),
+    secondary = Color(0xFF38BDF8),
+    onSecondary = Color(0xFF082F49),
+    secondaryContainer = BrandSkyDeep,
+    onSecondaryContainer = Color(0xFFE0F2FE),
+    background = Color(0xFF061923),
+    onBackground = Color(0xFFE6F6FD),
+    surface = Color(0xFF0B2533),
+    onSurface = Color(0xFFE6F6FD),
+    surfaceVariant = Color(0xFF12394B),
+    onSurfaceVariant = Color(0xFFB5D4E2),
+    outline = Color(0xFF4D778A),
+    outlineVariant = Color(0xFF2C586B),
     error = Color(0xFFE57373),
     onError = Color(0xFF2A0A08),
 )

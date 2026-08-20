@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.ketoanapk.hr.data.PortalAbout
 import com.ketoanapk.hr.data.PortalPost
 import com.ketoanapk.hr.ui.theme.BrandRed
+import com.ketoanapk.hr.ui.theme.Danger
 import com.ketoanapk.hr.ui.theme.InfoBlue
 import com.ketoanapk.hr.ui.theme.Warning
 import java.time.LocalDate
@@ -271,7 +272,7 @@ private fun FeaturedEventCard(post: PortalPost, onClick: () -> Unit) {
 /** Nhãn đếm ngược "Còn X ngày" / "Hôm nay" / "Ngày mai". Đỏ khi sắp tới gần (≤7 ngày). */
 @Composable
 private fun CountdownBadge(cd: EventCountdown) {
-    val color = if (cd.urgent) BrandRed else InfoBlue
+    val color = if (cd.urgent) Danger else InfoBlue
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(50))

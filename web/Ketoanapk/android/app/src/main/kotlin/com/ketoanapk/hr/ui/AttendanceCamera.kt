@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Schedule
@@ -98,8 +99,6 @@ import androidx.compose.ui.util.lerp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
@@ -111,11 +110,16 @@ import com.ketoanapk.hr.ui.theme.Danger
 import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 // ── Tham số căn khung 2 bước + quét (đơn vị: tỉ lệ bề rộng mặt so với khung, thời gian ms) ──
 // "Bề rộng mặt" = chiều rộng hộp khuôn mặt / chiều rộng ảnh. To hơn = ở gần hơn.
@@ -224,9 +228,9 @@ fun AttendanceScreen(vm: HrViewModel) {
 }
 
 /**
- * Bước quét: camera toàn màn hình, chỉ ẩn tạm thanh trạng thái; thanh điều hướng Android luôn hiện.
- * Được gọi ở tầng ngoài Scaffold
- * (xem HrShell) nên không dính thanh tiêu đề/điều hướng của app. Chỉ hiện khi đang Collecting.
+ * Bước quét camera toàn màn hình nhưng giữ nguyên cả hai thanh hệ thống. Việc không ẩn/hiện lại status
+ * bar giữa camera và kết quả giữ WindowInsets ổn định, tránh tiêu đề bị đè trong khung chuyển trạng thái.
+ * Được gọi ở tầng ngoài Scaffold (xem HrShell) và chỉ hiện khi đang Collecting.
  */
 @Composable
 fun FullScreenCameraScan(
@@ -238,15 +242,18 @@ fun FullScreenCameraScan(
 ) {
     val context = LocalContext.current
     KeepScreenBrightEffect()
-    // Chỉ ẩn thanh trạng thái để camera rộng hơn; luôn giữ thanh điều hướng Android cho người dùng.
-    DisposableEffect(Unit) {
+    // Camera nằm dưới status bar trong suốt; ép icon sáng trên nền camera rồi khôi phục đúng màu cũ
+    // khi thoát. Không hide/show status bar vì thao tác đó làm inset thay đổi giữa camera và kết quả.
+    DisposableEffect(context) {
         val window = context.findActivity()?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
-        controller?.apply {
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.statusBars())
+        val previousLightStatusBars = controller?.isAppearanceLightStatusBars
+        controller?.isAppearanceLightStatusBars = false
+        onDispose {
+            if (previousLightStatusBars != null) {
+                controller?.isAppearanceLightStatusBars = previousLightStatusBars
+            }
         }
-        onDispose { controller?.show(WindowInsetsCompat.Type.statusBars()) }
     }
     Box(
         modifier = Modifier
@@ -266,7 +273,7 @@ fun FullScreenCameraScan(
             onClick = onCancel,
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .statusBarsPadding() // vẫn bấm được nếu người dùng vuốt hiện thanh trạng thái
+                .statusBarsPadding()
                 .padding(12.dp)
                 .size(44.dp)
                 .clip(CircleShape)
@@ -538,6 +545,7 @@ private fun AttendanceVerifyScreen(vm: HrViewModel) {
     val badgeDraw = remember { Animatable(0f) } // 0 = còn vòng xoay, 1 = tích/X vẽ xong
     val centerT = remember { Animatable(1f) }   // 1 = badge to & ở giữa, 0 = nhỏ & ở góc trái
     val reveal = remember { Animatable(0f) }    // 0..1 tiến độ hiện thông tin (tween ~1.5s)
+    val cornerEffect = remember { Animatable(0f) } // hiệu ứng riêng sau khi tick đã đứng yên ở góc trái
 
     // "Chữ ký" state để biết khi nào chạy lại chuỗi animation.
     val key = when (cap) {
@@ -558,7 +566,7 @@ private fun AttendanceVerifyScreen(vm: HrViewModel) {
                 busy = false
                 phase = VerifyPhase.Loading
                 badge = null
-                badgeDraw.snapTo(0f); centerT.snapTo(1f); reveal.snapTo(0f)
+                badgeDraw.snapTo(0f); centerT.snapTo(1f); reveal.snapTo(0f); cornerEffect.snapTo(0f)
             }
         } else {
             val target = if (key == "resolve:fail") VerifyBadge.Cross else VerifyBadge.Check
@@ -571,29 +579,55 @@ private fun AttendanceVerifyScreen(vm: HrViewModel) {
             confirmMode = cap is AttendanceCapture.AwaitingConfirm
             if (phase == VerifyPhase.Revealed && badge == target) {
                 // Ví dụ: xác nhận (tích) → ghi công xong (vẫn tích): chỉ đổi nội dung, không vẽ lại.
-                badgeDraw.snapTo(1f); centerT.snapTo(0f); reveal.snapTo(1f)
+                badgeDraw.snapTo(1f); centerT.snapTo(0f); reveal.snapTo(1f); cornerEffect.snapTo(1f)
             } else {
                 phase = VerifyPhase.Resolving
                 badge = target
-                badgeDraw.snapTo(0f); centerT.snapTo(1f); reveal.snapTo(0f)
+                badgeDraw.snapTo(0f); centerT.snapTo(1f); reveal.snapTo(0f); cornerEffect.snapTo(0f)
                 badgeDraw.animateTo(1f, tween(680))         // vòng tròn đặc + vẽ dấu
                 delay(160)
                 centerT.animateTo(0f, tween(520, easing = FastOutSlowInEasing)) // trượt lên góc trái
-                reveal.animateTo(1f, tween(1500))           // các dòng thông tin hiện dần
+                // Badge đã tới đích và đứng yên: hiệu ứng tick chạy song song với phần thông tin,
+                // không đổi vị trí/kích thước và không làm chậm luồng hiện có.
+                coroutineScope {
+                    launch {
+                        if (target == VerifyBadge.Check) {
+                            cornerEffect.animateTo(1f, tween(1050, easing = FastOutSlowInEasing))
+                        } else {
+                            cornerEffect.snapTo(1f)
+                        }
+                    }
+                    launch { reveal.animateTo(1f, tween(1500)) } // các dòng thông tin hiện dần
+                }
                 phase = VerifyPhase.Revealed
             }
         }
     }
 
     val loadingLabel = if (cap is AttendanceCapture.Submitting) "Đang ghi công…" else "Đang so khớp khuôn mặt…"
+    val doneResult = (cap as? AttendanceCapture.Done)?.result
+    val doneSuccess = doneResult?.status?.let(::isVerifySuccess) == true
+    val doneFailure = doneResult != null && !doneSuccess
+    // Bắt đầu đúng lúc loading chuyển sang vẽ tick; tiếp tục chạy trong lúc tick bay lên góc trái.
+    // State Done-success là đường dự phòng để nền chắc chắn vẫn còn sau khi animation kết thúc.
+    val animateDongSonBackground = !doneFailure && (badge == VerifyBadge.Check || doneSuccess)
+    val dongSonReveal = if (animateDongSonBackground) badgeDraw.value else 0f
+    val dongSonSettle = if (animateDongSonBackground) (1f - centerT.value).coerceIn(0f, 1f) else 0f
 
-    // Nền TRẮNG cho vùng nội dung (dưới thanh tiêu đề Scaffold). KHÔNG thêm statusBars/navigationBars
-    // padding: Scaffold đã trừ insets qua padding(innerPadding) ở HrApp, thêm nữa sẽ dôi kép.
+    // Nền cho vùng nội dung dưới thanh tiêu đề Scaffold. Status bar được giữ hiện xuyên suốt camera →
+    // kết quả nên padding(innerPadding) luôn ổn định và chữ không chui vào vùng thanh hệ thống.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.White),
     ) {
+        if (animateDongSonBackground && dongSonReveal > 0.30f) {
+            DongSonSuccessBackground(
+                revealProgress = dongSonReveal,
+                settleProgress = dongSonSettle,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val density = LocalDensity.current
             val cw = constraints.maxWidth.toFloat()
@@ -668,6 +702,16 @@ private fun AttendanceVerifyScreen(vm: HrViewModel) {
                 }
                 badge?.let { b ->
                     if (badgeDraw.value > 0f) {
+                        if (b == VerifyBadge.Check) {
+                            VerifySuccessEffects(
+                                draw = badgeDraw.value,
+                                modifier = Modifier.size(156.dp),
+                            )
+                            VerifySettledSuccessEffects(
+                                progress = cornerEffect.value,
+                                modifier = Modifier.size(156.dp),
+                            )
+                        }
                         VerifyBadgeCanvas(badge = b, draw = badgeDraw.value, modifier = Modifier.fillMaxSize())
                     }
                 }
@@ -685,6 +729,146 @@ private fun AttendanceVerifyScreen(vm: HrViewModel) {
                     Icon(Icons.Filled.Close, contentDescription = "Đóng", tint = VerifyInkSoft)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Hiệu ứng phụ chỉ chạy trong lúc nét tick đang được vẽ: quầng sáng, hai vòng sóng và các tia/hạt
+ * bung nhẹ quanh badge. Canvas lớn hơn badge nhưng nằm phía sau, nên dấu tích hiện tại không đổi.
+ */
+@Composable
+private fun VerifySuccessEffects(draw: Float, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        // VerifyBadgeCanvas bắt đầu vẽ tick tại 32%; bám đúng mốc đó để hiệu ứng không chạy sớm.
+        val progress = ((draw - 0.32f) / 0.68f).coerceIn(0f, 1f)
+        if (progress <= 0f || progress >= 1f) return@Canvas
+
+        val s = size.minDimension
+        val center = Offset(size.width / 2f, size.height / 2f)
+        // Badge gốc 104dp nằm giữa canvas 156dp: bán kính thật bằng đúng 1/3 cạnh canvas.
+        val badgeRadius = s / 3f
+
+        // Quầng mềm nở cùng nét tick rồi tan hết trước lúc badge bắt đầu trượt.
+        val haloAlpha = if (progress < 0.42f) {
+            progress / 0.42f
+        } else {
+            (1f - progress) / 0.58f
+        }
+        drawCircle(
+            color = VerifyGreen,
+            radius = lerp(badgeRadius * 1.04f, badgeRadius * 1.30f, progress),
+            center = center,
+            alpha = haloAlpha.coerceIn(0f, 1f) * 0.13f,
+        )
+
+        // Hai vòng sóng nối đuôi nhau để chuyển động có chiều sâu nhưng không che dấu tick.
+        fun drawWave(waveProgress: Float, maxAlpha: Float, width: Float) {
+            if (waveProgress <= 0f || waveProgress >= 1f) return
+            val appear = (waveProgress / 0.14f).coerceIn(0f, 1f)
+            val alpha = appear * (1f - waveProgress) * maxAlpha
+            drawCircle(
+                color = VerifyGreen,
+                radius = lerp(badgeRadius * 1.03f, s * 0.49f, waveProgress),
+                center = center,
+                alpha = alpha,
+                style = Stroke(width = width),
+            )
+        }
+        drawWave((progress / 0.82f).coerceIn(0f, 1f), maxAlpha = 0.44f, width = s * 0.014f)
+        drawWave(((progress - 0.16f) / 0.84f).coerceIn(0f, 1f), maxAlpha = 0.25f, width = s * 0.009f)
+
+        // Tia ngắn và hạt tròn xuất hiện lệch nhịp; các góc vẫn cố định nên animation không rung.
+        repeat(12) { index ->
+            val delay = (index % 3) * 0.045f
+            val local = ((progress - delay) / 0.76f).coerceIn(0f, 1f)
+            if (local <= 0f || local >= 1f) return@repeat
+
+            val appear = (local / 0.16f).coerceIn(0f, 1f)
+            val alpha = appear * (1f - local)
+            val angle = (2.0 * PI * index / 12.0 - PI / 2.0)
+            val dx = cos(angle).toFloat()
+            val dy = sin(angle).toFloat()
+            val innerRadius = lerp(badgeRadius * 1.12f, badgeRadius * 1.34f, local)
+            val rayLength = lerp(s * 0.075f, s * 0.035f, local)
+            val start = Offset(center.x + dx * innerRadius, center.y + dy * innerRadius)
+            val end = Offset(center.x + dx * (innerRadius + rayLength), center.y + dy * (innerRadius + rayLength))
+
+            drawLine(
+                color = VerifyGreen,
+                start = start,
+                end = end,
+                alpha = alpha * 0.72f,
+                strokeWidth = s * 0.014f,
+                cap = StrokeCap.Round,
+            )
+            if (index % 2 == 1) {
+                drawCircle(
+                    color = VerifyGreen,
+                    radius = s * lerp(0.018f, 0.008f, local),
+                    center = end,
+                    alpha = alpha * 0.58f,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Nhịp xác nhận chạy một lần sau khi tick đã tới góc trên-trái. Chỉ quầng/vòng sáng phía sau thay
+ * đổi; bản thân badge giữ nguyên vị trí và kích thước trong suốt hiệu ứng.
+ */
+@Composable
+private fun VerifySettledSuccessEffects(progress: Float, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val p = progress.coerceIn(0f, 1f)
+        if (p <= 0f || p >= 1f) return@Canvas
+
+        val s = size.minDimension
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val badgeRadius = s / 3f
+        val pulse = sin(PI * p).toFloat().coerceAtLeast(0f)
+
+        // Quầng cố định theo tâm badge: sáng lên rồi dịu xuống, không làm tick co giãn/rung.
+        drawCircle(
+            color = VerifyGreen,
+            radius = badgeRadius * 1.16f,
+            center = center,
+            alpha = pulse * 0.16f,
+        )
+
+        // Hai vòng xác nhận lan rất nhẹ sau khi badge đã dừng hẳn ở góc trái.
+        fun drawSettledRing(local: Float, maxAlpha: Float, strokeWidth: Float) {
+            if (local <= 0f || local >= 1f) return
+            val alpha = sin(PI * local).toFloat().coerceAtLeast(0f) * maxAlpha
+            drawCircle(
+                color = VerifyGreen,
+                radius = lerp(badgeRadius * 1.04f, badgeRadius * 1.42f, local),
+                center = center,
+                alpha = alpha,
+                style = Stroke(width = strokeWidth),
+            )
+        }
+        drawSettledRing((p / 0.78f).coerceIn(0f, 1f), maxAlpha = 0.34f, strokeWidth = s * 0.012f)
+        drawSettledRing(((p - 0.18f) / 0.82f).coerceIn(0f, 1f), maxAlpha = 0.2f, strokeWidth = s * 0.008f)
+
+        // Sáu điểm sáng cân đối nhấp một nhịp quanh tick; tâm và góc đều cố định.
+        repeat(6) { index ->
+            val local = ((p - index * 0.025f) / 0.74f).coerceIn(0f, 1f)
+            if (local <= 0f || local >= 1f) return@repeat
+            val alpha = sin(PI * local).toFloat().coerceAtLeast(0f)
+            val angle = 2.0 * PI * index / 6.0 - PI / 2.0
+            val pointRadius = badgeRadius * 1.34f
+            val point = Offset(
+                x = center.x + cos(angle).toFloat() * pointRadius,
+                y = center.y + sin(angle).toFloat() * pointRadius,
+            )
+            drawCircle(
+                color = VerifyGreen,
+                radius = s * lerp(0.014f, 0.007f, local),
+                center = point,
+                alpha = alpha * 0.72f,
+            )
         }
     }
 }
@@ -927,6 +1111,7 @@ private fun attendanceVisual(status: String): Triple<Tone, String, ImageVector> 
     "noface" -> Triple(Tone.Warning, "Không thấy khuôn mặt", Icons.Filled.WarningAmber)
     "spoof" -> Triple(Tone.Danger, "Nghi ngờ giả mạo", Icons.Filled.ErrorOutline)
     "proxy" -> Triple(Tone.Danger, "Không phải tài khoản của bạn", Icons.Filled.ErrorOutline)
+    "payslip_required" -> Triple(Tone.Danger, "Cần xác nhận phiếu lương", Icons.Filled.Lock)
     // Nhận diện ĐÃ thành công, chỉ là để form xác nhận quá lâu — không phải lỗi khuôn mặt, nên báo
     // đúng bản chất (và ở mức nhắc nhở) thay vì rơi vào "Chưa nhận diện được".
     "expired" -> Triple(Tone.Warning, "Hết hạn xác nhận", Icons.Filled.Schedule)
