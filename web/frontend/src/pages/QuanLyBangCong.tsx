@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { CalendarClock, Download, Loader2 } from "lucide-react";
+import { ExportExcelButton, type ProgressReport } from "../components/ExportExcelButton";
 import { PageHeader } from "../components/Layout";
+import { MonthPicker } from "../components/DateField";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { TimesheetCalendar } from "../components/hr/TimesheetCalendar";
 import { EmployeePicker } from "../components/hr/EmployeePicker";
@@ -17,7 +18,6 @@ function currentMonth() {
 export function QuanLyBangCong() {
   const [month, setMonth] = useState(currentMonth());
   const [empId, setEmpId] = useState<string>("");
-  const [exporting, setExporting] = useState(false);
   const { notify } = useAppNotifications();
 
   const { data: employees } = useApi<EmployeeCard[]>("/api/hr/employees");
@@ -33,10 +33,11 @@ export function QuanLyBangCong() {
 
   const selected = useMemo(() => employees?.find((e) => e.id === empId), [employees, empId]);
 
-  async function exportExcel() {
-    setExporting(true);
+  async function exportExcel(report: ProgressReport) {
     try {
-      const blob = await api.getBlob(`/api/payroll/export?month=${month}`);
+      // Tiến trình = số byte thật đã tải về. Máy chủ dựng xong workbook mới gửi byte đầu tiên, nên
+      // quãng chờ máy chủ thanh vẫn ở chế độ "chưa đo được" chứ không chạy khống.
+      const blob = await api.getBlob(`/api/payroll/export?month=${month}`, report);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -48,8 +49,8 @@ export function QuanLyBangCong() {
       notify.success("Đã xuất file Excel bảng công + phiếu lương.", "Xuất Excel");
     } catch {
       notify.error("Không xuất được file Excel. Vui lòng thử lại.", "Xuất Excel");
-    } finally {
-      setExporting(false);
+      // false = nút bỏ qua trạng thái "Đã xuất" và quay về ngay.
+      return false;
     }
   }
 
@@ -60,24 +61,16 @@ export function QuanLyBangCong() {
         subtitle="Xem bảng công theo lịch tháng của từng nhân viên và xuất Excel toàn công ty"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-2 rounded-xl border border-[var(--glass-border)] bg-white/55 px-3 py-2 text-sm dark:bg-white/5">
-              <CalendarClock className="h-4 w-4 text-[var(--accent)]" />
-              <input
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-                className="bg-transparent text-sm text-[var(--text)] outline-none"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={exportExcel}
-              disabled={exporting}
+            <MonthPicker
+              value={month}
+              onChange={(next) => setMonth(next || currentMonth())}
+              clearable={false}
+              ariaLabel="Chọn tháng bảng công"
+            />
+            <ExportExcelButton
+              onExport={exportExcel}
               className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-60"
-            >
-              {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              Xuất Excel
-            </button>
+            />
           </div>
         }
       />

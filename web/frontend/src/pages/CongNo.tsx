@@ -7,7 +7,6 @@ import {
   BanknoteArrowDown,
   CalendarClock,
   CircleDollarSign,
-  Download,
   FileText,
   HandCoins,
   Landmark,
@@ -17,6 +16,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { DatePicker } from "../components/DateField";
+import { ExportExcelButton, type ProgressReport } from "../components/ExportExcelButton";
 import { GoodsReturnModal } from "../components/GoodsReturnModal";
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
@@ -130,14 +130,22 @@ export function CongNo() {
   const canReturn = access.can(PERM.accountingAccess);
   const [returning, setReturning] = useState<DebtSummary | null>(null);
 
-  const exportOverview = () => {
-    if (!data?.customers.length) return;
+  const exportOverview = async (report: ProgressReport) => {
+    // Trả về false để nút xuất Excel không chạy hiệu ứng "Đã xuất" khi thật ra chẳng có gì để xuất.
+    if (!data?.customers.length) return false;
     const escape = (value: unknown) =>
       String(value ?? "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;");
-    const tableRows = data.customers.map((item) => `
+    // Dựng theo lô và nhường luồng giữa các lô: tiến trình báo ra là số khách hàng ĐÃ dựng xong
+    // thật, đồng thời trình duyệt còn kịp vẽ lại thanh thay vì đứng hình tới lúc xong.
+    const customers = data.customers;
+    const rows: string[] = [];
+    const BATCH = 150;
+    for (let index = 0; index < customers.length; index += BATCH) {
+      for (const item of customers.slice(index, index + BATCH)) {
+        rows.push(`
       <tr>
         <td>${escape(item.customer.name)}</td>
         <td>${escape(item.customer.taxCode)}</td>
@@ -148,7 +156,12 @@ export function CongNo() {
         <td>${item.collectedTotal}</td>
         <td>${item.balance}</td>
         <td>${escape(statusOf(item.balance).label)}</td>
-      </tr>`).join("");
+      </tr>`);
+      }
+      report(rows.length, customers.length);
+      if (rows.length < customers.length) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const tableRows = rows.join("");
     const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>
       <table border="1"><thead><tr>
         <th>Khách hàng</th><th>Mã số thuế</th><th>Ngày đầu kỳ</th><th>Nợ đầu kỳ</th>
@@ -187,10 +200,7 @@ export function CongNo() {
             </motion.p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <GlassButton variant="soft" onClick={exportOverview} disabled={!data?.customers.length}>
-              <Download className="h-4 w-4" />
-              Xuất Excel
-            </GlassButton>
+            <ExportExcelButton variant="soft" onExport={exportOverview} disabled={!data?.customers.length} />
           {canEditOpening && selectedSummary && (
             <GlassButton variant="soft" onClick={() => setEditingOpening(selectedSummary)}>
               <Landmark className="h-4 w-4" />

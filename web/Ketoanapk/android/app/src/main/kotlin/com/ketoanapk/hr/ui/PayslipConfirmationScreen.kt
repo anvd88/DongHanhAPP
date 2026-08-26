@@ -97,7 +97,6 @@ fun PayslipConfirmationScreen(
     onInquiry: (String, String, String) -> Unit,
     onDownload: (PayslipItem) -> Unit,
     onClose: () -> Unit,
-    onVerifyAccountPassword: (String, (Boolean, String?) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -203,7 +202,6 @@ fun PayslipConfirmationScreen(
             unlocked = true
             showPin = false
         },
-        onVerifyAccountPassword = onVerifyAccountPassword,
     )
 
     if (inquiryOpen && payslip != null) {

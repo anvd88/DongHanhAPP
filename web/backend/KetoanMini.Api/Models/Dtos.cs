@@ -69,6 +69,19 @@ public record UpdateProfileRequest(string FullName, string Email);
 public record UpdateAvatarRequest(string ImageDataUrl);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record VerifyPasswordRequest(string Password);
+
+// ── Mã bảo mật 6 số của ứng dụng (lưu Ở MÁY CHỦ, thiết bị không giữ bản sao nào) ─────────────────
+/// <summary>Trạng thái mã bảo mật của chính tài khoản đang đăng nhập.</summary>
+/// <param name="HasPin">Đã tạo mã chưa (hỏi máy chủ, không phải hỏi thiết bị).</param>
+/// <param name="LockedForSeconds">Còn bao nhiêu giây bị khoá thử lại; 0 = không khoá. Trả số giây
+/// CÒN LẠI chứ không phải mốc thời gian tuyệt đối để đồng hồ điện thoại lệch cũng không sai.</param>
+/// <param name="AttemptsBeforeLock">Còn mấy lần thử trước khi bị khoá tạm.</param>
+public record AppPinStatusDto(bool HasPin, long LockedForSeconds, int AttemptsBeforeLock);
+/// <summary>Tạo mã lần đầu (bỏ trống <paramref name="CurrentPin"/>) hoặc đổi mã (phải kèm mã cũ).</summary>
+public record AppPinSetRequest(string Pin, string? CurrentPin);
+public record AppPinVerifyRequest(string Pin);
+/// <summary>Quên mã: xác minh mật khẩu tài khoản rồi xoá mã cũ để tạo mã mới.</summary>
+public record AppPinResetRequest(string Password);
 // Cài đặt đăng nhập của tài khoản: cho phép đăng nhập bản web hay không (app native luôn dùng được).
 public record AccountLoginSettingsDto(bool WebLoginEnabled);
 public record AccountLoginSettingsPatch(bool WebLoginEnabled);

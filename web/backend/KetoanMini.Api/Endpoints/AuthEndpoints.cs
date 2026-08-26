@@ -852,8 +852,12 @@ public static class AuthEndpoints
             return Results.NoContent();
         }).RequireAuthorization();
 
-        // App dùng endpoint chỉ-xác-minh này cho luồng "Quên mã bảo mật ứng dụng". Không đăng nhập
-        // lại (tránh đá phiên app hiện tại), không đổi mật khẩu và không bao giờ trả password hash.
+        // Xác minh lại mật khẩu mà KHÔNG đăng nhập lại (tránh đá phiên app hiện tại), không đổi mật
+        // khẩu và không bao giờ trả password hash.
+        //
+        // GIỮ CHO BẢN APK CŨ: từ bản chuyển mã bảo mật lên máy chủ, luồng "Quên mã bảo mật" đi qua
+        // /app-pin/reset (xác minh mật khẩu VÀ xoá mã trong cùng một lượt). Các máy chưa cập nhật vẫn
+        // gọi endpoint này nên chưa gỡ được; gỡ khi không còn bản cũ nào ngoài hiện trường.
         g.MapPost("/verify-password", async (VerifyPasswordRequest req, ClaimsPrincipal principal, Database db, HttpContext http) =>
         {
             NoStore(http);
@@ -871,6 +875,123 @@ public static class AuthEndpoints
 
             await db.RecordAudit(username, "Xác minh bảo mật", "User", username,
                 "Xác minh mật khẩu để khôi phục mã bảo mật ứng dụng.");
+            return Results.NoContent();
+        }).RequireAuthorization().RequireRateLimiting("reauth");
+
+        // ── Mã bảo mật 6 số của ứng dụng ────────────────────────────────────────────
+        // MÃ NẰM Ở MÁY CHỦ, THIẾT BỊ KHÔNG GIỮ BẢN SAO NÀO (trước đây hash + salt + bộ đếm sai nằm
+        // trong SharedPreferences của app). Nhờ vậy: (a) máy bị mất/bị lấy bản sao lưu cũng không mang
+        // theo thứ gì để dò ngoại tuyến 10^6 mã; (b) xoá dữ liệu app hay cài lại app KHÔNG reset được
+        // số lần thử sai vì bộ đếm gắn với TÀI KHOẢN; (c) hai điện thoại của cùng một người dùng chung
+        // một mã. Đánh đổi: mở khoá phải có mạng — chấp nhận được vì dữ liệu sau lớp khoá (phiếu lương,
+        // hồ sơ điện tử) vốn cũng phải tải từ máy chủ. Xem AppPinPolicy.
+
+        // Trạng thái mã của chính mình: đã tạo chưa, còn bị khoá bao lâu, còn mấy lần thử.
+        g.MapGet("/app-pin", async (ClaimsPrincipal principal, Database db, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var state = await ReadAppPinAsync(conn, username);
+            return Results.Ok(new AppPinStatusDto(
+                HasPin: state is not null,
+                LockedForSeconds: state?.LockSeconds ?? 0,
+                AttemptsBeforeLock: AppPinPolicy.AttemptsBeforeLock(state?.FailedAttempts ?? 0)));
+        }).RequireAuthorization();
+
+        // Tạo mã lần đầu, hoặc đổi mã (bắt buộc nhập đúng mã cũ — nhập sai vẫn bị tính vào bộ đếm khoá,
+        // nếu không thì đây thành đường dò mã không giới hạn đi vòng qua /verify).
+        g.MapPost("/app-pin", async (AppPinSetRequest req, ClaimsPrincipal principal, Database db, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+
+            var pin = (req.Pin ?? "").Trim();
+            if (!AppPinPolicy.IsWellFormed(pin))
+                return Results.BadRequest(new { message = "Mã bảo mật phải gồm đúng 6 chữ số.", code = "pin_invalid" });
+            if (AppPinPolicy.IsTooObvious(pin))
+                return Results.BadRequest(new
+                {
+                    message = "Mã quá dễ đoán (toàn một chữ số hoặc dãy liên tiếp). Vui lòng chọn mã khác.",
+                    code = "pin_too_obvious"
+                });
+
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var state = await ReadAppPinAsync(conn, username);
+            if (state is not null)
+            {
+                if (state.LockSeconds > 0) return AppPinLockedResult(state.LockSeconds);
+                var currentPin = (req.CurrentPin ?? "").Trim();
+                if (!AppPinPolicy.IsWellFormed(currentPin) || !PasswordHasher.Verify(currentPin, state.Hash))
+                    return await RegisterAppPinFailureAsync(conn, db, username, state.FailedAttempts, "đổi mã bảo mật");
+            }
+
+            await conn.Cmd(
+                @"INSERT INTO app_pin_codes (username, pin_hash, failed_attempts, locked_until, created_at, updated_at)
+                  VALUES (@u, @h, 0, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                  ON CONFLICT (username) DO UPDATE SET
+                      pin_hash = EXCLUDED.pin_hash,
+                      failed_attempts = 0,
+                      locked_until = NULL,
+                      updated_at = CURRENT_TIMESTAMP;")
+                .With("@u", username).With("@h", PasswordHasher.Hash(pin)).ExecuteNonQueryAsync();
+
+            await db.RecordAudit(username, state is null ? "Tạo mã bảo mật ứng dụng" : "Đổi mã bảo mật ứng dụng",
+                "Auth", username, "Mã bảo mật 6 số của ứng dụng được lưu (dạng hash Argon2id) trên máy chủ.");
+            return Results.NoContent();
+        }).RequireAuthorization().RequireRateLimiting("app-pin");
+
+        // Mở khoá: máy chủ đối chiếu hash và tự đếm số lần sai. Client KHÔNG được tự quyết mở khoá.
+        g.MapPost("/app-pin/verify", async (AppPinVerifyRequest req, ClaimsPrincipal principal, Database db, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var state = await ReadAppPinAsync(conn, username);
+            if (state is null)
+                return Results.Json(new { message = "Tài khoản chưa tạo mã bảo mật ứng dụng.", code = "pin_not_set" },
+                    statusCode: StatusCodes.Status409Conflict);
+            if (state.LockSeconds > 0) return AppPinLockedResult(state.LockSeconds);
+
+            var pin = (req.Pin ?? "").Trim();
+            if (!AppPinPolicy.IsWellFormed(pin) || !PasswordHasher.Verify(pin, state.Hash))
+                return await RegisterAppPinFailureAsync(conn, db, username, state.FailedAttempts, "mở khoá dữ liệu nhạy cảm");
+
+            await conn.Cmd(
+                @"UPDATE app_pin_codes
+                     SET failed_attempts = 0, locked_until = NULL, last_verified_at = CURRENT_TIMESTAMP
+                   WHERE username = @u")
+                .With("@u", username).ExecuteNonQueryAsync();
+            return Results.NoContent();
+        }).RequireAuthorization().RequireRateLimiting("app-pin");
+
+        // Quên mã: xác minh MẬT KHẨU TÀI KHOẢN rồi xoá mã (kèm mọi bộ đếm/khoá) để tạo lại mã mới.
+        // Gộp hai bước vào một request để client không thể "xác minh xong rồi tự xoá" ở phía nó.
+        g.MapPost("/app-pin/reset", async (AppPinResetRequest req, ClaimsPrincipal principal, Database db, HttpContext http) =>
+        {
+            NoStore(http);
+            var username = principal.Username();
+            if (string.IsNullOrWhiteSpace(username)) return Results.Unauthorized();
+            if (string.IsNullOrWhiteSpace(req.Password))
+                return Results.BadRequest(new { message = "Vui lòng nhập mật khẩu tài khoản." });
+
+            await using var conn = await db.OpenAsync(http.RequestAborted);
+            var hash = Convert.ToString(await conn.Cmd(
+                    "SELECT password_hash FROM app_users WHERE username = @u AND is_deleted = FALSE AND is_active = TRUE LIMIT 1")
+                .With("@u", username).ExecuteScalarAsync()) ?? "";
+            if (string.IsNullOrEmpty(hash)) return Results.Unauthorized();
+            if (!PasswordHasher.Verify(req.Password, hash))
+                return Results.Json(new { message = "Mật khẩu tài khoản không đúng." }, statusCode: 400);
+
+            await conn.Cmd("DELETE FROM app_pin_codes WHERE username = @u")
+                .With("@u", username).ExecuteNonQueryAsync();
+            await db.RecordAudit(username, "Đặt lại mã bảo mật ứng dụng", "Auth", username,
+                "Xác minh mật khẩu tài khoản để xoá mã bảo mật cũ và tạo mã mới.");
             return Results.NoContent();
         }).RequireAuthorization().RequireRateLimiting("reauth");
 
@@ -1048,6 +1169,60 @@ public static class AuthEndpoints
         => string.Equals(clientMode?.Trim(), "mobile_app", StringComparison.Ordinal);
 
     // Tạo bảng web-only (không đụng schema dùng chung với app desktop) lưu cờ đăng nhập web mỗi tài khoản.
+    /// <summary>Bản ghi mã bảo mật đọc từ CSDL. <c>LockSeconds</c> được tính bằng ĐỒNG HỒ MÁY CHỦ
+    /// (khoảng còn lại tính bằng giây) nên đồng hồ điện thoại lệch hay bị chỉnh tay đều vô hiệu.</summary>
+    private sealed record AppPinState(string Hash, int FailedAttempts, long LockSeconds);
+
+    private static async Task<AppPinState?> ReadAppPinAsync(NpgsqlConnection conn, string username)
+    {
+        await using var r = await conn.Cmd(
+            @"SELECT pin_hash, failed_attempts,
+                     GREATEST(0, CEIL(EXTRACT(EPOCH FROM (COALESCE(locked_until, CURRENT_TIMESTAMP) - CURRENT_TIMESTAMP))))::bigint AS lock_seconds
+              FROM app_pin_codes WHERE username = @u LIMIT 1")
+            .With("@u", username).ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new AppPinState(r.Str("pin_hash"), r.Int("failed_attempts"), r.GetInt64(r.GetOrdinal("lock_seconds")));
+    }
+
+    /// <summary>423 Locked + số giây còn lại, để app đếm ngược mà không cần đồng hồ khớp máy chủ.</summary>
+    private static IResult AppPinLockedResult(long lockSeconds) => Results.Json(new
+    {
+        message = "Đã nhập sai quá nhiều lần. Vui lòng thử lại sau.",
+        code = "pin_locked",
+        lockedForSeconds = lockSeconds
+    }, statusCode: StatusCodes.Status423Locked);
+
+    /// <summary>Ghi nhận một lần nhập sai: tăng bộ đếm của TÀI KHOẢN, khoá tạm khi tới mốc và trả về
+    /// phản hồi tương ứng (400 còn lượt / 423 đã khoá).</summary>
+    private static async Task<IResult> RegisterAppPinFailureAsync(
+        NpgsqlConnection conn, Database db, string username, int previousFailures, string context)
+    {
+        var failures = previousFailures + 1;
+        var lockFor = AppPinPolicy.LockDuration(failures);
+        var lockSeconds = (long)lockFor.TotalSeconds;
+        await conn.Cmd(
+            @"UPDATE app_pin_codes
+                 SET failed_attempts = @f,
+                     locked_until = CASE WHEN @s > 0 THEN CURRENT_TIMESTAMP + make_interval(secs => @s) ELSE NULL END,
+                     updated_at = CURRENT_TIMESTAMP
+               WHERE username = @u")
+            .With("@u", username).With("@f", failures).With("@s", (double)lockSeconds)
+            .ExecuteNonQueryAsync();
+
+        if (lockSeconds > 0)
+        {
+            await db.RecordAudit(username, "Khoá mã bảo mật ứng dụng", "Auth", username,
+                $"Nhập sai mã bảo mật {failures} lần khi {context}; tạm khoá {lockSeconds} giây.");
+            return AppPinLockedResult(lockSeconds);
+        }
+        return Results.Json(new
+        {
+            message = "Mã bảo mật không đúng.",
+            code = "pin_incorrect",
+            attemptsBeforeLock = AppPinPolicy.AttemptsBeforeLock(failures)
+        }, statusCode: StatusCodes.Status400BadRequest);
+    }
+
     private static async Task EnsureLoginSettingsTableAsync(NpgsqlConnection conn)
     {
         await conn.Cmd(

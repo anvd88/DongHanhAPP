@@ -5,7 +5,6 @@ import {
   Ban,
   CheckCircle2,
   CircleDollarSign,
-  Download,
   FileText,
   Loader2,
   Pencil,
@@ -23,7 +22,8 @@ import { Modal } from "../components/Modal";
 import { PrintPreviewModal } from "../components/PrintPreviewModal";
 import { MonthPicker } from "../components/DateField";
 import { useAppNotifications } from "../components/app-notifications-context";
-import { Button, Field, Input } from "../components/ui";
+import { ExportExcelButton, type ProgressReport } from "../components/ExportExcelButton";
+import { Button, Field, Input, buttonClasses, buttonInlineStyle } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -76,7 +76,6 @@ export function ThuChi() {
   const [printingId, setPrintingId] = useState<string | null>(null);
   const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
   const [printPreview, setPrintPreview] = useState<CashPrintableDocument | null>(null);
-  const [exporting, setExporting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [compact, setCompact] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -202,50 +201,61 @@ export function ThuChi() {
     }
   };
 
-  const printVoucher = async (frame: HTMLIFrameElement | null) => {
-    if (!printPreview) return;
+  const printVoucher = async (frame: HTMLIFrameElement | null, report: ProgressReport) => {
+    if (!printPreview) return false;
     const row = printPreview.row;
     const printWindow = frame?.contentWindow;
     if (!printWindow) {
       notify.error("Không mở được khung xem trước để in.");
-      return;
+      return false;
     }
     setPrintingId(row.id);
     try {
+      // Hai mốc có thật: (1) hộp thoại in của trình duyệt đã đóng, (2) máy chủ đã ghi nhận phát hành.
       printWindow.focus();
       printWindow.print();
+      report(1, 2);
       await api.put(`/api/cash-vouchers/${row.id}/issued`);
+      report(2, 2);
       setPrintPreview(null);
       reload({ silent: true });
     } catch (printError) {
       notify.error(printError instanceof Error ? printError.message : "Không in được phiếu.");
+      return false;
     } finally {
       setPrintingId(null);
     }
   };
 
-  const exportExcel = async () => {
+  const exportExcel = async (report: ProgressReport) => {
     if (!monthRows.length) {
       notify.info(`Không có phiếu trong kỳ ${monthLabel(month)} để xuất Excel.`);
-      return;
+      // false = nút không chạy tiếp sang trạng thái "Đã xuất".
+      return false;
     }
-    setExporting(true);
-    try {
-      const items = await Promise.all(monthRows.map(loadPrintable));
-      const blob = new Blob([buildCashExcelHtml(items, month)], {
-        type: "application/vnd.ms-excel;charset=utf-8",
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `so-thu-chi-${month || "tat-ca"}.xls`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } finally {
-      setExporting(false);
-    }
+    // Tiến trình thật: đếm từng phiếu đã tải xong, chừa nhịp cuối cho khâu dựng file.
+    const steps = monthRows.length + 1;
+    let loaded = 0;
+    report(0, steps);
+    const items = await Promise.all(
+      monthRows.map(async (row) => {
+        const item = await loadPrintable(row);
+        loaded += 1;
+        report(loaded, steps);
+        return item;
+      }),
+    );
+    const blob = new Blob([buildCashExcelHtml(items, month)], {
+      type: "application/vnd.ms-excel;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `so-thu-chi-${month || "tat-ca"}.xls`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const confirmCancel = async () => {
@@ -340,10 +350,12 @@ export function ThuChi() {
             Theo dõi dòng tiền và quản lý phiếu thu, phiếu chi tập trung.
           </p>
         </div>
-        <Button variant="ghost" onClick={exportExcel} disabled={exporting}>
-          {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          Xuất sổ Excel
-        </Button>
+        <ExportExcelButton
+          onExport={exportExcel}
+          idleLabel="Xuất sổ Excel"
+          className={buttonClasses("ghost")}
+          style={buttonInlineStyle("ghost")}
+        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.6fr)]">
@@ -613,7 +625,7 @@ export function ThuChi() {
           onClose={() => {
             if (printingId !== printPreview.row.id) setPrintPreview(null);
           }}
-          onPrint={(frame) => void printVoucher(frame)}
+          onPrint={(frame, report) => printVoucher(frame, report)}
         />
       )}
 

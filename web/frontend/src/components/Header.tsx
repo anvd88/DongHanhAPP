@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import {
-  Bell,
   CalendarDays,
   ChevronDown,
   Clock3,
@@ -20,14 +18,12 @@ import { useAccess } from "../lib/access";
 import { APP_BRAND_NAME } from "../lib/branding";
 import { VerifiedBadge } from "./VerifiedBadge";
 import { EditProfileModal, ChangePasswordModal } from "./AccountModals";
-import { useChatNotifications } from "./chat-notifications-context";
+import { NotificationBell } from "./NotificationBell";
 
 export function Header({ onMenu }: { onMenu: () => void }) {
   const { user, logout } = useAuth();
   const { profile } = useAccess();
   const { theme, toggle } = useTheme();
-  const navigate = useNavigate();
-  const { unreadCount } = useChatNotifications();
   const [menuOpen, setMenuOpen] = useState(false);
   const [shiftOpen, setShiftOpen] = useState(false);
   const [modal, setModal] = useState<null | "profile" | "password">(null);
@@ -116,19 +112,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
         <Moon className="h-4 w-4" />
       </button>
 
-      <button
-        className="km-icon-button relative"
-        type="button"
-        aria-label={unreadCount ? `${unreadCount} tin nh\u1eafn ch\u01b0a \u0111\u1ecdc` : "Th\u00f4ng b\u00e1o"}
-        onClick={() => navigate("/chats")}
-      >
-        <Bell className="h-5 w-5" />
-        {unreadCount > 0 && (
-          <span className="km-notification-badge km-notification-badge--header">
-            {unreadCount > 99 ? "99+" : unreadCount}
-          </span>
-        )}
-      </button>
+      <NotificationBell />
 
       <div className="relative">
         <button

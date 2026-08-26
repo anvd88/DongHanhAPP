@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HelpCenter
@@ -91,6 +92,7 @@ import com.ketoanapk.hr.data.ReleaseInfo
 import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.RequestType
+import com.ketoanapk.hr.data.DayLog
 import com.ketoanapk.hr.data.PayEstimate
 import com.ketoanapk.hr.data.PayslipItem
 import com.ketoanapk.hr.data.PayslipRequirement
@@ -111,6 +113,7 @@ import com.ketoanapk.hr.data.CreateTaskBody
 import com.ketoanapk.hr.data.TaskCollection
 import com.ketoanapk.hr.data.WorkTask
 import com.ketoanapk.hr.data.WorkTaskDetailResult
+import com.ketoanapk.hr.data.WorkTaskHistoryResult
 import com.ketoanapk.hr.data.WorkTaskListResult
 import com.ketoanapk.hr.data.WorkTaskMeta
 import com.ketoanapk.hr.data.WorkTaskSummary
@@ -130,6 +133,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.YearMonth
 
@@ -184,6 +188,9 @@ enum class HrDestination(
     // Màn công việc DUY NHẤT (đã gộp màn "Giao việc" cũ vào đây): nhân viên thấy việc được giao +
     // đơn/chấm công cần xử lý; Thủ kho/Admin có thêm tab "Việc tôi giao" để giao & nghiệm thu.
     Tasks("Việc cần làm", "Công việc", Icons.Filled.TaskAlt),
+    // Màn RIÊNG (không phải hộp thoại) tra lại việc ĐÃ HOÀN THÀNH theo tuần/tháng. Không nằm trong
+    // homeActions: chỉ vào từ nút "Lịch sử" của màn Việc cần làm để không đẻ thêm một ô ở Trang chủ.
+    TaskHistory("Lịch sử công việc", "Lịch sử việc", Icons.Filled.FactCheck),
     Chat("Chat nội bộ", "Chat", Icons.Filled.Chat),
     Directory("Danh bạ", "Danh bạ", Icons.Filled.Contacts),
     Calls("Lịch sử cuộc gọi", "Cuộc gọi", Icons.Filled.Call),
@@ -330,6 +337,40 @@ data class WorkTasksUiState(
         summary.inboxActionable + summary.outboxReview + summary.outboxAwaitingVoucher + summary.collectionsStandalone
 }
 
+/** Khoảng thời gian của màn Lịch sử công việc. */
+enum class TaskHistoryRange(val label: String) { Week("Theo tuần"), Month("Theo tháng") }
+
+/**
+ * Trạng thái màn "Lịch sử công việc": việc ĐÃ HOÀN THÀNH trong tuần/tháng đang xem.
+ * [anchor] là một ngày bất kỳ NẰM TRONG khoảng đang xem — lùi/tiến khoảng chỉ việc dịch ngày này.
+ */
+data class TaskHistoryUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val range: TaskHistoryRange = TaskHistoryRange.Month,
+    val anchor: LocalDate = LocalDate.now(),
+    /** null = xem tất cả mọi người mình được phép thấy. */
+    val assignee: String? = null,
+    val result: WorkTaskHistoryResult? = null,
+) {
+    val from: LocalDate get() = when (range) {
+        TaskHistoryRange.Week -> anchor.with(java.time.DayOfWeek.MONDAY)
+        TaskHistoryRange.Month -> anchor.withDayOfMonth(1)
+    }
+    val to: LocalDate get() = when (range) {
+        TaskHistoryRange.Week -> from.plusDays(6)
+        TaskHistoryRange.Month -> anchor.withDayOfMonth(anchor.lengthOfMonth())
+    }
+}
+
+/** Trạng thái "nhật ký ngày" của ô ngày đang chọn trên lịch bảng công. */
+data class DayLogUiState(
+    val date: String? = null,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val data: DayLog? = null,
+)
+
 /** Trạng thái xem chi tiết một công việc (mở khi id != null). */
 data class WorkTaskDetailUiState(
     val id: String? = null,
@@ -411,10 +452,25 @@ sealed interface UpdateStage {
     data class Failed(val message: String) : UpdateStage
 }
 
+/**
+ * Nhóm thông báo hiện trên màn Cài đặt. Danh sách khoá + nhãn phải khớp `NotificationGroups.cs` ở
+ * máy chủ; máy chủ mới là nơi chốt (không ghi thông báo, không bắn push cho nhóm đã tắt).
+ */
+val NOTIFICATION_GROUPS: List<Pair<String, String>> = listOf(
+    "delivery" to "Giao hàng",
+    "collection" to "Thu tiền",
+    "accounting" to "Chứng từ & phiếu chi",
+    "work" to "Việc được giao & đơn từ",
+    "people" to "Nhân sự & chấm công",
+)
+
 data class SettingsUiState(
     val loading: Boolean = false,
     val webLoginEnabled: Boolean? = null,
     val pushNotificationsEnabled: Boolean? = null,
+    /** null = chưa tải xong. Chưa từng đặt thì máy chủ trả về bật hết. */
+    val notificationGroups: Map<String, Boolean>? = null,
+    val savingNotificationGroup: String? = null,
     val devices: List<DeviceSession> = emptyList(),
     val devicesLoading: Boolean = false,
     val checkingUpdate: Boolean = false,
@@ -650,6 +706,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     var workTaskDetail by mutableStateOf(WorkTaskDetailUiState())
         private set
     var workTaskBusy by mutableStateOf(false)
+        private set
+    var taskHistoryState by mutableStateOf(TaskHistoryUiState())
+        private set
+    // Nhật ký của ô ngày đang chọn trên lịch bảng công.
+    var dayLogState by mutableStateOf(DayLogUiState())
         private set
     var realChatState by mutableStateOf(RealChatUiState())
         private set
@@ -1095,6 +1156,35 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadPushNotificationSetting() {
         syncPushDelivery()
+        loadNotificationGroups()
+    }
+
+    fun loadNotificationGroups() {
+        viewModelScope.launch {
+            val groups = repo.notificationGroups()
+            // Không đọc được (mất mạng) thì coi như BẬT hết — đó cũng là mặc định của máy chủ; hiện
+            // "tắt hết" sẽ khiến người dùng tưởng mình đã tắt và không hiểu vì sao vẫn có thông báo.
+            settingsState = settingsState.copy(
+                notificationGroups = groups.ifEmpty { NOTIFICATION_GROUPS.associate { it.first to true } },
+            )
+        }
+    }
+
+    fun setNotificationGroup(group: String, enabled: Boolean) {
+        val before = settingsState.notificationGroups ?: return
+        settingsState = settingsState.copy(
+            notificationGroups = before + (group to enabled),
+            savingNotificationGroup = group,
+        )
+        viewModelScope.launch {
+            val saved = repo.setNotificationGroup(group, enabled)
+            settingsState = if (saved.isEmpty()) {
+                actionMessage = "Không lưu được tuỳ chọn thông báo. Vui lòng thử lại."
+                settingsState.copy(notificationGroups = before, savingNotificationGroup = null)
+            } else {
+                settingsState.copy(notificationGroups = saved, savingNotificationGroup = null)
+            }
+        }
     }
 
     fun refreshPushPermissionState() {
@@ -1378,7 +1468,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 user.can(AppPermissions.PenaltyManage),
                 attendanceSheets = attendanceSheets,
                 nowVietnam = nowVietnam,
-            )
+            ) +
+                // Hộp thư trên máy chủ: nguồn của mọi thông báo nghiệp vụ dùng chung với web (giao
+                // hàng, thu tiền, chứng từ…). Trộn ở đây nên app không cần biết từng nghiệp vụ một.
+                center.ingestFromServer(repo.notificationFeed())
             if (repo.pushNotificationsEnabled() && hasNotificationPermission()) {
                 val delivered = fresh.filter { it.kind != com.ketoanapk.hr.data.NotificationKind.Attendance }.filter {
                     AppNotifier.show(getApplication<Application>(), it, user.username)
@@ -1424,9 +1517,14 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun markNotificationRead(id: String) {
         val center = notificationCenter
+        // Tra serverId TRƯỚC khi đánh dấu: sau khi markRead chạy, dòng vẫn còn nhưng lấy từ danh sách
+        // đang hiển thị là đủ và rẻ hơn một vòng đọc DataStore nữa.
+        val serverId = notifications.firstOrNull { it.id == id }?.serverId
         viewModelScope.launch {
             val updated = center.markRead(id)
             if (center.accountScope == notificationCenter.accountScope) notifications = updated
+            // Đọc trên app thì chuông trên web cũng phải hết đỏ — cùng một hộp thư.
+            serverId?.let { repo.markServerNotificationRead(it) }
         }
     }
 
@@ -1435,6 +1533,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val updated = center.markAllRead()
             if (center.accountScope == notificationCenter.accountScope) notifications = updated
+            repo.markAllServerNotificationsRead()
         }
     }
 
@@ -1750,6 +1849,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.CashCollections -> loadCashCollections(silent = cashCollectionState.items.isNotEmpty())
             HrDestination.Portal -> if (portalState.feed == null && !portalState.loading) loadPortal(silent = false)
             HrDestination.Tasks -> refreshTasks()
+            // Lịch sử luôn tải lại: việc vừa nghiệm thu xong phải thấy ngay khi mở màn.
+            HrDestination.TaskHistory -> loadTaskHistory(silent = taskHistoryState.result != null)
             HrDestination.Chat -> {
                 chatTab = ChatTab.Conversations // vào mini app Chat luôn bắt đầu ở tab Hội thoại
                 if (realChatState.conversations.isEmpty()) refreshChat()
@@ -1782,6 +1883,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.CashCollections -> loadCashCollections(silent = cashCollectionState.items.isNotEmpty())
             HrDestination.Portal -> loadPortal(silent = false)
             HrDestination.Tasks -> refreshTasks()
+            HrDestination.TaskHistory -> loadTaskHistory()
             HrDestination.Chat -> refreshChat()
             HrDestination.Directory -> refreshDirectory()
             HrDestination.Calls -> refreshCallHistory()
@@ -1889,6 +1991,67 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             // Metadata (danh sách người nhận) chỉ cần cho người có quyền giao.
             if (workTasksState.canAssign && workTasksState.meta == null)
                 runCatching { repo.workTaskMeta() }.onSuccess { workTasksState = workTasksState.copy(meta = it) }
+        }
+    }
+
+    // ── Lịch sử việc đã hoàn thành ───────────────────────────────────────────────
+    /** Mở màn Lịch sử công việc (màn riêng, có nút Back về màn Việc cần làm). */
+    fun openTaskHistory() = select(HrDestination.TaskHistory)
+
+    fun setTaskHistoryRange(range: TaskHistoryRange) {
+        if (taskHistoryState.range == range) return
+        taskHistoryState = taskHistoryState.copy(range = range)
+        loadTaskHistory()
+    }
+
+    /** Lùi/tiến một tuần hoặc một tháng, tuỳ khoảng đang chọn. */
+    fun shiftTaskHistory(offset: Int) {
+        val state = taskHistoryState
+        val anchor = when (state.range) {
+            TaskHistoryRange.Week -> state.anchor.plusWeeks(offset.toLong())
+            TaskHistoryRange.Month -> state.anchor.plusMonths(offset.toLong())
+        }
+        taskHistoryState = state.copy(anchor = anchor)
+        loadTaskHistory()
+    }
+
+    fun setTaskHistoryAssignee(username: String?) {
+        taskHistoryState = taskHistoryState.copy(assignee = username)
+        loadTaskHistory()
+    }
+
+    fun loadTaskHistory(silent: Boolean = false) {
+        if (authState !is AuthState.SignedIn) return
+        val state = taskHistoryState
+        val from = state.from.toString()
+        val to = state.to.toString()
+        val assignee = state.assignee
+        viewModelScope.launch {
+            if (!silent) taskHistoryState = taskHistoryState.copy(loading = true, error = null)
+            runCatching { repo.workTaskHistory(from, to, assignee) }
+                .onSuccess { res ->
+                    // Bỏ qua kết quả đã cũ: người dùng bấm lùi/tiến nhanh hơn tốc độ mạng.
+                    if (taskHistoryState.from.toString() == from &&
+                        taskHistoryState.to.toString() == to &&
+                        taskHistoryState.assignee == assignee
+                    ) taskHistoryState = taskHistoryState.copy(loading = false, error = null, result = res)
+                }
+                .onFailure { taskHistoryState = taskHistoryState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    // ── Nhật ký một ngày (ô ngày trên lịch bảng công) ────────────────────────────
+    /** Nạp mọi thứ đã xảy ra trong một ngày: việc đã làm, phạt, đơn tiền, phiếu chi. */
+    fun loadDayLog(date: String?) {
+        if (date.isNullOrBlank()) { dayLogState = DayLogUiState(); return }
+        if (authState !is AuthState.SignedIn) return
+        // Cùng ngày và đã có dữ liệu thì không gọi lại (bấm đi bấm lại một ô ngày).
+        if (dayLogState.date == date && (dayLogState.data != null || dayLogState.loading)) return
+        dayLogState = DayLogUiState(date = date, loading = true)
+        viewModelScope.launch {
+            runCatching { repo.myDayLog(date) }
+                .onSuccess { if (dayLogState.date == date) dayLogState = dayLogState.copy(loading = false, data = it) }
+                .onFailure { if (dayLogState.date == date) dayLogState = dayLogState.copy(loading = false, error = readable(it)) }
         }
     }
 
@@ -3656,19 +3819,6 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { repo.changePassword(current, next) }
                 .onSuccess { actionMessage = "Đã đổi mật khẩu."; onDone(true) }
                 .onFailure { actionMessage = readable(it); onDone(false) }
-        }
-    }
-
-    /** Xác minh mật khẩu hiện tại trước khi xóa PIN cục bộ trong luồng "Quên mã bảo mật". */
-    fun verifyAccountPassword(password: String, onDone: (Boolean, String?) -> Unit) {
-        if (password.isBlank()) {
-            onDone(false, "Vui lòng nhập mật khẩu tài khoản.")
-            return
-        }
-        viewModelScope.launch {
-            runCatching { repo.verifyPassword(password) }
-                .onSuccess { onDone(true, null) }
-                .onFailure { onDone(false, readable(it)) }
         }
     }
 

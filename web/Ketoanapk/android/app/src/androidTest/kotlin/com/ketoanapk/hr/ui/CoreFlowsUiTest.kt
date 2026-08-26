@@ -50,7 +50,6 @@ class CoreFlowsUiTest {
                     onOpenConfirmation = {},
                     onInquiry = { _, _, _ -> },
                     onDownload = {},
-                    onVerifyAccountPassword = { _, result -> result(true, null) },
                 )
             }
         }

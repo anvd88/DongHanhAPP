@@ -29,10 +29,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -375,13 +372,17 @@ private fun CreateCashCollectionDialog(
 ) {
     var customer by remember(customers) { mutableStateOf(customers.firstOrNull()) }
     var driver by remember(drivers) { mutableStateOf(drivers.firstOrNull()) }
-    var customerOpen by remember { mutableStateOf(false) }
-    var driverOpen by remember { mutableStateOf(false) }
     var amount by remember { mutableStateOf("") }
     var scheduled by remember { mutableStateOf(LocalDate.now().toString()) }
     var dueDate by remember { mutableStateOf(LocalDate.now().plusDays(1).toString()) }
     var note by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    val customerOptions = remember(customers) {
+        customers.map { PickOption(id = it.id, label = it.name, sub = it.phone, keywords = it.phone) }
+    }
+    val driverOptions = remember(drivers) {
+        drivers.map { PickOption(id = it.id, label = it.name, sub = it.position.ifBlank { it.employeeCode }, keywords = it.employeeCode) }
+    }
 
     Dialog(onDismissRequest = onClose) {
         Surface(shape = RoundedCornerShape(24.dp), tonalElevation = 8.dp, modifier = Modifier.fillMaxWidth().heightIn(max = 720.dp)) {
@@ -392,24 +393,41 @@ private fun CreateCashCollectionDialog(
                 }
                 LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
-                        ExposedDropdownMenuBox(expanded = customerOpen, onExpandedChange = { customerOpen = it }) {
-                            OutlinedTextField(customer?.let { "${it.name}${if (it.phone.isNotBlank()) " · ${it.phone}" else ""}" }.orEmpty(), {}, readOnly = true, label = { Text("Khách hàng *") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(customerOpen) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                            ExposedDropdownMenu(expanded = customerOpen, onDismissRequest = { customerOpen = false }) {
-                                customers.forEach { row -> DropdownMenuItem(text = { Text(row.name) }, onClick = { customer = row; customerOpen = false }) }
-                            }
-                        }
+                        // Danh sách khách hàng dài → ô chọn có tìm kiếm (gõ tên/số điện thoại, không dấu vẫn ra).
+                        SelectField(
+                            label = "Khách hàng *",
+                            selectedId = customer?.id,
+                            options = customerOptions,
+                            onPick = { picked -> customer = customers.firstOrNull { it.id == picked.id } },
+                            searchHint = "Tìm theo tên hoặc số điện thoại",
+                            emptyText = "Chưa có khách hàng nào để chọn.",
+                            showAvatar = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                     item {
-                        ExposedDropdownMenuBox(expanded = driverOpen, onExpandedChange = { driverOpen = it }) {
-                            OutlinedTextField(driver?.let { "${it.name} · ${it.position.ifBlank { it.employeeCode }}" }.orEmpty(), {}, readOnly = true, label = { Text("Tài xế *") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(driverOpen) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                            ExposedDropdownMenu(expanded = driverOpen, onDismissRequest = { driverOpen = false }) {
-                                drivers.forEach { row -> DropdownMenuItem(text = { Text("${row.name} · ${row.position.ifBlank { row.employeeCode }}") }, onClick = { driver = row; driverOpen = false }) }
-                            }
-                        }
+                        SelectField(
+                            label = "Tài xế *",
+                            selectedId = driver?.id,
+                            options = driverOptions,
+                            onPick = { picked -> driver = drivers.firstOrNull { it.id == picked.id } },
+                            searchHint = "Tìm theo tên hoặc mã nhân viên",
+                            emptyText = "Chưa có tài xế nào để chọn.",
+                            showAvatar = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
-                    item { OutlinedTextField(amount, { amount = it.filter(Char::isDigit).take(15) }, label = { Text("Số tiền dự kiến *") }, supportingText = { Text(formatMoney((amount.toDoubleOrNull() ?: 0.0))) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()) }
-                    item { OutlinedTextField(scheduled, { scheduled = it }, label = { Text("Ngày đi thu (yyyy-MM-dd) *") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
-                    item { OutlinedTextField(dueDate, { dueDate = it }, label = { Text("Hạn bàn giao (yyyy-MM-dd) *") }, supportingText = { Text("Mặc định 10:00 ngày đã chọn") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                    item {
+                        MoneyField(
+                            label = "Số tiền dự kiến *",
+                            value = amount,
+                            onChange = { amount = it },
+                            supportingText = formatMoney(amount.toDoubleOrNull() ?: 0.0),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    item { DateField(label = "Ngày đi thu *", value = scheduled, onChange = { scheduled = it }, modifier = Modifier.fillMaxWidth()) }
+                    item { DateField(label = "Hạn bàn giao *", value = dueDate, onChange = { dueDate = it }, supportingText = "Mặc định 10:00 ngày đã chọn", modifier = Modifier.fillMaxWidth()) }
                     item { OutlinedTextField(note, { note = it.take(1000) }, label = { Text("Nội dung / ghi chú") }, minLines = 2, modifier = Modifier.fillMaxWidth()) }
                     item { Text("Lệnh không lưu GPS và không lưu địa chỉ khách hàng.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }

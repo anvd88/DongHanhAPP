@@ -1,7 +1,31 @@
 import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 import { Loader2 } from "lucide-react";
 
-type Variant = "primary" | "ghost" | "danger" | "soft";
+export type Variant = "primary" | "ghost" | "danger" | "soft";
+
+const BUTTON_VARIANT_CLASSES: Record<Variant, string> = {
+  primary: "shadow-lg shadow-[rgba(var(--accent-rgb),0.28)] hover:brightness-110",
+  soft: "text-[var(--accent)] hover:bg-[var(--accent-soft)]",
+  ghost: "text-[var(--text-secondary)] hover:bg-black/5 dark:hover:bg-white/10",
+  danger: "text-white bg-[var(--danger)] hover:brightness-110 shadow-lg shadow-red-500/30",
+};
+
+/** Class của <Button> — tách ra để nút khác (vd. nút có thanh tiến trình) mặc đúng bộ đồ này. */
+export function buttonClasses(variant: Variant = "primary", className = "") {
+  return `inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none ${BUTTON_VARIANT_CLASSES[variant]} ${className}`;
+}
+
+/** Phần màu đặt bằng inline style của <Button> (biến CSS, không diễn đạt được bằng class Tailwind). */
+export function buttonInlineStyle(variant: Variant = "primary"): CSSProperties | undefined {
+  if (variant === "primary") {
+    return {
+      background: "var(--btn-primary-bg)",
+      color: "var(--btn-primary-text)",
+      border: "1px solid var(--btn-primary-border)",
+    };
+  }
+  return variant === "soft" ? { background: "var(--accent-soft)" } : undefined;
+}
 
 export function Button({
   variant = "primary",
@@ -10,24 +34,12 @@ export function Button({
   children,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; loading?: boolean }) {
-  const styles: Record<Variant, string> = {
-    primary: "shadow-lg shadow-[rgba(var(--accent-rgb),0.28)] hover:brightness-110",
-    soft: "text-[var(--accent)] hover:bg-[var(--accent-soft)]",
-    ghost: "text-[var(--text-secondary)] hover:bg-black/5 dark:hover:bg-white/10",
-    danger: "text-white bg-[var(--danger)] hover:brightness-110 shadow-lg shadow-red-500/30",
-  };
   return (
     <button
       {...rest}
       disabled={rest.disabled || loading}
-      style={
-        variant === "primary"
-          ? { background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", border: "1px solid var(--btn-primary-border)" }
-          : variant === "soft"
-            ? { background: "var(--accent-soft)" }
-            : undefined
-      }
-      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none ${styles[variant]} ${className}`}
+      style={buttonInlineStyle(variant)}
+      className={buttonClasses(variant, className)}
     >
       {loading && <Loader2 className="h-4 w-4 animate-spin" />}
       {children}

@@ -144,6 +144,11 @@ public static class DatabaseChangePublisher
         ("hr_training_enrollments", ["talent"]),
         ("hr_employee_benefits", ["talent"]),
         ("hr_employee_rewards", ["talent"]),
+
+        // Hộp thư thông báo của web. Trigger phát sau khi giao dịch nghiệp vụ COMMIT, nên cái chuông
+        // không bao giờ hiện một thông báo của lần ghi đã rollback. Tín hiệu chỉ mang tên scope, mỗi
+        // máy khách tự gọi /api/notifications để lấy đúng phần của mình.
+        ("web_notifications", ["notify"]),
     ];
 
     /// <summary>Hàm trigger dùng chung: phát từng scope được truyền qua TG_ARGV.</summary>

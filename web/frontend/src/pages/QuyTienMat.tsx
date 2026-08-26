@@ -8,16 +8,14 @@ import {
   Loader2,
   PiggyBank,
   Plus,
-  ReceiptText,
   RefreshCw,
   Search,
   TrendingDown,
   TrendingUp,
-  Vault,
 } from "lucide-react";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { LiquidTabs, type LiquidTab } from "../components/glass/LiquidTabs";
-import { MonthPicker } from "../components/DateField";
+import { DateTimePicker, MonthPicker } from "../components/DateField";
 import { Modal } from "../components/Modal";
 import { CashFundBalanceCard } from "../components/CashFundBalanceCard";
 import { useAppNotifications } from "../components/app-notifications-context";
@@ -146,9 +144,6 @@ export function QuyTienMat() {
     <div className="gc-root space-y-5">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
         <div>
-          <div className="mb-1 flex items-center gap-2 text-sm font-bold text-emerald-600 dark:text-emerald-400">
-            <Vault className="h-4 w-4" /> Tiền mặt tại két
-          </div>
           <h1 className="text-[1.75rem] font-black text-[var(--gc-text)]">Quỹ tiền mặt</h1>
           <p className="mt-1 text-sm font-semibold text-[var(--gc-text-muted)]">
             Hợp nhất tiền vào từ lệnh thu, tiền ra từ phiếu chi và phiếu thu/chi nghiệp vụ — cộng bút toán ghi tay.
@@ -156,7 +151,6 @@ export function QuyTienMat() {
         </div>
         <div className="flex items-center gap-2">
           <Button variant="soft" onClick={refreshAll}><RefreshCw className="h-4 w-4" /> Làm mới</Button>
-          {canManage && <Button onClick={() => setCreating(true)}><Plus className="h-4 w-4" /> Ghi bút toán</Button>}
         </div>
       </div>
 
@@ -248,14 +242,26 @@ export function QuyTienMat() {
             </div>
           </>
         ) : (
-          <div className="gc-scroll overflow-auto">
+          <>
+            {/* Nút ghi tay nằm NGAY trong tab của nó: người dùng đang xem danh sách bút toán thủ công
+                thì việc "ghi thêm một bút toán" phải ở ngay tầm mắt, không phải ở đầu trang. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gc-border)] p-4">
+              <div className="text-sm font-semibold text-[var(--gc-text-muted)]">
+                Bút toán ghi tay dùng cho tiền ra/vào không có chứng từ nào khác trong hệ thống.
+              </div>
+              {canManage
+                ? <Button onClick={() => setCreating(true)}><Plus className="h-4 w-4" /> Tạo bút toán ghi tay</Button>
+                : <Badge color="muted">Bạn không có quyền ghi bút toán quỹ</Badge>}
+            </div>
+
+            <div className="gc-scroll overflow-auto">
             <table className="gc-table min-w-[980px]">
               <thead>
                 <tr><th>Bút toán</th><th>Thời điểm</th><th>Diễn giải</th><th>Người ghi</th><th className="text-right">Số tiền</th><th /></tr>
               </thead>
               <tbody>
                 {(manual?.entries ?? []).length === 0 ? (
-                  <tr><td colSpan={6}><EmptyState icon={<HandCoins className="h-8 w-8" />} title="Tháng này chưa có bút toán ghi tay." hint="Bút toán ghi tay dùng cho tiền ra/vào không có chứng từ nào khác trong hệ thống." /></td></tr>
+                  <tr><td colSpan={6}><EmptyState icon={<HandCoins className="h-8 w-8" />} title="Tháng này chưa có bút toán ghi tay." hint="Bấm “Tạo bút toán ghi tay” ở trên để ghi khoản tiền ra/vào đầu tiên." /></td></tr>
                 ) : (manual?.entries ?? []).map((entry) => (
                   <tr key={entry.id} className={entry.reversedAt ? "opacity-60" : ""}>
                     <td>
@@ -291,13 +297,9 @@ export function QuyTienMat() {
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
-      </GlassPanel>
-
-      <GlassPanel className="flex flex-wrap items-center gap-2 p-4 text-xs font-semibold text-[var(--gc-text-muted)]">
-        <ReceiptText className="h-4 w-4" />
-        Dòng sinh từ chứng từ không sửa được tại đây — muốn đổi số phải sửa ở đúng lệnh thu, phiếu chi hoặc phiếu thu/chi gốc.
       </GlassPanel>
 
       {creating && <ManualEntryModal onClose={() => setCreating(false)} onSaved={() => { setCreating(false); refreshAll(); }} />}
@@ -369,7 +371,11 @@ function ManualEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
           <MoneyInput value={amount} onChange={setAmount} placeholder="Ví dụ: 10.000.000" />
         </Field>
         <Field label="Thời điểm phát sinh *">
-          <Input type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
+          <DateTimePicker
+            value={occurredAt}
+            onChange={(next) => setOccurredAt(next || localDateTimeInput())}
+            className="w-full"
+          />
         </Field>
         {!isOpening && (
           <>

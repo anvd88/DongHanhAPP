@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { MotionConfig, motion } from "motion/react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CalendarDays, Download, FileText, FilterX, FileEdit, Loader2, Printer, Search, Server, TriangleAlert, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CalendarDays, FileText, FilterX, FileEdit, Loader2, Printer, Search, Server, TriangleAlert, X } from "lucide-react";
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Button as GlassButton } from "../shadcn/button";
+import { ExportExcelButton, type ProgressReport } from "../components/ExportExcelButton";
 import { Modal } from "../components/Modal";
 import { PrintPreviewModal } from "../components/PrintPreviewModal";
 import { useAppNotifications } from "../components/app-notifications-context";
@@ -274,7 +275,6 @@ export function KeToan() {
     previewUrl: string;
   } | null>(null);
   const [printingId, setPrintingId] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
   const [systemStatus, setSystemStatus] = useState<AccountingSystemStatus | null>(null);
   const [systemStatusError, setSystemStatusError] = useState("");
   const [checkingSystemStatus, setCheckingSystemStatus] = useState(true);
@@ -444,6 +444,8 @@ export function KeToan() {
       const message = e instanceof Error ? e.message : "Máy chủ không in được phiếu.";
       setPrintVoucherNoError(message);
       notify.error(message);
+      // false = nút In phiếu không chạy tiếp sang trạng thái "Đã in".
+      return false;
     } finally {
       setPrintingId(null);
       void refreshSystemStatus();
@@ -500,32 +502,38 @@ export function KeToan() {
     }
   };
 
-  const exportRangeExcel = async () => {
+  const exportRangeExcel = async (report: ProgressReport) => {
     if (!rangeRows.length) {
       notify.info(`Không có phiếu trong khoảng ${displayIsoDate(dateFrom)} – ${displayIsoDate(dateTo)} để xuất Excel.`);
-      return;
+      // false = nút không chạy tiếp sang trạng thái "Đã xuất".
+      return false;
     }
 
-    setExporting(true);
-    try {
-      const items = await Promise.all(
-        rangeRows.map((row) => loadPrintableDocument(row)),
-      );
+    // Tiến trình thật: đếm từng phiếu đã tải xong chi tiết. Chừa 1 nhịp cuối cho khâu dựng file nên
+    // tổng là số phiếu + 1 — thanh chỉ đầy khi file đã thật sự được tạo.
+    const steps = rangeRows.length + 1;
+    let loaded = 0;
+    report(0, steps);
+    const items = await Promise.all(
+      rangeRows.map(async (row) => {
+        const item = await loadPrintableDocument(row);
+        loaded += 1;
+        report(loaded, steps);
+        return item;
+      }),
+    );
 
-      const blob = new Blob([buildExcelHtml(items, APP_BRAND_NAME, dateFrom, dateTo)], {
-        type: "application/vnd.ms-excel;charset=utf-8",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `bao-cao-phieu-xuat-${dateFrom}-den-${dateTo}.xls`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } finally {
-      setExporting(false);
-    }
+    const blob = new Blob([buildExcelHtml(items, APP_BRAND_NAME, dateFrom, dateTo)], {
+      type: "application/vnd.ms-excel;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bao-cao-phieu-xuat-${dateFrom}-den-${dateTo}.xls`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
@@ -565,10 +573,7 @@ export function KeToan() {
             <GlassButton variant="soft" onClick={() => setEditing("new")}>
               <FileText className="h-4 w-4" /> Tạo phiếu xuất kho
             </GlassButton>
-            <GlassButton variant="ghost" onClick={exportRangeExcel} disabled={exporting}>
-              {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              Xuất Excel
-            </GlassButton>
+            <ExportExcelButton variant="ghost" onExport={exportRangeExcel} />
           </motion.div>
         </div>
 
@@ -917,7 +922,7 @@ export function KeToan() {
             onClose={() => {
               if (printingId !== printPreview.originalRow.id) setPrintPreview(null);
             }}
-            onPrint={() => void printVoucher(printPreview.originalRow, printPreview.voucherNo)}
+            onPrint={() => printVoucher(printPreview.originalRow, printPreview.voucherNo)}
           />
         )}
 

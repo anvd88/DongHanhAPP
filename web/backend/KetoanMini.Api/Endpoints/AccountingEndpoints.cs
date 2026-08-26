@@ -9,6 +9,19 @@ namespace KetoanMini.Api.Endpoints;
 
 public static class AccountingEndpoints
 {
+    /// <summary>
+    /// Ai cần biết một chứng từ vừa được phát hành hay bị hủy: người theo dõi chứng từ
+    /// (<see cref="Permissions.VouchersRead"/> — kế toán, kế toán trưởng, ban giám đốc) và người
+    /// điều phối kho (<see cref="Permissions.TasksAssign"/> — thủ kho, trưởng phòng). Quản trị viên
+    /// được cộng thêm bên trong <see cref="PushService.SendToPermissionAsync"/>.
+    /// </summary>
+    private static readonly string[] DocumentAudience = [Permissions.VouchersRead, Permissions.TasksAssign];
+
+    private static Task AnnounceDocumentAsync(PushService push, string actorUsername,
+        string title, string body, string notifId)
+        => push.SendToPermissionAsync(DocumentAudience, title, body, notifId,
+            target: "Documents", link: "/ban-hang", category: "document", exceptUsername: actorUsername);
+
     private const string TotalSub =
         "(SELECT COALESCE(SUM(l.quantity * l.unit_price), 0) FROM document_lines l WHERE l.document_id = d.id)";
     // Một máy chủ chỉ có một Excel/máy in mặc định. Giữ trọn chuỗi đọc → in → phát hành trong cùng
@@ -147,6 +160,7 @@ public static class AccountingEndpoints
             ClaimsPrincipal u,
             Database db,
             WarehouseVoucherPrintService printer,
+            PushService push,
             CancellationToken cancellationToken) =>
         {
             var voucherNo = (req.VoucherNo ?? "").Trim();
@@ -191,6 +205,14 @@ public static class AccountingEndpoints
                 await db.RecordAudit(u.Username(), "In phiếu xuất kho", "Document",
                     voucherNo,
                     $"Đã gửi phiếu từ Excel tới máy in máy chủ: {printResult.PrinterName}.");
+
+                // Phiếu vừa PHÁT HÀNH là lúc tờ giấy bước ra khỏi phòng kế toán: kho phải biết để
+                // xếp chuyến, kế toán biết để theo dõi. Đây là mốc mở đầu của cả tiến trình giao hàng.
+                await AnnounceDocumentAsync(push, u.Username(), "Phiếu xuất kho đã phát hành",
+                    $"{voucherNo}"
+                        + (document.CustomerName.Length > 0 ? $" · {document.CustomerName}" : "")
+                        + " đã in xong, chờ gán giao hàng.",
+                    $"document:{id}:issued");
                 return Results.Ok(new
                 {
                     voucherNo,
@@ -290,21 +312,21 @@ public static class AccountingEndpoints
             return Results.Ok(new { issuedAt });
         });
 
-        api.MapPut("/documents/{id:guid}/cancel", (Guid id, CancelDocumentRequest req, ClaimsPrincipal u, Database db) =>
-            CancelDocument(db, u, id, req.Reason, cashOnly: false))
+        api.MapPut("/documents/{id:guid}/cancel", (Guid id, CancelDocumentRequest req, ClaimsPrincipal u, Database db, PushService push) =>
+            CancelDocument(db, u, id, req.Reason, cashOnly: false, push))
             .RequirePermission(Permissions.VouchersCancel);
 
-        api.MapPut("/cash-vouchers/{id:guid}/cancel", (Guid id, CancelDocumentRequest req, ClaimsPrincipal u, Database db) =>
-            CancelDocument(db, u, id, req.Reason, cashOnly: true))
+        api.MapPut("/cash-vouchers/{id:guid}/cancel", (Guid id, CancelDocumentRequest req, ClaimsPrincipal u, Database db, PushService push) =>
+            CancelDocument(db, u, id, req.Reason, cashOnly: true, push))
             .RequirePermission(Permissions.VouchersCancel);
 
         // Giữ tương thích với các bản giao diện cũ nhưng không xóa dữ liệu: DELETE cũng chỉ chuyển trạng thái sang hủy.
-        api.MapDelete("/documents/{id:guid}", (Guid id, ClaimsPrincipal u, Database db) =>
-            CancelDocument(db, u, id, "Hủy từ yêu cầu xóa của phiên bản cũ.", cashOnly: false))
+        api.MapDelete("/documents/{id:guid}", (Guid id, ClaimsPrincipal u, Database db, PushService push) =>
+            CancelDocument(db, u, id, "Hủy từ yêu cầu xóa của phiên bản cũ.", cashOnly: false, push))
             .RequirePermission(Permissions.VouchersCancel);
 
-        api.MapDelete("/cash-vouchers/{id:guid}", (Guid id, ClaimsPrincipal u, Database db) =>
-            CancelDocument(db, u, id, "Hủy từ yêu cầu xóa của phiên bản cũ.", cashOnly: true))
+        api.MapDelete("/cash-vouchers/{id:guid}", (Guid id, ClaimsPrincipal u, Database db, PushService push) =>
+            CancelDocument(db, u, id, "Hủy từ yêu cầu xóa của phiên bản cũ.", cashOnly: true, push))
             .RequirePermission(Permissions.VouchersCancel);
 
         api.MapDelete("/cash-vouchers/{id:guid}/permanent", (
@@ -1193,7 +1215,8 @@ public static class AccountingEndpoints
         ClaimsPrincipal u,
         Guid id,
         string? reason,
-        bool cashOnly)
+        bool cashOnly,
+        PushService push)
     {
         reason = (reason ?? "").Trim();
         if (reason.Length > 500)
@@ -1249,6 +1272,12 @@ public static class AccountingEndpoints
         var entityName = string.IsNullOrWhiteSpace(voucherNo) ? id.ToString() : voucherNo;
         await db.RecordAudit(u.Username(), $"Hủy {name}", "Document", entityName,
             string.IsNullOrWhiteSpace(reason) ? $"Chuyển {name} sang trạng thái hủy (web)." : $"Lý do: {reason}");
+        // Hủy chứng từ đảo ngược cả số liệu lẫn việc đang chạy theo nó (chuyến giao, công nợ), nên
+        // không được để ai đó vẫn làm tiếp theo tờ phiếu đã chết.
+        await AnnounceDocumentAsync(push, u.Username(), $"Đã hủy {name}",
+            $"{entityName} bị hủy."
+                + (string.IsNullOrWhiteSpace(reason) ? "" : $" Lý do: {reason}"),
+            $"document:{id}:cancelled");
         return Results.Ok(new { cancelledAt, cancelledBy = u.Username(), cancelReason = reason });
     }
 

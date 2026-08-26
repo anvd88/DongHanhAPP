@@ -68,7 +68,6 @@ private fun ProfileDocuments(vm: HrViewModel) {
         purpose = "Xác thực để xem đầy đủ số giấy tờ và dữ liệu nhạy cảm.",
         onDismiss = { showPin = false },
         onUnlocked = { unlocked = true; showPin = false },
-        onVerifyAccountPassword = vm::verifyAccountPassword,
     )
 }
 
@@ -110,7 +109,7 @@ private fun AddDocumentDialog(vm: HrViewModel, context: Context, close: () -> Un
             OutlinedTextField(title,{title=it},label={Text("Tên hồ sơ / người liên hệ")},modifier=Modifier.fillMaxWidth())
             OutlinedTextField(number,{number=it},label={Text("Số giấy tờ / số điện thoại")},modifier=Modifier.fillMaxWidth())
             OutlinedTextField(issuedBy,{issuedBy=it},label={Text("Nơi cấp / quan hệ")},modifier=Modifier.fillMaxWidth())
-            OutlinedTextField(expiry,{expiry=it},label={Text("Ngày hết hạn (yyyy-MM-dd)")},modifier=Modifier.fillMaxWidth())
+            DateField("Ngày hết hạn", expiry, { expiry = it }, Modifier.fillMaxWidth(), supportingText = "Để trống nếu giấy tờ không có hạn", placeholder = "Không có hạn")
             Row { TextButton({ picker.launch(arrayOf("image/*","application/pdf")) }) { Text("Tải tệp") }; TextButton({ camera.launch(null) }) { Text("Chụp ảnh") } }
             uri?.let { Text("Đã chọn tệp", style = MaterialTheme.typography.bodySmall) }
         }

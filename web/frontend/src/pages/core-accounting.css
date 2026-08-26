@@ -25,7 +25,11 @@
 .ca-hero-actions { display: flex; align-items: center; gap: 9px; }
 .ca-period-picker { display: flex; flex-direction: column; min-width: 150px; padding: 8px 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 13px; background: rgba(255,255,255,.1); }
 .ca-period-picker span { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: rgba(255,255,255,.55); }
-.ca-period-picker input { color-scheme: dark; border: 0; outline: 0; background: transparent; color: white; font: 700 13px inherit; }
+/* Bộ chọn tháng dùng chung nằm trên nền hero tối: gỡ viền/nền sáng mặc định để nó hoà vào thẻ. */
+.ca-period-picker .ca-period-field { min-height: 0; padding: 0; border: 0; background: transparent; color: white; }
+.ca-period-picker .ca-period-field:hover { background: transparent; transform: none; }
+.ca-period-picker .ca-period-field .gc-datefield-icon { display: none; }
+.ca-period-picker .ca-period-field .gc-datefield-value { color: white; font: 700 13px inherit; }
 .ca-period-state { display: inline-flex; align-items: center; gap: 6px; padding: 11px 13px; border-radius: 12px; font-size: 12px; font-weight: 750; white-space: nowrap; }
 .ca-period-state.is-open { color: #b9fff0; background: rgba(24, 199, 164, .16); border: 1px solid rgba(78, 225, 193, .24); }
 .ca-period-state.is-locked { color: #ffd7bb; background: rgba(230, 138, 41, .16); border: 1px solid rgba(255, 187, 113, .24); }

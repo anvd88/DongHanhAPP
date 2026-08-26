@@ -8,6 +8,43 @@ import kotlinx.serialization.json.JsonObject
  * trùng khóa JSON). Mọi trường đều có giá trị mặc định để giải mã an toàn khi thiếu/null.
  */
 
+/**
+ * Một dòng trong HỘP THƯ THÔNG BÁO trên máy chủ (bảng web_notifications) — cùng nguồn với cái chuông
+ * trên web. App tải về rồi trộn vào chuông của mình, nhờ đó thông báo của cả công ty (giao hàng,
+ * thu tiền, chứng từ…) hiện trên điện thoại kể cả khi máy chưa nhận được gói FCM nào.
+ *
+ * [notifId] là chữ ký sự kiện, TRÙNG với notif_id trong gói FCM — dùng nó làm khoá để một sự kiện
+ * không hiện hai lần (một lần do push, một lần do đồng bộ).
+ * [appTarget] là tên màn hình của APP (HrDestination); [link] là đường dẫn web nên app bỏ qua.
+ */
+@Serializable
+data class ServerNotification(
+    val id: Long = 0,
+    val title: String = "",
+    val body: String = "",
+    val category: String = "",
+    val link: String = "",
+    val appTarget: String = "",
+    val notifId: String = "",
+    val createdAt: String = "",
+    val read: Boolean = false,
+)
+
+/**
+ * Nhóm thông báo mà tài khoản này còn nhận. Khoá trùng `Services/NotificationGroups.cs` ở máy chủ.
+ * Đây là cấu hình PHÍA MÁY CHỦ và dùng chung với web: tắt ở app thì chuông trên web cũng im.
+ */
+@Serializable
+data class NotificationGroupSettings(
+    val groups: Map<String, Boolean> = emptyMap(),
+)
+
+@Serializable
+data class ServerNotificationFeed(
+    val unread: Int = 0,
+    val items: List<ServerNotification> = emptyList(),
+)
+
 /** Một cuộc gọi nhỡ (bền vững trong DB) để hiện khi mở app dù lúc gọi đang offline. */
 @Serializable
 data class MissedCall(
@@ -855,9 +892,6 @@ data class ChangePasswordBody(
 )
 
 @Serializable
-data class VerifyPasswordBody(val password: String)
-
-@Serializable
 data class AccountLoginSettings(
     val webLoginEnabled: Boolean = true,
 )
@@ -1311,3 +1345,119 @@ data class CreateTaskBody(
 @Serializable data class TaskNoteBody(val note: String = "", val progress: Int? = null)
 @Serializable data class TaskReviewBody(val note: String = "", val rating: Int? = null)
 @Serializable data class CreatedTask(val id: String = "", val taskNo: String = "")
+
+// ───────────────────────── Lịch sử việc đã hoàn thành ─────────────────────────
+/** Một người từng hoàn thành việc trong khoảng đang xem — dựng hàng chip lọc theo nhân viên. */
+@Serializable
+data class WorkTaskHistoryPerson(
+    val username: String = "",
+    val fullName: String = "",
+    val count: Int = 0,
+)
+
+/**
+ * Kết quả tra lịch sử việc đã hoàn thành trong một khoảng ngày (app lọc theo tuần/tháng).
+ * [people] luôn là DANH SÁCH ĐẦY ĐỦ của khoảng đó — không bị co lại khi đang lọc một người —
+ * nên chọn nhầm người vẫn quay về người khác được.
+ */
+@Serializable
+data class WorkTaskHistoryResult(
+    val from: String = "",
+    val to: String = "",
+    val isAdmin: Boolean = false,
+    val items: List<WorkTask> = emptyList(),
+    val people: List<WorkTaskHistoryPerson> = emptyList(),
+    val total: Int = 0,
+)
+
+// ───────────────────────── Nhật ký một ngày (bảng công / bảng lương) ─────────────────────────
+/** Một lần chạm vào công việc trong ngày: được giao, bắt đầu, nộp, nghiệm thu… */
+@Serializable
+data class DayLogTask(
+    val id: String = "",
+    val taskNo: String = "",
+    val title: String = "",
+    val status: String = "",
+    val statusLabel: String = "",
+    val progress: Int = 0,
+    val kind: String = "",
+    val kindLabel: String = "",
+    val note: String = "",
+    val actorName: String = "",
+    val assignerName: String = "",
+    val assigneeName: String = "",
+    val at: String = "",
+)
+
+/** Một mốc trong đời một chứng từ (duyệt cấp 1, ký nhận, thực chi…) kèm giờ phút và người làm. */
+@Serializable
+data class DayLogStep(
+    val label: String = "",
+    val status: String = "",
+    val statusLabel: String = "",
+    val at: String? = null,
+    val by: String = "",
+    val note: String = "",
+)
+
+/** Quyết định phạt/kỷ luật ghi cho ngày đang xem. */
+@Serializable
+data class DayLogPenalty(
+    val id: String = "",
+    val code: String = "",
+    val type: String = "",
+    val typeLabel: String = "",
+    val penaltyDate: String = "",
+    val amount: Double = 0.0,
+    val installments: Int = 1,
+    val reason: String = "",
+    val note: String = "",
+    val status: String = "",
+    val statusLabel: String = "",
+    val createdBy: String = "",
+    val at: String = "",
+)
+
+/** Đơn tiền bạc (tạm ứng, thanh toán, hoàn ứng, mua sắm) phát sinh trong ngày. */
+@Serializable
+data class DayLogRequest(
+    val id: String = "",
+    val code: String = "",
+    val type: String = "",
+    val typeLabel: String = "",
+    val title: String = "",
+    val amount: Double = 0.0,
+    val status: String = "",
+    val statusLabel: String = "",
+    val at: String = "",
+    val updatedAt: String = "",
+    val steps: List<DayLogStep> = emptyList(),
+)
+
+/** Phiếu chi tiền mặt kế toán lập cho tôi, kèm đủ mốc lập → ký nhận → duyệt → thực chi. */
+@Serializable
+data class DayLogPayout(
+    val id: String = "",
+    val code: String = "",
+    val category: String = "",
+    val amount: Double = 0.0,
+    val status: String = "",
+    val statusLabel: String = "",
+    val reason: String = "",
+    val note: String = "",
+    val at: String = "",
+    val steps: List<DayLogStep> = emptyList(),
+)
+
+/** Toàn bộ những gì xảy ra với tôi trong MỘT ngày: việc, phạt, đơn tiền, phiếu chi. */
+@Serializable
+data class DayLog(
+    val date: String = "",
+    val tasks: List<DayLogTask> = emptyList(),
+    val penalties: List<DayLogPenalty> = emptyList(),
+    val requests: List<DayLogRequest> = emptyList(),
+    val payouts: List<DayLogPayout> = emptyList(),
+) {
+    val isEmpty: Boolean
+        get() = tasks.isEmpty() && penalties.isEmpty() && requests.isEmpty() && payouts.isEmpty()
+}

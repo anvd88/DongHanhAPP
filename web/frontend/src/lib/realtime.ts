@@ -8,6 +8,7 @@ import { appUrl } from "./appConfig";
  *   • "data"     — thay đổi nghiệp vụ (chứng từ, thanh toán, gia công, chấm công…)
  *   • "presence" — hiện diện online + thay đổi tài khoản
  *   • "chat"     — tin nhắn mới/sửa/gỡ (chỉ gửi tới ĐÚNG thành viên cuộc trò chuyện)
+ *   • "notify"   — hộp thư thông báo có dòng mới (chuông trên header)
  * Client chỉ LẮNG NGHE WebSocket — không poll. Mỗi listener đăng ký phạm vi quan tâm để
  * tránh refetch thừa: trang chat không tải lại khi có thay đổi kế toán và ngược lại.
  */
@@ -25,6 +26,9 @@ export type RealtimeScope =
   | "liveness"
   | "release"
   | "attendance"
+  // "notify" — có thông báo mới trong hộp thư (bảng web_notifications). Tín hiệu KHÔNG mang nội
+  // dung: mỗi máy khách tự gọi /api/notifications và chỉ nhận được phần của chính mình.
+  | "notify"
   // "access" — quyền của CHÍNH tài khoản này vừa bị admin thay đổi. Chỉ gửi tới đúng người đó
   // (Clients.User), không phát ra toàn hệ thống. Frontend nạp lại hồ sơ truy cập → menu/layout/route
   // cập nhật ngay mà không phải đăng nhập lại. Xem lib/access.tsx.

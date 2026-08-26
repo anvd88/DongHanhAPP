@@ -60,6 +60,11 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.PriceCheck
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -93,7 +98,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.ketoanapk.hr.data.AppUpdater
-import com.ketoanapk.hr.data.AppPinStore
+import com.ketoanapk.hr.data.HrRepository
 import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.DeviceSession
@@ -397,15 +402,16 @@ private fun PasswordField(label: String, value: String, onChange: (String) -> Un
 @Composable
 private fun AppPinSettingsScreen(user: HrUser, vm: HrViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
-    val store = remember(context) { AppPinStore(context) }
+    val repo = remember(context) { HrRepository.foreground(context) }
     var hasPin by remember(user.username) { mutableStateOf<Boolean?>(null) }
     var loadError by remember(user.username) { mutableStateOf<String?>(null) }
     var showGate by remember { mutableStateOf(false) }
 
+    // Trạng thái do MÁY CHỦ trả về: thiết bị không giữ mã nên cũng không tự biết đã có mã hay chưa.
     LaunchedEffect(user.username) {
-        runCatching { store.hasPin(user.username) }
-            .onSuccess { hasPin = it; loadError = null }
-            .onFailure { hasPin = true; loadError = it.message }
+        runCatching { repo.appPinStatus() }
+            .onSuccess { hasPin = it.hasPin; loadError = null }
+            .onFailure { loadError = it.message ?: "Không kết nối được máy chủ." }
     }
 
     SubScreen("Mã bảo mật ứng dụng", onBack) {
@@ -424,9 +430,9 @@ private fun AppPinSettingsScreen(user: HrUser, vm: HrViewModel, onBack: () -> Un
                             Text("PIN riêng 6 số", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Text(
                                 when (hasPin) {
-                                    true -> "Đã thiết lập trên thiết bị này"
+                                    true -> "Đã thiết lập (lưu trên máy chủ)"
                                     false -> "Chưa thiết lập"
-                                    null -> "Đang kiểm tra…"
+                                    null -> if (loadError != null) "Chưa kiểm tra được" else "Đang kiểm tra…"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -441,12 +447,19 @@ private fun AppPinSettingsScreen(user: HrUser, vm: HrViewModel, onBack: () -> Un
                     )
                     Button(
                         onClick = { showGate = true },
-                        enabled = hasPin != null,
+                        // Hỏi trạng thái hỏng (mất mạng) vẫn cho bấm: bảng mã bảo mật tự hỏi lại máy chủ
+                        // và có nút Thử lại của riêng nó, không để nút này kẹt vĩnh viễn.
+                        enabled = hasPin != null || loadError != null,
                         modifier = Modifier.fillMaxWidth().height(50.dp),
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Text(if (hasPin == true) "Đổi mã bảo mật" else "Tạo mã bảo mật", fontWeight = FontWeight.Bold)
                     }
+                    Text(
+                        "Mã được giữ trên máy chủ (dạng mã hoá một chiều), điện thoại không lưu bản sao nào — mất máy cũng không ai dò được mã, và số lần nhập sai không reset khi cài lại app. Đổi lại, mở khoá cần có mạng.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text(
                         "Nếu quên mã, chọn “Quên mã bảo mật?” và xác minh lại bằng mật khẩu tài khoản để tạo mã mới.",
                         style = MaterialTheme.typography.bodySmall,
@@ -469,7 +482,6 @@ private fun AppPinSettingsScreen(user: HrUser, vm: HrViewModel, onBack: () -> Un
             loadError = null
             vm.showActionMessage("Đã cập nhật mã bảo mật ứng dụng.")
         },
-        onVerifyAccountPassword = vm::verifyAccountPassword,
     )
 }
 
@@ -586,7 +598,46 @@ private fun NotificationSettings(vm: HrViewModel, onBack: () -> Unit) {
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
         }
+
+        // Nhóm thông báo: lưu ở MÁY CHỦ nên tắt ở đây thì chuông trên web cũng im, và ngược lại.
+        item { SectionTitle("Nhóm thông báo") }
+        item {
+            val groups = vm.settingsState.notificationGroups
+            SettingsGroup {
+                NOTIFICATION_GROUPS.forEach { (key, label) ->
+                    SettingsSwitchRow(
+                        icon = notificationGroupIcon(key),
+                        title = label,
+                        subtitle = when {
+                            groups == null -> "Đang tải..."
+                            groups[key] != false -> "Đang nhận"
+                            else -> "Đã tắt"
+                        },
+                        checked = groups?.get(key) != false,
+                        enabled = groups != null && vm.settingsState.savingNotificationGroup == null,
+                        onCheckedChange = { vm.setNotificationGroup(key, it) },
+                    )
+                }
+            }
+        }
+        item {
+            Text(
+                "Tuỳ chọn này lưu theo tài khoản nên áp dụng cho cả web lẫn điện thoại. Cảnh báo bảo mật " +
+                    "(đăng nhập trên thiết bị mới) và thông báo cập nhật ứng dụng luôn được gửi.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+        }
     }
+}
+
+private fun notificationGroupIcon(group: String): ImageVector = when (group) {
+    "delivery" -> Icons.Filled.LocalShipping
+    "collection" -> Icons.Filled.PriceCheck
+    "accounting" -> Icons.Filled.ReceiptLong
+    "work" -> Icons.Filled.TaskAlt
+    else -> Icons.Filled.Badge
 }
 
 private fun systemNotificationsAllowed(context: Context): Boolean {

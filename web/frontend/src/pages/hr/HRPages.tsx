@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Field, Input, MoneyInput, Select } from "../../components/ui";
 import { EmployeePicker } from "../../components/hr/EmployeePicker";
+import { DatePicker, MonthPicker } from "../../components/DateField";
 import { api } from "../../lib/api";
 import { PERM, useAccess } from "../../lib/access";
 import { date, dateTime, moneyVnd } from "../../lib/format";
@@ -257,7 +258,7 @@ export function HRPenaltyPage() {
         <HrCard className="hr-penalty-filter-card">
           <div className="hr-range-row">
             <Field label="Lọc theo tháng">
-              <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+              <MonthPicker value={month} onChange={setMonth} className="w-full" />
             </Field>
             {month && <HrButton tone="secondary" onClick={() => setMonth("")}>Xóa lọc</HrButton>}
           </div>
@@ -602,14 +603,14 @@ function PenaltyModal({ penalty, onClose, onSaved }: { penalty: Penalty | null; 
             {(types ?? []).map((t) => <option key={t.type} value={t.type}>{t.label}</option>)}
           </Select>
         </Field>
-        <Field label="Ngày phạt"><Input type="date" value={penaltyDate} onChange={(e) => setPenaltyDate(e.target.value)} /></Field>
+        <Field label="Ngày phạt"><DatePicker value={penaltyDate} onChange={setPenaltyDate} className="w-full" /></Field>
         <Field label="Số tiền phạt (₫)"><MoneyInput value={amount} onChange={setAmount} /></Field>
         {isFine && (
           <>
             <Field label="Trừ trong (số tháng)">
               <Input type="number" min={1} max={60} value={installments} onChange={(e) => setInstallments(e.target.value)} />
             </Field>
-            <Field label="Bắt đầu trừ từ kỳ"><Input type="month" value={startPeriod} onChange={(e) => setStartPeriod(e.target.value)} /></Field>
+            <Field label="Bắt đầu trừ từ kỳ"><MonthPicker value={startPeriod} onChange={setStartPeriod} clearable={false} className="w-full" /></Field>
             {schedule.length > 0 && (
               <div className="hr-penalty-schedule">
                 <strong>Lịch khấu trừ dự kiến</strong>
@@ -692,7 +693,12 @@ function PublishedPayslipsMonth({ onOpen }: { onOpen: (employeeId: string, perio
       <HrCard className="hr-payroll-filter-card">
         <form className="hr-published-payroll-filters" onSubmit={(e) => { e.preventDefault(); applySearch(); }}>
           <Field label="Kỳ lương">
-            <Input type="month" value={period} onChange={(e) => { setPeriod(e.target.value); setPage(1); }} />
+            <MonthPicker
+              value={period}
+              onChange={(next) => { setPeriod(next); setPage(1); }}
+              clearable={false}
+              className="w-full"
+            />
           </Field>
           <Field label="Tìm nhân viên">
             <Input value={searchDraft} placeholder="Tên, mã, phòng ban hoặc chi nhánh" onChange={(e) => setSearchDraft(e.target.value)} />
@@ -1105,7 +1111,7 @@ function PayslipMaker({
               clearLabel="-- Chọn nhân viên --"
             />
           </Field>
-          <Field label="Kỳ lương"><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></Field>
+          <Field label="Kỳ lương"><MonthPicker value={period} onChange={setPeriod} clearable={false} className="w-full" /></Field>
         </div>
       </HrCard>
 

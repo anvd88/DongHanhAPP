@@ -133,16 +133,21 @@ public static class TaskAssignmentEndpoints
         // Danh sách việc liên quan tới người đang đăng nhập.
         //  • inbox  = việc được giao CHO TÔI.
         //  • outbox = việc TÔI giao (Admin thấy toàn bộ việc trong hệ thống để giám sát).
-        g.MapGet("/", async (ClaimsPrincipal u, Database db) =>
+        //
+        // activeOnly=true (app di động dùng): HẾT NGÀY thì việc đã xong của hôm qua rời màn hình, chỉ
+        // còn việc chưa xong kéo sang hôm nay. Việc xong rồi tra ở /history chứ không nằm chắn màn
+        // "Việc cần làm" nữa. Web không truyền cờ này nên vẫn thấy đủ như trước.
+        g.MapGet("/", async (ClaimsPrincipal u, Database db, bool? activeOnly) =>
         {
             var me = u.Username();
             var admin = u.Can(Permissions.UsersManage);
             await using var conn = await db.OpenAsync();
             var canAssign = u.Can(Permissions.TasksAssign);
+            var todayOnly = activeOnly == true ? " AND " + ClosedTodayOrOpen : "";
 
             var inbox = new List<WorkTaskDto>();
             await using (var r = await conn.Cmd(
-                SelectTask + " WHERE t.assignee_username = @me ORDER BY " + ListOrder)
+                SelectTask + " WHERE t.assignee_username = @me" + todayOnly + " ORDER BY " + ListOrder)
                 .With("@me", me).ExecuteReaderAsync())
                 while (await r.ReadAsync()) inbox.Add(ReadTask(r));
 
@@ -175,8 +180,8 @@ public static class TaskAssignmentEndpoints
             // không thấy việc mình giao để nghiệm thu, và phiếu kẹt mãi ở "Chờ nghiệm thu".
             var outbox = new List<WorkTaskDto>();
             {
-                var where = admin ? "" : " WHERE t.assigner_username = @me";
-                await using var r = await conn.Cmd(SelectTask + where + " ORDER BY " + ListOrder)
+                var where = admin ? " WHERE TRUE" : " WHERE t.assigner_username = @me";
+                await using var r = await conn.Cmd(SelectTask + where + todayOnly + " ORDER BY " + ListOrder)
                     .With("@me", me).ExecuteReaderAsync();
                 while (await r.ReadAsync()) outbox.Add(ReadTask(r));
             }
@@ -203,6 +208,62 @@ public static class TaskAssignmentEndpoints
                 outbox,
                 collections = standaloneCollections,
                 summary,
+            });
+        });
+
+        // LỊCH SỬ việc đã hoàn thành trong một khoảng ngày (app lọc theo tuần/tháng).
+        //  • Nhân viên thường: việc của chính mình + việc mình đã giao cho người khác.
+        //  • Admin: toàn hệ thống, lọc thêm theo từng nhân viên qua ?assignee=.
+        // "Hoàn thành" = đã nghiệm thu đạt ('accepted') hoặc đã đóng phiếu giao hàng ('completed').
+        // Việc bị huỷ không phải thành tích nên không nằm ở đây.
+        g.MapGet("/history", async (ClaimsPrincipal u, Database db, string? from, string? to, string? assignee) =>
+        {
+            var me = u.Username();
+            var admin = u.Can(Permissions.UsersManage);
+            var fromDate = ParseDate(from) ?? DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7)).AddDays(-30);
+            var toDate = ParseDate(to) ?? DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+            if (toDate < fromDate) (fromDate, toDate) = (toDate, fromDate);
+
+            await using var conn = await db.OpenAsync();
+            var items = new List<WorkTaskDto>();
+            // Khoảng ngày Việt Nam quy về timestamptz: [00:00 ngày from, 00:00 ngày to+1).
+            const string range =
+                " AND " + ClosedAt + " >= ((@from::date)::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')" +
+                " AND " + ClosedAt + " <  (((@to::date) + 1)::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')";
+            var scope = admin
+                ? ""
+                : " AND (t.assignee_username = @me OR t.assigner_username = @me)";
+            await using (var r = await conn.Cmd(
+                SelectTask + " WHERE t.status IN ('accepted','completed')" + range + scope +
+                " ORDER BY " + ClosedAt + " DESC")
+                .With("@me", me).With("@from", fromDate).With("@to", toDate).ExecuteReaderAsync())
+                while (await r.ReadAsync()) items.Add(ReadTask(r));
+
+            // Danh sách người để lọc dựng từ CHÍNH khoảng đang xem (trước khi lọc theo người), nếu
+            // không thì chọn một người xong là mất luôn các tên còn lại.
+            var people = items
+                .GroupBy(t => t.AssigneeUsername, StringComparer.OrdinalIgnoreCase)
+                .Select(grp => new
+                {
+                    username = grp.Key,
+                    fullName = grp.First().AssigneeName,
+                    count = grp.Count(),
+                })
+                .OrderByDescending(p => p.count).ThenBy(p => p.fullName, StringComparer.CurrentCulture)
+                .ToList();
+
+            var filtered = string.IsNullOrWhiteSpace(assignee)
+                ? items
+                : items.Where(t => string.Equals(t.AssigneeUsername, assignee, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            return Results.Ok(new
+            {
+                from = fromDate.ToString("yyyy-MM-dd"),
+                to = toDate.ToString("yyyy-MM-dd"),
+                isAdmin = admin,
+                items = filtered,
+                people,
+                total = filtered.Count,
             });
         });
 
@@ -335,9 +396,16 @@ public static class TaskAssignmentEndpoints
             return Results.NoContent();
         });
 
-        // Nhân viên bắt đầu làm.
-        g.MapPost("/{id:guid}/start", async (Guid id, ClaimsPrincipal u, Database db) =>
-            await AssigneeTransition(id, u, db, expect: ["assigned"], to: "in_progress", kind: "started", note: "Bắt đầu thực hiện."));
+        // Nhân viên bắt đầu làm. Với việc GIAO HÀNG, "bắt đầu" nghĩa là tài xế đã cầm phiếu lên đường —
+        // đó là mốc đầu tiên của tiến trình mà kho và kế toán phải nhìn thấy.
+        g.MapPost("/{id:guid}/start", async (Guid id, ClaimsPrincipal u, Database db, PushService push) =>
+            await AssigneeTransition(id, u, db, expect: ["assigned"], to: "in_progress", kind: "started",
+                note: "Bắt đầu thực hiện.",
+                announce: (t, actorName) => t.IsDelivery
+                    ? new DeliveryAnnouncement("Tài xế đã nhận chuyến",
+                        $"{actorName} đã nhận chuyến và đang đi giao — {t.Title}", $"delivery:{id}:started")
+                    : null,
+                push: push));
 
         // Nhân viên cập nhật tiến độ.
         g.MapPost("/{id:guid}/progress", async (Guid id, TaskNoteReq req, ClaimsPrincipal u, Database db) =>
@@ -378,6 +446,14 @@ public static class TaskAssignmentEndpoints
             await AddEvent(conn, id, me, name, "submitted", note.Length > 0 ? $"Nộp nghiệm thu: {note}" : "Nộp nghiệm thu.");
             await db.RecordAudit(me, "Nộp nghiệm thu", "WorkTask", t.TaskNo, t.Title);
             await push.SendToUserAsync(t.AssignerUsername, "Có việc chờ nghiệm thu", $"{t.TaskNo}: {t.Title}", $"task:{id}:submitted", "Tasks");
+            // Giao hàng không có bước nghiệm thu, nên cú "nộp" chính là lúc hàng đã tới tay khách.
+            // Báo cho CẢ BỘ PHẬN (thủ kho, kế toán kho, quản trị viên) chứ không chỉ người giao việc:
+            // kho cần biết để chờ phiếu ký nhận về, kế toán cần biết để theo dõi công nợ và tiền hàng.
+            if (t.IsDelivery)
+                await AnnounceDeliveryAsync(push, me,
+                    "Đã giao hàng cho khách",
+                    $"{name} đã giao xong — {t.Title}" + (note.Length > 0 ? $". {note}" : ""),
+                    $"delivery:{id}:delivered");
             return Results.NoContent();
         });
 
@@ -556,6 +632,10 @@ public static class TaskAssignmentEndpoints
             : null;
     }
 
+    /// <summary>Ngày "yyyy-MM-dd" từ query string; null nếu thiếu/sai để bên gọi tự chọn mặc định.</summary>
+    private static DateOnly? ParseDate(string? value) =>
+        DateOnly.TryParseExact((value ?? "").Trim(), "yyyy-MM-dd", out var d) ? d : null;
+
     private static string NormalizePriority(string? p)
     {
         var v = (p ?? "").Trim().ToLowerInvariant();
@@ -586,8 +666,25 @@ public static class TaskAssignmentEndpoints
             .With("@t", taskId).With("@au", actor).With("@an", actorName).With("@k", kind).With("@n", note)
             .ExecuteNonQueryAsync();
 
+    /// <summary>
+    /// Ai phải biết tiến trình một chuyến giao hàng: THỦ KHO / trưởng phòng điều phối
+    /// (<see cref="Permissions.TasksAssign"/>) và KẾ TOÁN theo dõi phiếu xuất
+    /// (<see cref="Permissions.VouchersRead"/>). Quản trị viên được cộng thêm ở
+    /// <see cref="PushService.SendToPermissionAsync"/>.
+    /// </summary>
+    internal static readonly string[] DeliveryAudience = [Permissions.TasksAssign, Permissions.VouchersRead];
+
+    /// <summary>Một mốc tiến trình giao hàng đáng báo cho cả bộ phận.</summary>
+    internal sealed record DeliveryAnnouncement(string Title, string Body, string NotifId);
+
+    internal static Task AnnounceDeliveryAsync(PushService push, string actorUsername,
+        string title, string body, string notifId)
+        => push.SendToPermissionAsync(DeliveryAudience, title, body, notifId,
+            target: "Tasks", link: "/cong-viec", category: "delivery", exceptUsername: actorUsername);
+
     private static async Task<IResult> AssigneeTransition(Guid id, ClaimsPrincipal u, Database db,
-        string[] expect, string to, string kind, string note)
+        string[] expect, string to, string kind, string note,
+        Func<TaskCore, string, DeliveryAnnouncement?>? announce = null, PushService? push = null)
     {
         var me = u.Username();
         await using var conn = await db.OpenAsync();
@@ -600,6 +697,10 @@ public static class TaskAssignmentEndpoints
             .With("@s", to).With("@id", id).ExecuteNonQueryAsync();
         var name = await DisplayName(conn, me);
         await AddEvent(conn, id, me, name, kind, note);
+
+        // Thông báo phát SAU khi đã ghi xong: hỏng ở đây thì mất một tin nhắn, không mất trạng thái việc.
+        if (push is not null && announce?.Invoke(t, name) is { } message)
+            await AnnounceDeliveryAsync(push, me, message.Title, message.Body, message.NotifId);
         return Results.NoContent();
     }
 
@@ -630,6 +731,20 @@ public static class TaskAssignmentEndpoints
         FROM work_tasks t
         LEFT JOIN documents d ON d.id = t.source_document_id
         """;
+
+    /// <summary>Thời điểm việc được đóng sổ (nghiệm thu/hoàn thành/huỷ). Việc còn mở thì vô nghĩa.</summary>
+    private const string ClosedAt = "COALESCE(t.reviewed_at, t.updated_at)";
+
+    /// <summary>Nửa đêm HÔM NAY theo giờ Việt Nam, quy về timestamptz để so với các cột mốc.</summary>
+    private const string TodayStart =
+        "(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh') AT TIME ZONE 'Asia/Ho_Chi_Minh')";
+
+    /// <summary>
+    /// Việc còn phải để mắt trong ngày: chưa đóng sổ (kể cả việc tồn từ hôm qua — chính là thứ phải
+    /// kéo sang hôm nay để làm nốt), hoặc vừa đóng sổ trong ngày hôm nay.
+    /// </summary>
+    private const string ClosedTodayOrOpen =
+        "(t.status NOT IN ('accepted','completed','cancelled') OR " + ClosedAt + " >= " + TodayStart + ")";
 
     // Ưu tiên việc còn "sống" (chưa đóng sổ) lên trước, rồi theo hạn gần nhất, mới nhất.
     private const string ListOrder =

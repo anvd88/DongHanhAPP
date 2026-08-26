@@ -254,12 +254,20 @@ builder.Services.AddRateLimiter(options =>
         {
             PermitLimit = 180, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
         }));
-    // Xác minh lại mật khẩu để khôi phục PIN cục bộ. PIN còn có khóa thử sai ngay trên thiết bị;
-    // giới hạn này bảo vệ thêm endpoint mật khẩu mà vẫn đủ rộng cho nhiều nhân viên chung NAT.
+    // Xác minh lại mật khẩu tài khoản (quên mã bảo mật ứng dụng, đặt lại mã).
+    // Giới hạn này bảo vệ endpoint mật khẩu mà vẫn đủ rộng cho nhiều nhân viên chung NAT.
     options.AddPolicy("reauth", http => RateLimitPartition.GetFixedWindowLimiter(
         RateLimitKey(http), _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = 40, Window = TimeSpan.FromMinutes(5), QueueLimit = 0, AutoReplenishment = true
+        }));
+    // Thử mã bảo mật 6 số của ứng dụng. Chốt CHÍNH chống dò là bộ đếm sai + khoá tăng dần theo TÀI
+    // KHOẢN ở app_pin_codes (xem AppPinPolicy); hạn mức theo IP này chỉ chặn flood, nên phải đủ rộng
+    // cho cả văn phòng chung một IP công khai sau Cloudflare Tunnel/NAT.
+    options.AddPolicy("app-pin", http => RateLimitPartition.GetFixedWindowLimiter(
+        RateLimitKey(http), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
         }));
     options.AddPolicy("qr-start", http => RateLimitPartition.GetFixedWindowLimiter(
         RateLimitKey(http), _ => new FixedWindowRateLimiterOptions

@@ -43,6 +43,19 @@ fun formatIsoDateTime(value: String?): String {
     }.getOrElse { formatIsoDate(value) }
 }
 
+/**
+ * Định dạng datetime ISO sang dd/MM/yyyy HH:mm theo múi giờ thiết bị — dùng cho nhật ký/chứng từ,
+ * nơi phải đọc được ĐỦ ngày tháng giờ phút chứ không chỉ "dd/MM HH:mm".
+ */
+fun formatIsoDateTimeFull(value: String?): String {
+    if (value.isNullOrBlank()) return "--"
+    return runCatching {
+        OffsetDateTime.parse(value)
+            .atZoneSameInstant(java.time.ZoneId.systemDefault())
+            .format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
+    }.getOrElse { formatIsoDate(value) }
+}
+
 /** Lấy chữ cái đầu của tên để hiển thị avatar chữ. */
 fun initials(name: String): String {
     val parts = name.trim().split(" ").filter { it.isNotBlank() }

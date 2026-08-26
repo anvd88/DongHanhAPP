@@ -23,7 +23,7 @@
   gap: 8px;
 }
 
-.ed-date-nav button,
+.ed-date-nav > button,
 .ed-today,
 .ed-chip-list button,
 .ed-section-heading > button {
@@ -34,7 +34,7 @@
   font-weight: 750;
 }
 
-.ed-date-nav button {
+.ed-date-nav > button {
   display: grid;
   width: 42px;
   height: 42px;
@@ -42,27 +42,16 @@
   border-radius: 12px;
 }
 
-.ed-date-nav button:disabled {
+.ed-date-nav > button:disabled {
   cursor: not-allowed;
   opacity: 0.42;
 }
 
-.ed-date-nav label {
-  gap: 8px;
-  min-height: 42px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  padding: 0 12px;
-}
-
-.ed-date-nav input {
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-weight: 750;
+/* Ô chọn ngày dùng chung toàn hệ thống (DatePicker) nằm trong lớp bọc riêng để không dính
+   luật nút mũi tên 42x42 ở trên. */
+.ed-date-field {
+  display: flex;
+  align-items: center;
 }
 
 .ed-today,

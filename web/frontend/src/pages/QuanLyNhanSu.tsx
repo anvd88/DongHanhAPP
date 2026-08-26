@@ -5,6 +5,7 @@ import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
 import { Badge, Button, Field, Input, MoneyInput, Select } from "../components/ui";
 import { Table } from "../components/Table";
+import { DatePicker, MonthPicker, TimePicker } from "../components/DateField";
 import { api } from "../lib/api";
 import { date, dateTime, moneyVnd } from "../lib/format";
 import { useApi } from "../lib/useApi";
@@ -882,7 +883,7 @@ function ProfilePanel({ employee, initialAccount, departments, locations, jobPos
             {employees.filter((e) => e.id !== employee?.id).map((e) => <option key={e.id} value={e.id}>{e.fullName}</option>)}
           </Select>
         </Field>
-        <Field label="Ngày vào làm / ngày tạo tài khoản"><Input type="date" value={form.hireDate} onChange={(e) => set("hireDate", e.target.value)} /></Field>
+        <Field label="Ngày vào làm / ngày tạo tài khoản"><DatePicker value={form.hireDate} onChange={(next) => set("hireDate", next)} className="w-full" /></Field>
         <Field label="Trạng thái">
           <Select value={form.status} onChange={(e) => set("status", e.target.value)} className="w-full">
             <option value="Active">Đang làm việc</option>
@@ -891,7 +892,7 @@ function ProfilePanel({ employee, initialAccount, departments, locations, jobPos
         </Field>
         <Field label="Số điện thoại"><Input value={form.phone} onChange={(e) => set("phone", e.target.value)} /></Field>
         <Field label="Email"><Input value={form.email} onChange={(e) => set("email", e.target.value)} /></Field>
-        <Field label="Ngày sinh"><Input type="date" value={form.dob} onChange={(e) => set("dob", e.target.value)} /></Field>
+        <Field label="Ngày sinh"><DatePicker value={form.dob} onChange={(next) => set("dob", next)} clearable className="w-full" max={new Date().toISOString().slice(0, 10)} /></Field>
         <Field label="Giới tính"><Input value={form.gender} onChange={(e) => set("gender", e.target.value)} placeholder="Nam / Nữ" /></Field>
         <div className="sm:col-span-2"><Field label="Địa chỉ"><Input value={form.address} onChange={(e) => set("address", e.target.value)} /></Field></div>
       </div>
@@ -995,10 +996,16 @@ function ContractAdmin({ empId }: { empId: string }) {
         </Field>
         <Field label="Lương cơ bản (₫)"><MoneyInput value={f.baseSalary} onChange={(raw) => set("baseSalary", raw)} /></Field>
         <Field label="Phụ cấp (₫)"><MoneyInput value={f.allowance} onChange={(raw) => set("allowance", raw)} /></Field>
-        <Field label="Từ ngày"><Input type="date" value={f.startDate} onChange={(e) => set("startDate", e.target.value)} /></Field>
+        <Field label="Từ ngày"><DatePicker value={f.startDate} onChange={(next) => set("startDate", next)} className="w-full" /></Field>
         <Field label={indefinite ? "Đến ngày (không thời hạn)" : "Đến ngày"}>
-          <Input type="date" value={indefinite ? "" : f.endDate} disabled={indefinite}
-            onChange={(e) => set("endDate", e.target.value)} />
+          <DatePicker
+            value={indefinite ? "" : f.endDate}
+            onChange={(next) => set("endDate", next)}
+            disabled={indefinite}
+            placeholder={indefinite ? "Không thời hạn" : "Chọn ngày"}
+            className="w-full"
+            min={f.startDate || undefined}
+          />
         </Field>
       </div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -1104,7 +1111,7 @@ function SalaryRaiseModal({
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Field label="Áp dụng từ tháng"><Input type="month" value={f.effectivePeriod} onChange={(e) => set("effectivePeriod", e.target.value)} /></Field>
+          <Field label="Áp dụng từ tháng"><MonthPicker value={f.effectivePeriod} onChange={(next) => set("effectivePeriod", next)} clearable={false} className="w-full" /></Field>
           <Field label="Mức tăng (₫)"><MoneyInput value={f.amount} placeholder="500.000" allowNegative onChange={(raw) => set("amount", raw)} /></Field>
           <Field label="Số quyết định"><Input value={f.decisionNo} onChange={(e) => set("decisionNo", e.target.value)} /></Field>
           <Field label="Lý do"><Input value={f.reason} placeholder="Vd: tăng lương định kỳ" onChange={(e) => set("reason", e.target.value)} /></Field>
@@ -1163,7 +1170,7 @@ function PayslipAdmin({ empId }: { empId: string }) {
   return (
     <div>
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <Field label="Kỳ (yyyy-MM)"><Input type="month" value={f.period} onChange={(e) => set("period", e.target.value)} /></Field>
+        <Field label="Kỳ lương"><MonthPicker value={f.period} onChange={(next) => set("period", next)} clearable={false} className="w-full" /></Field>
         <Field label="Ngày công"><Input type="number" value={f.workDays} onChange={(e) => set("workDays", e.target.value)} /></Field>
         <Field label="Lương CB (₫)"><MoneyInput value={f.baseSalary} onChange={(raw) => set("baseSalary", raw)} /></Field>
         <Field label="Phụ cấp (₫)"><MoneyInput value={f.allowance} onChange={(raw) => set("allowance", raw)} /></Field>
@@ -1274,7 +1281,7 @@ function DocsAdmin({ empId }: { empId: string }) {
         </Field>
         <Field label="Tên"><Input value={f.title} onChange={(e) => set("title", e.target.value)} /></Field>
         <Field label="Nơi cấp"><Input value={f.issuedBy} onChange={(e) => set("issuedBy", e.target.value)} /></Field>
-        <Field label="Ngày cấp"><Input type="date" value={f.issuedDate} onChange={(e) => set("issuedDate", e.target.value)} /></Field>
+        <Field label="Ngày cấp"><DatePicker value={f.issuedDate} onChange={(next) => set("issuedDate", next)} className="w-full" /></Field>
       </div>
       <div className="mb-4 flex justify-end"><Button onClick={add}><Plus className="h-4 w-4" /> Thêm</Button></div>
       <Table<EmployeeDoc> loading={loading} rows={data ?? []} keyOf={(r) => r.id} empty="Chưa có"
@@ -1488,21 +1495,20 @@ function HolidaysTab() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-bold text-[var(--text)]">Lịch nghỉ nhà nước & công ty</h2>
           <Field label="Tháng hiển thị">
-            <Input
-              type="month"
+            <MonthPicker
               value={month}
-              onChange={(e) => {
-                const next = e.target.value;
+              onChange={(next) => {
+                if (!next) return;
                 setMonth(next);
                 setF((s) => ({ ...s, holidayDate: monthRange(next).from }));
               }}
-              className="w-auto"
+              clearable={false}
             />
           </Field>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
           <Field label="Ngày nghỉ">
-            <Input type="date" value={f.holidayDate} onChange={(e) => set("holidayDate", e.target.value)} />
+            <DatePicker value={f.holidayDate} onChange={(next) => set("holidayDate", next)} className="w-full" />
           </Field>
           <Field label="Loại lịch">
             <Select value={f.holidayType} onChange={(e) => set("holidayType", e.target.value)} className="w-full">
@@ -1602,8 +1608,8 @@ function ShiftModal({ value, onClose, onSaved }: { value: Shift | null; onClose:
       <div className="grid grid-cols-2 gap-3">
         <Field label="Mã ca"><Input value={f.code} onChange={(e) => set("code", e.target.value)} /></Field>
         <Field label="Tên ca *"><Input value={f.name} onChange={(e) => set("name", e.target.value)} /></Field>
-        <Field label="Giờ vào"><Input type="time" value={f.startTime} onChange={(e) => set("startTime", e.target.value)} /></Field>
-        <Field label="Giờ ra"><Input type="time" value={f.endTime} onChange={(e) => set("endTime", e.target.value)} /></Field>
+        <Field label="Giờ vào"><TimePicker value={f.startTime} onChange={(next) => set("startTime", next)} className="w-full" /></Field>
+        <Field label="Giờ ra"><TimePicker value={f.endTime} onChange={(next) => set("endTime", next)} className="w-full" /></Field>
         <Field label="Nghỉ trưa (phút)"><Input type="number" value={f.breakMinutes} onChange={(e) => set("breakMinutes", e.target.value)} /></Field>
         <Field label="Trễ cho phép (phút)"><Input type="number" value={f.lateGraceMinutes} onChange={(e) => set("lateGraceMinutes", e.target.value)} /></Field>
         <Field label="Giờ công chuẩn"><Input type="number" value={f.standardHours} onChange={(e) => set("standardHours", e.target.value)} /></Field>
@@ -1656,7 +1662,7 @@ function AssignmentsTab() {
               {(shifts ?? []).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.startTime}-{s.endTime})</option>)}
             </Select>
           </Field>
-          <Field label="Ngày làm"><Input type="date" value={f.workDate} onChange={(e) => set("workDate", e.target.value)} /></Field>
+          <Field label="Ngày làm"><DatePicker value={f.workDate} onChange={(next) => set("workDate", next)} className="w-full" /></Field>
           <div className="flex items-end"><Button onClick={assign} className="w-full"><Plus className="h-4 w-4" /> Phân ca</Button></div>
         </div>
       </GlassPanel>
@@ -1665,9 +1671,19 @@ function AssignmentsTab() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gc-border)] px-5 py-4">
           <h2 className="font-bold text-[var(--text)]">Lịch phân ca</h2>
           <div className="flex items-center gap-2 text-sm">
-            <Input type="date" value={range.from} onChange={(e) => setRange((s) => ({ ...s, from: e.target.value }))} className="w-auto" />
+            <DatePicker
+              value={range.from}
+              onChange={(next) => setRange((s) => ({ ...s, from: next }))}
+              ariaLabel="Từ ngày"
+              max={range.to || undefined}
+            />
             <span className="text-[var(--text-muted)]">→</span>
-            <Input type="date" value={range.to} onChange={(e) => setRange((s) => ({ ...s, to: e.target.value }))} className="w-auto" />
+            <DatePicker
+              value={range.to}
+              onChange={(next) => setRange((s) => ({ ...s, to: next }))}
+              ariaLabel="Đến ngày"
+              min={range.from || undefined}
+            />
           </div>
         </div>
         <Table<ShiftAssignment> loading={loading} rows={data ?? []} keyOf={(r) => r.id} empty="Chưa phân ca trong khoảng này"

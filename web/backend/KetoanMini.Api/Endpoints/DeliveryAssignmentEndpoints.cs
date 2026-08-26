@@ -315,6 +315,24 @@ public static class DeliveryAssignmentEndpoints
                 await push.SendToUserAsync(driverUsername, "Bạn được giao phiếu xuất kho",
                     $"{state.VoucherNo}: giao cho {state.CustomerName}", $"task:{taskId}:assigned", "Tasks");
 
+            // Mốc mở đầu tiến trình giao hàng — cả kho lẫn kế toán theo dõi tờ phiếu từ đây.
+            // NotifId gắn thêm tên người nhận: đổi lái xe giữa chừng là một mốc MỚI, không phải bản
+            // trùng của lần gán trước, nên không được để chốt chống trùng nuốt mất.
+            if (mode == ModeDriver && !sameDriver)
+                await TaskAssignmentEndpoints.AnnounceDeliveryAsync(push, me,
+                    "Đã gán chuyến giao hàng",
+                    $"{actorName} giao phiếu {state.VoucherNo}"
+                        + (state.CustomerName.Length > 0 ? $" ({state.CustomerName})" : "")
+                        + $" cho lái xe {driverName}.{reasonSuffix}",
+                    $"delivery:{id}:assigned:{driverUsername.ToLowerInvariant()}");
+            else if (mode != ModeDriver && takingFromDriver)
+                await TaskAssignmentEndpoints.AnnounceDeliveryAsync(push, me,
+                    "Đã gỡ chuyến giao hàng",
+                    $"{actorName} thu phiếu {state.VoucherNo} khỏi {state.HolderName}. "
+                        + (mode == ModePickup ? "Khách tự lấy tại kho." : "Phiếu chưa có người giao.")
+                        + reasonSuffix,
+                    $"delivery:{id}:unassigned:{DateTime.UtcNow.Ticks}");
+
             return Results.Ok(new { mode, driverUsername, driverName, taskId, takenFrom = takingFromDriver ? state.HolderName : "" });
         });
     }

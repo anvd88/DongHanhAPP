@@ -18,7 +18,8 @@ import {
 } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
-import { Button, Field, Input, Spinner } from "../components/ui";
+import { ActionProgressButton } from "../components/ActionProgressButton";
+import { Button, Field, Input, Spinner, buttonClasses, buttonInlineStyle } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { DatePicker } from "../components/DateField";
 import { CellInput, FormulaNumberInput } from "./DocumentEditor";
@@ -78,7 +79,6 @@ export function PhieuDetail() {
   const [returns, setReturns] = useState<GoodsReturn[]>([]);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
-  const [printing, setPrinting] = useState(false);
   // Tăng mỗi lần trang nạp lại → thẻ Giao hàng (tự giữ state riêng) đọc lại theo.
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -175,6 +175,7 @@ export function PhieuDetail() {
   const step = currentStep(doc, settlement);
 
   // ── Hành động ──────────────────────────────────────────────────────────────
+  /** Trả về true/false để nút gọi nó biết việc chạy trót lọt hay không (vd. nút In lại có hiệu ứng). */
   const run = async (key: string, action: () => Promise<unknown>, ok: string) => {
     setBusy(key);
     setError("");
@@ -182,10 +183,12 @@ export function PhieuDetail() {
       await action();
       await loadAll();
       notify.success(ok, "Phiếu xuất kho");
+      return true;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Không thực hiện được.";
       setError(message);
       notify.error(message);
+      return false;
     } finally {
       setBusy("");
     }
@@ -281,17 +284,29 @@ export function PhieuDetail() {
         </div>
         <div className="pd-topbar-actions">
           {issued && !cancelled && (
-            <Button
-              variant="soft"
-              loading={printing}
-              onClick={() => {
-                setPrinting(true);
-                void run("print", () => api.post(`/api/documents/${id}/warehouse-print`, { voucherNo: doc.voucherNo }), "Đã gửi lệnh in.")
-                  .finally(() => setPrinting(false));
+            <ActionProgressButton
+              icon={Printer}
+              idleLabel="In lại"
+              busyLabel="Đang in..."
+              doneLabel="Đã in"
+              className={buttonClasses("soft")}
+              style={buttonInlineStyle("soft")}
+              onRun={async (report) => {
+                // Hai mốc có thật: (1) máy chủ nhận xong lệnh in, (2) phiếu đã tải lại theo trạng
+                // thái mới. Máy chủ không báo gì trong lúc dựng phiếu + đẩy máy in nên quãng đó
+                // thanh vẫn ở chế độ chưa đo được, không chạy khống.
+                const ok = await run(
+                  "print",
+                  async () => {
+                    await api.post(`/api/documents/${id}/warehouse-print`, { voucherNo: doc.voucherNo });
+                    report(1, 2);
+                  },
+                  "Đã gửi lệnh in.",
+                );
+                if (ok) report(2, 2);
+                return ok;
               }}
-            >
-              <Printer className="h-4 w-4" /> In lại
-            </Button>
+            />
           )}
           {!cancelled && (
             <Button variant="ghost" onClick={() => { setCancelReason(""); setCancelOpen(true); }}>

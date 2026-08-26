@@ -11,6 +11,7 @@ import { useAccess, PERM } from "../lib/access";
 import { subscribeRealtime } from "../lib/realtime";
 import { useAppNotifications } from "../components/app-notifications-context";
 import { Modal } from "../components/Modal";
+import { DatePicker, MonthPicker } from "../components/DateField";
 import { Badge, Button, Field, Input, Select, Spinner } from "../components/ui";
 import "./core-accounting.css";
 
@@ -298,10 +299,16 @@ export function CoreAccounting() {
           <p>Một nguồn dữ liệu duy nhất cho tài khoản, bút toán, đối chiếu và báo cáo tài chính.</p>
         </div>
         <div className="ca-hero-actions">
-          <label className="ca-period-picker">
+          <div className="ca-period-picker">
             <span>Kỳ làm việc</span>
-            <input type="month" value={period} onChange={(event) => setPeriod(event.target.value)} />
-          </label>
+            <MonthPicker
+              value={period}
+              onChange={(next) => setPeriod(next || currentPeriod())}
+              clearable={false}
+              className="ca-period-field"
+              ariaLabel="Chọn kỳ kế toán"
+            />
+          </div>
           <span className={`ca-period-state ${isLocked ? "is-locked" : "is-open"}`}>
             {isLocked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
             {isLocked ? "Đã khóa" : "Đang mở"}
@@ -725,7 +732,7 @@ function EntryDialog({ open, onClose, accounts, period, onSaved }: { open: boole
     finally { setSaving(false); }
   };
   return <Modal open={open} onClose={onClose} title="Lập bút toán kế toán" wide panel footer={<><Button variant="ghost" onClick={onClose}>Hủy</Button><Button loading={saving} onClick={() => void save()} disabled={!description || totals.debit <= 0 || Math.abs(totals.debit - totals.credit) >= .01}>Lưu bút toán</Button></>}>
-    <div className="ca-form-grid ca-form-grid-3"><Field label="Ngày hạch toán"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field><Field label="Số tham chiếu"><Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="HĐ, phiếu, hợp đồng…" /></Field><Field label="Kỳ kế toán"><Input value={date.slice(0, 7)} disabled /></Field></div>
+    <div className="ca-form-grid ca-form-grid-3"><Field label="Ngày hạch toán"><DatePicker value={date} onChange={setDate} className="w-full" /></Field><Field label="Số tham chiếu"><Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="HĐ, phiếu, hợp đồng…" /></Field><Field label="Kỳ kế toán"><Input value={date.slice(0, 7)} disabled /></Field></div>
     <Field label="Diễn giải"><Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Nội dung nghiệp vụ kinh tế phát sinh" /></Field>
     <div className="ca-entry-editor"><header><span>Tài khoản / diễn giải</span><span>Nợ</span><span>Có</span><span /></header>
       {draftLines.map((line, index) => <div key={index} className="ca-entry-line">

@@ -17,6 +17,11 @@ import {
   Trash2,
   Upload,
   Users2,
+  Banknote,
+  Bell,
+  FileText,
+  Truck,
+  UserCheck,
 } from "lucide-react";
 import { GlassCard } from "../components/Glass";
 import { GlassPanel } from "../components/glass/GlassPanel";
@@ -53,6 +58,12 @@ import {
   isMessagePreviewEnabled,
   subscribeMessagePreviewEnabled,
 } from "../lib/messagePreviewPreference";
+import {
+  NOTIFICATION_GROUPS,
+  loadNotificationGroups,
+  saveNotificationGroup,
+  type NotificationGroupState,
+} from "../lib/notificationGroups";
 import "./system-settings.css";
 
 const WATER_INTERVAL_MS = 60 * 60 * 1000;
@@ -75,6 +86,33 @@ function formatHHMMSS(ms: number) {
   const seconds = totalSeconds % 60;
 
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+/**
+ * Hiệu ứng chào trang: lần đầu mở trang Cài đặt, các công tắc ĐANG BẬT sẽ tự trượt từ tắt sang bật
+ * thay vì hiện sẵn ở trạng thái bật. Hook trả về `false` ở nhịp vẽ đầu (công tắc vẽ ở trạng thái
+ * tắt) rồi đổi sang `true` để CSS chạy transition. Máy đặt "giảm chuyển động" thì bỏ qua hiệu ứng.
+ * Truyền `ready = false` khi trạng thái còn đang tải để hiệu ứng chỉ chạy sau khi có dữ liệu thật.
+ */
+function useToggleIntro(ready = true) {
+  const [played, setPlayed] = useState(
+    () => typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+
+  useEffect(() => {
+    if (played || !ready) return;
+    const timerId = window.setTimeout(() => setPlayed(true), 240);
+    return () => window.clearTimeout(timerId);
+  }, [played, ready]);
+
+  return played;
+}
+
+/** Lớp cho hàng cài đặt: cái nào tắt thì mờ đi (thay cho tag "Đang bật / Đang tắt" trước đây). */
+function rowClass(on: boolean) {
+  return `system-settings-row${on ? "" : " is-off"}`;
 }
 
 export function SystemSettings() {
@@ -230,6 +268,10 @@ export function SystemSettings() {
   useEffect(() => subscribePerfMode(() => setLiteModeState(isLiteMode())), []);
   const liteAuto = !isPerfModeExplicit();
 
+  // Chỉ dùng cho lần vẽ đầu: công tắc bật sẽ trượt từ tắt sang bật cho người dùng thấy.
+  const introPlayed = useToggleIntro();
+  const onClass = (enabled: boolean) => (enabled && introPlayed ? "is-on" : "");
+
   return (
     <div className="system-settings-page gc-root">
       <PageHeader
@@ -298,7 +340,7 @@ export function SystemSettings() {
 
       <section className="system-settings-shell">
         <GlassCard className="system-settings-card system-settings-list p-5">
-          <div className="system-settings-row">
+          <div className={rowClass(waterEnabled)}>
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon">
                 <Droplet className="h-5 w-5" />
@@ -306,9 +348,6 @@ export function SystemSettings() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-sm font-black text-[var(--text)]">Nhắc nhở uống nước</h2>
-                  <Badge color={waterEnabled ? "success" : "muted"}>
-                    {waterEnabled ? "Đang bật" : "Đang tắt"}
-                  </Badge>
                   <TooltipProvider delayDuration={120}>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -328,7 +367,7 @@ export function SystemSettings() {
             </div>
 
             <button
-              className={`water-toggle ${waterEnabled ? "is-on" : ""}`}
+              className={`water-toggle ${onClass(waterEnabled)}`}
               type="button"
               role="switch"
               aria-checked={waterEnabled}
@@ -347,7 +386,7 @@ export function SystemSettings() {
             </button>
           </div>
 
-          <div className="system-settings-row">
+          <div className={rowClass(eyeEnabled)}>
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon is-soft">
                 <Eye className="h-5 w-5" />
@@ -355,9 +394,6 @@ export function SystemSettings() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-sm font-black text-[var(--text)]">Nhắc bảo vệ mắt 20-20-20</h2>
-                  <Badge color={eyeEnabled ? "success" : "muted"}>
-                    {eyeEnabled ? "Đang bật" : "Đang tắt"}
-                  </Badge>
                   <TooltipProvider delayDuration={120}>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -377,7 +413,7 @@ export function SystemSettings() {
             </div>
 
             <button
-              className={`water-toggle eye-toggle ${eyeEnabled ? "is-on" : ""}`}
+              className={`water-toggle eye-toggle ${onClass(eyeEnabled)}`}
               type="button"
               role="switch"
               aria-checked={eyeEnabled}
@@ -395,7 +431,7 @@ export function SystemSettings() {
               </span>
             </button>
           </div>
-          <div className="system-settings-row">
+          <div className={rowClass(keepCreateVoucherOpen)}>
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon is-accounting">
                 <FilePlus2 className="h-5 w-5" />
@@ -403,9 +439,6 @@ export function SystemSettings() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-sm font-black text-[var(--text)]">Giữ form tạo phiếu</h2>
-                  <Badge color={keepCreateVoucherOpen ? "success" : "muted"}>
-                    {keepCreateVoucherOpen ? "Đang bật" : "Đang tắt"}
-                  </Badge>
                   <TooltipProvider delayDuration={120}>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -425,7 +458,7 @@ export function SystemSettings() {
             </div>
 
             <button
-              className={`water-toggle accounting-toggle ${keepCreateVoucherOpen ? "is-on" : ""}`}
+              className={`water-toggle accounting-toggle ${onClass(keepCreateVoucherOpen)}`}
               type="button"
               role="switch"
               aria-checked={keepCreateVoucherOpen}
@@ -443,7 +476,7 @@ export function SystemSettings() {
               </span>
             </button>
           </div>
-          <div className="system-settings-row">
+          <div className={rowClass(messagePreviewEnabled)}>
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon is-chat">
                 <MessageCircle className="h-5 w-5" />
@@ -451,9 +484,6 @@ export function SystemSettings() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-sm font-black text-[var(--text)]">{"\u0110\u1ecdc tr\u01b0\u1edbc tin nh\u1eafn"}</h2>
-                  <Badge color={messagePreviewEnabled ? "success" : "muted"}>
-                    {messagePreviewEnabled ? "\u0110ang b\u1eadt" : "\u0110ang t\u1eaft"}
-                  </Badge>
                   <TooltipProvider delayDuration={120}>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -472,7 +502,7 @@ export function SystemSettings() {
             </div>
 
             <button
-              className={`water-toggle chat-toggle ${messagePreviewEnabled ? "is-on" : ""}`}
+              className={`water-toggle chat-toggle ${onClass(messagePreviewEnabled)}`}
               type="button"
               role="switch"
               aria-checked={messagePreviewEnabled}
@@ -491,7 +521,7 @@ export function SystemSettings() {
             </button>
           </div>
 
-          <div className="system-settings-row">
+          <div className={rowClass(liteMode)}>
             <div className="flex min-w-0 gap-4">
               <div className="system-settings-icon is-perf">
                 <Gauge className="h-5 w-5" />
@@ -499,10 +529,8 @@ export function SystemSettings() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-sm font-black text-[var(--text)]">Chế độ nhẹ (máy yếu)</h2>
-                  <Badge color={liteMode ? "success" : "muted"}>
-                    {liteMode ? "Đang bật" : "Đang tắt"}
-                    {liteAuto ? " · tự động" : ""}
-                  </Badge>
+                  {/* Chỉ còn nhãn "tự động" — trạng thái bật/tắt đã thấy ngay ở công tắc và độ mờ của hàng. */}
+                  {liteAuto && <Badge color="muted">Tự động</Badge>}
                   <TooltipProvider delayDuration={120}>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -523,7 +551,7 @@ export function SystemSettings() {
             </div>
 
             <button
-              className={`water-toggle perf-toggle ${liteMode ? "is-on" : ""}`}
+              className={`water-toggle perf-toggle ${onClass(liteMode)}`}
               type="button"
               role="switch"
               aria-checked={liteMode}
@@ -543,13 +571,111 @@ export function SystemSettings() {
           </div>
         </GlassCard>
 
-        <GlassCard className="system-settings-empty p-5" aria-label="Khu vực nội dung hệ thống để trống">
-          <div className="system-settings-empty-inner" aria-hidden="true" />
-        </GlassCard>
+        <NotificationGroupsCard />
       </section>
       </>
       )}
     </div>
+  );
+}
+
+const GROUP_ICON: Record<string, typeof Bell> = {
+  delivery: Truck,
+  collection: Banknote,
+  accounting: FileText,
+  work: FilePlus2,
+  people: UserCheck,
+};
+
+/**
+ * Bật/tắt từng nhóm thông báo. Lưu ở MÁY CHỦ (không phải localStorage) vì chính máy chủ dùng nó để
+ * quyết định có ghi thông báo và có bắn push hay không — nhờ vậy tắt trên web thì điện thoại cũng im.
+ */
+function NotificationGroupsCard() {
+  const { notify } = useAppNotifications();
+  const [groups, setGroups] = useState<NotificationGroupState | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+  // Đợi có trạng thái thật rồi mới chạy hiệu ứng trượt, tránh bật lên theo giá trị mặc định.
+  const introPlayed = useToggleIntro(groups !== null);
+
+  useEffect(() => {
+    let alive = true;
+    loadNotificationGroups()
+      .then((next) => { if (alive) setGroups(next); })
+      // Không đọc được thì coi như bật hết: đó cũng là mặc định của máy chủ, và hiện một bảng
+      // "tắt hết" trong khi thật ra đang bật sẽ khiến người dùng tưởng mình đã tắt.
+      .catch(() => { if (alive) setGroups(Object.fromEntries(NOTIFICATION_GROUPS.map((g) => [g.key, true]))); });
+    return () => { alive = false; };
+  }, []);
+
+  const toggle = async (key: string) => {
+    if (!groups || saving) return;
+    const next = !groups[key];
+    setSaving(key);
+    setGroups({ ...groups, [key]: next });
+    try {
+      setGroups(await saveNotificationGroup(key, next));
+    } catch {
+      setGroups({ ...groups, [key]: !next });
+      notify.error("Không lưu được tuỳ chọn thông báo. Vui lòng thử lại.");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <GlassCard className="system-settings-card system-settings-list p-5">
+      <div className="system-settings-row">
+        <div className="flex min-w-0 gap-4">
+          <div className="system-settings-icon is-chat">
+            <Bell className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-sm font-black text-[var(--text)]">Nhóm thông báo</h2>
+          </div>
+        </div>
+      </div>
+
+      {NOTIFICATION_GROUPS.map((group) => {
+        const Icon = GROUP_ICON[group.key] ?? Bell;
+        const on = groups?.[group.key] ?? true;
+        return (
+          <div className={rowClass(on)} key={group.key}>
+            <div className="flex min-w-0 gap-4">
+              <div className="system-settings-icon is-soft">
+                <Icon className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-black text-[var(--text)]">{group.label}</h2>
+                </div>
+                <p className="mt-1 text-xs font-semibold text-[var(--text-muted)]">{group.hint}</p>
+              </div>
+            </div>
+
+            <button
+              className={`water-toggle chat-toggle ${on && introPlayed ? "is-on" : ""}`}
+              type="button"
+              role="switch"
+              aria-checked={on}
+              disabled={!groups || saving === group.key}
+              aria-label={`${on ? "Tắt" : "Bật"} thông báo nhóm ${group.label}`}
+              onClick={() => void toggle(group.key)}
+            >
+              <span className="water-toggle-icon">
+                <Power className="h-4 w-4" />
+              </span>
+              <span className="reminder-toggle-countdown" aria-hidden="true">
+                {on ? "BẬT" : "TẮT"}
+              </span>
+              <span className="water-toggle-track">
+                <span className="water-toggle-thumb" />
+              </span>
+            </button>
+          </div>
+        );
+      })}
+    </GlassCard>
   );
 }
 

@@ -11,6 +11,7 @@ function scopesForPath(path: string): RealtimeScope[] {
   if (path.startsWith("/api/chat/conversations/") && path.endsWith("/messages")) return ["chat"];
   if (path.startsWith("/api/chat/conversations") || path.startsWith("/api/chat/contacts"))
     return ["chat", "presence"];
+  if (path.startsWith("/api/notifications")) return ["notify"];
   if (path.startsWith("/api/tasks")) return ["tasks", "hr"];
   if (path.startsWith("/api/worklist")) return ["tasks", "hr"];
   if (path.startsWith("/api/cash-collections")) return ["data", "hr"];

@@ -139,6 +139,25 @@ public static class CashCollectionEndpoints
             """).ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>
+    /// Ai cần biết tiến trình một lệnh thu tiền: người theo dõi toàn bộ lệnh (kế toán, kế toán
+    /// trưởng) và THỦ QUỸ đang chờ nhận tiền về két. Quản trị viên được cộng thêm trong
+    /// <see cref="PushService.SendToPermissionAsync"/> — Admin cố ý không có quyền collections.*
+    /// (xem <see cref="Permissions"/>) nhưng vẫn phải nắm được dòng tiền.
+    /// </summary>
+    private static readonly string[] CollectionAudience =
+        [Permissions.CollectionsReadAll, Permissions.CollectionsReceive];
+
+    /// <summary>
+    /// Báo một mốc của lệnh thu tiền cho cả bộ phận. Gọi SAU khi giao dịch đã commit: thông báo là
+    /// hệ quả của việc đã ghi xong, không được phép giữ chỗ trong giao dịch tiền bạc.
+    /// </summary>
+    private static Task AnnounceCollectionAsync(PushService push, string actorUsername,
+        string title, string body, string notifId)
+        => push.SendToPermissionAsync(CollectionAudience, title, body, notifId,
+            target: "CashCollections", link: "/lenh-thu-tien", category: "collection",
+            exceptUsername: actorUsername);
+
     public static void MapCashCollections(this WebApplication app)
     {
         var g = app.MapGroup("/api/cash-collections").RequireAuthorization();
@@ -443,6 +462,9 @@ public static class CashCollectionEndpoints
                 $"{before.OrderNo}: {before.DriverName} đã nhận lệnh.", $"cash-collection:{id}:accepted", "CashCollections");
             await tx.CommitAsync();
             await db.RecordAudit(u.Username(), "Nhận lệnh thu tiền", "CashCollection", before.OrderNo, before.CustomerName);
+            await AnnounceCollectionAsync(push, u.Username(), "Tài xế đã nhận lệnh thu tiền",
+                $"{before.OrderNo}: {before.DriverName} đi thu {before.CustomerName}.",
+                $"cash-collection:{id}:accepted");
             return Results.NoContent();
         });
 
@@ -469,6 +491,9 @@ public static class CashCollectionEndpoints
                 $"{before.OrderNo}: {before.CustomerName} · {reason}", $"cash-collection:{id}:failed", "CashCollections");
             await tx.CommitAsync();
             await db.RecordAudit(u.Username(), "Báo không thu được tiền", "CashCollection", before.OrderNo, reason);
+            await AnnounceCollectionAsync(push, u.Username(), "Không thu được tiền khách hàng",
+                $"{before.OrderNo}: {before.DriverName} báo không thu được của {before.CustomerName}. Lý do: {reason}",
+                $"cash-collection:{id}:failed");
             return Results.NoContent();
         });
 
@@ -517,6 +542,9 @@ public static class CashCollectionEndpoints
             await tx.CommitAsync();
             await db.RecordAudit(u.Username(), "Xác nhận đã thu tiền", "CashCollection", before.OrderNo,
                 $"Đã thu {computed.Total:N0} đồng; chờ bàn giao thủ quỹ.");
+            await AnnounceCollectionAsync(push, u.Username(), "Tài xế đã thu tiền khách hàng",
+                $"{before.DriverName} đã thu {computed.Total:N0} ₫ của {before.CustomerName} ({before.OrderNo}) — đang chờ bàn giao.",
+                $"cash-collection:{id}:collected:{driverRevision}");
             return Results.Ok(new { collectedAmount = computed.Total });
         });
 
@@ -559,6 +587,9 @@ public static class CashCollectionEndpoints
                 await tx.CommitAsync();
                 await db.RecordAudit(u.Username(), "Phát hiện lệch tiền bàn giao", "CashCollection", before.OrderNo,
                     $"Tài xế {before.CollectedAmount:N0}; thủ quỹ {computed.Total:N0}; lệch {difference:N0} đồng.");
+                await AnnounceCollectionAsync(push, u.Username(), "Bàn giao tiền bị lệch",
+                    $"{before.OrderNo}: tài xế {before.CollectedAmount:N0} ₫ / thủ quỹ {computed.Total:N0} ₫ — lệch {difference:N0} ₫.",
+                    $"cash-collection:{id}:variance:{revision}");
                 return Results.Conflict(new { message = $"Số tiền đang lệch {difference:N0} ₫. Công nợ chưa được cập nhật.", difference });
             }
 
@@ -606,6 +637,9 @@ public static class CashCollectionEndpoints
             await tx.CommitAsync();
             await db.RecordAudit(u.Username(), "Nhận đủ tiền và ghi công nợ", "CashCollection", before.OrderNo,
                 $"Nhận {computed.Total:N0} đồng từ {before.DriverName}; payment={persistedPayment}.");
+            await AnnounceCollectionAsync(push, u.Username(), "Thủ quỹ đã nhận đủ tiền",
+                $"{before.OrderNo}: nhận đủ {computed.Total:N0} ₫ từ {before.DriverName}, công nợ {before.CustomerName} đã cập nhật.",
+                $"cash-collection:{id}:completed");
             return Results.Ok(new { paymentId = persistedPayment, amount = computed.Total });
         });
 

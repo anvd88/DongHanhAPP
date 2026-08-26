@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -80,7 +81,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -119,9 +119,9 @@ import com.ketoanapk.hr.data.PayLine
 import com.ketoanapk.hr.data.PayslipItem
 import com.ketoanapk.hr.data.PayslipOvertimeDay
 import com.ketoanapk.hr.data.PayslipRequirement
+import com.ketoanapk.hr.data.DayLogStep
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
-import com.ketoanapk.hr.data.ShiftReminderSettings
 import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.data.ServerClock
 import com.ketoanapk.hr.ui.theme.BrandRed
@@ -958,13 +958,14 @@ private fun HeroFooterStat(label: String, value: String, modifier: Modifier = Mo
 fun TimesheetScreen(
     state: TimesheetUiState,
     payEstimate: PayEstimateUiState,
+    dayLog: DayLogUiState,
     username: String,
     onMonthOffset: (Int) -> Unit,
     onSelectMonth: (String) -> Unit,
+    onSelectDay: (String?) -> Unit,
     onShiftSwap: (String?) -> Unit,
     onForgotCheckin: (String?) -> Unit,
     onLoadSalary: () -> Unit,
-    onVerifyAccountPassword: (String, (Boolean, String?) -> Unit) -> Unit,
 ) {
     val period = state.month.take(7)
     val ts = state.timesheet?.takeIf { it.period.take(7) == period }
@@ -975,11 +976,9 @@ fun TimesheetScreen(
     // là che lại ngay — tránh lộ lương khi người khác cầm máy.
     var salaryRevealed by remember { mutableStateOf(false) }
     var salaryPinOpen by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val reminderSettings = remember { ShiftReminderSettings(context) }
-    var beforeShift by rememberSaveable { mutableStateOf(reminderSettings.beforeShift) }
-    var lateWarning by rememberSaveable { mutableStateOf(reminderSettings.lateWarning) }
     val currentStart = timesheetMonthStart(period)
+    // Chọn ô ngày nào thì kéo nhật ký của đúng ngày đó về (việc đã làm, phạt, ứng tiền, phiếu chi).
+    LaunchedEffect(selectedDate) { onSelectDay(selectedDate) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = screenPadding(),
@@ -1019,17 +1018,7 @@ fun TimesheetScreen(
             val selectedDay = selectedDate?.let { daysByDate[it] }
             if (selectedDate != null) {
                 item { TimesheetDayDetailCard(selectedDate.orEmpty(), selectedDay, onShiftSwap, onForgotCheckin) }
-            }
-            item {
-                HrCard {
-                    CardHeader("Nhắc ca làm")
-                    ReminderToggle("Nhắc trước giờ làm", "Thông báo trong vòng 30 phút trước ca", beforeShift) {
-                        beforeShift = it; reminderSettings.beforeShift = it
-                    }
-                    ReminderToggle("Cảnh báo sắp trễ", "Nhắc khi qua giờ vào mà chưa chấm công", lateWarning) {
-                        lateWarning = it; reminderSettings.lateWarning = it
-                    }
-                }
+                item { TimesheetDayLogCard(selectedDate.orEmpty(), dayLog) }
             }
             item { SectionTitle("Tổng hợp tháng", modifier = Modifier.padding(start = 4.dp)) }
             item {
@@ -1076,14 +1065,13 @@ fun TimesheetScreen(
             salaryRevealed = true
             onLoadSalary()
         },
-        onVerifyAccountPassword = onVerifyAccountPassword,
     )
 }
 
 /**
- * Phần "Lương của tôi" nhúng trong tab Bảng công. Mặc định CHE số tiền (hiện ***********); nhân viên bấm
- * biểu tượng con mắt + xác thực PIN/vân tay mới hiện chi tiết. Gộp trọn nội dung màn "Lương của tôi" cũ
- * (thực nhận dự tính, ngày công/tăng ca, khoản cộng, khoản trừ, ghi chú) để xem công và lương cùng một chỗ.
+ * Phần "Lương của tôi" nhúng trong tab Bảng công. Khi CHƯA mở, nó chỉ là MỘT THANH MỎNG một dòng —
+ * bảng công mới là nội dung chính của màn này, không việc gì để một thẻ lương che mất nửa màn hình.
+ * Bấm con mắt + xác thực PIN/vân tay mới bung đủ chi tiết (thực nhận, ngày công, khoản cộng/trừ).
  */
 private fun LazyListScope.timesheetSalarySection(
     state: PayEstimateUiState,
@@ -1093,29 +1081,40 @@ private fun LazyListScope.timesheetSalarySection(
 ) {
     val est = state.data
     item {
-        HrCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(38.dp).clip(CircleShape).background(Success.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Filled.Payments, contentDescription = null, tint = Success, modifier = Modifier.size(22.dp)) }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Lương của tôi", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
-                    Text("Dự tính ${formatTimesheetPeriod(est?.period)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                IconButton(onClick = { if (revealed) onHide() else onRequestReveal() }) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Payments, contentDescription = null, tint = Success, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Lương của tôi",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (revealed && est != null) formatMoney(est.netPay) else "•••••••",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                )
+                IconButton(onClick = { if (revealed) onHide() else onRequestReveal() }, modifier = Modifier.size(40.dp)) {
                     Icon(
                         if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                         contentDescription = if (revealed) "Ẩn lương" else "Xem lương",
                         tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
-            }
-            if (!revealed) {
-                Spacer(Modifier.height(10.dp))
-                Text("Thực nhận dự tính", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("***********", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.ExtraBold)
             }
         }
     }
@@ -1140,7 +1139,11 @@ private fun LazyListScope.timesheetSalarySection(
         // Thẻ nổi bật: thực nhận dự tính.
         item {
             HrCard {
-                Text("Thực nhận dự tính", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "Thực nhận dự tính · ${formatTimesheetPeriod(est.period)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Text(
                     formatMoney(est.netPay),
                     style = MaterialTheme.typography.headlineMedium,
@@ -1746,15 +1749,165 @@ private fun TimesheetDayDetailCard(
     }
 }
 
+/**
+ * NHẬT KÝ NGÀY ĐANG CHỌN — phần "chuyện gì đã xảy ra hôm đó" bên cạnh giờ vào/ra: đã làm những việc
+ * gì (lấy từ Việc cần làm), có bị phạt/kỷ luật không, xin ứng tiền hay được kế toán chi tiền không.
+ * Mọi mốc đều ghi đủ ngày/tháng/giờ/phút + trạng thái để đối chiếu khi thắc mắc lương.
+ */
 @Composable
-private fun ReminderToggle(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun TimesheetDayLogCard(dateKey: String, state: DayLogUiState) {
+    val log = state.data?.takeIf { it.date == dateKey }
+    HrCard {
+        CardHeader("Nhật ký ngày ${formatIsoDate(dateKey)}")
+        when {
+            state.loading && log == null -> LoadingBlock()
+            state.error != null && log == null -> ErrorText(state.error)
+            log == null || log.isEmpty -> Text(
+                "Ngày này không có việc, án phạt, đơn ứng tiền hay phiếu chi nào được ghi nhận.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> {
+                if (log.tasks.isNotEmpty()) {
+                    DayLogGroup("Công việc") {
+                        log.tasks.forEach { task ->
+                            DayLogRow(
+                                time = formatIsoDateTimeFull(task.at),
+                                title = "${task.taskNo} · ${task.title}",
+                                subtitle = listOf(
+                                    task.kindLabel.replaceFirstChar(Char::uppercase),
+                                    task.note,
+                                ).filter { it.isNotBlank() }.joinToString(" — "),
+                                status = task.statusLabel,
+                                tone = dayLogTaskTone(task.status),
+                            )
+                        }
+                    }
+                }
+                if (log.penalties.isNotEmpty()) {
+                    DayLogGroup("Phạt / kỷ luật") {
+                        log.penalties.forEach { penalty ->
+                            DayLogRow(
+                                time = formatIsoDateTimeFull(penalty.at),
+                                title = "${penalty.code} · ${penalty.typeLabel}" +
+                                    if (penalty.amount > 0) " · ${formatMoney(penalty.amount)}" else "",
+                                subtitle = listOf(
+                                    "Ngày vi phạm ${formatIsoDate(penalty.penaltyDate)}",
+                                    penalty.reason,
+                                ).filter { it.isNotBlank() }.joinToString(" — "),
+                                status = penalty.statusLabel,
+                                tone = if (penalty.status == "Active") Tone.Danger else Tone.Muted,
+                            )
+                        }
+                    }
+                }
+                if (log.requests.isNotEmpty()) {
+                    DayLogGroup("Ứng tiền & đề nghị thanh toán") {
+                        log.requests.forEach { request ->
+                            DayLogRow(
+                                time = formatIsoDateTimeFull(request.at),
+                                title = "${request.code} · ${request.typeLabel}" +
+                                    if (request.amount > 0) " · ${formatMoney(request.amount)}" else "",
+                                subtitle = request.title,
+                                status = request.statusLabel,
+                                tone = dayLogRequestTone(request.status),
+                                steps = request.steps,
+                            )
+                        }
+                    }
+                }
+                if (log.payouts.isNotEmpty()) {
+                    DayLogGroup("Kế toán chi tiền") {
+                        log.payouts.forEach { payout ->
+                            DayLogRow(
+                                time = formatIsoDateTimeFull(payout.at),
+                                title = "${payout.code} · ${formatMoney(payout.amount)}" +
+                                    if (payout.category.isNotBlank()) " · ${payout.category}" else "",
+                                subtitle = payout.reason,
+                                status = payout.statusLabel,
+                                tone = dayLogPayoutTone(payout.status),
+                                steps = payout.steps,
+                            )
+                        }
+                    }
+                }
+            }
         }
-        Switch(checked = checked, onCheckedChange = onChecked)
     }
+}
+
+@Composable
+private fun DayLogGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        content()
+    }
+}
+
+/** Một dòng nhật ký: giờ phút đầy đủ + nội dung + trạng thái, kèm các mốc duyệt/chi nếu có. */
+@Composable
+private fun DayLogRow(
+    time: String,
+    title: String,
+    subtitle: String,
+    status: String,
+    tone: Tone,
+    steps: List<DayLogStep> = emptyList(),
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = toneColor(tone).copy(alpha = 0.07f),
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(time, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                if (status.isNotBlank()) StatusChip(status, tone)
+            }
+            Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            if (subtitle.isNotBlank()) {
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            steps.filter { !it.at.isNullOrBlank() }.forEach { step ->
+                Text(
+                    "• ${step.label}: ${formatIsoDateTimeFull(step.at)}" +
+                        (step.statusLabel.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "") +
+                        (step.by.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "") +
+                        (step.note.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private fun dayLogTaskTone(status: String): Tone = when (status) {
+    "accepted", "completed" -> Tone.Success
+    "rejected" -> Tone.Danger
+    "submitted" -> Tone.Warning
+    "cancelled" -> Tone.Muted
+    else -> Tone.Info
+}
+
+private fun dayLogRequestTone(status: String): Tone = when (status) {
+    "Approved" -> Tone.Success
+    "Rejected" -> Tone.Danger
+    "Cancelled" -> Tone.Muted
+    else -> Tone.Warning
+}
+
+private fun dayLogPayoutTone(status: String): Tone = when (status) {
+    "Paid" -> Tone.Success
+    "Rejected", "Cancelled" -> Tone.Danger
+    "Approved", "Confirmed" -> Tone.Info
+    else -> Tone.Warning
 }
 
 @Composable
@@ -1949,7 +2102,6 @@ fun MyPayslipsScreen(
     onOpenConfirmation: (String) -> Unit,
     onInquiry: (String, String, String) -> Unit,
     onDownload: (PayslipItem) -> Unit,
-    onVerifyAccountPassword: (String, (Boolean, String?) -> Unit) -> Unit,
 ) {
     var pendingPeriod by remember { mutableStateOf<String?>(null) }
     val opened = openPeriod?.let { p -> state.items.find { it.period == p } }
@@ -1993,7 +2145,6 @@ fun MyPayslipsScreen(
             pendingPeriod = null
             if (period != null) onOpen(period)
         },
-        onVerifyAccountPassword = onVerifyAccountPassword,
     )
 }
 

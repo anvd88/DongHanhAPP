@@ -260,6 +260,209 @@ public static class PayrollEndpoints
             });
         });
 
+        // NHẬT KÝ MỘT NGÀY của chính mình — bấm vào một ô ngày trên lịch bảng công thì thấy ngày đó
+        // đã làm những việc gì, có bị phạt/kỷ luật gì, xin ứng tiền hay được kế toán chi tiền không.
+        // Mọi mốc đều trả nguyên timestamptz để app hiện đủ ngày/tháng/giờ/phút.
+        g.MapGet("/my-day", async (ClaimsPrincipal u, Database db, string? date) =>
+        {
+            var me = u.Username();
+            var day = DateOnly.TryParseExact((date ?? "").Trim(), "yyyy-MM-dd", out var parsed)
+                ? parsed
+                : DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+            await using var conn = await db.OpenAsync();
+            if (await conn.Cmd("SELECT id FROM hr_employees WHERE username=@u").With("@u", me).ExecuteScalarAsync() is not Guid employeeId)
+                return Results.NotFound(new { message = "Tài khoản chưa gắn hồ sơ nhân sự." });
+
+            // ── Việc đã làm trong ngày ──────────────────────────────────────────────────────────
+            // Lấy theo SỰ KIỆN chứ không theo việc: một việc kéo dài nhiều ngày thì mỗi ngày chỉ hiện
+            // đúng phần đã động tới hôm đó. Gồm cả sự kiện do người khác gây ra trên việc của tôi
+            // (được giao, bị trả lại, được nghiệm thu) vì đó cũng là chuyện xảy ra với tôi hôm đó.
+            var tasks = new List<object>();
+            await using (var r = await conn.Cmd($"""
+                SELECT t.id, t.task_no, t.title, t.status, t.priority, t.progress,
+                       t.assigner_name, t.assignee_name,
+                       ev.kind, ev.note, ev.actor_name, ev.created_at
+                FROM work_task_events ev
+                JOIN work_tasks t ON t.id = ev.task_id
+                WHERE (lower(t.assignee_username) = lower(@me) OR lower(ev.actor_username) = lower(@me))
+                  AND (ev.created_at AT TIME ZONE '{DayTz}')::date = @day
+                ORDER BY ev.created_at
+                """).With("@me", me).With("@day", day).ExecuteReaderAsync())
+                while (await r.ReadAsync())
+                    tasks.Add(new
+                    {
+                        id = r.Guid("id"),
+                        taskNo = r.Str("task_no"),
+                        title = r.Str("title"),
+                        status = r.Str("status"),
+                        statusLabel = TaskStatusLabel(r.Str("status")),
+                        progress = r.Int("progress"),
+                        kind = r.Str("kind"),
+                        kindLabel = TaskEventLabel(r.Str("kind")),
+                        note = r.Str("note"),
+                        actorName = r.Str("actor_name"),
+                        assignerName = r.Str("assigner_name"),
+                        assigneeName = r.Str("assignee_name"),
+                        at = r.Dt("created_at"),
+                    });
+
+            // ── Phạt / kỷ luật ghi nhận cho ngày đó ─────────────────────────────────────────────
+            // Bắt cả quyết định LẬP hôm đó lẫn quyết định ghi cho NGÀY VI PHẠM là hôm đó, vì hai mốc
+            // này thường lệch nhau (vi phạm hôm nay, quyết định ký hôm sau).
+            var penalties = new List<object>();
+            await using (var r = await conn.Cmd($"""
+                SELECT id, penalty_no, penalty_type, penalty_date, amount, installments,
+                       reason, note, status, created_by, created_at
+                FROM hr_penalties
+                WHERE employee_id = @emp
+                  AND (penalty_date = @day OR (created_at AT TIME ZONE '{DayTz}')::date = @day)
+                ORDER BY created_at
+                """).With("@emp", employeeId).With("@day", day).ExecuteReaderAsync())
+                while (await r.ReadAsync())
+                    penalties.Add(new
+                    {
+                        id = r.Guid("id"),
+                        code = r.Str("penalty_no"),
+                        type = r.Str("penalty_type"),
+                        typeLabel = PenaltyEndpoints.Types.FirstOrDefault(t => t.Type == r.Str("penalty_type")).Label
+                            ?? r.Str("penalty_type"),
+                        penaltyDate = r.DateOnly("penalty_date").ToString("yyyy-MM-dd"),
+                        amount = r.Dec("amount"),
+                        installments = r.Int("installments"),
+                        reason = r.Str("reason"),
+                        note = r.Str("note"),
+                        status = r.Str("status"),
+                        statusLabel = PenaltyStatusLabel(r.Str("status")),
+                        createdBy = r.Str("created_by"),
+                        at = r.Dt("created_at"),
+                    });
+
+            // ── Đơn tiền bạc (tạm ứng, thanh toán, hoàn ứng, mua sắm) ───────────────────────────
+            var rawRequests = new List<DayRequest>();
+            await using (var r = await conn.Cmd($"""
+                SELECT id, request_no, req_type, title, status, payload::text AS payload,
+                       created_at, updated_at
+                FROM hr_requests
+                WHERE employee_id = @emp
+                  AND req_type IN ('advance','payment','reimbursement','purchase')
+                  AND ((created_at AT TIME ZONE '{DayTz}')::date = @day
+                       OR (updated_at AT TIME ZONE '{DayTz}')::date = @day)
+                ORDER BY created_at
+                """).With("@emp", employeeId).With("@day", day).ExecuteReaderAsync())
+                while (await r.ReadAsync())
+                {
+                    var type = r.Str("req_type");
+                    rawRequests.Add(new DayRequest(
+                        r.Guid("id"), r.Str("request_no"), type,
+                        RequestEndpoints.Types.FirstOrDefault(t => t.Type == type).Label ?? type,
+                        r.Str("title"), PayloadAmount(r.Str("payload")), r.Str("status"),
+                        r.Dt("created_at"), r.Dt("updated_at")));
+                }
+            // Các cấp đã duyệt/từ chối, kèm giờ phút — "trạng thái chi tiết" của một đơn tiền.
+            var requestSteps = new Dictionary<Guid, List<object>>();
+            if (rawRequests.Count > 0)
+            {
+                await using var r = await conn.Cmd("""
+                    SELECT request_id, step_no, approver_name, status, decided_at, decided_by, comment
+                    FROM hr_request_approvals
+                    WHERE request_id = ANY(@ids)
+                    ORDER BY request_id, step_no
+                    """).With("@ids", rawRequests.ConvertAll(x => x.Id).ToArray()).ExecuteReaderAsync();
+                while (await r.ReadAsync())
+                {
+                    var rid = r.Guid("request_id");
+                    if (!requestSteps.TryGetValue(rid, out var list)) requestSteps[rid] = list = new List<object>();
+                    var approver = r.Str("approver_name");
+                    list.Add(new
+                    {
+                        label = $"Cấp {r.Int("step_no")}" + (approver.Length > 0 ? $" · {approver}" : ""),
+                        status = r.Str("status"),
+                        statusLabel = RequestStatusLabel(r.Str("status")),
+                        at = r.DtNull("decided_at"),
+                        by = r.Str("decided_by"),
+                        note = r.Str("comment"),
+                    });
+                }
+            }
+            var requests = rawRequests.ConvertAll(x => (object)new
+            {
+                id = x.Id,
+                code = x.Code,
+                type = x.Type,
+                typeLabel = x.TypeLabel,
+                title = x.Title,
+                amount = x.Amount,
+                status = x.Status,
+                statusLabel = RequestStatusLabel(x.Status),
+                at = x.CreatedAt,
+                updatedAt = x.UpdatedAt,
+                steps = requestSteps.TryGetValue(x.Id, out var s) ? s : new List<object>(),
+            });
+
+            // ── Phiếu chi tiền mặt kế toán lập cho tôi ──────────────────────────────────────────
+            // Một phiếu chạm vào nhiều mốc trong ngày (lập, ký nhận, duyệt, thực chi) nên chỉ cần
+            // MỘT mốc rơi vào ngày đang xem là phiếu đó thuộc về ngày này.
+            var payouts = new List<object>();
+            await using (var r = await conn.Cmd($"""
+                SELECT v.id, v.voucher_no, v.amount, v.status, v.reason, v.note,
+                       COALESCE(c.name,'') AS category_name,
+                       v.created_by, v.created_at, v.confirmed_at, v.confirmed_by,
+                       v.approved_at, v.approved_by, v.completed_at, v.completed_by, v.paid_at,
+                       v.rejected_at, v.rejected_by, v.reject_reason,
+                       v.cancelled_at, v.cancelled_by, v.cancel_reason
+                FROM hr_payout_vouchers v
+                LEFT JOIN hr_payout_categories c ON c.id = v.category_id
+                WHERE v.employee_id = @emp
+                  AND @day IN (
+                      (v.created_at   AT TIME ZONE '{DayTz}')::date,
+                      (v.confirmed_at AT TIME ZONE '{DayTz}')::date,
+                      (v.approved_at  AT TIME ZONE '{DayTz}')::date,
+                      (v.completed_at AT TIME ZONE '{DayTz}')::date,
+                      (v.paid_at      AT TIME ZONE '{DayTz}')::date,
+                      (v.rejected_at  AT TIME ZONE '{DayTz}')::date,
+                      (v.cancelled_at AT TIME ZONE '{DayTz}')::date
+                  )
+                ORDER BY v.created_at
+                """).With("@emp", employeeId).With("@day", day).ExecuteReaderAsync())
+                while (await r.ReadAsync())
+                {
+                    var steps = new List<object>();
+                    void Step(string label, DateTime? at, string by, string note = "")
+                    {
+                        if (at is null) return;
+                        steps.Add(new { label, at, by, note });
+                    }
+                    Step("Kế toán lập phiếu", r.Dt("created_at"), r.Str("created_by"));
+                    Step("Người nhận quét QR ký nhận", r.DtNull("confirmed_at"), r.Str("confirmed_by"));
+                    Step("Duyệt chi", r.DtNull("approved_at"), r.Str("approved_by"));
+                    Step("Đã thực chi", r.DtNull("completed_at") ?? r.DtNull("paid_at"), r.Str("completed_by"));
+                    Step("Từ chối", r.DtNull("rejected_at"), r.Str("rejected_by"), r.Str("reject_reason"));
+                    Step("Huỷ phiếu", r.DtNull("cancelled_at"), r.Str("cancelled_by"), r.Str("cancel_reason"));
+                    payouts.Add(new
+                    {
+                        id = r.Guid("id"),
+                        code = r.Str("voucher_no"),
+                        category = r.Str("category_name"),
+                        amount = r.Dec("amount"),
+                        status = r.Str("status"),
+                        statusLabel = PayoutStatusLabel(r.Str("status")),
+                        reason = r.Str("reason"),
+                        note = r.Str("note"),
+                        at = r.Dt("created_at"),
+                        steps,
+                    });
+                }
+
+            return Results.Ok(new
+            {
+                date = day.ToString("yyyy-MM-dd"),
+                tasks,
+                penalties,
+                requests,
+                payouts,
+            });
+        });
+
         // Nhân viên tự xem các PHIẾU LƯƠNG ĐÃ PHÁT HÀNH của chính mình (mỗi kỳ một phiếu), kèm chi tiết
         // khoản cộng/trừ để app hiển thị khi bấm vào từng tháng. Chỉ trả phiếu đã publish.
         g.MapGet("/my-payslips", async (ClaimsPrincipal u, Database db) =>
@@ -1256,6 +1459,94 @@ public static class PayrollEndpoints
     {
         await db.RecordAudit(u.Username(), action, entity, employeeId.ToString(), $"{action} (web).");
     }
+
+    // ---- Nhật ký một ngày (/my-day) ----
+
+    /// <summary>Ngày làm việc chốt theo giờ Việt Nam, không theo giờ máy chủ.</summary>
+    private const string DayTz = "Asia/Ho_Chi_Minh";
+
+    private sealed record DayRequest(Guid Id, string Code, string Type, string TypeLabel, string Title,
+        decimal Amount, string Status, DateTime CreatedAt, DateTime UpdatedAt);
+
+    /// <summary>Số tiền nằm trong payload đơn — mỗi loại đơn gọi tên trường một kiểu.</summary>
+    private static decimal PayloadAmount(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return 0m;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return 0m;
+            foreach (var key in new[] { "amount", "advancedAmount", "spentAmount" })
+            {
+                if (!doc.RootElement.TryGetProperty(key, out var v)) continue;
+                switch (v.ValueKind)
+                {
+                    case JsonValueKind.Number when v.TryGetDecimal(out var n): return n;
+                    case JsonValueKind.String when decimal.TryParse(
+                        v.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var s): return s;
+                }
+            }
+        }
+        catch (JsonException) { /* payload hỏng thì coi như không có số tiền */ }
+        return 0m;
+    }
+
+    private static string TaskStatusLabel(string s) => s switch
+    {
+        "assigned" => "Chờ nhận",
+        "in_progress" => "Đang làm",
+        "submitted" => "Chờ nghiệm thu",
+        "accepted" => "Đã nghiệm thu",
+        "completed" => "Đã hoàn thành",
+        "rejected" => "Bị trả lại",
+        "cancelled" => "Đã huỷ",
+        _ => s,
+    };
+
+    private static string TaskEventLabel(string kind) => kind switch
+    {
+        "assigned" => "được giao việc",
+        "reassigned" => "chuyển người nhận",
+        "updated" => "cập nhật việc",
+        "started" => "bắt đầu làm",
+        "progress" => "cập nhật tiến độ",
+        "submitted" => "báo xong / nộp nghiệm thu",
+        "accepted" => "nghiệm thu đạt",
+        "completed" => "hoàn thành",
+        "rejected" => "bị trả lại",
+        "cancelled" => "huỷ việc",
+        "comment" => "trao đổi",
+        _ => kind,
+    };
+
+    private static string PenaltyStatusLabel(string s) => s switch
+    {
+        "Active" => "Còn hiệu lực",
+        "Settled" => "Đã tất toán",
+        "Waived" => "Đã xoá phạt",
+        _ => s,
+    };
+
+    private static string RequestStatusLabel(string s) => s switch
+    {
+        "Pending" => "Chờ duyệt",
+        "Approved" => "Đã duyệt",
+        "Rejected" => "Từ chối",
+        "Cancelled" => "Đã huỷ",
+        _ => s,
+    };
+
+    private static string PayoutStatusLabel(string s) => s switch
+    {
+        "AwaitingScan" => "Chờ quét QR",
+        "AwaitingApproval" => "Chờ duyệt",
+        "Confirmed" => "Đã ký nhận · chờ duyệt",
+        "Approved" => "Đã duyệt · chờ thực chi",
+        "Paid" => "Đã thực chi",
+        "Rejected" => "Đã từ chối",
+        "Cancelled" => "Đã huỷ",
+        _ => s,
+    };
 
     // ---- Xuất Excel ----
 

@@ -75,7 +75,6 @@ class TimesheetSwipeUiTest {
                     onShiftSwap = {},
                     onForgotCheckin = {},
                     onLoadSalary = {},
-                    onVerifyAccountPassword = { _, result -> result(true, null) },
                 )
             }
         }

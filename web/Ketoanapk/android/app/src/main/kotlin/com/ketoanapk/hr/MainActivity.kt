@@ -15,6 +15,7 @@ import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.data.CallManager
 import com.ketoanapk.hr.data.CallNotifier
+import com.ketoanapk.hr.data.purgeLegacyAppPinStorage
 import com.ketoanapk.hr.ui.HrApp
 import com.ketoanapk.hr.ui.HrViewModel
 
@@ -43,6 +44,7 @@ class MainActivity : ComponentActivity() {
         AppNotifier.ensureChannel(this)
         CallManager.init(this)
         AppUpdater.purgeCachedApks(this)
+        purgeLegacyAppPinStorage(this)
         handleDeepLink(intent)
 
         setContent { HrApp(viewModel) }

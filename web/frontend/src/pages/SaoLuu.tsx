@@ -3,6 +3,7 @@ import { Download, RotateCcw, Search } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Table } from "../components/Table";
+import { DatePicker } from "../components/DateField";
 import { Badge, Button, Input, Select } from "../components/ui";
 import { useApi } from "../lib/useApi";
 import { api } from "../lib/api";
@@ -176,14 +177,28 @@ export function SaoLuu() {
         {/* Khoảng ngày chỉ dùng khi KHÔNG lọc theo tháng — tránh hai bộ lọc thời gian đá nhau. */}
         {!draft.month && (
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            <label className="text-xs font-semibold text-[var(--text-secondary)] lg:col-span-1">
+            <div className="text-xs font-semibold text-[var(--text-secondary)] lg:col-span-1">
               Từ ngày
-              <Input type="date" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
-            </label>
-            <label className="text-xs font-semibold text-[var(--text-secondary)] lg:col-span-1">
+              <DatePicker
+                value={draft.from}
+                onChange={(next) => setDraft({ ...draft, from: next })}
+                placeholder="Từ ngày"
+                clearable
+                className="mt-1 w-full"
+                max={draft.to || undefined}
+              />
+            </div>
+            <div className="text-xs font-semibold text-[var(--text-secondary)] lg:col-span-1">
               Đến ngày
-              <Input type="date" value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} />
-            </label>
+              <DatePicker
+                value={draft.to}
+                onChange={(next) => setDraft({ ...draft, to: next })}
+                placeholder="Đến ngày"
+                clearable
+                className="mt-1 w-full"
+                min={draft.from || undefined}
+              />
+            </div>
           </div>
         )}
         <div className="mt-3 flex flex-wrap items-center gap-2">

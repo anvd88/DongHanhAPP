@@ -60,8 +60,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -71,9 +69,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
-import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -114,9 +109,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 
 /**
@@ -650,7 +643,7 @@ private fun FieldEditor(
             ) { open -> DatePickerPopup(value, onPicked = onChange, control = open) }
 
             RfType.Time -> PickerBox(
-                display = if (value.isBlank()) "Chọn giờ" else value,
+                display = if (value.isBlank()) "Chọn giờ" else formatTime12(value),
                 placeholder = value.isBlank(),
                 icon = Icons.Filled.Schedule,
                 isError = isError,
@@ -668,13 +661,15 @@ private fun FieldEditor(
             }
 
             RfType.Money -> OutlinedTextField(
-                value = groupThousands(value),
-                onValueChange = { onChange(it.filter { c -> c.isDigit() }) },
+                value = value.filter { c -> c.isDigit() },
+                onValueChange = { onChange(it.filter { c -> c.isDigit() }.take(15)) },
                 modifier = Modifier.fillMaxWidth(),
                 readOnly = readOnly,
                 singleLine = true,
                 isError = isError,
+                placeholder = { Text("0") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                visualTransformation = ThousandsSeparatorTransformation(),
                 trailingIcon = { Text("₫", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant) },
                 shape = RoundedCornerShape(14.dp),
             )
@@ -863,52 +858,27 @@ private fun PickerBox(
 /** Điều khiển nhỏ để hộp thoại tự đóng. */
 private class MutableControl(val dismiss: () -> Unit)
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Ngày & giờ của form đơn từ dùng CHUNG bánh xe vuốt với cả app (xem FormPickers.kt) — không còn
+ * lịch Material và mặt đồng hồ kim, để mọi màn nhập liệu thao tác giống hệt nhau.
+ */
 @Composable
 private fun DatePickerPopup(current: String, onPicked: (String) -> Unit, control: MutableControl) {
-    val initMillis = runCatching {
-        LocalDate.parse(current).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-    }.getOrNull()
-    val pickerState = rememberDatePickerState(initialSelectedDateMillis = initMillis)
-    DatePickerDialog(
-        onDismissRequest = control.dismiss,
-        confirmButton = {
-            TextButton(onClick = {
-                pickerState.selectedDateMillis?.let { millis ->
-                    val date = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
-                    onPicked(date.toString())
-                }
-                control.dismiss()
-            }) { Text("Chọn") }
-        },
-        dismissButton = { TextButton(onClick = control.dismiss) { Text("Hủy") } },
-    ) {
-        DatePicker(state = pickerState)
-    }
+    WheelDatePickerDialog(
+        initial = runCatching { LocalDate.parse(current) }.getOrDefault(LocalDate.now()),
+        onPicked = { onPicked(it.toString()) },
+        onDismiss = control.dismiss,
+    )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TimePickerPopup(current: String, onPicked: (String) -> Unit, control: MutableControl) {
     val parts = current.split(":")
-    val initHour = parts.getOrNull(0)?.toIntOrNull() ?: 8
-    val initMinute = parts.getOrNull(1)?.toIntOrNull() ?: 0
-    val pickerState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
-    AlertDialog(
-        onDismissRequest = control.dismiss,
-        confirmButton = {
-            TextButton(onClick = {
-                onPicked("%02d:%02d".format(pickerState.hour, pickerState.minute))
-                control.dismiss()
-            }) { Text("Chọn") }
-        },
-        dismissButton = { TextButton(onClick = control.dismiss) { Text("Hủy") } },
-        title = { Text("Chọn giờ") },
-        text = {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                TimePicker(state = pickerState)
-            }
-        },
+    WheelTimePickerDialog(
+        initialHour = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 8,
+        initialMinute = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0,
+        onPicked = { hour, minute -> onPicked("%02d:%02d".format(hour, minute)) },
+        onDismiss = control.dismiss,
     )
 }
 
@@ -1286,11 +1256,4 @@ private fun inclusiveDays(from: String?, to: String?): Int? {
         val b = LocalDate.parse(to)
         if (b.isBefore(a)) null else (ChronoUnit.DAYS.between(a, b).toInt() + 1)
     }.getOrNull()
-}
-
-/** Nhóm 3 chữ số cho tiền: "1500000" → "1.500.000". */
-private fun groupThousands(digits: String): String {
-    val n = digits.filter { it.isDigit() }.trimStart('0')
-    if (n.isEmpty()) return ""
-    return n.reversed().chunked(3).joinToString(".").reversed()
 }

@@ -2,6 +2,7 @@ using FirebaseAdmin;
 using FirebaseAdmin.Messaging;
 using Google.Apis.Auth.OAuth2;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.Security;
 using Npgsql;
 using System.Security.Cryptography;
 using System.Text;
@@ -60,20 +61,125 @@ public sealed class PushService
     /// KHÔNG gọi FCM ngay: chỉ ghi một dòng vào hàng chờ rồi trả về, worker gửi sau (xem OutboxQueue).
     /// Nhờ vậy thao tác của người dùng không phải chờ mạng, và FCM lỗi thì việc vẫn được thử lại.
     /// </summary>
-    public async Task SendToUserAsync(string? username, string title, string body, string notifId, string? target = null)
+    public async Task SendToUserAsync(string? username, string title, string body, string notifId,
+        string? target = null, string? link = null, string? category = null)
     {
         if (string.IsNullOrWhiteSpace(username)) return;
+        if (await IsMutedAsync(username!, category ?? CategoryFor(target))) return;
+        await RecordInboxAsync(username!, title, body, notifId, target, link, category);
         await _outbox.EnqueueAsync(OutboxQueue.KindUserPush,
             new PushJob(username, title, body, notifId, target),
             DedupeKey(OutboxQueue.KindUserPush, username, notifId));
     }
 
+    /// <summary>
+    /// Báo cho MỌI người đang giữ một trong các quyền — dùng cho sự kiện thuộc về cả một bộ phận
+    /// ("tài xế vừa giao xong khách X" thì thủ kho, kế toán và quản trị viên đều cần biết), thay vì
+    /// chỉ báo đúng một người như trước.
+    ///
+    /// <paramref name="exceptUsername"/> là CHÍNH người vừa gây ra sự kiện: không ai cần thông báo về
+    /// việc mình vừa tự bấm.
+    /// </summary>
+    public async Task SendToPermissionAsync(IReadOnlyCollection<string> permissions, string title, string body,
+        string notifId, string? target = null, string? link = null, string? category = null,
+        bool includeAdmins = true, string? exceptUsername = null)
+    {
+        List<string> recipients;
+        try
+        {
+            var wanted = includeAdmins ? [.. permissions, Permissions.UsersManage] : permissions.ToArray();
+            recipients = await PermissionDirectory.UsersWithAnyPermissionAsync(_db, wanted);
+        }
+        catch (Exception ex)
+        {
+            // Không tra được danh sách người nhận thì thà mất một thông báo còn hơn làm hỏng nghiệp vụ
+            // vừa ghi xong — nhưng phải kêu, vì im lặng ở đây nghĩa là cả phòng ban không hay biết gì.
+            _log.LogError(ex, "Không tra được người nhận thông báo cho quyền {Perms}", string.Join(",", permissions));
+            return;
+        }
+
+        var targets = recipients.Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(r => string.IsNullOrWhiteSpace(exceptUsername)
+                        || !string.Equals(r, exceptUsername, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        // Hỏi một lần cho cả danh sách thay vì mỗi người một truy vấn: một sự kiện giao hàng có thể
+        // gửi cho cả chục người, và số đó còn tăng theo quy mô công ty.
+        var muted = await MutedUsersAsync(targets, category ?? CategoryFor(target));
+
+        foreach (var recipient in targets)
+        {
+            if (muted.Contains(recipient)) continue;
+            await RecordInboxAsync(recipient, title, body, notifId, target, link, category);
+            await _outbox.EnqueueAsync(OutboxQueue.KindUserPush,
+                new PushJob(recipient, title, body, notifId, target),
+                DedupeKey(OutboxQueue.KindUserPush, recipient, notifId));
+        }
+    }
+
+    /* ---- Nhóm thông báo người dùng đã TẮT (xem NotificationGroups) ----
+     * Không có dòng preference = BẬT. Chỉ dòng ghi rõ "false" mới là tắt, nên người chưa từng vào
+     * Cài đặt vẫn nhận đủ mọi thông báo. */
+
+    private async Task<bool> IsMutedAsync(string username, string? category)
+    {
+        var group = NotificationGroups.ForCategory(category);
+        if (group is null) return false;
+        var muted = await MutedUsersAsync([username], category);
+        return muted.Contains(username);
+    }
+
+    private async Task<HashSet<string>> MutedUsersAsync(IReadOnlyCollection<string> usernames, string? category)
+    {
+        var empty = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var group = NotificationGroups.ForCategory(category);
+        if (group is null || usernames.Count == 0) return empty;
+        try
+        {
+            await using var conn = await _db.OpenAsync();
+            return await MutedUsersAsync(conn, null, usernames, group, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Không đọc được tuỳ chọn thì GỬI (mở mặc định): thà nhận thừa một thông báo còn hơn
+            // lặng lẽ nuốt mất tin "tài xế đã giao hàng" vì cơ sở dữ liệu chập chờn.
+            _log.LogWarning("Không đọc được tuỳ chọn thông báo: {Msg}", ex.Message);
+            return empty;
+        }
+    }
+
+    private static async Task<HashSet<string>> MutedUsersAsync(NpgsqlConnection conn, NpgsqlTransaction? tx,
+        IReadOnlyCollection<string> usernames, string group, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT u.username
+            FROM app_users u
+            JOIN web_user_preferences p ON p.user_id = u.id
+            WHERE p.preference_key = @k AND lower(p.preference_value) = 'false'
+              AND lower(u.username) = ANY(@users)
+            """;
+        var cmd = (tx is null ? conn.Cmd(sql) : conn.Cmd(sql, tx))
+            .With("@k", NotificationGroups.PreferenceKey(group))
+            .With("@users", usernames.Select(u => u.Trim().ToLowerInvariant()).ToArray());
+        var muted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) muted.Add(r.Str(0));
+        return muted;
+    }
+
     /// <summary>Xếp push trong cùng transaction với thay đổi nghiệp vụ nguồn.</summary>
     internal async Task<bool> EnqueueToUserAsync(NpgsqlConnection conn, NpgsqlTransaction tx,
         string username, string title, string body, string notifId, string? target = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? link = null, string? category = null)
     {
         if (string.IsNullOrWhiteSpace(username)) return false;
+        if (NotificationGroups.ForCategory(category ?? CategoryFor(target)) is { } group)
+        {
+            // Dùng lại đúng kết nối/giao dịch đang mở: mở kết nối thứ hai giữa một giao dịch đang giữ
+            // khoá hàng là cách nhanh nhất để tự khoá chính mình.
+            var muted = await MutedUsersAsync(conn, tx, [username], group, ct);
+            if (muted.Contains(username)) return false;
+        }
+        await RecordInboxAsync(conn, tx, username, title, body, notifId, target, link, category, ct);
         return await _outbox.EnqueueAsync(conn, tx, OutboxQueue.KindUserPush,
             new PushJob(username, title, body, notifId, target),
             DedupeKey(OutboxQueue.KindUserPush, username, notifId), ct);
@@ -90,11 +196,194 @@ public sealed class PushService
     }
 
     /// <summary>Đẩy tới mọi quản trị viên đang hoạt động (cho bước duyệt cấp Admin).</summary>
-    public async Task SendToAdminsAsync(string title, string body, string notifId, string? target = null)
+    public async Task SendToAdminsAsync(string title, string body, string notifId, string? target = null,
+        string? link = null, string? category = null)
     {
+        await RecordInboxForAdminsAsync(title, body, notifId, target, link, category);
         await _outbox.EnqueueAsync(OutboxQueue.KindAdminsPush,
             new PushJob(null, title, body, notifId, target),
             DedupeKey(OutboxQueue.KindAdminsPush, null, notifId));
+    }
+
+    /* ------------------------------------------------------------------------------------------
+     * HỘP THƯ THÔNG BÁO CỦA WEB (bảng web_notifications)
+     *
+     * App Android tự dựng thông báo từ gói FCM, nhưng TRÌNH DUYỆT thì không có FCM: đóng tab là mất.
+     * Nên mỗi lần đẩy push, ghi luôn một dòng vào hộp thư — chuông trên header đọc từ đó. Đặt ở
+     * ĐÂY (chứ không rải ra từng endpoint) vì PushService đã là cửa duy nhất mà mọi sự kiện đáng
+     * báo phải đi qua: thêm nghiệp vụ mới chỉ cần gọi push như cũ là web có thông báo.
+     *
+     * Ghi hỏng KHÔNG được làm hỏng nghiệp vụ gốc: thông báo là hệ quả, không phải dữ liệu sổ sách.
+     * ---------------------------------------------------------------------------------------- */
+
+    private const string InboxInsertSql = """
+        INSERT INTO web_notifications (username, title, body, category, link, app_target, notif_id, actor)
+        VALUES (@u, @t, @b, @c, @l, @s, @n, @a)
+        ON CONFLICT DO NOTHING
+        """;
+
+    /// <summary>Tin nhắn chat đã có badge riêng trên chuông; ghi thêm vào hộp thư là đếm hai lần.</summary>
+    private static bool SkipInbox(string? target) =>
+        string.Equals(target, "Chat", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Màn hình web tương ứng với "màn hình app" mà thông báo trỏ tới. Nhờ ánh xạ này, các nghiệp vụ
+    /// đã có push từ trước tự có đường dẫn đúng trên web mà không phải sửa lại từng endpoint.
+    /// </summary>
+    internal static string WebLinkFor(string? target) => (target ?? "").Trim() switch
+    {
+        "Tasks" => "/cong-viec",
+        "CashCollection" or "CashCollections" => "/lenh-thu-tien",
+        "Approval" => "/pheduyet",
+        "Requests" => "/dontu",
+        "Penalty" => "/phat",
+        "Attendance" => "/chamcong",
+        "Settings" => "/caidat",
+        "AppUpdate" => "/tai-apk",
+        "Chat" => "/chats",
+        _ => "",
+    };
+
+    /// <summary>Nhóm thông báo — dùng để chọn biểu tượng/màu trên chuông, không chốt quyền gì cả.</summary>
+    internal static string CategoryFor(string? target) => (target ?? "").Trim() switch
+    {
+        "Tasks" => "task",
+        "CashCollection" or "CashCollections" => "collection",
+        "Approval" or "Requests" => "request",
+        "Penalty" => "penalty",
+        "Attendance" => "attendance",
+        "Settings" => "security",
+        "AppUpdate" => "system",
+        "Chat" => "chat",
+        _ => "general",
+    };
+
+    private static NpgsqlCommand InboxCommand(NpgsqlCommand cmd, string username, string title, string body,
+        string notifId, string? target, string? link, string? category)
+        => cmd.With("@u", username.Trim())
+              .With("@t", Clip(title, 200))
+              .With("@b", Clip(body, 2000))
+              .With("@c", category ?? CategoryFor(target))
+              .With("@l", link ?? WebLinkFor(target))
+              // Tên màn hình của APP (HrDestination) — cùng giá trị đang gửi trong gói FCM, để dòng
+              // hộp thư mà app tải về bấm vào là đi đúng chỗ chứ không phải đoán từ đường dẫn web.
+              .With("@s", AppTargetFor(target, category))
+              .With("@n", notifId ?? "")
+              .With("@a", "");
+
+    /// <summary>
+    /// Màn hình APP tương ứng. <paramref name="target"/> đã là tên màn của app ở hầu hết nghiệp vụ cũ;
+    /// các nghiệp vụ mới (giao hàng, chứng từ…) chỉ có category nên suy ngược ra đây.
+    /// Chuỗi rỗng = app không có màn tương ứng, bấm vào chỉ đánh dấu đã đọc.
+    /// </summary>
+    internal static string AppTargetFor(string? target, string? category)
+    {
+        var raw = (target ?? "").Trim();
+        if (raw is "Tasks" or "Approval" or "Requests" or "Penalty" or "Attendance" or "Chat"
+            or "Settings" or "AppUpdate" or "Payout" or "CashCollections") return raw;
+        if (raw == "CashCollection") return "CashCollections";
+        return (category ?? "").Trim().ToLowerInvariant() switch
+        {
+            "delivery" or "task" => "Tasks",
+            "collection" => "CashCollections",
+            "payout" => "Payout",
+            "request" => "Requests",
+            "penalty" => "Penalty",
+            "attendance" => "Timesheet",
+            // "document" cố ý để trống: app không có màn chứng từ nào để mở.
+            _ => "",
+        };
+    }
+
+    private static string Clip(string? value, int max)
+    {
+        var text = (value ?? "").Trim();
+        return text.Length <= max ? text : text[..max];
+    }
+
+    private async Task RecordInboxAsync(string username, string title, string body, string notifId,
+        string? target, string? link, string? category)
+    {
+        if (SkipInbox(target)) return;
+        try
+        {
+            await using var conn = await _db.OpenAsync();
+            await InboxCommand(conn.Cmd(InboxInsertSql), username, title, body, notifId, target, link, category)
+                .ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Không ghi được thông báo web cho {User}: {Msg}", username, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Ghi trong CÙNG giao dịch nghiệp vụ: nghiệp vụ rollback thì thông báo cũng biến mất.
+    ///
+    /// Bọc trong SAVEPOINT vì ở PostgreSQL một lệnh lỗi làm HỎNG CẢ giao dịch — không có savepoint
+    /// thì một sự cố của bảng thông báo (bảng chưa kịp tạo, đĩa đầy…) sẽ chặn luôn việc ghi lệnh thu
+    /// tiền hay phiếu chi. Thông báo là hệ quả, tuyệt đối không được cản trở dữ liệu sổ sách.
+    /// </summary>
+    private async Task RecordInboxAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string username,
+        string title, string body, string notifId, string? target, string? link, string? category,
+        CancellationToken ct)
+    {
+        if (SkipInbox(target)) return;
+        const string savepoint = "km_inbox";
+        try
+        {
+            await tx.SaveAsync(savepoint, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Không đặt được savepoint cho thông báo web: {Msg}", ex.Message);
+            return;
+        }
+
+        try
+        {
+            await InboxCommand(conn.Cmd(InboxInsertSql, tx), username, title, body, notifId, target, link, category)
+                .ExecuteNonQueryAsync(ct);
+            await tx.ReleaseAsync(savepoint, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Ghi thông báo web trong giao dịch thất bại cho {User}", username);
+            try { await tx.RollbackAsync(savepoint, ct); }
+            catch (Exception rollback)
+            {
+                _log.LogError(rollback, "Không quay lui được savepoint thông báo web");
+            }
+        }
+    }
+
+    private async Task RecordInboxForAdminsAsync(string title, string body, string notifId,
+        string? target, string? link, string? category)
+    {
+        if (SkipInbox(target)) return;
+        try
+        {
+            var admins = new List<string>();
+            await using var conn = await _db.OpenAsync();
+            await using (var r = await conn.Cmd("""
+                SELECT username FROM app_users
+                WHERE lower(role) = 'admin' AND is_active = TRUE AND COALESCE(is_deleted, FALSE) = FALSE
+                """).ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync()) admins.Add(r.Str(0));
+            }
+            var muted = await MutedUsersAsync(admins, category ?? CategoryFor(target));
+            foreach (var admin in admins)
+            {
+                if (muted.Contains(admin)) continue;
+                await InboxCommand(conn.Cmd(InboxInsertSql), admin, title, body, notifId, target, link, category)
+                    .ExecuteNonQueryAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Không ghi được thông báo web cho quản trị viên: {Msg}", ex.Message);
+        }
     }
 
     /// <summary>
@@ -145,13 +434,18 @@ public sealed class PushService
         return await SendNowAsync(tokens, title, body, notifId, target, "");
     }
 
+    /// <summary>
+    /// So sánh vai trò KHÔNG phân biệt hoa/thường: app_users.role lưu đúng dạng "Admin" (xem
+    /// <see cref="AppRoles"/>), nên câu cũ dùng 'admin' chữ thường không khớp dòng nào — thông báo
+    /// gửi cho quản trị viên lặng lẽ rơi vào hư không.
+    /// </summary>
     internal async Task<bool> DispatchAdminsAsync(string title, string body, string notifId, string? target)
     {
         if (!_enabled) return await SendNowAsync([], title, body, notifId, target, "");
         var tokens = await LoadTokensAsync("""
             SELECT dt.token FROM hr_device_tokens dt
             JOIN app_users u ON lower(u.username) = lower(dt.username)
-            WHERE u.role = 'admin' AND u.is_active = TRUE AND COALESCE(u.is_deleted, FALSE) = FALSE
+            WHERE lower(u.role) = 'admin' AND u.is_active = TRUE AND COALESCE(u.is_deleted, FALSE) = FALSE
             """);
         return await SendNowAsync(tokens, title, body, notifId, target, "");
     }

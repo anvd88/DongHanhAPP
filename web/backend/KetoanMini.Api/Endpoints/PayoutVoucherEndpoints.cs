@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
+using KetoanMini.Api.Services;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -594,7 +595,7 @@ public static class PayoutVoucherEndpoints
 
         // ---------------- Lập / xác nhận / duyệt / thực chi ----------------
 
-        g.MapPost("/", async (CreateVoucherReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/", async (CreateVoucherReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             await using var conn = await db.OpenAsync();
             if (!await IsAccountingDepartmentMemberAsync(conn, u))
@@ -663,6 +664,11 @@ public static class PayoutVoucherEndpoints
 
             await tx.CommitAsync();
             await Signal(db, u, "Lập phiếu chi", no);
+            await push.SendToPermissionAsync([Permissions.PayoutApprove],
+                "Có phiếu chi mới chờ duyệt",
+                $"{no}: {amount:N0} ₫" + (reason.Length > 0 ? $" · {reason}" : ""),
+                $"payout:{id}:created", target: "Payout", link: "/phieu-chi", category: "payout",
+                exceptUsername: u.Username());
             return Results.Ok(new { id, voucherNo = no });
         }).RequirePermission(Permissions.PayoutCreate);
 
@@ -693,7 +699,7 @@ public static class PayoutVoucherEndpoints
         }).RequirePermission(Permissions.PayoutCreate);
 
         // Kế toán trưởng duyệt về mặt thẩm quyền. Đây CHƯA phải thực chi; thủ quỹ hoàn tất ở /complete.
-        g.MapPost("/{id:guid}/approve", async (Guid id, TransitionVoucherReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/{id:guid}/approve", async (Guid id, TransitionVoucherReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             await using var conn = await db.OpenAsync();
             if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
@@ -716,12 +722,17 @@ public static class PayoutVoucherEndpoints
                 after?.ApprovedAt);
             await tx.CommitAsync();
             await Signal(db, u, "Duyệt phiếu chi", before.VoucherNo);
+            await push.SendToPermissionAsync([Permissions.PayoutPay],
+                "Phiếu chi đã được duyệt",
+                $"{before.VoucherNo}: chờ thủ quỹ chi tiền.",
+                $"payout:{id}:approved", target: "Payout", link: "/phieu-chi", category: "payout",
+                exceptUsername: u.Username());
             return Results.NoContent();
         }).RequirePermission(Permissions.PayoutApprove);
 
         // Thủ quỹ xác nhận tiền đã thực chi. Trạng thái client gửi lên bị bỏ qua; server khóa hàng và chỉ
         // chấp nhận đúng Approved → Paid.
-        g.MapPost("/{id:guid}/complete", async (Guid id, TransitionVoucherReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/{id:guid}/complete", async (Guid id, TransitionVoucherReq req, ClaimsPrincipal u, Database db, PushService push) =>
         {
             await using var conn = await db.OpenAsync();
             if (!await IsAccountingDepartmentMemberAsync(conn, u)) return Results.Forbid();
@@ -748,6 +759,11 @@ public static class PayoutVoucherEndpoints
                 after?.CompletedAt);
             await tx.CommitAsync();
             await Signal(db, u, "Hoàn tất chi phiếu chi", before.VoucherNo);
+            await push.SendToPermissionAsync([Permissions.PayoutRead, Permissions.CashFundRead],
+                "Đã chi tiền phiếu chi",
+                $"{before.VoucherNo}: tiền đã ra khỏi két.",
+                $"payout:{id}:paid", target: "Payout", link: "/phieu-chi", category: "payout",
+                exceptUsername: u.Username());
             return Results.NoContent();
         }).RequirePermission(Permissions.PayoutPay);
 

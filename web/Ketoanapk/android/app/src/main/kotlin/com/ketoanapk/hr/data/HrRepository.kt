@@ -8,6 +8,9 @@ import com.ketoanapk.hr.network.ApiException
 import com.ketoanapk.hr.network.DecisionBody
 import com.ketoanapk.hr.network.HrApi
 import com.ketoanapk.hr.network.friendlyMessage
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
@@ -281,7 +284,9 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun requestDetail(id: String): RequestDetail = call { api.requestDetail(id) }
     suspend fun createRequest(body: CreateRequestBody): CreatedRequest = call { api.createRequest(body) }
     // ---- Giao việc & nghiệm thu ----
-    suspend fun workTasks(): WorkTaskListResult = call { api.workTasks() }
+    suspend fun workTasks(): WorkTaskListResult = call { api.workTasks(activeOnly = true) }
+    suspend fun workTaskHistory(from: String, to: String, assignee: String?): WorkTaskHistoryResult =
+        call { api.workTaskHistory(from, to, assignee?.ifBlank { null }) }
     suspend fun workTaskMeta(): WorkTaskMeta = call { api.workTaskMeta() }
     suspend fun workTaskDetail(id: String): WorkTaskDetailResult = call { api.workTaskDetail(id) }
     suspend fun createWorkTask(body: CreateTaskBody): CreatedTask = call { api.createWorkTask(body) }
@@ -299,6 +304,7 @@ class HrRepository(context: Context, background: Boolean = false) {
         call { api.penalties(scope, month) }
     suspend fun salaries(): List<SalaryListItem> = call { api.salaries() }
     suspend fun myEstimate(): PayEstimate = call { api.myEstimate() }
+    suspend fun myDayLog(date: String): DayLog = call { api.myDayLog(date) }
     // ---- Phiếu chi tiền mặt ----
     suspend fun payoutVouchers(scope: String): List<PayoutVoucher> = call { api.payoutVouchers(scope) }
     suspend fun payoutCategories(): List<PayoutCategory> = call { api.payoutCategories() }
@@ -381,8 +387,49 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun changePassword(current: String, next: String) = callUnit {
         api.changePassword(ChangePasswordBody(current, next))
     }
-    suspend fun verifyPassword(password: String) = callUnit {
-        api.verifyPassword(VerifyPasswordBody(password))
+    // --- Mã bảo mật ứng dụng (mọi thứ nằm ở máy chủ: hash, bộ đếm sai, khoá thử lại) ---
+    suspend fun appPinStatus(): AppPinStatus = call { api.appPinStatus() }
+
+    /**
+     * Tạo mã lần đầu ([currentPin] = null) hoặc đổi mã. Trả [AppPinVerification.Incorrect]/[AppPinVerification.Locked]
+     * khi mã CŨ sai; mã mới không hợp lệ (quá dễ đoán, không đủ 6 số) thì ném [ApiException] kèm lý do.
+     */
+    suspend fun setAppPin(pin: String, currentPin: String? = null): AppPinVerification =
+        appPinCall { api.setAppPin(AppPinSetBody(pin, currentPin)) }
+
+    suspend fun verifyAppPin(pin: String): AppPinVerification =
+        appPinCall { api.verifyAppPin(AppPinVerifyBody(pin)) }
+
+    /** Quên mã: máy chủ xác minh mật khẩu tài khoản rồi xoá mã cũ (một lượt, client không tự xoá được). */
+    suspend fun resetAppPin(password: String) = callUnit { api.resetAppPin(AppPinResetBody(password)) }
+
+    /**
+     * Gọi một endpoint mã bảo mật và dịch phản hồi lỗi CÓ CẤU TRÚC của máy chủ thành [AppPinVerification].
+     * Chỉ các mã lỗi nghiệp vụ mới thành kết quả; còn lại (mạng, 401, mã mới không hợp lệ…) vẫn ném lỗi
+     * để giao diện hiện đúng thông điệp của máy chủ.
+     */
+    private suspend fun appPinCall(block: suspend () -> retrofit2.Response<Unit>): AppPinVerification {
+        val response = try {
+            block()
+        } catch (e: HttpException) {
+            throw ApiException(e.friendlyMessage())
+        } catch (e: IOException) {
+            throw ApiException("Không kết nối được máy chủ nên chưa kiểm tra được mã bảo mật.")
+        }
+        if (response.isSuccessful) return AppPinVerification.Success
+
+        val raw = runCatching { response.errorBody()?.string() }.getOrNull()
+        val error = raw?.let {
+            runCatching { ApiClient.json.parseToJsonElement(it) as? JsonObject }.getOrNull()
+        }
+        fun field(name: String): String? =
+            (error?.get(name) as? JsonPrimitive)?.contentOrNull
+        return when (field("code")) {
+            "pin_locked" -> AppPinVerification.Locked(field("lockedForSeconds")?.toLongOrNull() ?: 30L)
+            "pin_incorrect" -> AppPinVerification.Incorrect(field("attemptsBeforeLock")?.toIntOrNull() ?: 1)
+            "pin_not_set" -> AppPinVerification.NotSet
+            else -> throw ApiException(field("message") ?: HttpException(response).friendlyMessage())
+        }
     }
     suspend fun devices(): List<DeviceSession> = call { api.devices() }
     suspend fun revokeDevice(sid: String) = callUnit { api.revokeDevice(sid) }
@@ -721,6 +768,31 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun missedCall(toUser: String, callId: String, media: String) {
         runCatching { api.missedCall(com.ketoanapk.hr.network.CallMissedBody(toUser, callId, media)) }
     }
+
+    /**
+     * Hộp thư thông báo trên máy chủ. Lỗi mạng trả danh sách rỗng chứ không ném: chuông trong app đã
+     * có sẵn dữ liệu cũ trên máy, mất mạng không được làm trắng nó.
+     */
+    suspend fun notificationFeed(limit: Int = 50): List<ServerNotification> =
+        runCatching { api.notificationFeed(limit).items }.getOrDefault(emptyList())
+
+    /** Báo máy chủ là đã đọc, để chuông trên web và trên app không lệch nhau. */
+    suspend fun markServerNotificationRead(id: Long) {
+        runCatching { api.markNotificationRead(id) }
+    }
+
+    suspend fun markAllServerNotificationsRead() {
+        runCatching { api.markAllNotificationsRead() }
+    }
+
+    /** Nhóm thông báo còn nhận. Không đọc được thì trả rỗng để giao diện hiểu là "chưa biết". */
+    suspend fun notificationGroups(): Map<String, Boolean> =
+        runCatching { api.notificationGroups().groups }.getOrDefault(emptyMap())
+
+    /** Trả về bản đồ mới nhất từ máy chủ; rỗng nghĩa là lưu KHÔNG thành công. */
+    suspend fun setNotificationGroup(group: String, enabled: Boolean): Map<String, Boolean> =
+        runCatching { api.updateNotificationGroups(NotificationGroupSettings(mapOf(group to enabled))).groups }
+            .getOrDefault(emptyMap())
 
     /** Lấy cuộc gọi nhỡ chưa xem (từ DB) — dùng khi mở app để hiện dù trước đó offline. */
     suspend fun fetchMissedCalls(): List<MissedCall> =

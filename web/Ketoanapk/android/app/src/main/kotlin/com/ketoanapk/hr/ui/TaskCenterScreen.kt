@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -208,6 +209,20 @@ fun TaskCenterScreen(vm: HrViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
+        // Lối vào LỊCH SỬ: màn này chỉ giữ việc còn phải làm (việc xong của hôm qua tự rụng khi sang
+        // ngày mới), nên phải có một cửa rõ ràng để xem lại việc đã hoàn thành.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 14.dp, top = 10.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            OutlinedButton(onClick = vm::openTaskHistory) {
+                Icon(Icons.Filled.FactCheck, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Lịch sử")
+            }
+        }
         // Có việc mình giao thì mới dựng thanh tab.
         if (hasOutbox) {
             Row(

@@ -566,6 +566,19 @@ public static class PostgresSchema
         );
         CREATE INDEX IF NOT EXISTS ix_recovery_username ON password_recovery_codes(username);
 
+        -- Mã bảo mật 6 số của ứng dụng di động. Lưu Ở MÁY CHỦ (không còn bản sao nào trên điện thoại):
+        -- mất/bị lấy cắp máy cũng không có gì để dò offline, và bộ đếm sai + khoá thử lại là của máy
+        -- chủ nên xoá dữ liệu app hay cài lại app KHÔNG reset được số lần thử. Chỉ lưu hash Argon2id.
+        CREATE TABLE IF NOT EXISTS app_pin_codes (
+            username varchar(128) NOT NULL PRIMARY KEY,
+            pin_hash text NOT NULL,
+            failed_attempts integer NOT NULL DEFAULT 0,
+            locked_until timestamptz NULL,
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_verified_at timestamptz NULL
+        );
+
         CREATE TABLE IF NOT EXISTS registration_codes (
             id bigserial NOT NULL PRIMARY KEY,
             created_by varchar(128) NOT NULL DEFAULT '',

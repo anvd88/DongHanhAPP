@@ -1,10 +1,8 @@
 package com.ketoanapk.hr.ui
 
 import android.os.Build
+import android.os.SystemClock
 import android.view.HapticFeedbackConstants
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,14 +13,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
@@ -51,29 +48,35 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
-import com.ketoanapk.hr.data.AppPinStore
+import com.ketoanapk.hr.data.APP_PIN_LENGTH
 import com.ketoanapk.hr.data.AppPinVerification
+import com.ketoanapk.hr.data.HrRepository
 import com.ketoanapk.hr.ui.theme.Danger
+import com.ketoanapk.hr.ui.theme.Success
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
-import kotlin.math.roundToInt
 
 enum class AppPinGateMode { Unlock, Manage }
 
-private enum class AppPinPhase { Loading, Unlock, Create, Confirm, Recover }
+private enum class AppPinPhase { Loading, Unlock, Create, Confirm, Recover, Unavailable }
 
 /**
  * Bottom sheet PIN dùng chung cho mọi dữ liệu nhạy cảm. PIN được nhập hoàn toàn bằng bàn phím số tự
  * vẽ; không mở bàn phím hệ thống và không dùng ô nhập văn bản cho mã bảo mật.
+ *
+ * MÃ NẰM Ở MÁY CHỦ, THIẾT BỊ KHÔNG GIỮ BẢN SAO NÀO. Màn hình này chỉ thu mã rồi hỏi máy chủ
+ * (`/api/auth/app-pin/...`); hash, bộ đếm sai và thời gian khoá đều do máy chủ giữ. Vì thế:
+ *  • máy bị mất/bị lấy bản sao lưu cũng không mang theo thứ gì để dò ngoại tuyến 10^6 mã;
+ *  • xoá dữ liệu app hay cài lại app KHÔNG reset được số lần thử sai;
+ *  • đổi mã trên một máy là mọi máy của tài khoản đều theo mã mới.
+ * Đánh đổi: mở khoá phải có mạng — dữ liệu sau lớp khoá (phiếu lương, hồ sơ) vốn cũng tải từ máy chủ.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,88 +86,137 @@ fun AppPinGate(
     purpose: String,
     onDismiss: () -> Unit,
     onUnlocked: () -> Unit,
-    onVerifyAccountPassword: (String, (Boolean, String?) -> Unit) -> Unit,
     mode: AppPinGateMode = AppPinGateMode.Unlock,
 ) {
     if (!visible) return
 
     val context = LocalContext.current
-    val density = LocalDensity.current
     val view = LocalView.current
-    val store = remember(context) { AppPinStore(context) }
+    val repo = remember(context) { HrRepository.foreground(context) }
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var phase by remember(visible, username, mode) { mutableStateOf(AppPinPhase.Loading) }
     var pin by remember(visible, username, mode) { mutableStateOf("") }
     var firstPin by remember(visible, username, mode) { mutableStateOf<String?>(null) }
+    // Mã CŨ vừa được máy chủ xác nhận, giữ tạm trong RAM để gửi kèm khi đặt mã mới (máy chủ bắt buộc
+    // có mã cũ mới cho đổi). Không bao giờ ghi xuống đĩa và mất ngay khi đóng bảng.
+    var verifiedCurrentPin by remember(visible, username, mode) { mutableStateOf<String?>(null) }
     var password by remember(visible, username, mode) { mutableStateOf("") }
     var error by remember(visible, username, mode) { mutableStateOf<String?>(null) }
     var busy by remember(visible, username, mode) { mutableStateOf(false) }
-    var rejectingPin by remember(visible, username, mode) { mutableStateOf(false) }
-    var rejectionEvent by remember(visible, username, mode) { mutableIntStateOf(0) }
-    var lockUntil by remember(visible, username, mode) { mutableLongStateOf(0L) }
-    var clock by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val pinShake = remember(visible, username, mode) { Animatable(0f) }
+    // Hoạt cảnh của hàng ô mã — dùng chung đúng thành phần với 5 ô OTP ở màn quên mật khẩu.
+    var cellPhase by remember(visible, username, mode) { mutableStateOf(CodeCellsPhase.Idle) }
+    var reloadEvent by remember(visible, username, mode) { mutableIntStateOf(0) }
+    // Mốc hết khoá tính theo đồng hồ chạy-từ-lúc-khởi-động: máy chủ trả SỐ GIÂY còn lại, nên chỉnh
+    // giờ máy không rút ngắn được thời gian chờ.
+    var lockUntilElapsed by remember(visible, username, mode) { mutableLongStateOf(0L) }
+    var clock by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
 
-    LaunchedEffect(visible, username, mode) {
+    fun applyLock(seconds: Long) {
+        lockUntilElapsed = if (seconds > 0) SystemClock.elapsedRealtime() + seconds * 1_000 else 0L
+        clock = SystemClock.elapsedRealtime()
+    }
+
+    LaunchedEffect(visible, username, mode, reloadEvent) {
         phase = AppPinPhase.Loading
         error = null
-        runCatching { store.hasPin(username) }
-            .onSuccess { hasPin -> phase = if (hasPin) AppPinPhase.Unlock else AppPinPhase.Create }
+        runCatching { repo.appPinStatus() }
+            .onSuccess { status ->
+                applyLock(status.lockedForSeconds)
+                phase = if (status.hasPin) AppPinPhase.Unlock else AppPinPhase.Create
+            }
             .onFailure {
-                // Vẫn cho vào màn mở để người dùng có đường "Quên mã" khôi phục bản ghi hỏng.
-                phase = AppPinPhase.Unlock
-                error = it.message ?: "Không thể đọc mã bảo mật."
+                // Không hỏi được máy chủ thì KHÔNG đoán bừa là "chưa có mã" (đoán sai sẽ mời tạo mã mới
+                // và ghi đè mã cũ). Báo rõ là cần kết nối, kèm nút thử lại.
+                phase = AppPinPhase.Unavailable
+                error = it.message ?: "Không kết nối được máy chủ."
             }
     }
 
-    LaunchedEffect(lockUntil) {
-        while (lockUntil > System.currentTimeMillis()) {
-            clock = System.currentTimeMillis()
+    LaunchedEffect(lockUntilElapsed) {
+        while (lockUntilElapsed > SystemClock.elapsedRealtime()) {
+            clock = SystemClock.elapsedRealtime()
             delay(1_000)
         }
-        clock = System.currentTimeMillis()
+        clock = SystemClock.elapsedRealtime()
     }
 
-    LaunchedEffect(rejectionEvent) {
-        if (rejectionEvent == 0) return@LaunchedEffect
-        val activeEvent = rejectionEvent
-        val distance = with(density) { 12.dp.toPx() }
+    /**
+     * Sai mã: rung máy rồi để hàng ô nứt–vỡ–rơi xong mới dựng lại hàng trống. Bàn phím số vẫn bị khoá
+     * suốt hoạt cảnh ([busy]) để không ai gõ đè lên lúc các mảnh đang rơi.
+     */
+    fun reject(message: String?, onAnimationEnd: () -> Unit = {}) {
+        error = message
+        busy = true
+        cellPhase = CodeCellsPhase.Error
         view.performHapticFeedback(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.REJECT
             else HapticFeedbackConstants.LONG_PRESS,
         )
-        pinShake.snapTo(0f)
-        listOf(-1f, 1f, -0.75f, 0.75f, -0.4f, 0.4f).forEach { direction ->
-            pinShake.animateTo(direction * distance, animationSpec = tween(42))
-        }
-        pinShake.animateTo(0f, animationSpec = tween(60))
-        if (rejectionEvent == activeEvent) {
+        scope.launch {
+            delay(CODE_CELLS_ERROR_MILLIS)
             pin = ""
-            rejectingPin = false
+            cellPhase = CodeCellsPhase.Idle
+            busy = false
+            onAnimationEnd()
+        }
+    }
+
+    /** Đúng mã: các ô thu về giữa, vòng tròn xanh nở ra và nét ✓ được vẽ, rồi mới đi tiếp. */
+    fun sealAndThen(next: () -> Unit) {
+        cellPhase = CodeCellsPhase.Success
+        scope.launch {
+            delay(CODE_CELLS_SUCCESS_MILLIS)
+            cellPhase = CodeCellsPhase.Idle
+            next()
         }
     }
 
     fun finish() {
         pin = ""
         firstPin = null
+        verifiedCurrentPin = null
         busy = false
         onUnlocked()
     }
 
+    /** Máy chủ trong LAN trả lời gần như tức thì — giữ nhịp tối thiểu để nhìn kịp hoạt cảnh chờ. */
+    suspend fun holdSpinner(startedAt: Long, minimumMillis: Long) {
+        val remain = minimumMillis - (System.currentTimeMillis() - startedAt)
+        if (remain > 0) delay(remain)
+    }
+
+    /** Gửi mã mới lên máy chủ (kèm mã cũ nếu là đổi mã). */
     fun saveConfirmedPin(value: String) {
         scope.launch {
             busy = true
             error = null
-            runCatching { store.setPin(username, value) }
-                .onSuccess { finish() }
-                .onFailure {
-                    busy = false
-                    pin = ""
+            cellPhase = CodeCellsPhase.Verifying
+            val startedAt = System.currentTimeMillis()
+            val result = runCatching { repo.setAppPin(value, verifiedCurrentPin) }.getOrElse { failure ->
+                holdSpinner(startedAt, 600)
+                firstPin = null
+                reject(failure.message ?: "Không lưu được mã bảo mật.") { phase = AppPinPhase.Create }
+                return@launch
+            }
+            holdSpinner(startedAt, if (result is AppPinVerification.Success) 900 else 700)
+            when (result) {
+                AppPinVerification.Success, AppPinVerification.NotSet -> sealAndThen(::finish)
+                // Mã cũ không còn đúng (bị đổi ở máy khác giữa chừng) → phải xác minh lại từ đầu.
+                is AppPinVerification.Incorrect -> {
                     firstPin = null
-                    phase = AppPinPhase.Create
-                    error = it.message ?: "Không thể lưu mã bảo mật."
+                    verifiedCurrentPin = null
+                    reject("Mã hiện tại không còn đúng. Vui lòng nhập lại mã hiện tại.") {
+                        phase = AppPinPhase.Unlock
+                    }
                 }
+                is AppPinVerification.Locked -> {
+                    firstPin = null
+                    verifiedCurrentPin = null
+                    applyLock(result.seconds)
+                    reject(null) { phase = AppPinPhase.Unlock }
+                }
+            }
         }
     }
 
@@ -179,10 +231,7 @@ fun AppPinGate(
             AppPinPhase.Confirm -> {
                 if (value != firstPin) {
                     firstPin = null
-                    phase = AppPinPhase.Create
-                    error = "Hai lần nhập chưa khớp. Vui lòng tạo mã lại."
-                    rejectingPin = true
-                    rejectionEvent++
+                    reject("Hai lần nhập chưa khớp. Vui lòng tạo mã lại.") { phase = AppPinPhase.Create }
                 } else {
                     saveConfirmedPin(value)
                 }
@@ -190,33 +239,39 @@ fun AppPinGate(
             AppPinPhase.Unlock -> scope.launch {
                 busy = true
                 error = null
-                when (val result = runCatching { store.verify(username, value) }.getOrElse {
-                    busy = false
-                    error = it.message ?: "Không thể xác minh mã bảo mật."
-                    rejectingPin = true
-                    rejectionEvent++
+                cellPhase = CodeCellsPhase.Verifying
+                val startedAt = System.currentTimeMillis()
+                val result = runCatching { repo.verifyAppPin(value) }.getOrElse { failure ->
+                    holdSpinner(startedAt, 600)
+                    reject(failure.message ?: "Không kiểm tra được mã bảo mật.")
                     return@launch
-                }) {
-                    AppPinVerification.Success -> {
+                }
+                holdSpinner(startedAt, if (result is AppPinVerification.Success) 900 else 700)
+                when (result) {
+                    AppPinVerification.Success -> sealAndThen {
                         if (mode == AppPinGateMode.Manage) {
                             busy = false
+                            verifiedCurrentPin = value
                             pin = ""
                             firstPin = null
                             phase = AppPinPhase.Create
                         } else finish()
                     }
-                    is AppPinVerification.Incorrect -> {
-                        busy = false
-                        error = "Mã không đúng. Còn ${result.attemptsBeforeLock} lần trước khi tạm khóa."
-                        rejectingPin = true
-                        rejectionEvent++
-                    }
+                    is AppPinVerification.Incorrect ->
+                        reject("Mã không đúng. Còn ${result.attemptsBeforeLock} lần trước khi tạm khóa.")
                     is AppPinVerification.Locked -> {
+                        applyLock(result.seconds)
+                        reject(null)
+                    }
+                    // Mã đã bị đặt lại ở nơi khác → tạo mã mới ngay tại đây.
+                    AppPinVerification.NotSet -> {
                         busy = false
-                        lockUntil = result.retryAtMillis
-                        clock = System.currentTimeMillis()
-                        rejectingPin = true
-                        rejectionEvent++
+                        pin = ""
+                        cellPhase = CodeCellsPhase.Idle
+                        firstPin = null
+                        verifiedCurrentPin = null
+                        phase = AppPinPhase.Create
+                        error = "Tài khoản chưa có mã bảo mật. Hãy tạo mã mới."
                     }
                 }
             }
@@ -225,25 +280,27 @@ fun AppPinGate(
     }
 
     fun appendDigit(digit: Int) {
-        if (busy || rejectingPin || phase !in listOf(AppPinPhase.Unlock, AppPinPhase.Create, AppPinPhase.Confirm)) return
-        if (lockUntil > clock || pin.length >= 6) return
+        if (busy || cellPhase != CodeCellsPhase.Idle) return
+        if (phase !in listOf(AppPinPhase.Unlock, AppPinPhase.Create, AppPinPhase.Confirm)) return
+        if (lockUntilElapsed > clock || pin.length >= APP_PIN_LENGTH) return
         val next = pin + digit.toString()
         pin = next
         error = null
-        if (next.length == 6) submitPin(next)
+        if (next.length == APP_PIN_LENGTH) submitPin(next)
     }
 
-    val secondsLeft = ceil(((lockUntil - clock).coerceAtLeast(0L)) / 1_000.0).toLong()
+    val secondsLeft = ceil(((lockUntilElapsed - clock).coerceAtLeast(0L)) / 1_000.0).toLong()
     val title = when (phase) {
         AppPinPhase.Loading -> "Mã bảo mật ứng dụng"
         AppPinPhase.Unlock -> "Nhập mã bảo mật"
         AppPinPhase.Create -> if (mode == AppPinGateMode.Manage) "Tạo mã bảo mật mới" else "Tạo mã bảo mật"
         AppPinPhase.Confirm -> "Nhập lại mã bảo mật"
         AppPinPhase.Recover -> "Quên mã bảo mật"
+        AppPinPhase.Unavailable -> "Cần kết nối máy chủ"
     }
     val subtitle = when (phase) {
         AppPinPhase.Unlock -> purpose
-        AppPinPhase.Create -> "Chọn mã gồm đúng 6 chữ số, không phụ thuộc mã mở khóa điện thoại."
+        AppPinPhase.Create -> "Chọn mã gồm đúng 6 chữ số, không phụ thuộc mã mở khóa điện thoại. Mã được lưu trên máy chủ, không lưu trên điện thoại."
         AppPinPhase.Confirm -> "Nhập lại 6 số vừa chọn để xác nhận."
         AppPinPhase.Recover -> "Xác minh mật khẩu tài khoản để đặt lại mã bảo mật của ứng dụng."
         else -> "Đang kiểm tra mã bảo mật…"
@@ -267,7 +324,11 @@ fun AppPinGate(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    if (phase == AppPinPhase.Recover) Icons.Filled.Lock else Icons.Filled.Shield,
+                    when (phase) {
+                        AppPinPhase.Recover -> Icons.Filled.Lock
+                        AppPinPhase.Unavailable -> Icons.Filled.CloudOff
+                        else -> Icons.Filled.Shield
+                    },
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(25.dp),
@@ -284,6 +345,12 @@ fun AppPinGate(
                 Box(Modifier.fillMaxWidth().height(260.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
+            } else if (phase == AppPinPhase.Unavailable) {
+                AppPinUnavailable(
+                    message = error ?: "Không kết nối được máy chủ.",
+                    onRetry = { reloadEvent++ },
+                    onClose = onDismiss,
+                )
             } else if (phase == AppPinPhase.Recover) {
                 RecoverWithAccountPassword(
                     subtitle = subtitle,
@@ -299,29 +366,25 @@ fun AppPinGate(
                     onVerify = {
                         if (password.isBlank()) {
                             error = "Vui lòng nhập mật khẩu tài khoản."
-                        } else {
+                        } else scope.launch {
                             busy = true
                             error = null
-                            onVerifyAccountPassword(password) { ok, message ->
-                                if (!ok) {
+                            // Máy chủ xác minh mật khẩu VÀ xoá mã cũ trong cùng một lượt; client không
+                            // có đường tự xoá mã, nên không thể bỏ qua bước mật khẩu.
+                            runCatching { repo.resetAppPin(password) }
+                                .onSuccess {
                                     busy = false
-                                    error = message ?: "Không thể xác minh mật khẩu."
-                                } else scope.launch {
-                                    runCatching { store.clear(username) }
-                                        .onSuccess {
-                                            busy = false
-                                            password = ""
-                                            pin = ""
-                                            firstPin = null
-                                            lockUntil = 0L
-                                            phase = AppPinPhase.Create
-                                        }
-                                        .onFailure {
-                                            busy = false
-                                            error = it.message ?: "Không thể đặt lại mã bảo mật."
-                                        }
+                                    password = ""
+                                    pin = ""
+                                    firstPin = null
+                                    verifiedCurrentPin = null
+                                    applyLock(0)
+                                    phase = AppPinPhase.Create
                                 }
-                            }
+                                .onFailure {
+                                    busy = false
+                                    error = it.message ?: "Không đặt lại được mã bảo mật."
+                                }
                         }
                     },
                 )
@@ -337,14 +400,21 @@ fun AppPinGate(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 28.dp),
                     )
-                    Spacer(Modifier.height(22.dp))
-                    PinDots(
+                    Spacer(Modifier.height(14.dp))
+                    // Cùng một hàng ô có hoạt cảnh với mã OTP ở màn quên mật khẩu, nhưng KHÔNG xoè
+                    // thành cụm tròn: dưới nó là bàn phím số tự vẽ, không có ~100dp để cụm nở ra.
+                    AnimatedCodeCells(
+                        count = APP_PIN_LENGTH,
                         filled = pin.length,
-                        error = error != null || secondsLeft > 0,
-                        modifier = Modifier.offset { IntOffset(pinShake.value.roundToInt(), 0) },
+                        phase = cellPhase,
+                        // Mã bảo mật luôn được che: ô đã nhập hiện dấu tròn, không hiện chữ số.
+                        cellText = { index -> if (index < pin.length) "●" else "" },
+                        boxSize = 44.dp,
+                        gap = 8.dp,
+                        cluster = false,
                     )
                     Box(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         when {
@@ -353,7 +423,19 @@ fun AppPinGate(
                                 color = Danger,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                            busy -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                            // Đang hỏi máy chủ/đang chốt: hàng ô đã tự nói lên điều đó, không cần thêm
+                            // vòng quay thứ hai chen vào giữa.
+                            cellPhase == CodeCellsPhase.Verifying -> Text(
+                                "Đang kiểm tra mã…",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            cellPhase == CodeCellsPhase.Success -> Text(
+                                "Đã xác thực",
+                                color = Success,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                             error != null -> Text(
                                 error.orEmpty(),
                                 color = Danger,
@@ -371,7 +453,7 @@ fun AppPinGate(
                                 error = null
                                 phase = AppPinPhase.Recover
                             },
-                            enabled = !busy && !rejectingPin,
+                            enabled = !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text("Quên mã bảo mật?", fontSize = 16.sp) }
                     } else {
@@ -379,38 +461,35 @@ fun AppPinGate(
                     }
                 }
                 NumericPinPad(
-                    enabled = !busy && !rejectingPin && secondsLeft <= 0,
+                    enabled = !busy && secondsLeft <= 0,
                     canDelete = pin.isNotEmpty(),
                     onDigit = ::appendDigit,
-                    onDelete = { if (!busy && !rejectingPin && pin.isNotEmpty()) pin = pin.dropLast(1) },
+                    onDelete = { if (!busy && pin.isNotEmpty()) pin = pin.dropLast(1) },
                 )
             }
         }
     }
 }
 
+/** Mã nằm ở máy chủ nên mất mạng là không mở khoá được — nói thẳng thay vì im lặng cho nhập mã. */
 @Composable
-private fun PinDots(filled: Int, error: Boolean, modifier: Modifier = Modifier) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-        repeat(6) { index ->
-            Surface(
-                modifier = Modifier.size(34.dp),
-                shape = CircleShape,
-                color = when {
-                    error -> MaterialTheme.colorScheme.errorContainer
-                    index < filled -> MaterialTheme.colorScheme.primary
-                    else -> Color.Transparent
-                },
-                border = BorderStroke(
-                    2.dp,
-                    when {
-                        error -> MaterialTheme.colorScheme.error
-                        index < filled -> MaterialTheme.colorScheme.primary
-                        else -> MaterialTheme.colorScheme.outline
-                    },
-                ),
-            ) {}
+private fun AppPinUnavailable(message: String, onRetry: () -> Unit, onClose: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(message, color = Danger, textAlign = TextAlign.Center)
+        Text(
+            "Mã bảo mật được giữ trên máy chủ để thiết bị không lưu bản sao nào. Vì vậy cần có mạng mới mở khóa được dữ liệu nhạy cảm.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Button(onClick = onRetry, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+            Text("Thử lại", fontWeight = FontWeight.Bold)
         }
+        TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Đóng") }
     }
 }
 

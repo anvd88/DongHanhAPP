@@ -12,6 +12,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { GlassCard } from "../components/Glass";
+import { DatePicker } from "../components/DateField";
 import { PageHeader } from "../components/Layout";
 import { Table } from "../components/Table";
 import { useApi } from "../lib/useApi";
@@ -140,10 +141,14 @@ export function ExecutiveDashboard() {
           <button type="button" onClick={() => setDate((value) => shiftDay(value, -1))} aria-label="Ngày trước">
             <ChevronLeft className="h-5 w-5" />
           </button>
-          <label>
-            <CalendarDays className="h-4 w-4" />
-            <input type="date" value={date} max={localDateKey()} onChange={(event) => setDate(event.target.value)} />
-          </label>
+          <div className="ed-date-field">
+            <DatePicker
+              value={date}
+              onChange={(next) => setDate(next || localDateKey())}
+              max={localDateKey()}
+              ariaLabel="Chọn ngày xem"
+            />
+          </div>
           <button
             type="button"
             onClick={() => setDate((value) => shiftDay(value, 1))}

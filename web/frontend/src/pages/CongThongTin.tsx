@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
+import { DateTimePicker } from "../components/DateField";
 import { Badge, Button, EmptyState, Field, Input } from "../components/ui";
 import { api } from "../lib/api";
 import { dateTime } from "../lib/format";
@@ -68,7 +69,7 @@ function pad(n: number) {
   return String(n).padStart(2, "0");
 }
 
-/** ISO (UTC) → chuỗi cho <input type="datetime-local"> theo giờ địa phương. */
+/** ISO (UTC) → chuỗi "YYYY-MM-DDTHH:mm" cho DateTimePicker, theo giờ địa phương. */
 function toLocalInput(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -451,7 +452,7 @@ function PostEditor({
           {kind === "event" && (
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Thời gian diễn ra">
-                <Input type="datetime-local" value={eventLocal} onChange={(e) => setEventLocal(e.target.value)} />
+                <DateTimePicker value={eventLocal} onChange={setEventLocal} clearable className="w-full" />
               </Field>
               <Field label="Địa điểm">
                 <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="VD: Hội trường tầng 3" />

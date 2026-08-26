@@ -19,7 +19,21 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.Locale
+
+/** Mốc thời gian ISO của máy chủ → epoch millis. Không đọc được thì trả null để bên gọi tự lùi. */
+internal fun parseServerTime(raw: String?): Long? {
+    val value = raw?.trim().orEmpty()
+    if (value.isEmpty()) return null
+    return try {
+        java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+    } catch (_: DateTimeParseException) {
+        // Máy chủ có lúc trả dạng không kèm offset ("2026-08-26T09:30:00"); coi như giờ máy.
+        runCatching { LocalDateTime.parse(value).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli() }
+            .getOrNull()
+    }
+}
 
 const val APP_UPDATE_NOTIFICATION_TARGET = "AppUpdate"
 const val MISSED_CHECKOUT_LOOKBACK_DAYS = 31
@@ -28,9 +42,33 @@ internal const val MISSED_CHECKOUT_FALLBACK_GRACE_MINUTES = 0L
 internal const val MISSED_CHECKOUT_NOTIFICATION_PREFIX = "attendance:missing-checkout:"
 private const val MISSED_CHECKOUT_ENTITY_PREFIX = "forgot-checkout:"
 
-/** Nhóm thông báo, dùng để chọn icon/màu và điểm đến khi bấm vào. */
+/**
+ * Nhóm thông báo, dùng để chọn icon/màu và điểm đến khi bấm vào.
+ *
+ * Năm giá trị cuối đến từ HỘP THƯ TRÊN MÁY CHỦ (web_notifications) — tiến trình giao hàng, thu tiền,
+ * chứng từ, phiếu chi và việc được giao. Thêm giá trị vào cuối là an toàn: snapshot cũ trên máy chỉ
+ * chứa các giá trị cũ nên vẫn đọc được.
+ */
 @Serializable
-enum class NotificationKind { Request, Approval, Penalty, Attendance, Chat, System }
+enum class NotificationKind {
+    Request, Approval, Penalty, Attendance, Chat, System,
+    Delivery, Collection, Document, Payout, Task,
+}
+
+/** category của máy chủ → nhóm hiển thị trong app. Lạ thì về System chứ không làm rơi thông báo. */
+internal fun notificationKindFromCategory(category: String?): NotificationKind =
+    when (category.orEmpty().trim().lowercase(Locale.ROOT)) {
+        "delivery" -> NotificationKind.Delivery
+        "collection" -> NotificationKind.Collection
+        "document" -> NotificationKind.Document
+        "payout" -> NotificationKind.Payout
+        "task" -> NotificationKind.Task
+        "request" -> NotificationKind.Request
+        "penalty" -> NotificationKind.Penalty
+        "attendance" -> NotificationKind.Attendance
+        "chat" -> NotificationKind.Chat
+        else -> NotificationKind.System
+    }
 
 /**
  * Một thông báo hiển thị trong chuông. Lưu bền vững trên máy (DataStore) kèm trạng thái đã đọc.
@@ -48,6 +86,11 @@ data class AppNotification(
     val entityId: String? = null,
     /** Đã dựng thành công notification hệ thống; dùng để backfill đúng một lần sau khi cấp quyền. */
     val systemDelivered: Boolean = false,
+    /**
+     * Khoá dòng tương ứng trong hộp thư máy chủ, nếu thông báo này đến từ đó. Có nó thì "đánh dấu đã
+     * đọc" trên app báo ngược lên máy chủ được, nhờ vậy chuông trên web cũng hết chấm đỏ.
+     */
+    val serverId: Long? = null,
 )
 
 @Serializable
@@ -281,6 +324,52 @@ class NotificationCenter(context: Context, val accountId: String) {
             items = (listOf(incoming) + items).distinctBy { it.id }
             store.save(items, seen)
             incoming
+        }
+    }
+
+    /**
+     * Trộn HỘP THƯ TRÊN MÁY CHỦ vào chuông của app. Trả về các dòng LẦN ĐẦU thấy để bắn lên khay hệ thống.
+     *
+     * Khoá chống trùng là `notifId` — cùng chữ ký với gói FCM, nên một sự kiện đã rung máy qua push
+     * thì lần đồng bộ này không dựng thêm thông báo thứ hai.
+     *
+     * [firstSync] (kho còn rỗng) chỉ GHI NHỚ chứ không bắn: người vừa cài lại app không đáng bị dội
+     * 30 thông báo cũ cùng lúc. Trạng thái "đã đọc" luôn lấy theo máy chủ vì đó là nơi web cũng ghi.
+     */
+    suspend fun ingestFromServer(feed: List<ServerNotification>): List<AppNotification> {
+        if (feed.isEmpty()) return emptyList()
+        return mutationMutex.withLock {
+            reload()
+            val firstSync = seen.isEmpty()
+            val byId = items.associateBy(AppNotification::id)
+            val fresh = mutableListOf<AppNotification>()
+            val merged = mutableListOf<AppNotification>()
+
+            for (row in feed) {
+                val id = row.notifId.ifBlank { "srv:${row.id}" }
+                val existing = byId[id]
+                val notification = AppNotification(
+                    id = id,
+                    kind = notificationKindFromCategory(row.category),
+                    title = row.title,
+                    body = row.body,
+                    createdAt = parseServerTime(row.createdAt) ?: existing?.createdAt ?: System.currentTimeMillis(),
+                    // Máy chủ là nguồn sự thật của "đã đọc"; đọc trên web thì app cũng phải hết đỏ.
+                    read = row.read || existing?.read == true,
+                    target = row.appTarget.takeIf(String::isNotBlank) ?: existing?.target,
+                    entityId = existing?.entityId ?: entityIdFromNotificationId(id),
+                    systemDelivered = existing?.systemDelivered ?: false,
+                    serverId = row.id,
+                )
+                merged += notification
+                val isNew = seen.add(id)
+                if (isNew && !firstSync && !notification.read) fresh += notification
+            }
+
+            val mergedIds = merged.mapTo(hashSetOf(), AppNotification::id)
+            items = (merged + items.filterNot { it.id in mergedIds }).sortedByDescending { it.createdAt }
+            store.save(items, seen)
+            fresh
         }
     }
 

@@ -158,8 +158,11 @@ async function request<T>(method: string, path: string, body?: unknown, options:
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
+/** Báo số byte đã nhận / tổng số byte (null khi máy chủ không gửi `Content-Length`). */
+export type BlobProgress = (received: number, total: number | null) => void;
+
 /** Tải tài nguyên nhị phân (vd. ảnh snapshot camera) kèm Bearer token; trả Blob để tạo object URL. */
-async function requestBlob(path: string, sameOrigin = false): Promise<Blob> {
+async function requestBlob(path: string, sameOrigin = false, onProgress?: BlobProgress): Promise<Blob> {
   const target = sameOrigin
     ? (path.startsWith("/") ? path : `/${path}`)
     : appUrl(path);
@@ -181,6 +184,28 @@ async function requestBlob(path: string, sameOrigin = false): Promise<Blob> {
     } catch { /* body rỗng hoặc không phải JSON */ }
     throw new ApiError(res.status, message);
   }
+
+  // Có người theo dõi tiến trình thì đọc theo luồng để đếm byte thật. `Content-Length` vắng mặt
+  // (nén/chunked) thì vẫn báo số đã nhận kèm total = null để bên gọi biết là "không đo được".
+  if (onProgress && res.body) {
+    const header = res.headers.get("Content-Length");
+    const total = header && Number.isFinite(Number(header)) ? Number(header) : null;
+    const reader = res.body.getReader();
+    const chunks: BlobPart[] = [];
+    let received = 0;
+    onProgress(0, total);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value as unknown as BlobPart);
+        received += value.byteLength;
+        onProgress(received, total);
+      }
+    }
+    return new Blob(chunks, { type: res.headers.get("Content-Type") ?? "" });
+  }
+
   return res.blob();
 }
 
@@ -250,7 +275,7 @@ export const api = {
     request<T>("POST", p, body ?? {}, { anonymous: true, cache: "no-store", signal }),
   put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body ?? {}),
   del: <T>(p: string) => request<T>("DELETE", p),
-  getBlob: (p: string) => requestBlob(p),
+  getBlob: (p: string, onProgress?: BlobProgress) => requestBlob(p, false, onProgress),
   getSameOriginBlob: (p: string) => requestBlob(p, true),
   postBlob: <T>(p: string, blob: Blob, signal?: AbortSignal) => postBlob<T>(p, blob, signal),
   postForm: <T>(p: string, form: FormData) => requestForm<T>("POST", p, form),

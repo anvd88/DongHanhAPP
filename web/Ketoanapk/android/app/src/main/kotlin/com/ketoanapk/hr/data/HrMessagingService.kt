@@ -135,16 +135,30 @@ class HrMessagingService : FirebaseMessagingService() {
         currentScope.isNotBlank() && incomingScope.isNotBlank() &&
             currentScope.equals(incomingScope, ignoreCase = true)
 
+    /**
+     * Đoán nhóm từ CHỮ KÝ sự kiện. Chữ ký do máy chủ đặt (xem các endpoint nghiệp vụ) nên tiền tố ở
+     * đây phải khớp với chúng — nếu không, thông báo vẫn hiện nhưng đeo nhầm icon/màu. Cùng một sự
+     * kiện tới bằng đường đồng bộ hộp thư thì được phân loại theo `category` của máy chủ
+     * (notificationKindFromCategory), hai đường cho ra cùng một kết quả.
+     */
     private fun kindOf(notifId: String, target: String?): NotificationKind = when {
         notifId.startsWith("req:") -> NotificationKind.Request
         notifId.startsWith("inbox:") -> NotificationKind.Approval
         notifId.startsWith("pen:") -> NotificationKind.Penalty
         notifId.startsWith("chat:") -> NotificationKind.Chat
         notifId.startsWith("attendance:") -> NotificationKind.Attendance
+        notifId.startsWith("delivery:") -> NotificationKind.Delivery
+        notifId.startsWith("cash-collection:") -> NotificationKind.Collection
+        notifId.startsWith("document:") -> NotificationKind.Document
+        notifId.startsWith("payout:") -> NotificationKind.Payout
+        notifId.startsWith("task:") -> NotificationKind.Task
         target == "Requests" -> NotificationKind.Request
         target == "Approval" -> NotificationKind.Approval
         target == "Penalty" -> NotificationKind.Penalty
         target == "Chat" -> NotificationKind.Chat
+        target == "CashCollections" -> NotificationKind.Collection
+        target == "Payout" -> NotificationKind.Payout
+        target == "Tasks" -> NotificationKind.Task
         else -> NotificationKind.System
     }
 }

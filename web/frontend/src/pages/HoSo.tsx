@@ -5,6 +5,7 @@ import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Badge, Button, Field, Input } from "../components/ui";
 import { Table } from "../components/Table";
+import { DatePicker } from "../components/DateField";
 import { api } from "../lib/api";
 import { date, initials, moneyVnd } from "../lib/format";
 import { useApi } from "../lib/useApi";
@@ -130,7 +131,7 @@ function InfoTab({ me, onSaved }: { me: EmployeeDetail; onSaved: () => void }) {
         <ReadOnly label="Chức vụ" value={me.position || "—"} />
         <ReadOnly label="Quản lý trực tiếp" value={me.managerName || "—"} />
         <ReadOnly label="Ngày vào làm" value={me.hireDate ? date(me.hireDate) : "—"} />
-        <Field label="Ngày sinh"><Input type="date" value={form.dob ?? ""} onChange={(e) => set("dob", e.target.value)} /></Field>
+        <Field label="Ngày sinh"><DatePicker value={form.dob ?? ""} onChange={(next) => set("dob", next)} clearable className="w-full" max={new Date().toISOString().slice(0, 10)} /></Field>
         <Field label="Giới tính"><Input value={form.gender} onChange={(e) => set("gender", e.target.value)} placeholder="Nam / Nữ" /></Field>
         <Field label="Số điện thoại"><Input value={form.phone} onChange={(e) => set("phone", e.target.value)} /></Field>
         <Field label="Email"><Input value={form.email} onChange={(e) => set("email", e.target.value)} /></Field>

@@ -26,10 +26,7 @@ import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -541,6 +538,9 @@ private fun WorkTaskFormDialog(vm: HrViewModel, meta: WorkTaskMeta?, editing: Wo
     var dueText by remember { mutableStateOf(fmtDateInput(editing?.dueAt)) }
 
     val assignees = meta?.assignees ?: emptyList()
+    val assigneeOptions = remember(assignees) {
+        assignees.map { PickOption(id = it.username, label = it.fullName, sub = it.department, keywords = it.username) }
+    }
     val assigneeLabel = assignees.firstOrNull { it.username == assignee }
         ?.let { it.fullName + if (it.department.isNotBlank()) " · ${it.department}" else "" }
         ?: editing?.assigneeName ?: ""
@@ -571,44 +571,34 @@ private fun WorkTaskFormDialog(vm: HrViewModel, meta: WorkTaskMeta?, editing: Wo
                 OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Tên công việc") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Mô tả / tiêu chí nghiệm thu") }, modifier = Modifier.fillMaxWidth())
 
-                // Người nhận
-                var openAssignee by remember { mutableStateOf(false) }
-                ExposedDropdownMenuBox(expanded = openAssignee, onExpandedChange = { openAssignee = it }) {
-                    OutlinedTextField(
-                        value = assigneeLabel, onValueChange = {}, readOnly = true,
-                        label = { Text("Người nhận việc") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = openAssignee) },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                    )
-                    ExposedDropdownMenu(expanded = openAssignee, onDismissRequest = { openAssignee = false }) {
-                        assignees.forEach { a ->
-                            DropdownMenuItem(
-                                text = { Text(a.fullName + if (a.department.isNotBlank()) " · ${a.department}" else "") },
-                                onClick = { assignee = a.username; openAssignee = false },
-                            )
-                        }
-                    }
-                }
+                // Người nhận — danh sách nhân viên dài nên dùng ô chọn có tìm kiếm.
+                SelectField(
+                    label = "Người nhận việc",
+                    selectedId = assignee.takeIf { it.isNotBlank() },
+                    options = assigneeOptions,
+                    onPick = { assignee = it.id },
+                    placeholder = assigneeLabel.ifBlank { "Chọn người nhận việc" },
+                    searchHint = "Tìm theo tên hoặc phòng ban",
+                    emptyText = "Chưa có ai để giao việc.",
+                    showAvatar = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
                 // Ưu tiên
-                var openPriority by remember { mutableStateOf(false) }
-                ExposedDropdownMenuBox(expanded = openPriority, onExpandedChange = { openPriority = it }) {
-                    OutlinedTextField(
-                        value = priorityLabel(priority), onValueChange = {}, readOnly = true,
-                        label = { Text("Mức ưu tiên") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = openPriority) },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                    )
-                    ExposedDropdownMenu(expanded = openPriority, onDismissRequest = { openPriority = false }) {
-                        PRIORITIES.forEach { p ->
-                            DropdownMenuItem(text = { Text(priorityLabel(p)) }, onClick = { priority = p; openPriority = false })
-                        }
-                    }
-                }
+                SelectField(
+                    label = "Mức ưu tiên",
+                    selectedId = priority,
+                    options = remember { PRIORITIES.map { PickOption(it, priorityLabel(it)) } },
+                    onPick = { priority = it.id },
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
-                OutlinedTextField(
-                    value = dueText, onValueChange = { dueText = it },
-                    label = { Text("Hạn hoàn thành (yyyy-MM-dd, không bắt buộc)") },
+                DateField(
+                    label = "Hạn hoàn thành",
+                    value = dueText,
+                    onChange = { dueText = it },
+                    supportingText = "Không bắt buộc",
+                    placeholder = "Chưa đặt hạn",
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

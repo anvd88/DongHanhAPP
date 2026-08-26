@@ -20,6 +20,7 @@ import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Badge, Button, Field, Input, Select, Spinner, EmptyState } from "../components/ui";
 import { Modal } from "../components/Modal";
+import { DateTimePicker } from "../components/DateField";
 import { useApi } from "../lib/useApi";
 import { useAppNotifications } from "../components/app-notifications-context";
 import { dateTime, date as fmtDate } from "../lib/format";
@@ -195,7 +196,13 @@ function TaskFormModal({
           </Field>
         </div>
         <Field label="Hạn hoàn thành (không bắt buộc)">
-          <Input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+          <DateTimePicker
+            value={dueAt}
+            onChange={setDueAt}
+            placeholder="Không đặt hạn"
+            clearable
+            className="w-full"
+          />
         </Field>
       </div>
     </Modal>

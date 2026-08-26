@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from "react";
-import { Eye, Loader2, Maximize2, Printer, ZoomIn } from "lucide-react";
+import { Eye, Maximize2, Printer, ZoomIn } from "lucide-react";
 import { Modal } from "./Modal";
-import { Button } from "./ui";
+import { ActionProgressButton, type ProgressReport } from "./ActionProgressButton";
+import { Button, buttonClasses, buttonInlineStyle } from "./ui";
 
 export function PrintPreviewModal({
   title,
@@ -18,7 +19,11 @@ export function PrintPreviewModal({
   printing?: boolean;
   printLabel?: string;
   onClose: () => void;
-  onPrint: (frame: HTMLIFrameElement | null) => void;
+  /**
+   * Việc in thật. Nhận thêm hàm báo tiến trình: gọi `report(đã_xong, tổng)` ở từng mốc CÓ THẬT,
+   * không gọi thì thanh chạy kiểu không xác định. Trả về `false` khi in hỏng để nút không báo xong.
+   */
+  onPrint: (frame: HTMLIFrameElement | null, report: ProgressReport) => unknown | Promise<unknown>;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [pdfView, setPdfView] = useState<"page" | "width">("page");
@@ -41,10 +46,17 @@ export function PrintPreviewModal({
           <Button variant="ghost" onClick={onClose} disabled={printing}>
             Đóng
           </Button>
-          <Button onClick={() => onPrint(frameRef.current)} disabled={printing}>
-            {printing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
-            {printLabel}
-          </Button>
+          <ActionProgressButton
+            onRun={(report) => onPrint(frameRef.current, report)}
+            icon={Printer}
+            idleLabel={printLabel}
+            busyLabel="Đang in..."
+            doneLabel="Đã in"
+            // Không truyền `printing` vào `disabled`: nút tự khoá khi đang chạy, còn `disabled` sẽ
+            // làm mờ nút 50% ngay giữa lúc hiệu ứng đang chạy.
+            className={buttonClasses("primary")}
+            style={buttonInlineStyle("primary")}
+          />
         </>
       }
     >

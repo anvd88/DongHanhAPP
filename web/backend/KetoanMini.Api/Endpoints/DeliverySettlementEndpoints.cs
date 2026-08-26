@@ -197,6 +197,14 @@ public static class DeliverySettlementEndpoints
                 await push.SendToUserAsync(head.DriverUsername, "Việc giao hàng đã hoàn thành",
                     $"{head.VoucherNo}: kế toán đã nhận lại phiếu.", $"task:{head.TaskId}:completed", "Tasks");
 
+            // Chặng cuối của một chuyến hàng: kho và kế toán đang chờ đúng cái mốc này để chốt sổ.
+            await TaskAssignmentEndpoints.AnnounceDeliveryAsync(push, me,
+                "Phiếu giao hàng đã về kho",
+                $"{actorName} xác nhận phiếu {head.VoucherNo} đã về"
+                    + (head.DriverName.Length > 0 ? $" từ lái xe {head.DriverName}." : ".")
+                    + (note.Length > 0 ? $" {note}" : ""),
+                $"delivery:{id}:returned");
+
             await using var read = await db.OpenAsync();
             var after = await LoadHead(read, null, id);
             return Results.Ok(await BuildPayload(read, after!, canEdit: true, me, u.Can(Permissions.UsersManage)));

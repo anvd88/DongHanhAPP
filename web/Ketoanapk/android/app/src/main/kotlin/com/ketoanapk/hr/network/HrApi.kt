@@ -54,9 +54,14 @@ import com.ketoanapk.hr.data.SaveAvatarBody
 import com.ketoanapk.hr.data.SelfFaceEnrollRequest
 import com.ketoanapk.hr.data.SelfFaceEnrollResult
 import com.ketoanapk.hr.data.SelfFaceStatus
+import com.ketoanapk.hr.data.NotificationGroupSettings
+import com.ketoanapk.hr.data.ServerNotificationFeed
 import com.ketoanapk.hr.data.SessionPing
 import com.ketoanapk.hr.data.Timesheet
-import com.ketoanapk.hr.data.VerifyPasswordBody
+import com.ketoanapk.hr.data.AppPinSetBody
+import com.ketoanapk.hr.data.AppPinStatus
+import com.ketoanapk.hr.data.AppPinVerifyBody
+import com.ketoanapk.hr.data.AppPinResetBody
 import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
@@ -178,8 +183,15 @@ interface HrApi {
     suspend fun remindRequest(@Path("id") id: String): retrofit2.Response<Unit>
 
     // ---- Giao việc & nghiệm thu ----
+    // activeOnly=true: hết ngày thì việc đã xong của hôm qua rụng khỏi màn hình, việc chưa xong ở lại.
     @GET("api/tasks")
-    suspend fun workTasks(): com.ketoanapk.hr.data.WorkTaskListResult
+    suspend fun workTasks(@Query("activeOnly") activeOnly: Boolean = true): com.ketoanapk.hr.data.WorkTaskListResult
+    @GET("api/tasks/history")
+    suspend fun workTaskHistory(
+        @Query("from") from: String,
+        @Query("to") to: String,
+        @Query("assignee") assignee: String? = null,
+    ): com.ketoanapk.hr.data.WorkTaskHistoryResult
     @GET("api/tasks/meta")
     suspend fun workTaskMeta(): com.ketoanapk.hr.data.WorkTaskMeta
     @GET("api/tasks/{id}")
@@ -280,6 +292,10 @@ interface HrApi {
     @GET("api/payroll/my-estimate")
     suspend fun myEstimate(): com.ketoanapk.hr.data.PayEstimate
 
+    // Nhật ký một ngày: việc đã làm + phạt/kỷ luật + đơn tiền + phiếu chi của chính mình.
+    @GET("api/payroll/my-day")
+    suspend fun myDayLog(@Query("date") date: String): com.ketoanapk.hr.data.DayLog
+
     @GET("api/payroll/my-payslips")
     suspend fun myPayslips(): List<com.ketoanapk.hr.data.PayslipItem>
     @GET("api/payroll/my-payslips/requirement")
@@ -327,8 +343,20 @@ interface HrApi {
     @POST("api/auth/change-password")
     suspend fun changePassword(@Body body: ChangePasswordBody): retrofit2.Response<Unit>
 
-    @POST("api/auth/verify-password")
-    suspend fun verifyPassword(@Body body: VerifyPasswordBody): retrofit2.Response<Unit>
+    // --- Mã bảo mật 6 số của ứng dụng (lưu Ở MÁY CHỦ, thiết bị không giữ bản sao) ---
+    @GET("api/auth/app-pin")
+    suspend fun appPinStatus(): AppPinStatus
+
+    /** Tạo mã lần đầu (currentPin = null) hoặc đổi mã (phải kèm mã cũ). */
+    @POST("api/auth/app-pin")
+    suspend fun setAppPin(@Body body: AppPinSetBody): retrofit2.Response<Unit>
+
+    @POST("api/auth/app-pin/verify")
+    suspend fun verifyAppPin(@Body body: AppPinVerifyBody): retrofit2.Response<Unit>
+
+    /** Quên mã: máy chủ xác minh mật khẩu tài khoản rồi xoá mã cũ trong cùng một lượt. */
+    @POST("api/auth/app-pin/reset")
+    suspend fun resetAppPin(@Body body: AppPinResetBody): retrofit2.Response<Unit>
 
     @GET("api/auth/devices")
     suspend fun devices(): List<DeviceSession>
@@ -349,6 +377,23 @@ interface HrApi {
 
     @POST("api/notifications/unregister-token")
     suspend fun unregisterPushToken(@Body body: PushTokenBody): retrofit2.Response<Unit>
+
+    // --- Hộp thư thông báo trên máy chủ (dùng chung với chuông trên web) ---
+    @GET("api/notifications")
+    suspend fun notificationFeed(@Query("limit") limit: Int = 50): ServerNotificationFeed
+
+    @POST("api/notifications/{id}/read")
+    suspend fun markNotificationRead(@retrofit2.http.Path("id") id: Long): retrofit2.Response<Unit>
+
+    @POST("api/notifications/read-all")
+    suspend fun markAllNotificationsRead(): retrofit2.Response<Unit>
+
+    // --- Nhóm thông báo được nhận (dùng chung web + app) ---
+    @GET("api/preferences/notifications")
+    suspend fun notificationGroups(): NotificationGroupSettings
+
+    @PUT("api/preferences/notifications")
+    suspend fun updateNotificationGroups(@Body body: NotificationGroupSettings): NotificationGroupSettings
 
     // --- Cập nhật ứng dụng ---
     @GET("api/releases/latest")

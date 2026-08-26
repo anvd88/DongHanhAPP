@@ -25,10 +25,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -507,9 +504,13 @@ private fun CreatePayoutDialog(vm: HrViewModel, onClose: () -> Unit) {
                     } else {
                         PickerField(
                             label = "Đơn hoàn tiền phạt",
-                            selectedText = picked?.let { "${it.employeeName} · ${formatMoney(it.amount)}" }.orEmpty(),
-                            options = state.refundSources.map { it.id to "${it.employeeName} · ${it.refundNo} · ${formatMoney(it.amount)}" },
+                            selectedId = refundId,
+                            options = state.refundSources.map {
+                                PickOption(it.id, it.employeeName, "${it.refundNo} · phạt ${it.penaltyNo}", formatMoney(it.amount), it.employeeCode)
+                            },
                             onPick = { refundId = it },
+                            searchHint = "Tìm theo tên, mã nhân viên, số phiếu",
+                            showAvatar = true,
                         )
                         picked?.let {
                             Text(
@@ -527,21 +528,23 @@ private fun CreatePayoutDialog(vm: HrViewModel, onClose: () -> Unit) {
                 } else {
                     PickerField(
                         label = "Loại chi",
-                        selectedText = state.categories.firstOrNull { it.id == categoryId }?.name.orEmpty(),
-                        options = state.categories.map { it.id to it.name },
+                        selectedId = categoryId,
+                        options = state.categories.map { PickOption(it.id, it.name) },
                         onPick = { categoryId = it },
                     )
                     PickerField(
                         label = "Người nhận tiền",
-                        selectedText = state.recipients.firstOrNull { it.id == employeeId }?.fullName.orEmpty(),
-                        options = state.recipients.map { it.id to (it.fullName + if (it.departmentName.isNotBlank()) " · ${it.departmentName}" else "") },
+                        selectedId = employeeId,
+                        options = state.recipients.map { PickOption(it.id, it.fullName, it.departmentName, keywords = it.employeeCode) },
                         onPick = { employeeId = it },
+                        searchHint = "Tìm theo tên, mã nhân viên, phòng ban",
+                        showAvatar = true,
                     )
-                    OutlinedTextField(
+                    MoneyField(
+                        label = "Số tiền",
                         value = amount,
-                        onValueChange = { amount = it.filter { c -> c.isDigit() } },
-                        label = { Text("Số tiền (₫)") },
-                        singleLine = true,
+                        onChange = { amount = it },
+                        supportingText = formatMoney(amount.toDoubleOrNull() ?: 0.0),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -578,37 +581,26 @@ private fun CreatePayoutDialog(vm: HrViewModel, onClose: () -> Unit) {
     )
 }
 
-/** Ô chọn dạng dropdown dùng chung cho các danh sách ngắn trong hộp lập phiếu. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Ô chọn trong hộp lập phiếu chi. Bấm vào mở bảng chọn CÓ Ô TÌM KIẾM (kiểu Data Validation List
+ * của Excel) thay cho dropdown phải cuộn tay — danh sách người nhận tiền có thể rất dài.
+ */
 @Composable
 private fun PickerField(
     label: String,
-    selectedText: String,
-    options: List<Pair<String, String>>,
+    selectedId: String,
+    options: List<PickOption>,
     onPick: (String) -> Unit,
+    searchHint: String = "Gõ để tìm nhanh…",
+    showAvatar: Boolean = false,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        OutlinedTextField(
-            value = selectedText,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { (id, text) ->
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = {
-                        onPick(id)
-                        expanded = false
-                    },
-                )
-            }
-        }
-    }
+    SelectField(
+        label = label,
+        selectedId = selectedId.takeIf { it.isNotBlank() },
+        options = options,
+        onPick = { onPick(it.id) },
+        searchHint = searchHint,
+        showAvatar = showAvatar,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }

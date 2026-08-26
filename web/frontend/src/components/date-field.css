@@ -605,3 +605,117 @@ html[data-theme="dark"] .gc-rangepop .rdp-day_button[data-range-preview-label]::
     justify-content: flex-end;
   }
 }
+
+/* Ô chọn bị khoá (vd. hợp đồng không thời hạn) và ô tháng ngoài khoảng cho phép:
+   vẫn đọc được nội dung nhưng không bấm được, để người dùng hiểu là bị chặn chứ không phải hỏng. */
+.gc-datefield:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.gc-datefield:disabled:hover {
+  transform: none;
+}
+
+.gc-monthpop-cell:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.gc-monthpop-cell:disabled:hover {
+  background: transparent;
+  transform: none;
+}
+
+/* ---- Cột giờ/phút của TimePicker và DateTimePicker (xem DateField.tsx) ---- */
+
+.gc-clock {
+  display: flex;
+  gap: 8px;
+}
+
+.gc-clock-col {
+  display: flex;
+  min-width: 74px;
+  flex: 1;
+  flex-direction: column;
+}
+
+.gc-clock-head {
+  padding: 0 0 6px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gc-text-muted, #64748b);
+}
+
+/* Cuộn trong CỘT chứ không kéo dài cả popover: 24 giờ x 12 phút mà xổ hết thì bảng cao quá màn hình. */
+.gc-clock-scroll {
+  display: flex;
+  max-height: 216px;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.gc-clock-cell {
+  flex-shrink: 0;
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--gc-text, #0f172a);
+  transition: background-color 0.14s ease;
+}
+
+.gc-clock-cell:hover {
+  background: rgba(15, 23, 42, 0.07);
+}
+
+html[data-theme="dark"] .gc-clock-cell:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.gc-clock-cell.is-selected {
+  background: var(--accent, #2563eb);
+  color: #fff;
+}
+
+.gc-timepop {
+  min-width: 190px;
+}
+
+.gc-datetimepop-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.gc-datepop-done {
+  margin-left: auto;
+  border-radius: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--accent, #2563eb);
+}
+
+.gc-datepop-done:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+@media (max-width: 560px) {
+  .gc-datetimepop-body {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .gc-clock-scroll {
+    max-height: 150px;
+  }
+}

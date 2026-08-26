@@ -873,13 +873,14 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     HrDestination.Timesheet -> TimesheetScreen(
                         state = vm.timesheetState,
                         payEstimate = vm.payEstimateState,
+                        dayLog = vm.dayLogState,
                         username = user.username,
                         onMonthOffset = vm::changeTimesheetMonth,
                         onSelectMonth = vm::setTimesheetMonth,
+                        onSelectDay = vm::loadDayLog,
                         onShiftSwap = vm::startShiftSwap,
                         onForgotCheckin = vm::startForgotCheckin,
                         onLoadSalary = vm::loadMyEstimate,
-                        onVerifyAccountPassword = vm::verifyAccountPassword,
                     )
                     HrDestination.MyPayslips -> MyPayslipsScreen(
                         state = vm.payslipsState,
@@ -890,12 +891,12 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         onOpenConfirmation = vm::openPayslipConfirmation,
                         onInquiry = vm::sendPayslipInquiry,
                         onDownload = vm::downloadPayslip,
-                        onVerifyAccountPassword = vm::verifyAccountPassword,
                     )
                     HrDestination.Payout -> PayoutScreen(vm)
                     HrDestination.CashCollections -> CashCollectionScreen(vm)
                     HrDestination.Requests -> RequestsScreen(vm)
                     HrDestination.Tasks -> TaskCenterScreen(vm)
+                    HrDestination.TaskHistory -> TaskHistoryScreen(vm)
                     HrDestination.Chat -> RealChatScreen(vm)
                     HrDestination.Directory -> DirectoryScreen(vm)
                     HrDestination.Calls -> CallHistoryScreen(vm)
@@ -1025,7 +1026,6 @@ private fun PayslipConfirmationRoute(user: HrUser, vm: HrViewModel) {
         onInquiry = vm::sendPayslipInquiry,
         onDownload = vm::downloadPayslip,
         onClose = vm::closePayslipConfirmation,
-        onVerifyAccountPassword = vm::verifyAccountPassword,
     )
 }
 

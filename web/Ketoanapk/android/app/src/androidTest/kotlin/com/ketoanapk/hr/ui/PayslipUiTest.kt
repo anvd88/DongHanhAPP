@@ -70,7 +70,6 @@ class PayslipUiTest {
                     onOpenConfirmation = {},
                     onInquiry = { _, _, _ -> },
                     onDownload = {},
-                    onVerifyAccountPassword = { _, result -> result(true, null) },
                 )
             }
         }
@@ -121,7 +120,6 @@ class PayslipUiTest {
                     onInquiry = { _, _, _ -> },
                     onDownload = {},
                     onClose = {},
-                    onVerifyAccountPassword = { _, result -> result(true, null) },
                 )
             }
         }

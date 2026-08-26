@@ -179,7 +179,6 @@ class EdgeBackGestureUiTest {
                         onShiftSwap = {},
                         onForgotCheckin = {},
                         onLoadSalary = {},
-                        onVerifyAccountPassword = { _, result -> result(true, null) },
                     )
                 }
             }

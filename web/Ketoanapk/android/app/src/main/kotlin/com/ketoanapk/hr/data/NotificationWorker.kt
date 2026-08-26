@@ -9,9 +9,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.LocalTime
-import java.time.Duration
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
@@ -62,36 +59,18 @@ class NotificationWorker(
             canManagePenalties,
             attendanceSheets = attendanceSheets,
             nowVietnam = nowVietnam,
-        )
+        ) +
+            // Kể cả khi app đóng: vòng poll nền kéo hộp thư máy chủ về nên thông báo giao hàng/thu
+            // tiền vẫn lên khay dù máy chưa nhận được gói FCM nào.
+            center.ingestFromServer(repo.notificationFeed())
         val delivered = fresh.filter { it.kind != NotificationKind.Attendance }
             .filter { AppNotifier.show(applicationContext, it, user.username) }
             .map { it.id }
         center.markSystemDelivered(delivered)
         center.deliverPendingSystemAttendance()
-        runCatching { notifyShiftIfNeeded(repo, center) }
+        // Nhắc ca làm (trước giờ vào / sắp trễ) đã BỎ HẲN theo yêu cầu người dùng 2026-08-26: ca làm
+        // đã hiện sẵn trên bảng công, thêm hai thông báo mỗi ngày chỉ làm phiền chứ không giúp gì.
         return Result.success()
-    }
-
-    private suspend fun notifyShiftIfNeeded(repo: HrRepository, center: NotificationCenter) {
-        val now = LocalDateTime.now()
-        val sheet = repo.myTimesheet(now.toLocalDate().format(DateTimeFormatter.ofPattern("yyyy-MM")))
-        val day = sheet.days.firstOrNull { it.date.take(10) == now.toLocalDate().toString() } ?: return
-        val start = runCatching { LocalTime.parse(day.shiftStart) }.getOrNull() ?: return
-        val shiftAt = LocalDateTime.of(now.toLocalDate(), start)
-        val minutes = Duration.between(now, shiftAt).toMinutes()
-        val settings = ShiftReminderSettings(applicationContext)
-
-        val notification = when {
-            settings.beforeShift && minutes in 0..30 && settings.markOnce("before:${day.date}") ->
-                AppNotification("shift:before:${day.date}", NotificationKind.Attendance, "Sắp đến giờ làm",
-                    "${day.shiftName.ifBlank { "Ca làm" }} bắt đầu lúc ${day.shiftStart}.", System.currentTimeMillis(), target = "Timesheet")
-            settings.lateWarning && minutes in -30L..-1L && day.checkIn.isNullOrBlank() && settings.markOnce("late:${day.date}") ->
-                AppNotification("shift:late:${day.date}", NotificationKind.Attendance, "Bạn sắp bị ghi nhận đi muộn",
-                    "Ca bắt đầu lúc ${day.shiftStart} nhưng chưa có lượt chấm vào.", System.currentTimeMillis(), target = "Scan")
-            else -> null
-        } ?: return
-        center.ingestFromPush(notification.id, notification.kind, notification.title, notification.body, notification.target)
-            ?.let { center.deliverPendingSystemAttendance() }
     }
 
     companion object {

@@ -15,6 +15,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Modal } from "../components/Modal";
+import { DatePicker, DateTimePicker } from "../components/DateField";
 import { Field, Input, Select } from "../components/ui";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Button } from "../components/ui";
@@ -306,7 +307,7 @@ function CreateCollectionModal({ customers, drivers, onClose, onSaved }: { custo
       <Field label="Khách hàng *"><Select className="w-full" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>{customers.map((x) => <option key={x.id} value={x.id}>{x.name}{x.phone ? ` · ${x.phone}` : ""}</option>)}</Select></Field>
       <Field label="Tài xế *"><Select className="w-full" value={driverId} onChange={(e) => setDriverId(e.target.value)}>{drivers.map((x) => <option key={x.id} value={x.id}>{x.name} · {x.position || x.employeeCode}</option>)}</Select></Field>
       <Field label="Số tiền dự kiến *"><Input inputMode="numeric" value={amount ? money(Number(amount.replace(/[^\d]/g, ""))) : ""} onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ""))} placeholder="Ví dụ: 10.000.000" /></Field>
-      <div className="grid gap-4 sm:grid-cols-2"><Field label="Ngày đi thu *"><Input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} /></Field><Field label="Hạn bàn giao *"><Input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} /></Field></div>
+      <div className="grid gap-4 sm:grid-cols-2"><Field label="Ngày đi thu *"><DatePicker value={scheduledDate} onChange={setScheduledDate} className="w-full" /></Field><Field label="Hạn bàn giao *"><DateTimePicker value={due} onChange={setDue} className="w-full" min={scheduledDate || undefined} /></Field></div>
       <Field label="Nội dung / ghi chú"><textarea className="km-form-control min-h-24 w-full rounded-xl border p-3 text-sm outline-none" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Thông tin cần lưu ý khi thu tiền" /></Field>
       {error && <div className="rounded-xl bg-rose-500/10 p-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{error}</div>}
       <p className="text-xs font-semibold text-[var(--gc-text-muted)]">Lệnh không lưu GPS và không sao chép địa chỉ khách hàng.</p>

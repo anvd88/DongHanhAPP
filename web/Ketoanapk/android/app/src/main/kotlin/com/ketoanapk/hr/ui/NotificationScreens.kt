@@ -25,7 +25,12 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.PriceCheck
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -90,7 +95,12 @@ fun NotificationsScreen(
         }
 
         if (notifications.isEmpty()) {
-            item { EmptyState("Chưa có thông báo", "Các đơn từ, phê duyệt và quyết định phạt sẽ hiện ở đây.") }
+            item {
+                EmptyState(
+                    "Chưa có thông báo",
+                    "Giao hàng, thu tiền, chứng từ, đơn từ và việc được giao sẽ hiện ở đây.",
+                )
+            }
         } else {
             items(notifications, key = { it.id }) { n ->
                 NotificationRow(n, onClick = { onOpen(n) })
@@ -176,6 +186,11 @@ private fun notificationIcon(kind: NotificationKind): ImageVector = when (kind) 
     NotificationKind.Attendance -> Icons.Filled.Face
     NotificationKind.Chat -> Icons.Filled.Chat
     NotificationKind.System -> Icons.Filled.NotificationsNone
+    NotificationKind.Delivery -> Icons.Filled.LocalShipping
+    NotificationKind.Collection -> Icons.Filled.PriceCheck
+    NotificationKind.Document -> Icons.Filled.ReceiptLong
+    NotificationKind.Payout -> Icons.Filled.Payments
+    NotificationKind.Task -> Icons.Filled.TaskAlt
 }
 
 @Composable
@@ -186,4 +201,9 @@ private fun notificationColor(kind: NotificationKind): Color = when (kind) {
     NotificationKind.Attendance -> Warning
     NotificationKind.Chat -> MaterialTheme.colorScheme.primary
     NotificationKind.System -> MaterialTheme.colorScheme.primary
+    NotificationKind.Delivery -> MaterialTheme.colorScheme.primary
+    NotificationKind.Collection -> Success
+    NotificationKind.Document -> MaterialTheme.colorScheme.tertiary
+    NotificationKind.Payout -> Warning
+    NotificationKind.Task -> MaterialTheme.colorScheme.secondary
 }
