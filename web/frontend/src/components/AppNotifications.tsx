@@ -36,6 +36,8 @@ const ToastIcon = ({ tone }: { tone: ToastTone }) => {
 
 export function AppNotificationProvider({ children }: { children: ReactNode }) {
   const nextId = useRef(1);
+  const generationRef = useRef(0);
+  const [generation, setGeneration] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
 
@@ -43,7 +45,7 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
     setToasts((items) => items.filter((item) => item.id !== id));
   }, []);
 
-  const show = useCallback((input: ToastInput) => {
+  const enqueueToast = useCallback((input: ToastInput) => {
     const tone = input.tone ?? "info";
     const toast: Toast = {
       id: nextId.current++,
@@ -56,7 +58,7 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => dismiss(toast.id), toast.duration);
   }, [dismiss]);
 
-  const confirm = useCallback((input: ConfirmInput) => {
+  const openConfirm = useCallback((input: ConfirmInput) => {
     return new Promise<boolean>((resolve) => {
       setPendingConfirm({
         title: input.title ?? "Xác nhận thao tác",
@@ -77,16 +79,42 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const value = useMemo<NotificationsApi>(() => ({
-    notify: {
-      show,
-      success: (message, title) => show({ message, title, tone: "success" }),
-      error: (message, title) => show({ message, title, tone: "error" }),
-      info: (message, title) => show({ message, title, tone: "info" }),
-      warning: (message, title) => show({ message, title, tone: "warning" }),
-    },
-    confirm,
-  }), [confirm, show]);
+  const clear = useCallback(() => {
+    // Tăng generation trước khi setState: callback async của phiên cũ bị vô hiệu ngay cả trong
+    // cùng microtask, trước khi React kịp render context mới cho tài khoản kế tiếp.
+    generationRef.current += 1;
+    setGeneration(generationRef.current);
+    setToasts([]);
+    setPendingConfirm((current) => {
+      // Một hộp xác nhận thuộc phiên cũ không được treo Promise hoặc xuất hiện cho tài khoản mới.
+      current?.resolve(false);
+      return null;
+    });
+  }, []);
+
+  const value = useMemo<NotificationsApi>(() => {
+    // Mỗi consumer giữ các hàm gắn với generation tại lúc render. Promise/event handler của admin
+    // hoàn tất sau khi đã đổi sang nhân viên vẫn cầm generation cũ và bị bỏ, không thể dựng toast mới.
+    const show = (input: ToastInput) => {
+      if (generationRef.current !== generation) return;
+      enqueueToast(input);
+    };
+    const confirm = (input: ConfirmInput) => {
+      if (generationRef.current !== generation) return Promise.resolve(false);
+      return openConfirm(input);
+    };
+    return {
+      notify: {
+        show,
+        success: (message, title) => show({ message, title, tone: "success" }),
+        error: (message, title) => show({ message, title, tone: "error" }),
+        info: (message, title) => show({ message, title, tone: "info" }),
+        warning: (message, title) => show({ message, title, tone: "warning" }),
+      },
+      confirm,
+      clear,
+    };
+  }, [clear, enqueueToast, generation, openConfirm]);
 
   return (
     <NotificationsContext.Provider value={value}>

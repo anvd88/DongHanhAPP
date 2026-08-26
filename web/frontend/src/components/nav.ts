@@ -14,6 +14,7 @@ import {
   ClipboardList,
   FileText,
   Gavel,
+  HandCoins,
   History,
   IdCard,
   LayoutDashboard,
@@ -27,6 +28,7 @@ import {
   Tags,
   UserCog,
   Users,
+  Vault,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
@@ -100,8 +102,12 @@ export const NAV: NavSection[] = [
       { key: "thu-chi", label: "Thu chi", icon: ArrowRightLeft, path: "/thu-chi", area: "admin", permission: PERM.accountingAccess, ready: true },
       // Phiếu chi tiền mặt là quy trình QR/ký nhận riêng; phiếu thu/chi nghiệp vụ nằm ở trang Thu chi.
       { key: "phieu-chi", label: "Phiếu chi tiền mặt", icon: ReceiptText, path: "/phieu-chi", area: "admin", permission: PERM.payoutRead, ready: true },
+      { key: "lenh-thu-tien", label: "Lệnh thu tiền", icon: HandCoins, path: "/lenh-thu-tien", area: "admin", permission: PERM.collectionsReadAll, ready: true },
+      { key: "quy-tien-mat", label: "Quỹ tiền mặt", icon: Vault, path: "/quy-tien-mat", area: "admin", permission: PERM.cashFundRead, ready: true },
       { key: "khachhang", label: "Khách hàng", icon: Users, path: "/khachhang", area: "admin", permission: PERM.accountingAccess, ready: true },
-      { key: "muahang", label: "Mua hàng", icon: ShoppingCart, path: "/muahang", area: "admin", permission: PERM.accountingAccess },
+      { key: "danh-muc-hang", label: "Danh mục hàng hoá", icon: Tags, path: "/danh-muc-hang", area: "admin", permission: PERM.accountingAccess, ready: true },
+      { key: "muahang", label: "Mua hàng", icon: ShoppingCart, path: "/muahang", area: "admin", permission: PERM.accountingAccess, ready: true },
+      { key: "nha-cung-cap", label: "Nhà cung cấp", icon: Building2, path: "/nha-cung-cap", area: "admin", permission: PERM.accountingAccess, ready: true },
       { key: "kho", label: "Kho hàng", icon: ShoppingBag, path: "/kho", area: "admin", permission: PERM.accountingAccess },
       { key: "nganhang", label: "Ngân hàng", icon: Banknote, path: "/nganhang", area: "admin", permission: PERM.accountingAccess },
       { key: "congno", label: "Công nợ", icon: Wallet, path: "/congno", area: "admin", permission: PERM.accountingAccess, ready: true },
@@ -113,6 +119,7 @@ export const NAV: NavSection[] = [
     title: "QUẢN LÝ",
     area: "admin",
     items: [
+      { key: "dashboard-dieu-hanh", label: "Dashboard điều hành", icon: LayoutDashboard, path: "/dashboard-dieu-hanh", area: "admin", permission: PERM.hrRead, ready: true },
       { key: "chamcong-ql", label: "Quản lý chấm công", icon: ClipboardList, path: "/ql-chamcong", area: "admin", permission: PERM.attendanceManage, ready: true },
       { key: "quanly-nhansu", label: "Quản lý nhân sự", icon: UserCog, path: "/quanly-nhansu", area: "admin", permissionsAny: [PERM.hrManage, PERM.usersManage], ready: true },
       { key: "cong-thong-tin", label: "Cổng thông tin", icon: Newspaper, path: "/cong-thong-tin", area: "admin", permission: PERM.portalManage, ready: true },

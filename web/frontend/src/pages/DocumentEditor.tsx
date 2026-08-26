@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Eye, Plus, Trash2 } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { Button, Field, Input, Select } from "../components/ui";
@@ -13,6 +13,8 @@ import {
 } from "../lib/documents";
 import { money } from "../lib/format";
 import type { Customer, DocumentDetail, DocumentLine } from "../lib/types";
+
+import { ProductCellInput } from "../components/ProductCellInput";
 
 const emptyLine = (): DocumentLine => ({ lineContent: "", spec: "", quantity: 1, unitPrice: 0, note: "" });
 
@@ -146,6 +148,8 @@ export function DocumentEditor({
   readOnly = false,
   apiBasePath = "/api/documents",
   allowedKinds = ["document"],
+  renderShell,
+  beforeSave,
   onClose,
   onSaved,
 }: {
@@ -158,6 +162,22 @@ export function DocumentEditor({
   readOnly?: boolean;
   apiBasePath?: string;
   allowedKinds?: DocumentKind[];
+  /**
+   * Bọc phần thân + thanh nút của form bằng khung KHÁC thay cho hộp thoại mặc định.
+   *
+   * Dùng để nhét nguyên form này vào một màn lớn hơn (màn Phiếu gộp ở trang Bán hàng, nơi phiếu ·
+   * giao hàng · đối soát nằm chung một hộp thoại có tab) mà không phải lồng hộp thoại trong hộp
+   * thoại, và không phải tách form ra thành component riêng. Không truyền ⇒ vẫn là hộp thoại như cũ.
+   */
+  renderShell?: (parts: { title: string; body: ReactNode; footer: ReactNode }) => ReactNode;
+  /**
+   * Chạy TRƯỚC khi ghi phiếu; trả về false để dừng lại (kèm thông báo do người gọi tự hiện).
+   *
+   * Màn Phiếu gộp dùng nó để ghi LỊCH SỬ chỉnh sửa hàng thực nhận trước: phiếu đã phát hành mà sửa
+   * số lượng/đơn giá thì phải để lại vết cũ→mới kèm lý do, còn PUT phiếu bên dưới thì xoá sạch rồi
+   * chèn lại dòng nên tự nó không biết gì về "cũ".
+   */
+  beforeSave?: (lines: DocumentLine[]) => Promise<boolean>;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -234,6 +254,10 @@ export function DocumentEditor({
     setSaving(true);
     setError("");
     setSuccess("");
+    if (beforeSave && !(await beforeSave(lines))) {
+      setSaving(false);
+      return;
+    }
     const body = {
       voucherNo: voucherNo.trim(),
       documentType: docKind,
@@ -262,26 +286,21 @@ export function DocumentEditor({
     }
   };
 
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      wide
-      solid
-      title={id === "new" ? `Tạo ${documentKindLabel(docKind).toLowerCase()}` : isLocked ? "Xem phiếu đã hủy" : "Sửa phiếu"}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>{isLocked ? "Đóng" : "Hủy"}</Button>
-          {!isLocked && id !== "new" && onPrint && (
-            <Button variant="soft" onClick={onPrint} loading={printLoading}>
-              <Eye className="h-4 w-4" /> Xem trước &amp; in
-            </Button>
-          )}
-          {!isLocked && <Button onClick={save} loading={saving}>Lưu phiếu</Button>}
-        </>
-      }
-    >
-      <fieldset disabled={isLocked} className="space-y-4">
+  const title =
+    id === "new" ? `Tạo ${documentKindLabel(docKind).toLowerCase()}` : isLocked ? "Xem phiếu đã hủy" : "Sửa phiếu";
+  const footer = (
+    <>
+      <Button variant="ghost" onClick={onClose}>{isLocked ? "Đóng" : "Hủy"}</Button>
+      {!isLocked && id !== "new" && onPrint && (
+        <Button variant="soft" onClick={onPrint} loading={printLoading}>
+          <Eye className="h-4 w-4" /> Xem trước &amp; in
+        </Button>
+      )}
+      {!isLocked && <Button onClick={save} loading={saving}>Lưu phiếu</Button>}
+    </>
+  );
+  const body = (
+    <fieldset disabled={isLocked} className="space-y-4">
         {isLocked && (
           <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 px-3.5 py-3 text-sm font-semibold text-rose-600 dark:text-rose-300">
             Phiếu đã hủy và chỉ được phép xem.
@@ -368,7 +387,13 @@ export function DocumentEditor({
               <tbody>
                 {lines.map((l, i) => (
                   <tr key={i} className="border-b border-[var(--glass-border)]/40">
-                    <td className="p-1"><CellInput value={l.lineContent} onChange={(v) => setLine(i, { lineContent: v })} /></td>
+                    <td className="p-1">
+                      <ProductCellInput
+                        value={l.lineContent}
+                        onChange={(v) => setLine(i, { lineContent: v, productId: null })}
+                        onPick={(p) => setLine(i, { lineContent: p.name, spec: p.spec, productId: p.id })}
+                      />
+                    </td>
                     <td className="p-1"><CellInput value={l.spec} onChange={(v) => setLine(i, { spec: v })} /></td>
                     <td className="p-1"><FormulaNumberInput align="right" value={l.quantity} onChange={(quantity) => setLine(i, { quantity })} /></td>
                     <td className="p-1"><FormulaNumberInput align="right" value={l.unitPrice} onChange={(unitPrice) => setLine(i, { unitPrice })} /></td>
@@ -397,12 +422,20 @@ export function DocumentEditor({
 
         {success && <div className="rounded-xl bg-emerald-500/10 px-3 py-2.5 text-sm font-semibold text-emerald-700 dark:text-emerald-300">{success}</div>}
         {error && <div className="rounded-xl bg-red-500/10 px-3 py-2.5 text-sm font-medium text-[var(--danger)]">{error}</div>}
-      </fieldset>
+    </fieldset>
+  );
+
+  // Khung ngoài do người gọi quyết định: mặc định là hộp thoại riêng, còn màn Phiếu gộp thì nhét
+  // thân form vào tab của hộp thoại lớn.
+  if (renderShell) return <>{renderShell({ title, body, footer })}</>;
+  return (
+    <Modal open onClose={onClose} wide solid title={title} footer={footer}>
+      {body}
     </Modal>
   );
 }
 
-function CellInput({
+export function CellInput({
   value,
   onChange,
   type = "text",
@@ -425,7 +458,7 @@ function CellInput({
   );
 }
 
-function FormulaNumberInput({
+export function FormulaNumberInput({
   value,
   onChange,
   align = "left",

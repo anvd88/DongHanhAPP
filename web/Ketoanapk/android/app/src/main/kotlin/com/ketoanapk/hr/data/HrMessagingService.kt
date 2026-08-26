@@ -22,21 +22,50 @@ class HrMessagingService : FirebaseMessagingService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onNewToken(token: String) {
+        val tokenStore = TokenStore(applicationContext)
+        val identityAtCallback = runBlocking {
+            tokenStore.cachedUser()?.username.orEmpty() to tokenStore.token().orEmpty()
+        }
+        if (identityAtCallback.first.isBlank() || identityAtCallback.second.isBlank()) return
         val repo = HrRepository(applicationContext)
         // Đăng ký token BẤT KỂ công tắc thông báo — để server luôn gọi được tới máy này (cuộc gọi cần
-        // token dù người dùng tắt thông báo nghiệp vụ). Chưa đăng nhập thì API tự lỗi, bỏ qua an toàn.
-        scope.launch { runCatching { repo.registerPushToken(token) } }
+        // token dù người dùng tắt thông báo nghiệp vụ). Chốt cả username + JWT: callback của A chạy
+        // muộn sau khi B đăng nhập không được phép đăng ký token bằng phiên B.
+        scope.launch {
+            val identityNow = runCatching {
+                tokenStore.cachedUser()?.username.orEmpty() to tokenStore.token().orEmpty()
+            }.getOrNull() ?: return@launch
+            if (
+                !identityNow.first.equals(identityAtCallback.first, ignoreCase = true) ||
+                identityNow.second != identityAtCallback.second
+            ) return@launch
+            runCatching { repo.registerPushToken(token) }
+        }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
+        // Mọi push theo người nhận, kể cả cuộc gọi, phải khớp hồ sơ đã xác thực gần nhất. Đọc scope
+        // trước nhánh call để token còn sót của A không thể chạm CallManager sau khi đã chuyển sang B.
+        val accountId = runBlocking { TokenStore(applicationContext).cachedUser()?.username }.orEmpty()
+        if (accountId.isBlank()) return
+        val currentScope = notificationAccountScope(accountId)
+        val recipientScope = data["recipient_scope"].orEmpty().trim()
 
         // CUỘC GỌI đến/hủy: LUÔN xử lý (đổ chuông toàn màn hình) — KHÔNG phụ thuộc công tắc "thông báo
         // push" của người dùng, vì cuộc gọi quan trọng và phải reo được kể cả khi họ tắt thông báo
-        // nghiệp vụ. (Trước đây return sớm ở đây khiến nhiều nhân viên không nhận được cuộc gọi.)
+        // nghiệp vụ. Scope là bắt buộc cho call data-only; backend hiện hành luôn gửi trường này.
         when (data["type"]) {
-            "call_invite" -> { handleCallInvite(data); return }
-            "call_cancel" -> { handleCallCancel(data); return }
+            "call_invite" -> {
+                if (!callRecipientMatches(currentScope, recipientScope)) return
+                handleCallInvite(data)
+                return
+            }
+            "call_cancel" -> {
+                if (!callRecipientMatches(currentScope, recipientScope)) return
+                handleCallCancel(data)
+                return
+            }
         }
 
         val title = data["title"] ?: message.notification?.title ?: "Thông báo"
@@ -45,12 +74,6 @@ class HrMessagingService : FirebaseMessagingService() {
         val notifId = data["notif_id"].orEmpty()
         val kind = kindOf(notifId, target)
         val isAppUpdate = target == APP_UPDATE_NOTIFICATION_TARGET
-        // Scope push theo hồ sơ đã xác thực gần nhất. Không có phiên thì không ghi vào một kho dùng chung
-        // mơ hồ; server sẽ gửi lại/sync fallback sau khi đăng nhập.
-        val accountId = runBlocking { TokenStore(applicationContext).cachedUser()?.username }.orEmpty()
-        if (accountId.isBlank()) return
-        val currentScope = notificationAccountScope(accountId)
-        val recipientScope = data["recipient_scope"].orEmpty().trim().lowercase()
         if (!notificationRecipientMatches(kind, currentScope, recipientScope)) return
 
         // Tắt thông báo chỉ tắt phần HIỂN THỊ, không được tắt tín hiệu đồng bộ dữ liệu. Nếu không,
@@ -106,6 +129,11 @@ class HrMessagingService : FirebaseMessagingService() {
         data["call_id"]?.takeIf { it.isNotBlank() }?.let { CallManager.cancelIncomingFromPush(it) }
         CallNotifier.dismiss(applicationContext)
     }
+
+    /** Cuộc gọi là dữ liệu cá nhân/actionable nên thiếu scope cũng phải fail-closed. */
+    private fun callRecipientMatches(currentScope: String, incomingScope: String): Boolean =
+        currentScope.isNotBlank() && incomingScope.isNotBlank() &&
+            currentScope.equals(incomingScope, ignoreCase = true)
 
     private fun kindOf(notifId: String, target: String?): NotificationKind = when {
         notifId.startsWith("req:") -> NotificationKind.Request

@@ -134,6 +134,11 @@ class HrRepository(context: Context, background: Boolean = false) {
         result
     }
 
+    /** Bước 2 màn quên mật khẩu: hỏi máy chủ xem mã có đúng không (chưa đổi mật khẩu). */
+    suspend fun verifyRecoveryCode(username: String, code: String) = callUnit {
+        api.verifyRecoveryCode(RecoveryVerifyRequest(username.trim(), code.trim()))
+    }
+
     suspend fun resetPasswordWithCode(username: String, code: String, newPassword: String) = callUnit {
         api.resetWithRecoveryCode(RecoveryResetRequest(username.trim(), code.trim(), newPassword))
     }
@@ -305,6 +310,21 @@ class HrRepository(context: Context, background: Boolean = false) {
     suspend fun completePayoutVoucher(id: String, note: String = "") = callUnit { api.completePayoutVoucher(id, TransitionPayoutBody(note)) }
     suspend fun rejectPayoutVoucher(id: String, reason: String) = callUnit { api.rejectPayoutVoucher(id, CancelPayoutBody(reason)) }
     suspend fun cancelPayoutVoucher(id: String, reason: String) = callUnit { api.cancelPayoutVoucher(id, CancelPayoutBody(reason)) }
+
+    // ---- Lệnh thu tiền khách hàng ----
+    suspend fun cashCollections(scope: String): List<CashCollection> = call { api.cashCollections(scope) }
+    suspend fun cashCollectionDrivers(): List<CashCollectionDriver> = call { api.cashCollectionDrivers() }
+    suspend fun accountingCustomers(): List<CashCollectionCustomer> = call { api.accountingCustomers() }
+    suspend fun createCashCollection(body: CreateCashCollectionBody): CreatedCashCollection = call { api.createCashCollection(body) }
+    suspend fun acceptCashCollection(id: String) = callUnit { api.acceptCashCollection(id) }
+    suspend fun failCashCollection(id: String, reason: String) = callUnit { api.failCashCollection(id, CashCollectionReasonBody(reason)) }
+    suspend fun collectCashCollection(id: String, lines: List<CashCountLineBody>, reason: String): CashCollectionResult =
+        call { api.collectCashCollection(id, CashCountBody(lines, reason)) }
+    suspend fun receiveCashCollection(id: String, lines: List<CashCountLineBody>): CashCollectionResult =
+        call { api.receiveCashCollection(id, CashCountBody(lines)) }
+    suspend fun cancelCashCollection(id: String, reason: String) = callUnit { api.cancelCashCollection(id, CashCollectionReasonBody(reason)) }
+    suspend fun resolveCashCollection(id: String, action: String, reason: String): CashCollectionResult =
+        call { api.resolveCashCollection(id, ResolveCashCollectionBody(action, reason)) }
 
     suspend fun myPayslips(): List<PayslipItem> = call { api.myPayslips() }
     suspend fun payslipRequirement(): PayslipRequirement = call { api.payslipRequirement() }

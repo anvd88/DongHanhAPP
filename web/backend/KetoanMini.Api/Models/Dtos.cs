@@ -1,4 +1,4 @@
-namespace KetoanMini.Api.Models;
+﻿namespace KetoanMini.Api.Models;
 
 // ----- Auth -----
 // Client: "apk"/"android"/"native" = đăng nhập từ app native (KHÔNG bị chặn bởi cờ tắt đăng nhập web).
@@ -11,6 +11,8 @@ public record LoginBootstrapResponse(bool Ready, DateTime ExpiresAt, string Prot
 public record FacePasswordResetRequest(string Username, string NewPassword, List<string> Images, string? Client = null);
 // Khôi phục mật khẩu bằng mã do admin cấp (thay cho reset khuôn mặt): username + mã + mật khẩu mới.
 public record RecoveryResetRequest(string Username, string Code, string NewPassword);
+// Chỉ KIỂM TRA mã khôi phục ở bước 2 của màn hình quên mật khẩu (chưa đổi mật khẩu).
+public record RecoveryVerifyRequest(string Username, string Code);
 // Trả về mã khôi phục vừa tạo cho admin xem một lần (không lưu bản rõ ở server).
 public record RecoveryCodeResponse(string Code);
 /// <summary>Token CHỈ có với client native (ứng dụng Android). Với trình duyệt, phiên nằm trong cookie
@@ -122,8 +124,19 @@ public record RecentDocDto(Guid Id, string VoucherNo, DateOnly Date, string Cust
 // ----- Documents -----
 public record DocumentListItemDto(Guid Id, string VoucherNo, DateOnly Date, string DocumentType,
     string CustomerName, string Content, decimal Total, string CreatedBy, DateTime? IssuedAt,
-    DateTime? CancelledAt, string CancelledBy, string CancelReason);
-public record DocumentLineDto(string LineContent, string Spec, decimal Quantity, decimal UnitPrice, string Note)
+    DateTime? CancelledAt, string CancelledBy, string CancelReason,
+    // Đường giao hàng của phiếu xuất kho. Mặc định rỗng để sổ chứng từ của khách hàng
+    // (không quan tâm giao hàng) dùng lại nguyên bản ghi này mà không phải truy vấn thêm.
+    string DeliveryMode = "", string DeliveryDriverName = "",
+    // Đối soát khi lái xe nộp phiếu về: trạng thái việc giao hàng + mốc kế toán xác nhận phiếu
+    // đã về kho. Có sẵn ở danh sách để kế toán nhìn ra ngay phiếu nào còn treo.
+    string DeliveryTaskStatus = "", DateTime? DeliveryReturnedAt = null);
+/// <param name="ProductId">
+/// Mã hàng trong danh mục, nếu người lập phiếu chọn từ đó. NULL = gõ tay (vẫn hợp lệ: phiếu cũ,
+/// hàng lạ, hàng gia công một lần). Có mã thì thống kê bám theo mã chứ không theo chính tả.
+/// </param>
+public record DocumentLineDto(string LineContent, string Spec, decimal Quantity, decimal UnitPrice, string Note,
+    Guid? ProductId = null)
 {
     public decimal Amount => Quantity * UnitPrice;
 }
@@ -149,11 +162,15 @@ public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal
     decimal PaymentTotal, decimal SalesTotal, List<DocumentListItemDto> Documents);
 
 // ----- Customer debts -----
+/// <param name="ReturnsTotal">
+/// Hàng khách trả về (theo giá của chính đơn đã bán). Đứng riêng chứ không gộp vào
+/// <paramref name="CollectedTotal"/>: trả hàng không phải là trả tiền.
+/// </param>
 public record DebtSummaryDto(CustomerDto Customer, decimal OpeningBalance, DateOnly? OpeningDate,
-    string OpeningNote, decimal SalesTotal, decimal CollectedTotal, decimal Balance,
+    string OpeningNote, decimal SalesTotal, decimal ReturnsTotal, decimal CollectedTotal, decimal Balance,
     int InvoiceCount, DateOnly? LastActivityDate);
-public record DebtOverviewDto(decimal TotalOpeningBalance, decimal TotalSales, decimal TotalCollected,
-    decimal TotalReceivable, int DebtorCount, List<DebtSummaryDto> Customers);
+public record DebtOverviewDto(decimal TotalOpeningBalance, decimal TotalSales, decimal TotalReturns,
+    decimal TotalCollected, decimal TotalReceivable, int DebtorCount, List<DebtSummaryDto> Customers);
 public record DebtTransactionDto(Guid Id, DateOnly Date, string Reference, string Kind, string Description,
     decimal Debit, decimal Credit, decimal RunningBalance, bool Cancelled);
 public record DebtDetailDto(CustomerDto Customer, DebtSummaryDto Summary, List<DebtTransactionDto> Transactions);

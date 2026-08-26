@@ -1416,8 +1416,9 @@ html[data-theme="dark"] .hr-status[data-tone="danger"] { background: #3b211f; co
 .hr-ot-row .hr-ot-min { color: var(--hr-muted); font-size: 0.82rem; }
 .hr-ot-row b { color: var(--hr-text); text-align: right; white-space: nowrap; }
 
+/* Khoản cộng / khoản trừ xếp DỌC để nhìn tổng quan dễ hơn (trước đây 2 cột ngang khó đọc). */
 .hr-payroll-preview-card .hr-payslip-lines {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .hr-page--payroll .hr-payslip-group {
@@ -1644,6 +1645,40 @@ html[data-theme="dark"] .hr-status[data-tone="danger"] { background: #3b211f; co
   font-size: 0.98rem;
   overflow-wrap: anywhere;
 }
+
+.hr-payroll-history-head > .hr-payroll-history-head-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.hr-payroll-history-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--hr-border);
+  border-radius: 999px;
+  padding: 5px 11px;
+  background: var(--hr-surface-2);
+  color: var(--hr-text);
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.hr-payroll-history-btn:hover { border-color: var(--hr-accent, #2563eb); }
+
+.hr-payroll-history-btn span {
+  border-radius: 999px;
+  padding: 0 6px;
+  background: var(--hr-border);
+  color: var(--hr-muted);
+  font-size: 0.7rem;
+}
+
+.hr-modal-body .hr-payroll-timeline { margin-top: 2px; }
 
 .hr-payroll-history-actions {
   display: flex;

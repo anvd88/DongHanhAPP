@@ -40,7 +40,7 @@ data class CallHistoryUiState(
 @Composable
 fun CallHistoryScreen(vm: HrViewModel) {
     val state = vm.callHistoryState
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = screenPadding(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         when {
             state.loading && state.items.isEmpty() -> item { LoadingBlock() }
             state.items.isEmpty() -> item {

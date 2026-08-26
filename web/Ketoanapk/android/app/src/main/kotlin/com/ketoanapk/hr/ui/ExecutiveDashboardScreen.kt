@@ -18,7 +18,7 @@ fun ExecutiveDashboardScreen(vm: HrViewModel) {
     val h = vm.managerState.summary?.headcount
     var dept by remember { mutableStateOf<String?>(null) }
     val selected = vm.dashboardStatus
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = screenPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton({ vm.refreshDashboard(selected, dept, LocalDate.parse(vm.dashboardDate).minusDays(1).toString()) }, Modifier.weight(1f)) { Text("Ngày trước") }

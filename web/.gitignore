@@ -27,6 +27,10 @@ builder-debug.yml
 # Local editor / agent config
 .claude/
 .codex/
+.agents/
+.codex-work/
+.codex-spreadsheet-fix/
+.codex-spreadsheet-inspect/
 
 # Logs & moi truong
 *.log
@@ -35,6 +39,11 @@ builder-debug.yml
 !.env.example
 .codex-logs/
 .codex-build/
+
+# Local Codex/QA working data. Final source assets stay outside these folders.
+tmp/
+outputs/
+artifacts/
 
 # Chung chi HTTPS LAN - chua khoa bi mat, KHONG commit
 backend/KetoanMini.Api/certs/

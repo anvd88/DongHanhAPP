@@ -3,11 +3,13 @@ import { NavLink, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { PageSkeleton } from "./PageSkeleton";
+import { AppErrorBoundary } from "./AppErrorBoundary";
 import { QuickToolsDrawer } from "./QuickToolsDrawer";
 import { NAV } from "./nav";
 import { useAuth } from "../lib/auth";
 import { useWorkArea } from "../lib/workArea";
 import { useChatNotifications } from "./chat-notifications-context";
+import { RailSlotProvider, RailSwitch, useRailContent } from "./rail-slot";
 
 // Thanh điều hướng dưới cùng (mobile) khác nhau theo không gian: người làm nghiệp vụ cần lối tắt tới
 // chứng từ/khách hàng, còn nhân viên cần lối tắt tới việc của mình.
@@ -23,7 +25,11 @@ export function Layout({
   children: ReactNode;
   suppressMainWebSystem?: boolean;
 }) {
-  return <ClassicLayout suppressMainWebSystem={suppressMainWebSystem}>{children}</ClassicLayout>;
+  return (
+    <RailSlotProvider>
+      <ClassicLayout suppressMainWebSystem={suppressMainWebSystem}>{children}</ClassicLayout>
+    </RailSlotProvider>
+  );
 }
 
 function ClassicLayout({
@@ -71,6 +77,8 @@ function ClassicLayout({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
   const { unreadCount } = useChatNotifications();
+  // Trang có thể mượn thanh bên trái (xem rail-slot). Không mượn thì vẫn là menu như cũ.
+  const railOverride = useRailContent();
   const { loginTransitionPhase } = useAuth();
   const { area, can } = useWorkArea();
   const wanted = MOBILE_NAV_KEYS[area];
@@ -92,8 +100,8 @@ function ClassicLayout({
       aria-hidden={loginTransitionPhase ? true : undefined}
     >
       {/* Sidebar desktop */}
-      <div ref={railRef} className="km-sidebar-rail hidden lg:block">
-        <Sidebar />
+      <div ref={railRef} className="km-sidebar-rail hidden lg:block" data-rail={railOverride ? "stack" : "menu"}>
+        <RailSwitch menu={<Sidebar />} />
       </div>
 
       {/* Sidebar mobile */}
@@ -108,13 +116,18 @@ function ClassicLayout({
 
       <div className="km-main-shell">
         <Header onMenu={() => setMobileOpen(true)} />
-        <main key={location.pathname} className="km-page scroll-thin">
+        <main key={pageKey(location.pathname)} className="km-page scroll-thin">
           {/* Ranh giới Suspense NẰM TRONG vỏ app: chuyển sang trang lazy chưa tải thì chỉ vùng này
               hiện skeleton, còn sidebar + header đứng yên (không nháy cả màn hình như trước). */}
-          <Suspense fallback={<PageSkeleton />}>
-            {children}
-            <span hidden data-login-route-ready={location.pathname} />
-          </Suspense>
+          {/* Ranh giới lỗi RIÊNG cho vùng nội dung: trang lỗi thì chỉ vùng này báo lỗi, sidebar và
+              header vẫn còn để người dùng đi chỗ khác. `key` của <main> đổi theo trang nên ranh giới
+              tự khởi động lại khi chuyển trang. */}
+          <AppErrorBoundary label={`page:${location.pathname}`}>
+            <Suspense fallback={<PageSkeleton />}>
+              {children}
+              <span hidden data-login-route-ready={location.pathname} />
+            </Suspense>
+          </AppErrorBoundary>
         </main>
       </div>
       <nav
@@ -144,6 +157,18 @@ function ClassicLayout({
       {!suppressMainWebSystem && <QuickToolsDrawer />}
     </div>
   );
+}
+
+/**
+ * Khoá của vùng nội dung: mỗi TRANG là một cây riêng nên chuyển trang thì cuộn/hiệu ứng reset sạch.
+ *
+ * Ngoại lệ các đường dẫn có tham số: ở đó đổi tham số là ĐỔI LỰA CHỌN chứ không phải đổi trang.
+ * Gắn key theo đường dẫn đầy đủ sẽ dựng lại cả trang mỗi lần bấm — màn hình giật một nhịp, và thanh
+ * bên do trang mượn cũng bị gỡ rồi gắn lại nên menu nháy lên giữa chừng.
+ */
+function pageKey(pathname: string) {
+  const detail = pathname.match(/^(\/ban-hang)\/[^/]+$/);
+  return detail ? `${detail[1]}/:id` : pathname;
 }
 
 /** Tiêu đề trang dùng chung. */

@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   CalendarClock,
   CheckCircle2,
   ClipboardCheck,
   ClipboardList,
+  FileText,
   Inbox,
   Pencil,
   Plus,
@@ -22,10 +24,11 @@ import { useApi } from "../lib/useApi";
 import { useAppNotifications } from "../components/app-notifications-context";
 import { dateTime, date as fmtDate } from "../lib/format";
 import {
+  isTaskClosed,
   PRIORITY_COLOR,
   PRIORITY_LABEL,
   STATUS_COLOR,
-  STATUS_LABEL,
+  statusLabel,
   tasksApi,
   type CreateTaskBody,
   type TaskDetailResult,
@@ -36,8 +39,8 @@ import {
 
 type Tab = "inbox" | "outbox";
 
-function StatusBadge({ status }: { status: string }) {
-  return <Badge color={STATUS_COLOR[status] ?? "muted"}>{STATUS_LABEL[status] ?? status}</Badge>;
+function StatusBadge({ status, isDelivery = false }: { status: string; isDelivery?: boolean }) {
+  return <Badge color={STATUS_COLOR[status] ?? "muted"}>{statusLabel(status, isDelivery)}</Badge>;
 }
 function PriorityBadge({ priority }: { priority: string }) {
   return <Badge color={PRIORITY_COLOR[priority] ?? "muted"}>{PRIORITY_LABEL[priority] ?? priority}</Badge>;
@@ -69,7 +72,7 @@ function TaskCard({ task, side, onOpen }: { task: WorkTask; side: Tab; onOpen: (
           </div>
           <div className="mt-1 truncate font-bold text-[var(--text)]">{task.title}</div>
         </div>
-        <StatusBadge status={task.status} />
+        <StatusBadge status={task.status} isDelivery={!!task.delivery} />
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--text-secondary)]">
         <span>{who}</span>
@@ -82,7 +85,7 @@ function TaskCard({ task, side, onOpen }: { task: WorkTask; side: Tab; onOpen: (
       </div>
       {(task.status === "in_progress" || task.status === "submitted" || task.progress > 0) && (
         <div className="flex items-center gap-2">
-          <ProgressBar value={task.status === "accepted" ? 100 : task.progress} />
+          <ProgressBar value={isTaskClosed(task.status) && task.status !== "cancelled" ? 100 : task.progress} />
           <span className="w-9 text-right text-xs font-semibold text-[var(--text-secondary)]">{task.progress}%</span>
         </div>
       )}
@@ -212,6 +215,7 @@ function TaskDetailModal({
   onEdit: (task: WorkTask) => void;
 }) {
   const { notify, confirm } = useAppNotifications();
+  const navigate = useNavigate();
   const { data, loading, reload } = useApi<TaskDetailResult>(`/api/tasks/${id}`, [id]);
   const [note, setNote] = useState("");
   const [progress, setProgress] = useState(0);
@@ -255,7 +259,7 @@ function TaskDetailModal({
       ) : (
         <div className="space-y-5">
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={task.status} />
+            <StatusBadge status={task.status} isDelivery={!!task.delivery} />
             <PriorityBadge priority={task.priority} />
             {task.rating ? (
               <Badge color="warning">
@@ -287,7 +291,7 @@ function TaskDetailModal({
               <span>Tiến độ</span>
               <span>{task.progress}%</span>
             </div>
-            <ProgressBar value={task.status === "accepted" ? 100 : task.progress} />
+            <ProgressBar value={isTaskClosed(task.status) && task.status !== "cancelled" ? 100 : task.progress} />
           </div>
 
           {task.submitNote && (
@@ -295,7 +299,7 @@ function TaskDetailModal({
           )}
           {task.reviewNote && (
             <InfoBlock
-              label={task.status === "rejected" ? "Lý do trả lại" : "Ý kiến nghiệm thu"}
+              label={task.status === "rejected" ? "Lý do trả lại" : task.delivery ? "Ghi chú" : "Ý kiến nghiệm thu"}
               text={task.reviewNote}
               tone={task.status === "rejected" ? "danger" : undefined}
             />
@@ -321,7 +325,7 @@ function TaskDetailModal({
           </div>
 
           {/* Thao tác của người nhận */}
-          {flags.mine && task.status !== "accepted" && task.status !== "cancelled" && task.status !== "submitted" && (
+          {flags.mine && !isTaskClosed(task.status) && task.status !== "submitted" && (
             <div className="space-y-3 rounded-2xl p-4" style={{ background: "var(--accent-soft)" }}>
               <div className="text-sm font-bold text-[var(--text)]">Bạn là người thực hiện</div>
               {flags.canStart && (
@@ -403,6 +407,40 @@ function TaskDetailModal({
             </div>
           )}
 
+          {/* Việc GIAO HÀNG: không nghiệm thu ở đây. Nó khép lại ở màn Phiếu khi kế toán thu được tờ
+              phiếu ký nhận — chỗ này chỉ chỉ đường sang đó, và giữ lối "trả lại chuyến". */}
+          {flags.assignedByMe && task.delivery && task.status === "submitted" && (
+            <div className="space-y-3 rounded-2xl p-4" style={{ background: "var(--accent-soft)" }}>
+              <div className="text-sm font-bold text-[var(--text)]">
+                Lái xe {task.assigneeName} đã giao xong — chờ nộp tờ phiếu về kho
+              </div>
+              <p className="text-xs font-semibold leading-relaxed text-[var(--text-secondary)]">
+                Việc giao hàng không cần nghiệm thu. Mở phiếu {task.delivery.voucherNo} và bấm “Xác nhận
+                phiếu đã về kho” là việc tự khép lại.
+              </p>
+              {task.submitNote && (
+                <p className="text-xs font-semibold text-[var(--text-secondary)]">Lái xe ghi: {task.submitNote}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => navigate(`/ban-hang/${task.delivery!.documentId}`)}>
+                  <FileText className="h-4 w-4" /> Mở phiếu {task.delivery.voucherNo}
+                </Button>
+                {flags.canReject && (
+                  <Button
+                    variant="danger"
+                    loading={busy}
+                    onClick={() => {
+                      if (!note.trim()) return notify.error("Vui lòng nhập lý do trả lại chuyến.");
+                      run(() => tasksApi.reject(task.id, note.trim()), "Đã trả lại chuyến cho lái xe.");
+                    }}
+                  >
+                    <Undo2 className="h-4 w-4" /> Trả lại chuyến
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Quản lý (người giao) */}
           {flags.assignedByMe && (
             <div className="flex flex-wrap gap-2 border-t border-[var(--glass-border)] pt-4">
@@ -463,6 +501,7 @@ const EVENT_LABEL: Record<string, string> = {
   progress: "cập nhật tiến độ",
   submitted: "đã nộp nghiệm thu",
   accepted: "đã nghiệm thu đạt",
+  completed: "đã hoàn thành (phiếu đã về kho)",
   rejected: "đã trả lại",
   cancelled: "đã huỷ việc",
   comment: "trao đổi",
@@ -498,7 +537,23 @@ export function CongViec() {
   const { data, loading, error, reload } = useApi<TaskListResult>("/api/tasks");
   const { data: meta, reload: reloadMeta } = useApi<TaskMeta>("/api/tasks/meta");
   const [selectedTab, setTab] = useState<Tab>("inbox");
-  const [detailId, setDetailId] = useState<string | null>(null);
+  // Mở thẳng một việc qua ?task=<id> — dùng cho lối tắt từ màn Đối soát phiếu bên trang Kế toán.
+  // Giữ trong URL (không phải state) để bấm quay lại/chia sẻ link đều ra đúng việc đó.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedTaskId = searchParams.get("task");
+  const [openedId, setOpenedId] = useState<string | null>(null);
+  const detailId = openedId ?? linkedTaskId;
+  const setDetailId = useCallback(
+    (id: string | null) => {
+      setOpenedId(id);
+      // Đóng việc mở từ link thì dọn luôn tham số, nếu không nó mở lại ngay ở lần render sau.
+      if (id === null && linkedTaskId) {
+        searchParams.delete("task");
+        setSearchParams(searchParams, { replace: true });
+      }
+    },
+    [linkedTaskId, searchParams, setSearchParams],
+  );
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<WorkTask | null>(null);
   const [formSession, setFormSession] = useState(0);
@@ -507,11 +562,15 @@ export function CongViec() {
   const inbox = data?.inbox ?? [];
   const outbox = data?.outbox ?? [];
   const summary = data?.summary;
+  // Tab "Việc tôi giao" mở theo VIỆC ĐÃ GIAO chứ không theo quyền giao việc: kế toán gán phiếu xuất
+  // kho cho lái xe là đã thành người giao việc đó (và phải nghiệm thu nó), dù không có quyền
+  // "Giao việc mới". Quyền canAssign chỉ còn quyết định cái nút tạo việc.
+  const hasOutbox = canAssign || outbox.length > 0;
 
-  // Nếu không phải người giao thì luôn ở tab "của tôi". SUY RA thay vì sửa state trong effect: quyền
-  // giao việc có thể bị thu hồi giữa chừng (admin đổi vai trò → tín hiệu realtime), và cách này khoá
-  // tab ngay trong lần render đó, không để lọt một khung hình hiển thị tab "Tôi giao".
-  const tab: Tab = !canAssign && selectedTab === "outbox" ? "inbox" : selectedTab;
+  // Không có việc nào mình giao thì luôn ở tab "của tôi". SUY RA thay vì sửa state trong effect:
+  // quyền/danh sách có thể đổi giữa chừng (admin đổi vai trò → tín hiệu realtime), và cách này khoá
+  // tab ngay trong lần render đó, không để lọt một khung hình hiển thị tab rỗng.
+  const tab: Tab = !hasOutbox && selectedTab === "outbox" ? "inbox" : selectedTab;
 
   const rows = tab === "inbox" ? inbox : outbox;
   const openForm = useCallback((task: WorkTask | null) => {
@@ -531,9 +590,16 @@ export function CongViec() {
     const arr: { key: Tab; label: string; icon: typeof Inbox; count?: number }[] = [
       { key: "inbox", label: "Việc của tôi", icon: Inbox, count: summary?.inboxActionable || undefined },
     ];
-    if (canAssign) arr.push({ key: "outbox", label: "Việc tôi giao", icon: ClipboardCheck, count: summary?.outboxReview || undefined });
+    // Số trên tab = việc CẦN BẤM: chờ nghiệm thu (việc thường) + chờ thu tờ phiếu (việc giao hàng).
+    if (hasOutbox)
+      arr.push({
+        key: "outbox",
+        label: "Việc tôi giao",
+        icon: ClipboardCheck,
+        count: (summary?.outboxReview ?? 0) + (summary?.outboxAwaitingVoucher ?? 0) || undefined,
+      });
     return arr;
-  }, [canAssign, summary]);
+  }, [hasOutbox, summary]);
 
   return (
     <div className="gc-root">

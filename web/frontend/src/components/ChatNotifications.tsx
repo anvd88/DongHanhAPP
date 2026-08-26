@@ -7,7 +7,7 @@ import { initials } from "../lib/format";
 import { isMessagePreviewEnabled, subscribeMessagePreviewEnabled } from "../lib/messagePreviewPreference";
 import { subscribeRealtime } from "../lib/realtime";
 import { FileTransferPrompts } from "./FileTransferPrompts";
-import type { ChatConversation } from "../lib/types";
+import type { ChatConversation, User } from "../lib/types";
 import { ChatNotificationContext } from "./chat-notifications-context";
 
 type ChatToast = {
@@ -34,6 +34,24 @@ function visibleChatConversations(conversations: ChatConversation[], admin: bool
 
 export function ChatNotificationProvider({ children, suppress = false }: { children: ReactNode; suppress?: boolean }) {
   const { user } = useAuth();
+  // `key` biến danh tính thành ranh giới vòng đời thật: đổi admin ↔ nhân viên sẽ tháo toàn bộ
+  // state, subscription và callback toast của phiên trước trước khi dựng phiên mới.
+  return (
+    <AccountBoundChatNotificationProvider key={user?.id ?? "signed-out"} user={user} suppress={suppress}>
+      {children}
+    </AccountBoundChatNotificationProvider>
+  );
+}
+
+function AccountBoundChatNotificationProvider({
+  children,
+  suppress,
+  user,
+}: {
+  children: ReactNode;
+  suppress: boolean;
+  user: User | null;
+}) {
   const admin = user?.role?.toLowerCase() === "admin";
   const navigate = useNavigate();
   const location = useLocation();
@@ -54,17 +72,13 @@ export function ChatNotificationProvider({ children, suppress = false }: { child
   const conversationsRef = useRef<ChatConversation[]>([]);
   const firstLoadRef = useRef(true);
   const previewEnabledRef = useRef(previewEnabled);
+  const loadVersionRef = useRef(0);
 
-  // Đăng xuất (hoặc đổi tài khoản) thì bỏ sạch hội thoại và toast đang hiện — dữ liệu của người trước
-  // không được phép hiện cho người sau. Gán lúc render thay vì trong effect: React Compiler cấm
-  // setState đồng bộ trong effect, và làm ở đây còn CHẮC hơn — state sạch ngay trong khung hình đầu,
-  // không có nhịp nào kịp vẽ hội thoại cũ. `conversationsRef` tự theo sau nhờ effect đồng bộ bên dưới.
-  const [conversationsUserId, setConversationsUserId] = useState(user?.id ?? null);
-  if (conversationsUserId !== (user?.id ?? null)) {
-    setConversationsUserId(user?.id ?? null);
-    setConversations([]);
-    setToast(null);
-  }
+  useEffect(() => () => {
+    // Promise của instance vừa bị tháo không được phép tiếp tục chạm state, kể cả khi fetch không
+    // hỗ trợ hủy. Việc remount theo key ở trên đồng thời bảo đảm toast/hội thoại cũ biến mất ngay.
+    loadVersionRef.current += 1;
+  }, []);
 
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -88,7 +102,12 @@ export function ChatNotificationProvider({ children, suppress = false }: { child
   const loadConversations = useCallback(
     async ({ notify = false, payload }: { notify?: boolean; payload?: string } = {}) => {
       if (!user) return;
+      const requestedUserId = user.id;
+      const loadVersion = ++loadVersionRef.current;
       const allNext = await api.get<ChatConversation[]>("/api/chat/conversations");
+      // Kết quả chỉ thuộc đúng danh tính đã khởi tạo request và phải là lần tải mới nhất. Điều này
+      // chặn cả đổi admin → nhân viên lẫn hai lần refresh hoàn tất ngược thứ tự khi mạng chậm.
+      if (user.id !== requestedUserId || loadVersionRef.current !== loadVersion) return;
       const next = visibleChatConversations(allNext, admin);
       const previous = conversationsRef.current;
       conversationsRef.current = next;
@@ -120,7 +139,6 @@ export function ChatNotificationProvider({ children, suppress = false }: { child
     // BÁO NHẦM: `loadConversations` là hàm async và mọi setState trong đó đều nằm SAU
     // `await api.get(...)`, nên không có setState nào chạy đồng bộ trong thân effect. Luật chỉ thấy
     // "hàm này có gọi setState" chứ không lần được tới chỗ await.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadConversations();
 
     const unsubscribeRealtime = subscribeRealtime((_, payload) => {
@@ -139,7 +157,6 @@ export function ChatNotificationProvider({ children, suppress = false }: { child
   useEffect(() => {
     // BÁO NHẦM, cùng lý do như trên: setState trong `loadConversations` nằm sau `await`, không chạy
     // đồng bộ trong thân effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (location.pathname.startsWith("/chats")) void loadConversations();
   }, [loadConversations, location.pathname]);
 

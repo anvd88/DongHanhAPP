@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Day nui luc hoang hon">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#a99cc4"/>
+      <stop offset="0.42" stop-color="#c2b4cf"/>
+      <stop offset="0.72" stop-color="#dcc7c6"/>
+      <stop offset="1" stop-color="#efd6c2"/>
+    </linearGradient>
+    <radialGradient id="sunhaze" cx="0.78" cy="0.62" r="0.55">
+      <stop offset="0" stop-color="#ffd8a8" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffd8a8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rockLit" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#e3a668"/>
+      <stop offset="1" stop-color="#b97b45"/>
+    </linearGradient>
+    <linearGradient id="rockDark" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#565471"/>
+      <stop offset="1" stop-color="#2f2e43"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#sky)"/>
+  <rect width="1600" height="1000" fill="url(#sunhaze)"/>
+
+  <!-- Day nui xa, mo suong -->
+  <polygon points="0,772 180,668 348,706 520,604 764,692 1000,624 1246,704 1600,646 1600,1000 0,1000"
+           fill="#9b92b6" opacity="0.5"/>
+
+  <!-- Khoi nui chinh -->
+  <polygon points="20,1000 296,474 432,206 524,302 648,472 706,398 788,520 902,468 1004,560 1124,498 1306,642 1462,600 1600,704 1600,1000"
+           fill="url(#rockDark)"/>
+
+  <!-- Suon khuat nang -->
+  <polygon points="20,1000 296,474 432,206 418,302 330,562 214,772" fill="#3a394f" opacity="0.85"/>
+
+  <!-- Cac mat da an nang -->
+  <polygon points="432,206 524,302 472,428" fill="url(#rockLit)"/>
+  <polygon points="524,302 648,472 566,472" fill="#c78a52"/>
+  <polygon points="706,398 788,520 726,542" fill="#d29257"/>
+  <polygon points="902,468 1004,560 934,584" fill="#c5854d"/>
+  <polygon points="1124,498 1306,642 1186,644" fill="#b87c47"/>
+  <polygon points="1306,642 1462,600 1420,700" fill="#a97142"/>
+
+  <!-- Tuyet dinh va cac vet tuyet tren suon -->
+  <polygon points="432,206 396,286 470,300 452,236" fill="#efeaf3"/>
+  <polygon points="330,562 268,700 344,772 396,646" fill="#d5cfe2" opacity="0.55"/>
+  <polygon points="648,472 706,398 742,470 690,520" fill="#cfc8dd" opacity="0.42"/>
+  <polygon points="1004,560 1124,498 1156,568 1046,614" fill="#cbc4da" opacity="0.38"/>
+  <polygon points="150,900 262,742 336,806 246,940" fill="#c9c2d8" opacity="0.35"/>
+
+  <!-- Suong chan nui -->
+  <rect y="880" width="1600" height="120" fill="#2b2a3e" opacity="0.35"/>
+</svg>

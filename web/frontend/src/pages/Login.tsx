@@ -1,56 +1,31 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { Link } from "react-router-dom";
 import { AnimatePresence, LayoutGroup, MotionConfig, motion } from "motion/react";
 import {
+  ArrowLeft,
   ArrowRight,
-  Calculator,
   CheckCircle2,
   Eye,
   EyeOff,
+  KeySquare,
   LockKeyhole,
   LogIn,
   Moon,
   QrCode,
   ShieldCheck,
   Smartphone,
-  Sparkles,
   Sun,
   UserRound,
 } from "lucide-react";
-import { RecoveryResetModal } from "../components/RecoveryResetModal";
 import { AppLoginModal } from "../components/AppLoginModal";
 import { QrLoginModal } from "../components/QrLoginModal";
+import { RecoveryOtpField, type OtpStatus } from "../components/RecoveryOtpField";
 import { useAuth, IDLE_LOGOUT_FLAG, webSessionId } from "../lib/auth";
 import { api, ApiError } from "../lib/api";
 import { APP_BRAND_NAME } from "../lib/branding";
 import { useTheme } from "../lib/theme-context";
 import "./login.css";
 
-const INTRO_SCENES = [
-  {
-    id: "focus",
-    eyebrow: "Không gian làm việc tập trung",
-    title: "Mọi công việc quan trọng, trong một hệ thống.",
-    description: "Theo dõi vận hành, xử lý nghiệp vụ và truy cập công cụ hằng ngày nhanh chóng, an toàn.",
-    benefits: ["Dữ liệu đồng bộ theo thời gian thực", "Phiên đăng nhập được bảo vệ"],
-  },
-  {
-    id: "realtime",
-    eyebrow: "Nhịp vận hành trực tiếp",
-    title: "Mọi thay đổi được nhìn thấy ngay khi xảy ra.",
-    description: "Theo dõi tiến độ, nhận cập nhật và phối hợp công việc trên cùng một luồng dữ liệu.",
-    benefits: ["Cập nhật trạng thái tức thời", "Không bỏ sót việc cần xử lý"],
-  },
-  {
-    id: "secure",
-    eyebrow: "Bảo mật theo từng lớp",
-    title: "Đúng người truy cập, đúng dữ liệu cần thiết.",
-    description: "Kiểm soát phiên đăng nhập và quyền truy cập để mỗi thao tác luôn rõ ràng, an toàn.",
-    benefits: ["Quyền truy cập được kiểm soát", "Phiên làm việc được bảo vệ"],
-  },
-] as const;
-
-type LoginMode = "account" | "qr";
+type LoginMode = "account" | "qr" | "recover";
 type LoginBootstrapState = "initializing" | "ready" | "error";
 
 type LoginBootstrapResponse = {
@@ -105,6 +80,22 @@ const LOGIN_MODE_GROUP_VARIANTS = {
   exit: { opacity: 0, y: -5, transition: { duration: 0.2, ease: [0.4, 0, 1, 1] as const } },
 };
 
+/** Màn khôi phục đi 3 bước: tên đăng nhập → mã khôi phục (OTP) → mật khẩu mới. */
+type RecoverStep = "username" | "code" | "password";
+
+/** Mã khôi phục do admin cấp dài 5 ký tự (Security/RecoveryCodes.cs) → 5 ô OTP. */
+const RECOVERY_CODE_LENGTH = 5;
+const RECOVERY_RESEND_SECONDS = 60;
+const emptyRecoveryDigits = () => Array<string>(RECOVERY_CODE_LENGTH).fill("");
+
+const RECOVER_STEP_VARIANTS = {
+  enter: (direction: number) => ({ opacity: 0, x: direction * 42 }),
+  center: { opacity: 1, x: 0, transition: { duration: 0.38, ease: LOGIN_MODE_EASE } },
+  exit: (direction: number) => ({ opacity: 0, x: direction * -30, transition: { duration: 0.22, ease: [0.4, 0, 1, 1] as const } }),
+};
+
+const RECOVER_STEP_ORDER: RecoverStep[] = ["username", "code", "password"];
+
 export function Login() {
   const { login, completeLoginWithTransition, loginTransitionPhase } = useAuth();
   const { theme, toggle } = useTheme();
@@ -113,9 +104,9 @@ export function Login() {
   const usernameRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const qrHeadingRef = useRef<HTMLHeadingElement>(null);
+  const recoverHeadingRef = useRef<HTMLHeadingElement>(null);
   const submitButtonRef = useRef<HTMLButtonElement>(null);
   const loginModeViewportRef = useRef<HTMLDivElement>(null);
-  const [introScene, setIntroScene] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(() => {
     try {
@@ -143,7 +134,22 @@ export function Login() {
   });
   const [loginModeTransitioning, setLoginModeTransitioning] = useState(false);
   const [appLoginOpen, setAppLoginOpen] = useState(false);
-  const [recoverOpen, setRecoverOpen] = useState(false);
+  // Khôi phục mật khẩu chạy ngay trong thẻ đăng nhập (một cảnh của login-mode), không mở popup.
+  const [recoverStep, setRecoverStep] = useState<RecoverStep>("username");
+  const [recoverStepDirection, setRecoverStepDirection] = useState<1 | -1>(1);
+  const [recoverDigits, setRecoverDigits] = useState<string[]>(emptyRecoveryDigits);
+  const [codeStatus, setCodeStatus] = useState<OtpStatus>("idle");
+  const [codeFocusKey, setCodeFocusKey] = useState(0);
+  const [resendLeft, setResendLeft] = useState(RECOVERY_RESEND_SECONDS);
+  const [resendHint, setResendHint] = useState("");
+  const [recoverPassword, setRecoverPassword] = useState("");
+  const [recoverConfirm, setRecoverConfirm] = useState("");
+  const [recoverError, setRecoverError] = useState("");
+  const [recoverLoading, setRecoverLoading] = useState(false);
+  const [recoverDone, setRecoverDone] = useState(false);
+  // Hoạt cảnh xác thực chạy bằng hẹn giờ; giữ id để hủy khi người dùng rời cảnh giữa chừng.
+  const recoverTimersRef = useRef<number[]>([]);
+  const recoverCode = recoverDigits.join("");
   const requestedClientMode = typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("client_mode")
     : null;
@@ -152,7 +158,6 @@ export function Login() {
   const clientMode = isAndroidMobile ? "mobile_app" : "desktop_qr";
   const shouldAutoFocusUsername = typeof window !== "undefined"
     && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
-  const activeIntro = INTRO_SCENES[introScene];
   const transitionActive = loginSuccess || loginTransitionPhase !== null;
 
   const initializeSecureSession = useCallback(async (signal?: AbortSignal) => {
@@ -228,7 +233,7 @@ export function Login() {
 
     setLoginModeTransition((current) => ({
       id: current.id + 1,
-      direction: nextMode === "qr" ? 1 : -1,
+      direction: nextMode === "account" ? -1 : 1,
       originX,
       originY,
     }));
@@ -241,8 +246,138 @@ export function Login() {
     setLoginModeTransitioning(false);
     window.requestAnimationFrame(() => {
       if (loginMode === "account") usernameRef.current?.focus({ preventScroll: true });
+      else if (loginMode === "recover") recoverHeadingRef.current?.focus({ preventScroll: true });
       else qrHeadingRef.current?.focus({ preventScroll: true });
     });
+  };
+
+  const clearRecoverTimers = () => {
+    recoverTimersRef.current.forEach((id) => window.clearTimeout(id));
+    recoverTimersRef.current = [];
+  };
+
+  const scheduleRecover = (run: () => void, delay: number) => {
+    recoverTimersRef.current.push(window.setTimeout(run, delay));
+  };
+
+  useEffect(() => clearRecoverTimers, []);
+
+  const goRecoverStep = (next: RecoverStep) => {
+    setRecoverStepDirection(RECOVER_STEP_ORDER.indexOf(next) >= RECOVER_STEP_ORDER.indexOf(recoverStep) ? 1 : -1);
+    setRecoverStep(next);
+    setRecoverError("");
+    if (next === "code") {
+      setResendLeft(RECOVERY_RESEND_SECONDS);
+      setResendHint("");
+      setCodeStatus("idle");
+      setRecoverDigits(emptyRecoveryDigits());
+      setCodeFocusKey((key) => key + 1);
+    }
+  };
+
+  const openRecover = (trigger?: HTMLElement | null) => {
+    // Mở cảnh khôi phục với dữ liệu sạch; tên đăng nhập đang gõ dở được mang sang cho đỡ nhập lại.
+    clearRecoverTimers();
+    setRecoverStep("username");
+    setRecoverStepDirection(1);
+    setRecoverDigits(emptyRecoveryDigits());
+    setCodeStatus("idle");
+    setResendLeft(RECOVERY_RESEND_SECONDS);
+    setResendHint("");
+    setRecoverPassword("");
+    setRecoverConfirm("");
+    setRecoverError("");
+    setRecoverDone(false);
+    switchLoginMode("recover", trigger);
+  };
+
+  const submitRecoverUsername = (event: FormEvent) => {
+    event.preventDefault();
+    if (!username.trim()) { setRecoverError("Nhập tên đăng nhập cần đặt lại mật khẩu."); return; }
+    goRecoverStep("code");
+  };
+
+  // Bước 2: chỉ KIỂM TRA mã (chưa đổi mật khẩu). Giữ hoạt cảnh tối thiểu ~0,9s để người dùng
+  // kịp thấy 5 ô gom về tâm — mạng LAN trả lời quá nhanh thì hiệu ứng chớp qua, nhìn như giật.
+  const verifyRecoveryCode = async (code: string) => {
+    setCodeStatus("verifying");
+    setRecoverError("");
+    setResendHint("");
+    const startedAt = Date.now();
+    const holdAnimation = async (minimum: number) => {
+      const remain = minimum - (Date.now() - startedAt);
+      if (remain > 0) await new Promise((resolve) => { scheduleRecover(() => resolve(null), remain); });
+    };
+
+    try {
+      await api.post("/api/auth/verify-recovery-code", { username: username.trim(), code });
+      await holdAnimation(900);
+      setCodeStatus("success");
+      scheduleRecover(() => goRecoverStep("password"), 1050);
+    } catch (err) {
+      await holdAnimation(700);
+      setCodeStatus("error");
+      setRecoverError(err instanceof Error ? err.message : "Mã khôi phục không đúng hoặc đã hết hạn.");
+      // Chờ rung (380ms) + nứt + rơi (~1s) xong mới dựng lại hàng ô trống.
+      scheduleRecover(() => {
+        setRecoverDigits(emptyRecoveryDigits());
+        setCodeStatus("idle");
+        setCodeFocusKey((key) => key + 1);
+      }, 1480);
+    }
+  };
+
+  // Nhập đủ 5 ký tự là tự xác thực — màn hình này cố ý không có nút "Xác nhận".
+  useEffect(() => {
+    if (loginMode !== "recover" || recoverStep !== "code" || recoverDone) return;
+    if (codeStatus !== "idle" || recoverCode.length < RECOVERY_CODE_LENGTH) return;
+    void verifyRecoveryCode(recoverCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginMode, recoverStep, recoverDone, codeStatus, recoverCode]);
+
+  useEffect(() => {
+    if (loginMode !== "recover" || recoverStep !== "code" || recoverDone) return;
+    const id = window.setInterval(() => setResendLeft((left) => (left <= 0 ? 0 : left - 1)), 1000);
+    return () => window.clearInterval(id);
+  }, [loginMode, recoverStep, recoverDone]);
+
+  // Mã khôi phục do quản trị viên cấp trực tiếp (không gửi SMS/email) nên "gửi lại" là lời nhắc liên hệ.
+  const requestNewRecoveryCode = () => {
+    setResendHint("Mã khôi phục do quản trị viên cấp trực tiếp. Liên hệ quản trị viên để được cấp mã mới.");
+    setResendLeft(RECOVERY_RESEND_SECONDS);
+  };
+
+  const submitRecover = async (event: FormEvent) => {
+    event.preventDefault();
+    setRecoverError("");
+    if (!username.trim()) { setRecoverError("Nhập tên đăng nhập cần đặt lại mật khẩu."); return; }
+    if (recoverCode.length < RECOVERY_CODE_LENGTH) { goRecoverStep("code"); return; }
+    if (recoverPassword.length < 6) { setRecoverError("Mật khẩu mới cần ít nhất 6 ký tự."); return; }
+    if (recoverPassword !== recoverConfirm) { setRecoverError("Xác nhận mật khẩu không khớp."); return; }
+
+    setRecoverLoading(true);
+    try {
+      await api.post("/api/auth/reset-with-recovery-code", {
+        username: username.trim(),
+        code: recoverCode,
+        newPassword: recoverPassword,
+      });
+      setRecoverDone(true);
+      setRecoverDigits(emptyRecoveryDigits());
+      setRecoverPassword("");
+      setRecoverConfirm("");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Không đặt lại được mật khẩu.";
+      // Mã hết hạn/bị dùng mất trong lúc đang đặt mật khẩu ⇒ đưa về bước nhập mã thay vì báo lỗi cụt.
+      if (/mã khôi phục/i.test(message)) {
+        goRecoverStep("code");
+        setRecoverError(message);
+      } else {
+        setRecoverError(message);
+      }
+    } finally {
+      setRecoverLoading(false);
+    }
   };
 
   const submit = async (event: FormEvent) => {
@@ -286,6 +421,22 @@ export function Login() {
       if (!authenticated) setLoading(false);
     }
   };
+
+  const recoverStepIndex = RECOVER_STEP_ORDER.indexOf(recoverStep);
+  const recoverHeading = recoverDone
+    ? "Đặt lại mật khẩu"
+    : recoverStep === "code"
+      ? "Xác thực mã OTP"
+      : recoverStep === "password"
+        ? "Đặt mật khẩu mới"
+        : "Khôi phục mật khẩu";
+  const recoverSubtitle = recoverDone
+    ? "Mật khẩu mới đã được lưu. Quay lại và đăng nhập bằng mật khẩu vừa đặt."
+    : recoverStep === "code"
+      ? `Nhập mã khôi phục của bạn. Mã đã được cấp cho tài khoản ${username.trim() || "này"}.`
+      : recoverStep === "password"
+        ? "Mã khôi phục đã hợp lệ. Đặt mật khẩu mới cho tài khoản của bạn."
+        : "Nhập tên đăng nhập cần khôi phục, bước sau sẽ nhập mã khôi phục do quản trị viên cấp.";
 
   return (
     <main
@@ -384,18 +535,10 @@ export function Login() {
       </button>
 
       <section className="login-shell" aria-label="Đăng nhập hệ thống">
-        <aside
-          className="login-intro"
-          data-scene={activeIntro.id}
-          data-active={introScene === 0 ? undefined : "true"}
-        >
-          <div className="login-intro-palette" aria-hidden="true">
-            <span className="login-intro-palette-focus" />
-            <span className="login-intro-palette-realtime" />
-            <span className="login-intro-palette-secure" />
-          </div>
-          <div className="login-intro-glow" aria-hidden="true" />
-          <div className="login-motion-field" aria-hidden="true">
+        {/* Lớp khí quyển phủ trên ảnh nền: quỹ đạo, hạt sáng và vệt sáng giữ nguyên như bản cũ. */}
+        <aside className="login-intro" aria-hidden="true">
+          <div className="login-intro-glow" />
+          <div className="login-motion-field">
             <span className="login-motion-shine" />
             <span className="login-motion-orbit login-motion-orbit-primary">
               <i />
@@ -407,49 +550,15 @@ export function Login() {
             <span className="login-motion-particle login-motion-particle-two" />
             <span className="login-motion-particle login-motion-particle-three" />
           </div>
-          <div className="login-orbit-hotspots">
-            <button
-              type="button"
-              aria-label="Khám phá vận hành thời gian thực"
-              className="login-orbit-hotspot login-orbit-hotspot-realtime"
-              onPointerEnter={() => setIntroScene(1)}
-              onPointerLeave={() => setIntroScene(0)}
-              onFocus={() => setIntroScene(1)}
-              onBlur={() => setIntroScene(0)}
-              onClick={() => setIntroScene(1)}
-            />
-            <button
-              type="button"
-              aria-label="Khám phá bảo mật dữ liệu"
-              className="login-orbit-hotspot login-orbit-hotspot-secure"
-              onPointerEnter={() => setIntroScene(2)}
-              onPointerLeave={() => setIntroScene(0)}
-              onFocus={() => setIntroScene(2)}
-              onBlur={() => setIntroScene(0)}
-              onClick={() => setIntroScene(2)}
-            />
-          </div>
-          <div className="login-intro-content">
-          <div className="login-brand">
-            <span className="login-brand-mark" aria-hidden="true">CP</span>
-            <span>
-              <strong>{APP_BRAND_NAME}</strong>
-              <small>Nền tảng vận hành doanh nghiệp</small>
-            </span>
-          </div>
-
-          <div key={activeIntro.id} className="login-intro-copy">
-            <span className="login-eyebrow"><Sparkles aria-hidden="true" /> {activeIntro.eyebrow}</span>
-            <h1>{activeIntro.title}</h1>
-            <p>{activeIntro.description}</p>
-          </div>
-
-          <div key={`${activeIntro.id}-benefits`} className="login-benefits" aria-label="Lợi ích hệ thống">
-            <span><CheckCircle2 aria-hidden="true" /> {activeIntro.benefits[0]}</span>
-            <span><ShieldCheck aria-hidden="true" /> {activeIntro.benefits[1]}</span>
-          </div>
-          </div>
         </aside>
+
+        <div className="login-brand">
+          <span className="login-brand-mark" aria-hidden="true">CP</span>
+          <span>
+            <strong>{APP_BRAND_NAME}</strong>
+            <small>Nền tảng vận hành doanh nghiệp</small>
+          </span>
+        </div>
 
         <section
           className="login-card"
@@ -506,6 +615,194 @@ export function Login() {
                             className="login-mode-qr-content"
                             onClose={(trigger) => switchLoginMode("account", trigger)}
                           />
+                        </motion.div>
+                      </>
+                    ) : loginMode === "recover" ? (
+                      <>
+                        <motion.div className="login-mode-group login-mode-group--intro" variants={LOGIN_MODE_GROUP_VARIANTS}>
+                          <div className="login-card-head">
+                            <span className="login-welcome-icon login-welcome-icon--recover">
+                              {recoverStep === "code" && !recoverDone
+                                ? <ShieldCheck aria-hidden="true" />
+                                : recoverStep === "password" && !recoverDone
+                                  ? <LockKeyhole aria-hidden="true" />
+                                  : <KeySquare aria-hidden="true" />}
+                            </span>
+                            <div>
+                              <p>{recoverDone ? "Khôi phục truy cập" : `Khôi phục truy cập · Bước ${recoverStepIndex + 1}/3`}</p>
+                              <h2 ref={recoverHeadingRef} tabIndex={-1}>{recoverHeading}</h2>
+                            </div>
+                          </div>
+                          <p className="login-card-subtitle">{recoverSubtitle}</p>
+                          {!recoverDone && (
+                            <div className="login-recover-steps" aria-hidden="true">
+                              {RECOVER_STEP_ORDER.map((step, index) => (
+                                <span
+                                  key={step}
+                                  data-state={index < recoverStepIndex ? "done" : index === recoverStepIndex ? "active" : "todo"}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </motion.div>
+
+                        <motion.div className="login-mode-group login-mode-group--primary" variants={LOGIN_MODE_GROUP_VARIANTS}>
+                          {recoverDone ? (
+                            <div className="login-recover-done">
+                              <span className="login-recover-done-icon" aria-hidden="true"><CheckCircle2 /></span>
+                              <strong>Đã đặt lại mật khẩu</strong>
+                              <small>Mọi phiên đăng nhập cũ của tài khoản đã bị thu hồi.</small>
+                              <button
+                                type="button"
+                                className="login-submit"
+                                onClick={(event) => switchLoginMode("account", event.currentTarget)}
+                              >
+                                <span>Đăng nhập ngay</span>
+                                <ArrowRight aria-hidden="true" />
+                              </button>
+                            </div>
+                          ) : (
+                            <AnimatePresence mode="wait" initial={false} custom={recoverStepDirection}>
+                              <motion.div
+                                key={recoverStep}
+                                className="login-recover-step"
+                                custom={recoverStepDirection}
+                                variants={RECOVER_STEP_VARIANTS}
+                                initial="enter"
+                                animate="center"
+                                exit="exit"
+                              >
+                                {recoverStep === "username" ? (
+                                  <form onSubmit={submitRecoverUsername} className="login-form">
+                                    <div className="login-field">
+                                      <label htmlFor="recover-username">Tên đăng nhập</label>
+                                      <span className="login-input-wrap">
+                                        <UserRound aria-hidden="true" />
+                                        <input
+                                          id="recover-username"
+                                          autoComplete="username"
+                                          value={username}
+                                          onChange={(event) => setUsername(event.target.value)}
+                                          placeholder="Tài khoản cần đặt lại mật khẩu"
+                                          required
+                                        />
+                                      </span>
+                                    </div>
+
+                                    {recoverError && <div className="login-error" role="alert">{recoverError}</div>}
+
+                                    <button type="submit" className="login-submit">
+                                      <span>Tiếp tục</span>
+                                      <ArrowRight aria-hidden="true" />
+                                    </button>
+                                  </form>
+                                ) : recoverStep === "code" ? (
+                                  <div className="login-recover-code">
+                                    <RecoveryOtpField
+                                      digits={recoverDigits}
+                                      onDigitsChange={setRecoverDigits}
+                                      status={codeStatus}
+                                      focusKey={codeFocusKey}
+                                    />
+
+                                    <p className="login-recover-code-status" data-status={codeStatus} role="status">
+                                      {codeStatus === "verifying"
+                                        ? "Đang xác thực mã…"
+                                        : codeStatus === "success"
+                                          ? "Xác thực thành công"
+                                          : codeStatus === "error"
+                                            ? (recoverError || "Mã OTP không chính xác")
+                                            : ""}
+                                    </p>
+                                    {codeStatus === "success" && (
+                                      <p className="login-recover-code-hint">Đang chuyển sang bước đặt mật khẩu mới…</p>
+                                    )}
+
+                                    <div className="login-recover-resend">
+                                      <span>Bạn chưa nhận được mã?</span>
+                                      {resendLeft > 0 ? (
+                                        <span className="login-recover-resend-timer">Gửi lại sau {resendLeft} giây</span>
+                                      ) : (
+                                        <button type="button" className="login-recover-resend-link" onClick={requestNewRecoveryCode}>
+                                          Gửi lại mã
+                                        </button>
+                                      )}
+                                    </div>
+                                    {resendHint && <p className="login-recover-code-hint">{resendHint}</p>}
+                                  </div>
+                                ) : (
+                                  <form onSubmit={submitRecover} className="login-form">
+                                    <div className="login-field">
+                                      <label htmlFor="recover-password">Mật khẩu mới</label>
+                                      <span className="login-input-wrap">
+                                        <LockKeyhole aria-hidden="true" />
+                                        <input
+                                          id="recover-password"
+                                          type={showPassword ? "text" : "password"}
+                                          autoComplete="new-password"
+                                          value={recoverPassword}
+                                          onChange={(event) => setRecoverPassword(event.target.value)}
+                                          placeholder="Ít nhất 6 ký tự"
+                                          autoFocus
+                                          required
+                                        />
+                                        <button
+                                          type="button"
+                                          className="login-password-toggle"
+                                          onClick={() => setShowPassword((value) => !value)}
+                                          aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
+                                        >
+                                          {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                                        </button>
+                                      </span>
+                                    </div>
+
+                                    <div className="login-field">
+                                      <label htmlFor="recover-confirm">Xác nhận mật khẩu mới</label>
+                                      <span className="login-input-wrap">
+                                        <LockKeyhole aria-hidden="true" />
+                                        <input
+                                          id="recover-confirm"
+                                          type={showPassword ? "text" : "password"}
+                                          autoComplete="new-password"
+                                          value={recoverConfirm}
+                                          onChange={(event) => setRecoverConfirm(event.target.value)}
+                                          placeholder="Nhập lại mật khẩu mới"
+                                          required
+                                        />
+                                      </span>
+                                    </div>
+
+                                    {recoverError && <div className="login-error" role="alert">{recoverError}</div>}
+
+                                    <button type="submit" className="login-submit" disabled={recoverLoading}>
+                                      <span>{recoverLoading ? "Đang đặt lại…" : "Đặt lại mật khẩu"}</span>
+                                      <ArrowRight aria-hidden="true" />
+                                    </button>
+                                  </form>
+                                )}
+                              </motion.div>
+                            </AnimatePresence>
+                          )}
+                        </motion.div>
+
+                        <motion.div className="login-mode-group login-mode-group--secondary" variants={LOGIN_MODE_GROUP_VARIANTS}>
+                          <button
+                            type="button"
+                            className="login-qr-back"
+                            disabled={codeStatus === "verifying" || codeStatus === "success"}
+                            onClick={(event) => {
+                              if (recoverDone || recoverStep === "username") {
+                                switchLoginMode("account", event.currentTarget);
+                                return;
+                              }
+                              clearRecoverTimers();
+                              goRecoverStep(recoverStep === "password" ? "code" : "username");
+                            }}
+                          >
+                            <ArrowLeft aria-hidden="true" />
+                            {recoverDone || recoverStep === "username" ? " Quay lại đăng nhập" : " Quay lại bước trước"}
+                          </button>
                         </motion.div>
                       </>
                     ) : (
@@ -572,7 +869,7 @@ export function Login() {
                               <button
                                 type="button"
                                 className="login-forgot-button"
-                                onClick={() => setRecoverOpen(true)}
+                                onClick={(event) => openRecover(event.currentTarget)}
                               >
                                 Quên mật khẩu?
                               </button>
@@ -616,18 +913,6 @@ export function Login() {
                             </span>
                             <ArrowRight aria-hidden="true" />
                           </button>
-
-                          <div className="login-quick-head">
-                            <span>Truy cập nhanh</span>
-                            <small>Không cần đăng nhập</small>
-                          </div>
-                          <nav className="login-quick-grid login-quick-grid--single" aria-label="Truy cập nhanh">
-                            <Link to="/tinh-toan" className="login-quick-link login-quick-calculator">
-                              <span><Calculator aria-hidden="true" /></span>
-                              <div><strong>Tính toán</strong><small>Công cụ nghiệp vụ</small></div>
-                              <ArrowRight aria-hidden="true" />
-                            </Link>
-                          </nav>
                         </motion.div>
                       </>
                     )}
@@ -676,7 +961,6 @@ export function Login() {
           onClose={() => setAppLoginOpen(false)}
         />
       )}
-      {recoverOpen && <RecoveryResetModal onClose={() => setRecoverOpen(false)} />}
     </main>
   );
 }

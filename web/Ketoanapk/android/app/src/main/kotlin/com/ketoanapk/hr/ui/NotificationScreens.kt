@@ -62,7 +62,7 @@ fun NotificationsScreen(
     val unread = notifications.count { !it.read }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = screenPadding(16.dp, 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {

@@ -33,6 +33,8 @@ export type NotificationsApi = {
     warning: (message: ReactNode, title?: string) => void;
   };
   confirm: (input: ConfirmInput) => Promise<boolean>;
+  /** Xóa toàn bộ nội dung nổi khi kết thúc/đổi phiên để tài khoản sau không thấy dữ liệu tài khoản trước. */
+  clear: () => void;
 };
 
 export const NotificationsContext = createContext<NotificationsApi | null>(null);

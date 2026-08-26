@@ -13,7 +13,7 @@ namespace KetoanMini.Api.Tests;
 
 /// <summary>
 /// Nhật ký hoạt động: nhật ký vốn CHỈ admin xem được. Từ 2026-07-17 phòng kế toán được tra cứu thêm
-/// phần tiền (PayoutVoucher/PenaltyRefund) để đối chiếu thu chi. Bộ test này chốt rằng cửa nới ra đó
+/// phần tiền (phiếu chi/hoàn phạt/lệnh thu tiền) để đối chiếu thu chi. Bộ test này chốt rằng cửa nới ra đó
 /// KHÔNG rộng hơn dự tính: kế toán không thể lách qua tham số group/entity để đọc nhật ký khác.
 /// </summary>
 [Collection(ApiCollection.Name)]
@@ -34,7 +34,7 @@ public sealed class AuditScopeTests
             var all = await ItemsAsync(cashier, "/api/audit?pageSize=200");
             Assert.NotEmpty(all);
             Assert.All(all, e => Assert.Contains(e.GetProperty("entity").GetString(),
-                new[] { "PayoutVoucher", "PenaltyRefund" }));
+                new[] { "PayoutVoucher", "PenaltyRefund", "CashCollection" }));
 
             // Cố lọc sang nhật ký đăng nhập bằng entity → không được dòng nào (không phải "bỏ qua bộ lọc").
             Assert.Empty(await ItemsAsync(cashier, "/api/audit?entity=Auth&pageSize=200"));
@@ -43,13 +43,13 @@ public sealed class AuditScopeTests
             Assert.Empty(await ItemsAsync(cashier, "/api/audit?group=attendance&pageSize=200"));
             // Tìm kiếm tự do không được kéo dòng ngoài phạm vi về.
             Assert.All(await ItemsAsync(cashier, "/api/audit?search=" + world.AuthMarker + "&pageSize=200"),
-                e => Assert.Contains(e.GetProperty("entity").GetString(), new[] { "PayoutVoucher", "PenaltyRefund" }));
+                e => Assert.Contains(e.GetProperty("entity").GetString(), new[] { "PayoutVoucher", "PenaltyRefund", "CashCollection" }));
 
             // Gợi ý lọc cũng không lộ đối tượng ngoài phạm vi.
             var filters = await (await cashier.GetAsync("/api/audit/filters")).Content.ReadFromJsonAsync<JsonElement>();
             Assert.False(filters.GetProperty("canSeeAll").GetBoolean());
             Assert.All(filters.GetProperty("entities").EnumerateArray(),
-                e => Assert.Contains(e.GetString(), new[] { "PayoutVoucher", "PenaltyRefund" }));
+                e => Assert.Contains(e.GetString(), new[] { "PayoutVoucher", "PenaltyRefund", "CashCollection" }));
 
             // Xuất tệp phải chịu đúng phạm vi: không được lách bằng /export.
             var export = await cashier.GetAsync("/api/audit/export?format=csv&group=auth");

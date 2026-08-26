@@ -196,7 +196,7 @@ private fun RequestListView(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { CreateRequestButton(onCreate) }
@@ -366,7 +366,7 @@ private fun RequestTypePicker(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { FlowHeader(title = "Bạn muốn tạo đơn gì?", subtitle = "Chọn một loại đơn bên dưới", onBack = onBack) }
@@ -492,7 +492,8 @@ private fun RequestFormStep(
             .verticalScroll(rememberScrollState())
             .imePadding()
             .navigationBarsPadding()
-            .padding(14.dp),
+            // Chừa đáy cho footer nổi: nút cuối của form phải bấm được khi cuộn hết.
+            .padding(start = 14.dp, top = 14.dp, end = 14.dp, bottom = BottomBarScrollRoom),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         FlowHeader(title = "Điền thông tin đơn", subtitle = null, onBack = onBack)
@@ -992,7 +993,7 @@ internal fun RequestDetailView(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { FlowHeader(title = "Chi tiết đơn", subtitle = null, onBack = onBack) }

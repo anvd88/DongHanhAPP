@@ -122,38 +122,71 @@ public static class PayrollEndpoints
         {
             if (!u.Can(Permissions.PayrollRead)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
+            // Lương cứng hiển thị theo THÁNG HIỆN TẠI. Hợp đồng chi phối + tổng tăng lương lấy ngay
+            // trong một câu truy vấn (LATERAL) — mỗi nhân viên một vòng đọc riêng sẽ thành N+1.
+            var period = NormalizePeriod(null);
+            var (pStart, pEnd) = PeriodRange(period);
+            const string effectiveSql =
+                "(k.status='Active' AND (k.start_date IS NULL OR k.start_date <= @pEnd) AND (k.end_date IS NULL OR k.end_date >= @pStart))";
             var list = new List<object>();
-            await using var r = await conn.Cmd("""
+            await using var r = await conn.Cmd($"""
                 SELECT e.id, e.full_name, e.employee_code, COALESCE(d.name,'') AS dept_name,
-                       s.base_salary, s.allowance, s.overtime_rate, s.components::text AS components
+                       s.base_salary, s.allowance, s.overtime_rate, s.components::text AS components,
+                       c.id AS contract_id, c.contract_no, c.contract_type, c.base_salary AS contract_base,
+                       c.end_date AS contract_end, c.effective AS contract_effective,
+                       COALESCE(rz.raise_total, 0) AS raise_total
                 FROM hr_employees e
                 LEFT JOIN hr_departments d ON d.id = e.department_id
                 LEFT JOIN hr_salaries s ON s.employee_id = e.id
+                LEFT JOIN LATERAL (
+                    SELECT k.id, k.contract_no, k.contract_type, k.base_salary, k.end_date, {effectiveSql} AS effective
+                    FROM hr_contracts k WHERE k.employee_id = e.id
+                    ORDER BY {effectiveSql} DESC,
+                             (k.start_date IS NULL OR k.start_date <= @pEnd) DESC,
+                             k.start_date DESC NULLS LAST, k.created_at DESC
+                    LIMIT 1
+                ) c ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT SUM(z.amount) AS raise_total FROM hr_salary_raises z
+                    WHERE z.contract_id = c.id AND z.effective_period <= @period
+                ) rz ON TRUE
                 WHERE e.status = 'Active'
                 ORDER BY e.full_name
-                """).ExecuteReaderAsync();
+                """).With("@pStart", pStart).With("@pEnd", pEnd).With("@period", period).ExecuteReaderAsync();
             while (await r.ReadAsync())
             {
-                var hasSalary = !r.IsDBNull(r.GetOrdinal("base_salary"));
-                var components = hasSalary ? ParseComponents(r.Str("components")) : new List<SalaryComponent>();
+                var hasLegacy = !r.IsDBNull(r.GetOrdinal("base_salary"));
+                var components = hasLegacy ? ParseComponents(r.Str("components")) : new List<SalaryComponent>();
+                var hasContract = !r.IsDBNull(r.GetOrdinal("contract_id"));
+                var contractBase = hasContract ? r.Dec("contract_base") : 0m;
+                var raiseTotal = hasContract ? r.Dec("raise_total") : 0m;
+                var hard = hasContract
+                    ? new HardSalaryInfo(contractBase + raiseTotal, true, r.Guid("contract_id"), r.Str("contract_no"),
+                        r.Str("contract_type"), contractBase, raiseTotal, r.Bool("contract_effective"),
+                        r.IsDBNull(r.GetOrdinal("contract_end")) ? null : r.DateOnly("contract_end"),
+                        new List<HardSalaryRaise>())
+                    : new HardSalaryInfo(hasLegacy ? r.Dec("base_salary") : 0m, false, null, "", "", 0, 0, false, null,
+                        new List<HardSalaryRaise>());
                 list.Add(new
                 {
                     employeeId = r.Guid("id"),
                     employeeName = r.Str("full_name"),
                     employeeCode = r.Str("employee_code"),
                     departmentName = r.Str("dept_name"),
-                    hasSalary,
-                    baseSalary = hasSalary ? r.Dec("base_salary") : 0m,
-                    allowance = hasSalary ? r.Dec("allowance") : 0m,
-                    overtimeRate = hasSalary ? r.Dec("overtime_rate") : 0m,
+                    // "Đã gán" = có mức lương dùng được: hợp đồng có lương, hoặc bản ghi lương cũ.
+                    hasSalary = hasLegacy || hasContract,
+                    baseSalary = hard.Amount,
+                    allowance = hasLegacy ? r.Dec("allowance") : 0m,
+                    overtimeRate = hasLegacy ? r.Dec("overtime_rate") : 0m,
                     extraCount = components.Count,
+                    hardSalary = HardSalaryPayload(hard),
                 });
             }
             return Results.Ok(list);
         });
 
         // Cấu trúc lương chi tiết của một nhân viên (admin, hoặc chính chủ xem của mình).
-        g.MapGet("/salaries/{employeeId:guid}", async (Guid employeeId, ClaimsPrincipal u, Database db) =>
+        g.MapGet("/salaries/{employeeId:guid}", async (Guid employeeId, ClaimsPrincipal u, Database db, string? period) =>
         {
             await using var conn = await db.OpenAsync();
             if (!u.Can(Permissions.PayrollRead))
@@ -161,7 +194,22 @@ public static class PayrollEndpoints
                 var mine = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id").With("@id", employeeId).ExecuteScalarAsync() as string;
                 if (!string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
             }
-            return Results.Ok(await ReadSalary(conn, employeeId));
+            var salary = await ReadSalary(conn, employeeId);
+            // Lương cứng là số DẪN XUẤT (hợp đồng + tăng lương). base_salary cũ vẫn trả về ở
+            // legacyBaseSalary để màn hình còn chỗ sửa cho nhân viên chưa có hợp đồng nào.
+            var hard = await ResolveHardSalaryAsync(conn, employeeId, NormalizePeriod(period), salary.BaseSalary);
+            return Results.Ok(new
+            {
+                salary.EmployeeId,
+                salary.HasSalary,
+                baseSalary = hard.Amount,
+                legacyBaseSalary = salary.BaseSalary,
+                salary.Allowance,
+                salary.OvertimeRate,
+                salary.Components,
+                salary.Note,
+                hardSalary = HardSalaryPayload(hard),
+            });
         });
 
         g.MapPut("/salaries/{employeeId:guid}", async (Guid employeeId, SaveSalaryReq req, ClaimsPrincipal u, Database db) =>
@@ -194,6 +242,7 @@ public static class PayrollEndpoints
             var now = DateTime.UtcNow.AddHours(7);
             var period = $"{now.Year:D4}-{now.Month:D2}";
             var salary = await ReadSalary(conn, employeeId);
+            var hard = await ResolveHardSalaryAsync(conn, employeeId, period, salary.BaseSalary);
             var result = await ComputePayroll(conn, employeeId, period, null); // null = dự tính tất cả ngày tăng ca
             if (result is null) return Results.NotFound();
             // Earnings ở result không chứa tăng ca → thêm dòng tăng ca (dự tính) để nhân viên thấy đầy đủ.
@@ -207,7 +256,7 @@ public static class PayrollEndpoints
                 result.WorkedDays, result.AbsentDays, result.LateDays,
                 earnings, deductions = result.Deductions,
                 result.TotalEarnings, result.TotalDeductions, result.NetPay,
-                hasSalary = salary.HasSalary,
+                hasSalary = salary.HasSalary || hard.FromContract,
             });
         });
 
@@ -921,7 +970,8 @@ public static class PayrollEndpoints
         int WorkedDays, int AbsentDays, int LateDays, decimal OvertimeHours,
         List<PayLine> Earnings, List<PayLine> Deductions,
         decimal TotalEarnings, decimal TotalDeductions, decimal NetPay,
-        List<OtDay> OvertimeDays, List<PenaltyEndpoints.PenaltyDeductionLine> PenaltyLines, object Details);
+        List<OtDay> OvertimeDays, List<PenaltyEndpoints.PenaltyDeductionLine> PenaltyLines, object Details,
+        object HardSalary);
 
     /// <summary>
     /// Tính toàn bộ phiếu lương cho (nhân viên, kỳ). Trả null nếu không tìm thấy nhân viên.
@@ -943,6 +993,9 @@ public static class PayrollEndpoints
         }
 
         var salary = await ReadSalary(conn, employeeId);
+        // Lương cứng KHÔNG lấy từ ô nhập tay nữa: hợp đồng + các kỳ tăng lương mới là nguồn chuẩn.
+        var hard = await ResolveHardSalaryAsync(conn, employeeId, period, salary.BaseSalary);
+        var baseSalary = hard.Amount;
         var (ts, tsDays) = await ShiftEndpoints.ComputeDaysAsync(conn, employeeId, period);
 
         // Tăng ca trước 08:00 và sau 17:00, mỗi khoảng tối thiểu 15 phút.
@@ -958,7 +1011,7 @@ public static class PayrollEndpoints
         // Earnings KHÔNG gồm tăng ca (giao diện admin sẽ tự cộng theo ngày duyệt).
         var earnings = new List<PayLine>
         {
-            new("Lương cơ bản", salary.BaseSalary),
+            new(hard.RaiseTotal != 0 ? "Lương cứng (HĐ + tăng lương)" : "Lương cơ bản", baseSalary),
         };
         if (salary.Allowance != 0) earnings.Add(new("Phụ cấp", salary.Allowance));
 
@@ -1032,6 +1085,7 @@ public static class PayrollEndpoints
             // PayrollResult.OvertimeDays để màn lập lương cho phép quản trị chọn/bỏ chọn từng ngày.
             overtimeDays = approvedOvertimeDays.ConvertAll(o => new { date = o.Date, checkIn = o.CheckIn, checkOut = o.CheckOut, minutes = o.Minutes }),
             overtimeRate = salary.OvertimeRate,
+            hardSalary = HardSalaryPayload(hard),
             penaltyTotal,
             totalEarnings,
             totalDeductions,
@@ -1040,9 +1094,10 @@ public static class PayrollEndpoints
 
         return new PayrollResult(
             employeeId, empName, empCode, period,
-            salary.BaseSalary, salary.Allowance, salary.OvertimeRate, overtimePay,
+            baseSalary, salary.Allowance, salary.OvertimeRate, overtimePay,
             ts.WorkedDays, ts.AbsentDays, ts.LateDays, overtimeHours,
-            earnings, deductions, totalEarnings, totalDeductions, net, otCandidates, penaltyItems, details);
+            earnings, deductions, totalEarnings, totalDeductions, net, otCandidates, penaltyItems, details,
+            HardSalaryPayload(hard));
     }
 
     // ---- Mức lương ----
@@ -1063,6 +1118,97 @@ public static class PayrollEndpoints
         return new SalaryData(employeeId, true, r.Dec("base_salary"), r.Dec("allowance"), r.Dec("overtime_rate"),
             ParseComponents(r.Str("components")), r.Str("note"));
     }
+
+    // ---- Lương cứng lấy từ hợp đồng + các kỳ tăng lương ----
+
+    internal sealed record HardSalaryRaise(string Period, decimal Amount, string DecisionNo, string Reason);
+
+    /// <summary>
+    /// Lương cứng của một kỳ. Nguồn chuẩn là HỢP ĐỒNG: lương cơ bản đã ký + mọi lần tăng lương có
+    /// hiệu lực từ kỳ đó trở về trước. <see cref="FromContract"/> = false nghĩa là nhân viên chưa có
+    /// hợp đồng nào — khi đó rơi về con số nhập tay cũ ở hr_salaries để phiếu lương cũ không bị về 0.
+    /// </summary>
+    internal sealed record HardSalaryInfo(
+        decimal Amount, bool FromContract, Guid? ContractId, string ContractNo, string ContractType,
+        decimal ContractBase, decimal RaiseTotal, bool ContractEffective, DateOnly? ContractEndDate,
+        List<HardSalaryRaise> Raises);
+
+    private static (DateOnly Start, DateOnly End) PeriodRange(string period)
+    {
+        var start = new DateOnly(int.Parse(period[..4]), int.Parse(period.Substring(5, 2)), 1);
+        return (start, start.AddMonths(1).AddDays(-1));
+    }
+
+    /// <summary>
+    /// Chọn hợp đồng chi phối kỳ lương rồi cộng các lần tăng của chính hợp đồng đó. Ưu tiên hợp đồng
+    /// còn hiệu lực trong kỳ; nếu không có thì lấy hợp đồng gần nhất đã bắt đầu — để hợp đồng vừa hết
+    /// hạn chờ ký lại không làm lương của kỳ đang tính tụt về 0.
+    /// </summary>
+    private static async Task<HardSalaryInfo> ResolveHardSalaryAsync(
+        NpgsqlConnection conn, Guid employeeId, string period, decimal legacyBase)
+    {
+        var (pStart, pEnd) = PeriodRange(period);
+        const string effectiveSql =
+            "(status='Active' AND (start_date IS NULL OR start_date <= @pEnd) AND (end_date IS NULL OR end_date >= @pStart))";
+
+        Guid? contractId = null;
+        string contractNo = "", contractType = "";
+        decimal contractBase = 0;
+        DateOnly? contractEnd = null;
+        var effective = false;
+
+        await using (var r = await conn.Cmd($"""
+            SELECT id, contract_no, contract_type, base_salary, end_date, {effectiveSql} AS effective
+            FROM hr_contracts WHERE employee_id=@emp
+            ORDER BY {effectiveSql} DESC,
+                     (start_date IS NULL OR start_date <= @pEnd) DESC,
+                     start_date DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            """).With("@emp", employeeId).With("@pStart", pStart).With("@pEnd", pEnd).ExecuteReaderAsync())
+        {
+            if (await r.ReadAsync())
+            {
+                contractId = r.Guid("id");
+                contractNo = r.Str("contract_no");
+                contractType = r.Str("contract_type");
+                contractBase = r.Dec("base_salary");
+                contractEnd = r.IsDBNull(r.GetOrdinal("end_date")) ? null : r.DateOnly("end_date");
+                effective = r.Bool("effective");
+            }
+        }
+
+        if (contractId is null)
+            return new HardSalaryInfo(legacyBase, false, null, "", "", 0, 0, false, null, new List<HardSalaryRaise>());
+
+        var raises = new List<HardSalaryRaise>();
+        await using (var r = await conn.Cmd("""
+            SELECT effective_period, amount, decision_no, reason FROM hr_salary_raises
+            WHERE contract_id=@c AND effective_period <= @period
+            ORDER BY effective_period, created_at
+            """).With("@c", contractId).With("@period", period).ExecuteReaderAsync())
+        {
+            while (await r.ReadAsync())
+                raises.Add(new HardSalaryRaise(r.Str("effective_period"), r.Dec("amount"), r.Str("decision_no"), r.Str("reason")));
+        }
+
+        var raiseTotal = raises.Sum(x => x.Amount);
+        return new HardSalaryInfo(contractBase + raiseTotal, true, contractId, contractNo, contractType,
+            contractBase, raiseTotal, effective, contractEnd, raises);
+    }
+
+    private static object HardSalaryPayload(HardSalaryInfo h) => new
+    {
+        amount = h.Amount,
+        fromContract = h.FromContract,
+        contractId = h.ContractId,
+        contractNo = h.ContractNo,
+        contractType = h.ContractType,
+        contractBase = h.ContractBase,
+        raiseTotal = h.RaiseTotal,
+        contractEffective = h.ContractEffective,
+        contractEndDate = h.ContractEndDate,
+        raises = h.Raises.ConvertAll(x => new { period = x.Period, amount = x.Amount, decisionNo = x.DecisionNo, reason = x.Reason }),
+    };
 
     private static List<SalaryComponent> ParseComponents(string json)
     {

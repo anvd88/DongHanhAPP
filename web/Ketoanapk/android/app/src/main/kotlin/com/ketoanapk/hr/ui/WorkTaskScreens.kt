@@ -17,6 +17,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -50,7 +52,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.ketoanapk.hr.data.TaskCollection
 import com.ketoanapk.hr.data.WorkTask
+import com.ketoanapk.hr.data.WorkTaskDelivery
 import com.ketoanapk.hr.data.WorkTaskMeta
 import java.time.Instant
 import java.time.LocalDate
@@ -59,11 +63,21 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 // ── Nhãn & tông màu trạng thái/ưu tiên ──
+/**
+ * Việc GIAO HÀNG không có chặng nghiệm thu: 'submitted' = lái xe đã giao xong, đang chờ nộp tờ
+ * phiếu ký nhận về kho.
+ */
+private fun statusLabel(s: String, isDelivery: Boolean) =
+    if (isDelivery && s == "submitted") "Đã giao, chờ nộp phiếu" else statusLabel(s)
+
 private fun statusLabel(s: String) = when (s) {
     "assigned" -> "Chờ nhận"
     "in_progress" -> "Đang làm"
     "submitted" -> "Chờ nghiệm thu"
+    // Việc giao hàng không nghiệm thu; 'accepted' chỉ còn ở việc cũ trước 2026-08-24.
     "accepted" -> "Đã nghiệm thu"
+    // Chỉ việc GIAO HÀNG mới đi tiếp bước này: kế toán đã nhận lại tờ phiếu giấy.
+    "completed" -> "Đã hoàn thành"
     "rejected" -> "Bị trả lại"
     "cancelled" -> "Đã huỷ"
     else -> s
@@ -72,7 +86,7 @@ private fun statusTone(s: String) = when (s) {
     "assigned" -> Tone.Info
     "in_progress" -> Tone.Neutral
     "submitted" -> Tone.Warning
-    "accepted" -> Tone.Success
+    "accepted", "completed" -> Tone.Success
     "rejected" -> Tone.Danger
     else -> Tone.Muted
 }
@@ -83,6 +97,12 @@ private fun priorityTone(p: String) = when (p) {
     "low" -> Tone.Muted; "high" -> Tone.Warning; "urgent" -> Tone.Danger; else -> Tone.Info
 }
 private val PRIORITIES = listOf("low", "normal", "high", "urgent")
+
+/** Việc đã đóng sổ: không còn thao tác được. "completed" là bước sau "accepted" của việc giao hàng. */
+private fun isTaskClosed(s: String) = s == "accepted" || s == "completed" || s == "cancelled"
+
+/** Đóng sổ theo hướng ĐẠT (không phải huỷ) → thanh tiến độ đầy 100%. */
+private fun isTaskClosedOk(s: String) = s == "accepted" || s == "completed"
 
 private fun parseInstant(v: String?): Instant? {
     val s = v ?: return null
@@ -166,7 +186,7 @@ internal fun WorkTaskCard(task: WorkTask, isInbox: Boolean, onOpen: () -> Unit) 
                 Text(task.taskNo, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 StatusChip(priorityLabel(task.priority), priorityTone(task.priority))
                 Spacer(Modifier.weight(1f))
-                StatusChip(statusLabel(task.status), statusTone(task.status))
+                StatusChip(statusLabel(task.status, task.delivery != null), statusTone(task.status))
             }
             Text(task.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
@@ -174,6 +194,7 @@ internal fun WorkTaskCard(task: WorkTask, isInbox: Boolean, onOpen: () -> Unit) 
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            task.delivery?.let { DeliveryBlock(it, task.status) }
             if (task.dueAt != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Icon(
@@ -192,12 +213,131 @@ internal fun WorkTaskCard(task: WorkTask, isInbox: Boolean, onOpen: () -> Unit) 
             }
             if (task.status == "in_progress" || task.status == "submitted" || task.progress > 0) {
                 LinearProgressIndicator(
-                    progress = { (if (task.status == "accepted") 100 else task.progress) / 100f },
+                    progress = { (if (isTaskClosedOk(task.status)) 100 else task.progress) / 100f },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
     }
+}
+
+/**
+ * Khối "phải làm gì ở khách này": số phiếu xuất kho cần giao, và — nếu cùng khách đó còn lệnh thu —
+ * cả số tiền phải thu. Gộp một chỗ để lái xe không giao xong rồi quên thu tiền.
+ */
+@Composable
+private fun DeliveryBlock(delivery: WorkTaskDelivery, taskStatus: String = "") {
+    val collection = delivery.collection
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(
+                    Icons.Filled.LocalShipping,
+                    contentDescription = null,
+                    modifier = Modifier.width(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    "Phiếu ${delivery.voucherNo}" +
+                        if (delivery.customerName.isNotBlank()) " · ${delivery.customerName}" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (collection != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(
+                        Icons.Filled.Payments,
+                        contentDescription = null,
+                        modifier = Modifier.width(16.dp),
+                        tint = toneColor(Tone.Warning),
+                    )
+                    Text(
+                        "Thu ${formatMoney(collection.expectedAmount)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = toneColor(Tone.Warning),
+                    )
+                    Spacer(Modifier.weight(1f))
+                    StatusChip(collectionStatusLabel(collection.status), collectionStatusTone(collection.status))
+                }
+                Text(
+                    "Lệnh ${collection.orderNo} — giao hàng xong nhớ thu tiền.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Nghiệm thu xong việc vẫn chưa đóng: tờ phiếu giấy phải về tới bàn kế toán.
+            if (taskStatus == "accepted") {
+                Text(
+                    "Chờ kế toán nhận lại tờ phiếu và đối chiếu hàng thực nhận.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = toneColor(Tone.Warning),
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+/** Thẻ cho lệnh thu tiền không gắn với phiếu giao nào. */
+@Composable
+internal fun StandaloneCollectionCard(collection: TaskCollection, onOpen: () -> Unit) {
+    Surface(
+        onClick = onOpen,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, toneColor(collectionStatusTone(collection.status)).copy(alpha = 0.4f)),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    collection.orderNo,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                StatusChip("Thu tiền", Tone.Warning)
+                Spacer(Modifier.weight(1f))
+                StatusChip(collectionStatusLabel(collection.status), collectionStatusTone(collection.status))
+            }
+            Text(
+                "Thu ${formatMoney(collection.expectedAmount)}",
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "Khách: ${collection.customerName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+internal fun collectionStatusLabel(status: String): String = when (status) {
+    "Assigned" -> "Chờ nhận"
+    "Accepted" -> "Đã nhận lệnh"
+    "PendingHandover" -> "Chờ bàn giao"
+    "Variance" -> "Sai lệch tiền"
+    "Completed" -> "Đã nộp đủ tiền"
+    "Failed" -> "Không thu được"
+    "Cancelled" -> "Đã hủy"
+    else -> status
+}
+
+internal fun collectionStatusTone(status: String): Tone = when (status) {
+    "Completed" -> Tone.Success
+    "Variance", "Failed" -> Tone.Danger
+    "PendingHandover" -> Tone.Warning
+    else -> Tone.Info
 }
 
 @Composable
@@ -230,7 +370,7 @@ private fun WorkTaskDetailDialog(vm: HrViewModel, onEdit: (WorkTask) -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        StatusChip(statusLabel(task.status), statusTone(task.status))
+                        StatusChip(statusLabel(task.status, task.delivery != null), statusTone(task.status))
                         StatusChip(priorityLabel(task.priority), priorityTone(task.priority))
                         task.rating?.let { StatusChip("$it★", Tone.Warning) }
                     }
@@ -241,7 +381,7 @@ private fun WorkTaskDetailDialog(vm: HrViewModel, onEdit: (WorkTask) -> Unit) {
                     if (task.description.isNotBlank()) LabelValue("Mô tả", task.description)
 
                     LinearProgressIndicator(
-                        progress = { (if (task.status == "accepted") 100 else task.progress) / 100f },
+                        progress = { (if (isTaskClosedOk(task.status)) 100 else task.progress) / 100f },
                         modifier = Modifier.fillMaxWidth(),
                     )
 
@@ -262,12 +402,14 @@ private fun WorkTaskDetailDialog(vm: HrViewModel, onEdit: (WorkTask) -> Unit) {
                     }
 
                     // Thao tác của người nhận
-                    if (flags.mine && task.status != "accepted" && task.status != "cancelled" && task.status != "submitted") {
+                    if (flags.mine && !isTaskClosed(task.status) && task.status != "submitted") {
                         Spacer(Modifier.width(0.dp))
                         Text("Bạn là người thực hiện", fontWeight = FontWeight.Bold)
                         if (flags.canStart) {
                             OutlinedButton(onClick = { vm.startWorkTask(id) }, enabled = !vm.workTaskBusy, modifier = Modifier.fillMaxWidth()) {
-                                Text("Bắt đầu làm")
+                                // Việc giao hàng nói bằng ngôn ngữ của lái xe: họ "tiếp nhận" phiếu
+                                // xuất kho rồi mới lên đường, chứ không "bắt đầu làm" một việc chung.
+                                Text(if (task.delivery != null) "Tiếp nhận phiếu giao hàng" else "Bắt đầu làm")
                             }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -286,6 +428,14 @@ private fun WorkTaskDetailDialog(vm: HrViewModel, onEdit: (WorkTask) -> Unit) {
                         )
                         Button(onClick = { vm.submitWorkTask(id, note) }, enabled = !vm.workTaskBusy, modifier = Modifier.fillMaxWidth()) {
                             Icon(Icons.Filled.Send, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Nộp để nghiệm thu")
+                        }
+                        if (task.delivery != null) {
+                            Text(
+                                "Giao xong nhớ mang tờ phiếu có chữ ký khách về cho kế toán — kế toán "
+                                    + "đối chiếu hàng thực nhận rồi mới đóng việc này.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
 
@@ -324,6 +474,31 @@ private fun WorkTaskDetailDialog(vm: HrViewModel, onEdit: (WorkTask) -> Unit) {
                         }
                     }
 
+                    // Việc GIAO HÀNG: không nghiệm thu. Nó khép lại khi kế toán thu được tờ phiếu ký
+                    // nhận (làm trên web, màn Phiếu). Ở đây chỉ nói rõ đang chờ gì + giữ lối trả lại.
+                    if (flags.assignedByMe && task.delivery != null && task.status == "submitted") {
+                        Text("Đã giao xong — chờ nộp tờ phiếu", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Lái xe ${task.assigneeName} báo đã giao phiếu ${task.delivery.voucherNo}. "
+                                + "Việc tự khép lại khi kế toán xác nhận tờ phiếu về kho trên máy tính. "
+                                + "Nếu thực ra hàng phải quay đầu thì trả lại chuyến kèm lý do.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (flags.canReject) {
+                            OutlinedTextField(
+                                value = note, onValueChange = { note = it },
+                                label = { Text("Lý do trả lại chuyến") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedButton(
+                                onClick = { if (note.isBlank()) vm.showActionMessage("Nhập lý do trả lại.") else vm.rejectWorkTask(id, note) },
+                                enabled = !vm.workTaskBusy,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Icon(Icons.Filled.Undo, contentDescription = null); Spacer(Modifier.width(6.dp)); Text("Trả lại chuyến") }
+                        }
+                    }
+
                     // Quản lý của người giao
                     if (flags.assignedByMe && (flags.canEdit || flags.canCancel)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -347,8 +522,9 @@ private fun eventLabel(kind: String) = when (kind) {
     "updated" -> "đã cập nhật"
     "started" -> "đã bắt đầu làm"
     "progress" -> "cập nhật tiến độ"
-    "submitted" -> "đã nộp nghiệm thu"
+    "submitted" -> "đã báo giao xong / nộp nghiệm thu"
     "accepted" -> "đã nghiệm thu đạt"
+    "completed" -> "đã hoàn thành (kế toán nhận lại phiếu)"
     "rejected" -> "đã trả lại"
     "cancelled" -> "đã huỷ việc"
     "comment" -> "trao đổi"

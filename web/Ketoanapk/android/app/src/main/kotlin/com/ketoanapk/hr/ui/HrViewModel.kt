@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Poll
+import androidx.compose.material.icons.filled.PriceCheck
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
@@ -98,10 +99,16 @@ import com.ketoanapk.hr.data.PayoutCategory
 import com.ketoanapk.hr.data.PayoutRecipient
 import com.ketoanapk.hr.data.PayoutRefundSource
 import com.ketoanapk.hr.data.PayoutVoucher
+import com.ketoanapk.hr.data.CashCollection
+import com.ketoanapk.hr.data.CashCollectionCustomer
+import com.ketoanapk.hr.data.CashCollectionDriver
+import com.ketoanapk.hr.data.CashCountLineBody
+import com.ketoanapk.hr.data.CreateCashCollectionBody
 import com.ketoanapk.hr.data.SalaryListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TokenStore
 import com.ketoanapk.hr.data.CreateTaskBody
+import com.ketoanapk.hr.data.TaskCollection
 import com.ketoanapk.hr.data.WorkTask
 import com.ketoanapk.hr.data.WorkTaskDetailResult
 import com.ketoanapk.hr.data.WorkTaskListResult
@@ -184,6 +191,8 @@ enum class HrDestination(
     MyPayslips("Phiếu lương", "Phiếu lương", Icons.Filled.ReceiptLong),
     // Phiếu chi tiền mặt: nhân viên xem phiếu của mình; kế toán lập phiếu + hiện QR ngay trên app.
     Payout("Phiếu chi", "Phiếu chi", Icons.Filled.Payments),
+    // Kế toán tạo lệnh; tài xế thu tiền; thủ quỹ kiểm đếm bàn giao. Không dùng GPS hay địa chỉ.
+    CashCollections("Thu tiền khách hàng", "Thu tiền", Icons.Filled.PriceCheck, AppPermissions.CollectionsSelf),
     // Người quản lý xử lý đơn đang chờ ngay trong ứng dụng.
     Approval("Đơn chờ duyệt", "Chờ duyệt", Icons.Filled.Inbox, AppPermissions.RequestsApprove),
     Penalty("Kỷ luật", "Kỷ luật", Icons.Filled.Gavel),
@@ -311,11 +320,14 @@ data class WorkTasksUiState(
     val canAssign: Boolean = false,
     val inbox: List<WorkTask> = emptyList(),
     val outbox: List<WorkTask> = emptyList(),
+    /** Lệnh thu tiền chưa gộp được vào việc giao hàng nào. */
+    val collections: List<TaskCollection> = emptyList(),
     val summary: WorkTaskSummary = WorkTaskSummary(),
     val meta: WorkTaskMeta? = null,
 ) {
-    /** Số việc cần tôi để mắt: việc tôi phải làm + việc chờ tôi nghiệm thu. */
-    val badge: Int get() = summary.inboxActionable + summary.outboxReview
+    /** Số việc cần tôi để mắt: việc tôi phải làm + việc chờ tôi nghiệm thu + tiền còn phải thu. */
+    val badge: Int get() =
+        summary.inboxActionable + summary.outboxReview + summary.outboxAwaitingVoucher + summary.collectionsStandalone
 }
 
 /** Trạng thái xem chi tiết một công việc (mở khi id != null). */
@@ -364,6 +376,16 @@ data class PayoutUiState(
     val qrVoucher: PayoutVoucher? = null,
     val busy: Boolean = false,
     val message: String? = null,
+)
+
+data class CashCollectionUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val message: String? = null,
+    val items: List<CashCollection> = emptyList(),
+    val drivers: List<CashCollectionDriver> = emptyList(),
+    val customers: List<CashCollectionCustomer> = emptyList(),
+    val busy: Boolean = false,
 )
 
 /** Cổng thông tin công ty (tin tức, sự kiện, giới thiệu). */
@@ -543,6 +565,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingNotificationId: String? = null
     private var pendingNotificationAccountScope: String? = null
     private var pushToken: String? = null
+    private var pushRegistrationEpoch = 0L
+    private var pushRegistrationAccount: String? = null
+    private var pushRegistrationJob: Job? = null
     private var captureOffline = false   // lượt chấm hiện tại là ngoại tuyến (mất mạng) hay trực tuyến
 
     var authState: AuthState by mutableStateOf(AuthState.Loading)
@@ -589,6 +614,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     var payslipsState by mutableStateOf(PayslipsUiState())
         private set
     var payoutState by mutableStateOf(PayoutUiState())
+        private set
+    var cashCollectionState by mutableStateOf(CashCollectionUiState())
         private set
     // Kỳ (yyyy-MM) của phiếu lương đang mở chi tiết (null = đang xem danh sách thẻ tháng).
     var payslipOpenPeriod: String? by mutableStateOf(null)
@@ -791,6 +818,34 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Tác vụ có thể ghim/sắp xếp trên Trang chủ. Dashboard điều hành đã chuyển hẳn sang web;
+     * Khảo sát & phản hồi đi qua Trung tâm trợ giúp nên hai màn đó không xuất hiện trực tiếp ở đây.
+     */
+    fun homeActions(user: HrUser): List<HrDestination> = listOf(
+        HrDestination.Scan,
+        HrDestination.Requests,
+        HrDestination.Tasks,
+        HrDestination.Timesheet,
+        HrDestination.Portal,
+        HrDestination.Profile,
+        HrDestination.MyPayslips,
+        HrDestination.Payout,
+        HrDestination.CashCollections,
+        HrDestination.Penalty,
+        HrDestination.Chat,
+        HrDestination.Help,
+        HrDestination.Onboarding,
+        HrDestination.Performance,
+        HrDestination.Training,
+        HrDestination.Benefits,
+        HrDestination.Approval,
+        HrDestination.People,
+        HrDestination.Payroll,
+        HrDestination.Audit,
+        HrDestination.Settings,
+    ).filter { it.isAvailableTo(user) }
+
+    /**
      * Màn con nào nằm trong màn "chứa" nào — thay cho `navGroups` của ngăn kéo hamburger đã bỏ.
      *
      * Nguyên tắc: mỗi màn con xuất hiện ở ĐÚNG MỘT chỗ. Nếu để nó vừa là tab vừa nằm trong màn chứa thì
@@ -806,15 +861,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 if (user.can(AppPermissions.RequestsApprove)) listOf(HrDestination.Penalty)
                 else listOf(HrDestination.Approval, HrDestination.Penalty)
             HrDestination.People -> listOf(
-                HrDestination.Dashboard, HrDestination.Payroll, HrDestination.Audit,
+                HrDestination.Payroll, HrDestination.Audit,
             ).filter { it.isAvailableTo(user) }
-            // Cổng thông tin và Việc cần làm đã có thẻ riêng trên Trang chủ nên không lặp lại.
-            // Các vai trò chuyên môn không có tab Quản lý vẫn cần lối vào Dashboard/Lương/Nhật ký.
-            HrDestination.Home -> (
-                listOf(HrDestination.Feedback) +
-                    if (user.can(AppPermissions.HrManage)) emptyList()
-                    else listOf(HrDestination.Dashboard, HrDestination.Payroll, HrDestination.Audit)
-            ).filter { it.isAvailableTo(user) }
+            // Trang chủ dùng một khung Tác vụ có thể sắp xếp, không còn nhóm "Công ty" riêng.
+            HrDestination.Home -> emptyList()
             else -> emptyList()
         }
         return destinations.filter { it.isAvailableTo(user) }
@@ -825,6 +875,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         HrDestination.Approval -> pendingApprovalCount
         HrDestination.Tasks -> taskCenterItems.size + workTasksState.badge
         HrDestination.Chat -> chatUnreadCount
+        HrDestination.CashCollections -> cashCollectionState.items.count {
+            if (canReadAllCollections) it.status in setOf("PendingHandover", "Variance")
+            else it.mine && it.status in setOf("Assigned", "Accepted", "PendingHandover", "Variance")
+        }
         else -> 0
     }
 
@@ -893,6 +947,27 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Bước 2 màn quên mật khẩu: kiểm tra mã khôi phục trước khi cho đặt mật khẩu mới. */
+    fun verifyRecoveryCode(
+        username: String,
+        code: String,
+        onDone: (Boolean, String?) -> Unit,
+    ) {
+        if (username.isBlank()) {
+            onDone(false, "Vui lòng nhập tên đăng nhập.")
+            return
+        }
+        if (code.isBlank()) {
+            onDone(false, "Vui lòng nhập mã khôi phục.")
+            return
+        }
+        viewModelScope.launch {
+            runCatching { repo.verifyRecoveryCode(username, code) }
+                .onSuccess { onDone(true, null) }
+                .onFailure { onDone(false, readable(it)) }
+        }
+    }
+
     /** Quên mật khẩu bằng MÃ KHÔI PHỤC do admin cấp (thay cho reset khuôn mặt đã tắt ở backend). */
     fun resetPasswordWithCode(
         username: String,
@@ -925,6 +1000,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun onSignedIn(user: HrUser) {
+        beginPushRegistrationSession(user.username)
         authState = AuthState.SignedIn(user)
         activateNotificationAccount(user.username)
         resetToHome()
@@ -1075,14 +1151,51 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Lấy token FCM của thiết bị rồi đăng ký với máy chủ để nhận push tức thì. */
     private fun registerPush() {
+        val account = (authState as? AuthState.SignedIn)?.user?.username?.trim().orEmpty()
+        val epoch = pushRegistrationEpoch
+        if (!isPushRegistrationCurrent(epoch, account)) return
         runCatching {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-                if (!token.isNullOrBlank()) {
-                    pushToken = token
-                    viewModelScope.launch { repo.registerPushToken(token) }
+                // Firebase Task không hủy được sau khi phát lệnh. Callback phải mang epoch + username
+                // tại lúc tạo để kết quả của A không thể dùng JWT của B sau account switch.
+                if (token.isNullOrBlank() || !isPushRegistrationCurrent(epoch, account)) return@addOnSuccessListener
+                pushToken = token
+                pushRegistrationJob?.cancel()
+                pushRegistrationJob = viewModelScope.launch {
+                    // Kiểm lại ở trong coroutine: logout có thể xảy ra giữa callback và lúc job được chạy.
+                    if (!isPushRegistrationCurrent(epoch, account)) return@launch
+                    repo.registerPushToken(token)
                 }
             }
         }
+    }
+
+    /** Mở một ranh giới sở hữu token mới trước khi dựng trạng thái tài khoản. */
+    private fun beginPushRegistrationSession(username: String) {
+        pushRegistrationEpoch += 1
+        pushRegistrationAccount = username.trim()
+        pushRegistrationJob?.cancel()
+        pushRegistrationJob = null
+        pushToken = null
+    }
+
+    /** Vô hiệu callback cũ đồng bộ; trả token/job để logout unregister sau khi job A đã dừng hẳn. */
+    private fun endPushRegistrationSession(): Pair<String?, Job?> {
+        val token = pushToken
+        val registrationJob = pushRegistrationJob
+        pushRegistrationEpoch += 1
+        pushRegistrationAccount = null
+        registrationJob?.cancel()
+        pushRegistrationJob = null
+        pushToken = null
+        return token to registrationJob
+    }
+
+    private fun isPushRegistrationCurrent(epoch: Long, account: String): Boolean {
+        if (account.isBlank() || pushRegistrationEpoch != epoch) return false
+        if (!pushRegistrationAccount.equals(account, ignoreCase = true)) return false
+        val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
+        return activeAccount.equals(account, ignoreCase = true)
     }
 
     private fun unregisterPush() {
@@ -1107,6 +1220,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun logout(kickedMessage: String? = null) {
         if (authState is AuthState.SignedOut || loggingOut) return
         loggingOut = true
+        // Chốt token + vô hiệu callback Firebase trước mọi suspend. Token đã chốt được unregister ở
+        // dưới trong khi JWT của tài khoản cũ vẫn còn; callback đến muộn chỉ thấy epoch đã đổi và no-op.
+        val (pushTokenAtLogout, pushRegistrationAtLogout) = endPushRegistrationSession()
         // Vô hiệu hóa request phiên bản ngay trước mọi suspend của luồng logout để response cũ không
         // kịp ghi lại settings/notification của tài khoản vừa rời.
         updateCheckSession++
@@ -1130,8 +1246,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // Đợi tác vụ đọc kho chuông đã hủy kết thúc trước khi reset để nó không thể ghi dữ liệu cũ trở lại.
                 pendingNotificationLoad?.join()
-                pushToken?.let { runCatching { repo.unregisterPushToken(it) } }
-                pushToken = null
+                // Chờ request register đã cancel kết thúc rồi mới unregister để A không thể ghi đè ngược
+                // thứ tự trên server sau lệnh xóa token.
+                pushRegistrationAtLogout?.join()
+                pushTokenAtLogout?.let { runCatching { repo.unregisterPushToken(it) } }
                 repo.logout()
                 stopHeartbeat()
                 onAppPaused() // dừng vòng poll foreground
@@ -1157,6 +1275,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 acknowledgedPayslipAwaitingSyncId = null
                 // Sổ chi có tên + số tiền của người khác: phải xóa sạch khi đăng xuất.
                 payoutState = PayoutUiState()
+                cashCollectionState = CashCollectionUiState()
                 managerState = ManagerUiState()
                 settingsState = SettingsUiState()
                 attendanceServer = AttendanceServerState.Checking
@@ -1480,7 +1599,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         val q = searchKey(searchQuery.trim())
         if (q.isBlank()) return emptyList()
         return HrDestination.entries.filter {
-            it.isAvailableTo(user) && searchKey(it.title).contains(q)
+            it !in setOf(HrDestination.Dashboard, HrDestination.Feedback) &&
+                it.isAvailableTo(user) && searchKey(it.title).contains(q)
         }
     }
 
@@ -1627,6 +1747,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.MyPayslips -> if (payslipsState.items.isEmpty() && !payslipsState.loading) loadMyPayslips()
             // Sổ chi đổi liên tục (người nhận vừa quét, kế toán khác vừa lập) → luôn tải lại khi mở.
             HrDestination.Payout -> loadPayouts(silent = payoutState.items.isNotEmpty())
+            HrDestination.CashCollections -> loadCashCollections(silent = cashCollectionState.items.isNotEmpty())
             HrDestination.Portal -> if (portalState.feed == null && !portalState.loading) loadPortal(silent = false)
             HrDestination.Tasks -> refreshTasks()
             HrDestination.Chat -> {
@@ -1657,6 +1778,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Scan -> checkAttendanceServer()
             HrDestination.Timesheet -> { loadTimesheet(timesheetState.month, silent = false); if (payEstimateState.data != null) loadMyEstimate() }
             HrDestination.MyPayslips -> loadMyPayslips()
+            HrDestination.Payout -> loadPayouts(silent = payoutState.items.isNotEmpty())
+            HrDestination.CashCollections -> loadCashCollections(silent = cashCollectionState.items.isNotEmpty())
             HrDestination.Portal -> loadPortal(silent = false)
             HrDestination.Tasks -> refreshTasks()
             HrDestination.Chat -> refreshChat()
@@ -1758,7 +1881,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { res ->
                     workTasksState = workTasksState.copy(
                         loading = false, error = null, canAssign = res.canAssign,
-                        inbox = res.inbox, outbox = res.outbox, summary = res.summary,
+                        inbox = res.inbox, outbox = res.outbox, collections = res.collections,
+                        summary = res.summary,
                     )
                 }
                 .onFailure { if (!silent) workTasksState = workTasksState.copy(loading = false, error = readable(it)) }
@@ -2573,6 +2697,187 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---------------- Lệnh thu tiền khách hàng ----------------
+
+    val canReadAllCollections: Boolean
+        get() = (authState as? AuthState.SignedIn)?.user?.can(AppPermissions.CollectionsReadAll) == true
+
+    private fun canUseCollections(permission: String): Boolean {
+        val user = (authState as? AuthState.SignedIn)?.user ?: return false
+        return user.can(permission) && homeState.employee?.isAccounting == true
+    }
+
+    val canCreateCashCollection: Boolean get() = canUseCollections(AppPermissions.CollectionsCreate)
+    val canReceiveCashCollection: Boolean get() = canUseCollections(AppPermissions.CollectionsReceive)
+
+    fun loadCashCollections(silent: Boolean = false) {
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(loading = !silent, error = null)
+            runCatching { repo.cashCollections(if (canReadAllCollections) "all" else "mine") }
+                .onSuccess { items ->
+                    cashCollectionState = cashCollectionState.copy(loading = false, items = items)
+                    if (canCreateCashCollection) loadCashCollectionPickers()
+                }
+                .onFailure { cashCollectionState = cashCollectionState.copy(loading = false, error = readable(it)) }
+        }
+    }
+
+    private fun loadCashCollectionPickers() {
+        viewModelScope.launch {
+            val drivers = runCatching { repo.cashCollectionDrivers() }.getOrDefault(cashCollectionState.drivers)
+            val customers = runCatching { repo.accountingCustomers() }.getOrDefault(cashCollectionState.customers)
+            cashCollectionState = cashCollectionState.copy(drivers = drivers, customers = customers)
+        }
+    }
+
+    fun clearCashCollectionMessage() {
+        cashCollectionState = cashCollectionState.copy(message = null, error = null)
+    }
+
+    fun createCashCollection(body: CreateCashCollectionBody, onDone: () -> Unit = {}) {
+        if (!canCreateCashCollection) {
+            cashCollectionState = cashCollectionState.copy(error = "Tài khoản không có quyền tạo lệnh thu tiền.")
+            return
+        }
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(busy = true, error = null)
+            runCatching { repo.createCashCollection(body) }
+                .onSuccess { created ->
+                    cashCollectionState = cashCollectionState.copy(
+                        busy = false,
+                        message = "Đã tạo và giao lệnh ${created.orderNo} cho tài xế.",
+                    )
+                    loadCashCollections(silent = true)
+                    onDone()
+                }
+                .onFailure { cashCollectionState = cashCollectionState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun acceptCashCollection(order: CashCollection) {
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(busy = true, error = null)
+            runCatching { repo.acceptCashCollection(order.id) }
+                .onSuccess {
+                    cashCollectionState = cashCollectionState.copy(busy = false, message = "Bạn đã nhận lệnh ${order.orderNo}.")
+                    loadCashCollections(silent = true)
+                }
+                .onFailure { cashCollectionState = cashCollectionState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun failCashCollection(order: CashCollection, reason: String) {
+        if (reason.isBlank()) {
+            cashCollectionState = cashCollectionState.copy(error = "Vui lòng nhập lý do không thu được tiền.")
+            return
+        }
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(busy = true, error = null)
+            runCatching { repo.failCashCollection(order.id, reason.trim()) }
+                .onSuccess {
+                    cashCollectionState = cashCollectionState.copy(busy = false, message = "Đã báo không thu được tiền cho ${order.orderNo}.")
+                    loadCashCollections(silent = true)
+                }
+                .onFailure { cashCollectionState = cashCollectionState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun collectCashCollection(order: CashCollection, quantities: Map<Long, Int>, reason: String, onDone: () -> Unit = {}) {
+        val lines = cashCollectionLines(quantities)
+        if (lines.isEmpty()) {
+            cashCollectionState = cashCollectionState.copy(error = "Vui lòng nhập số lượng ít nhất một mệnh giá.")
+            return
+        }
+        val total = lines.sumOf { it.denomination * it.quantity }.toDouble()
+        if (total != order.expectedAmount && reason.isBlank()) {
+            cashCollectionState = cashCollectionState.copy(error = "Số thực thu lệch dự kiến; vui lòng nhập lý do chênh lệch.")
+            return
+        }
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(busy = true, error = null)
+            runCatching { repo.collectCashCollection(order.id, lines, reason.trim()) }
+                .onSuccess { result ->
+                    cashCollectionState = cashCollectionState.copy(
+                        busy = false,
+                        message = "Đã xác nhận thu ${formatMoney(result.collectedAmount)}. Hãy bàn giao thủ quỹ đúng hạn.",
+                    )
+                    loadCashCollections(silent = true)
+                    onDone()
+                }
+                .onFailure { cashCollectionState = cashCollectionState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun receiveCashCollection(order: CashCollection, quantities: Map<Long, Int>, onDone: () -> Unit = {}) {
+        if (!canReceiveCashCollection) {
+            cashCollectionState = cashCollectionState.copy(error = "Tài khoản không có quyền nhận bàn giao tiền.")
+            return
+        }
+        val lines = cashCollectionLines(quantities)
+        if (lines.isEmpty()) {
+            cashCollectionState = cashCollectionState.copy(error = "Vui lòng nhập số lượng ít nhất một mệnh giá.")
+            return
+        }
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(busy = true, error = null)
+            runCatching { repo.receiveCashCollection(order.id, lines) }
+                .onSuccess { result ->
+                    cashCollectionState = cashCollectionState.copy(
+                        busy = false,
+                        message = "Đã nhận đủ ${formatMoney(result.amount)} — đã nộp đủ tiền.",
+                    )
+                    loadCashCollections(silent = true)
+                    onDone()
+                }
+                .onFailure { failure ->
+                    val latest = runCatching { repo.cashCollections(if (canReadAllCollections) "all" else "mine") }
+                        .getOrDefault(cashCollectionState.items)
+                    cashCollectionState = cashCollectionState.copy(busy = false, items = latest, error = readable(failure))
+                }
+        }
+    }
+
+    fun cancelCashCollection(order: CashCollection, reason: String) {
+        if (!order.canCancel || reason.isBlank()) {
+            cashCollectionState = cashCollectionState.copy(error = "Vui lòng nhập lý do hủy lệnh.")
+            return
+        }
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(busy = true, error = null)
+            runCatching { repo.cancelCashCollection(order.id, reason.trim()) }
+                .onSuccess {
+                    cashCollectionState = cashCollectionState.copy(busy = false, message = "Đã hủy ${order.orderNo}.")
+                    loadCashCollections(silent = true)
+                }
+                .onFailure { cashCollectionState = cashCollectionState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    fun resolveCashCollection(order: CashCollection, action: String, reason: String, onDone: () -> Unit = {}) {
+        if (!order.canResolve || reason.isBlank()) {
+            cashCollectionState = cashCollectionState.copy(error = "Vui lòng nhập lý do xử lý sai lệch.")
+            return
+        }
+        viewModelScope.launch {
+            cashCollectionState = cashCollectionState.copy(busy = true, error = null)
+            runCatching { repo.resolveCashCollection(order.id, action, reason.trim()) }
+                .onSuccess { result ->
+                    cashCollectionState = cashCollectionState.copy(
+                        busy = false,
+                        message = if (action == "approve_actual")
+                            "Đã duyệt ${formatMoney(result.amount)} — đã nộp đủ tiền."
+                        else "Đã trả ${order.orderNo} cho tài xế kiểm đếm và khai lại.",
+                    )
+                    loadCashCollections(silent = true)
+                    onDone()
+                }
+                .onFailure { cashCollectionState = cashCollectionState.copy(busy = false, error = readable(it)) }
+        }
+    }
+
+    private fun cashCollectionLines(quantities: Map<Long, Int>): List<CashCountLineBody> =
+        quantities.filterValues { it > 0 }.map { CashCountLineBody(it.key, it.value) }
+
     /** Mở chi tiết phiếu lương của một kỳ (bấm vào thẻ tháng). */
     fun openPayslip(period: String) { payslipOpenPeriod = period }
 
@@ -2632,7 +2937,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                         acknowledgedPayslipAwaitingSyncId = null
                         val message = if (homeState.payslipRequirement.mustAcknowledge)
                             "Đã ghi nhận phiếu này. Bạn còn phiếu lương quá hạn khác cần xác nhận."
-                        else "Đã xác nhận đã xem/nhận phiếu lương. Ứng dụng đã được mở khóa."
+                        else "Đã xác nhận phiếu lương. Ứng dụng đã được mở khóa."
                         payslipConfirmationMessage = message
                         actionMessage = message
                     }
@@ -2805,6 +3110,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Dựng toàn bộ trạng thái sau khi đã xác định được người dùng (dù trực tuyến hay ngoại tuyến). */
     private fun enterSignedIn(user: HrUser) {
+        beginPushRegistrationSession(user.username)
         authState = AuthState.SignedIn(user)
         activateNotificationAccount(user.username)
         startHeartbeat()
@@ -3164,6 +3470,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         // Chỉ nạp lương khi nhân viên đã mở khoá (data != null) để không lộ/không gọi thừa lúc còn che.
         if (changeScope == "attendance" || changeScope == "hr" || changeScope == "data" || changeScope == "all") {
             refreshPayslipRequirement()
+            if (selected == HrDestination.CashCollections) loadCashCollections(silent = true)
             if (selected == HrDestination.Timesheet) {
                 loadTimesheet(timesheetState.month, silent = true)
                 if (payEstimateState.data != null) loadMyEstimate()

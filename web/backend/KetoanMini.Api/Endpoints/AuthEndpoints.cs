@@ -677,6 +677,41 @@ public static class AuthEndpoints
             return Results.NoContent();
         }).AllowAnonymous().RequireRateLimiting("face-reset");
 
+        // KIỂM TRA mã khôi phục (không đổi mật khẩu, không đánh dấu đã dùng) — phục vụ màn hình
+        // quên mật khẩu 3 bước: nhập tên đăng nhập → nhập mã → chỉ khi mã đúng mới cho đặt mật khẩu mới.
+        // Dùng chung hạn mức "face-reset" nên không mở thêm cửa dò mã: sai vài lần là bị chặn.
+        g.MapPost("/verify-recovery-code", async (RecoveryVerifyRequest req, Database db) =>
+        {
+            var username = (req?.Username ?? "").Trim();
+            var code = RecoveryCodes.Normalize(req?.Code);
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(code))
+                return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mã khôi phục." });
+
+            await using var conn = await db.OpenAsync();
+            var user = await ReadUserByUsername(conn, username);
+
+            // Cùng một thông báo lỗi cho mọi trường hợp: không tiết lộ tài khoản có tồn tại hay không.
+            var matched = false;
+            if (user is not null && user.IsActive && !user.IsPending)
+            {
+                await using var r = await conn.Cmd(
+                    @"SELECT code_hash FROM password_recovery_codes
+                      WHERE username = @u AND used_at IS NULL
+                        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                      ORDER BY created_at DESC")
+                    .With("@u", user.Username).ExecuteReaderAsync();
+                while (await r.ReadAsync())
+                {
+                    if (PasswordHasher.Verify(code, r.Str("code_hash"))) { matched = true; break; }
+                }
+            }
+
+            if (!matched)
+                return Results.Json(new { message = "Mã khôi phục không đúng hoặc đã hết hạn." }, statusCode: 400);
+
+            return Results.Ok(new { ok = true });
+        }).AllowAnonymous().RequireRateLimiting("face-reset");
+
         g.MapGet("/me", async (ClaimsPrincipal principal, Database db) =>
         {
             await using var conn = await db.OpenAsync();

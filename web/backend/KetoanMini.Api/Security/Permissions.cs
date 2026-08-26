@@ -37,6 +37,17 @@ public static class Permissions
     public const string PayoutCreate = "payout.create";
     public const string PayoutApprove = "payout.approve";
     public const string PayoutPay = "payout.pay";
+    /// <summary>Xem và xử lý các lệnh thu tiền được giao đích danh cho chính mình.</summary>
+    public const string CollectionsSelf = "collections.self";
+    /// <summary>Lệnh thu tiền khách hàng: xem toàn bộ lệnh của công ty (tài xế luôn chỉ xem lệnh của mình).</summary>
+    public const string CollectionsReadAll = "collections.read.all";
+    public const string CollectionsCreate = "collections.create";
+    public const string CollectionsReceive = "collections.receive";
+    public const string CollectionsResolve = "collections.resolve";
+    /// <summary>Quỹ tiền mặt: xem sổ quỹ và số dư đang giữ.</summary>
+    public const string CashFundRead = "cashfund.read";
+    /// <summary>Ghi bút toán thủ công vào quỹ (số dư đầu kỳ, nộp/rút quỹ, điều chỉnh).</summary>
+    public const string CashFundManage = "cashfund.manage";
 
     // ── Báo cáo ───────────────────────────────────────────────────────────────
     public const string ReportRead = "report.read";
@@ -91,6 +102,8 @@ public static class Permissions
         AuditRead,
         AccountingAccess, VouchersRead, VouchersCreate, VouchersUpdate, VouchersApprove, VouchersCancel,
         PayoutRead, PayoutCreate, PayoutApprove, PayoutPay,
+        CollectionsSelf, CollectionsReadAll, CollectionsCreate, CollectionsReceive, CollectionsResolve,
+        CashFundRead, CashFundManage,
         ReportRead, ReportExport,
         AttendanceSelf, AttendanceRead, AttendanceManage, AttendanceKiosk,
         PayrollRead, PayrollManage,
@@ -114,7 +127,10 @@ public static class Permissions
     [
         .. BaseEmployee,
         AccountingAccess, VouchersRead, VouchersCreate, VouchersUpdate, VouchersCancel,
-        PayoutRead, PayoutCreate, ReportRead, ReportExport, AuditRead,
+        PayoutRead, PayoutCreate,
+        CollectionsSelf, CollectionsReadAll, CollectionsCreate,
+        CashFundRead,
+        ReportRead, ReportExport, AuditRead,
     ];
 
     /// <summary>
@@ -124,9 +140,13 @@ public static class Permissions
     public static readonly IReadOnlyDictionary<string, string[]> RolePermissions =
         new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
-            // Admin có toàn bộ permission kỹ thuật. Các endpoint tiền mặt vẫn áp thêm điều kiện nghiệp vụ
-            // (phòng kế toán, đúng trạng thái quy trình, chữ ký người nhận) — xem PayoutVoucherEndpoints.
-            [AppRoles.Admin] = All,
+            // Lệnh thu là nghiệp vụ giữ tiền mặt theo chức danh: Admin chỉ được tham gia khi đồng thời
+            // giữ vai trò Kế toán hoặc Lái xe, không tự nhận các quyền collection chỉ vì là Admin.
+            [AppRoles.Admin] =
+            [
+                .. All.Where(p => p is not (CollectionsSelf or CollectionsReadAll or CollectionsCreate
+                    or CollectionsReceive or CollectionsResolve or CashFundManage)),
+            ],
 
             [AppRoles.Employee] = BaseEmployee,
 
@@ -135,7 +155,7 @@ public static class Permissions
             [AppRoles.Executive] =
             [
                 .. BaseEmployee,
-                CompanyScopeAll, AccountingAccess, VouchersRead, PayoutRead,
+                CompanyScopeAll, AccountingAccess, VouchersRead, PayoutRead, CashFundRead,
                 ReportRead, ReportExport, PayrollRead, HrRead, AttendanceRead, AuditRead,
             ],
 
@@ -153,14 +173,17 @@ public static class Permissions
             [AppRoles.ChiefAccountant] =
             [
                 .. AccountingPermissions,
-                VouchersApprove, PayoutApprove, PayrollRead,
+                VouchersApprove, PayoutApprove, CollectionsResolve, CashFundManage, PayrollRead,
             ],
 
             // Thủ quỹ chỉ thực chi phiếu đã được duyệt; không được tự lập hoặc tự duyệt phiếu.
             [AppRoles.Cashier] =
             [
                 .. BaseEmployee,
-                AccountingAccess, PayoutRead, PayoutPay, ReportRead, AuditRead,
+                AccountingAccess, PayoutRead, PayoutPay,
+                CollectionsSelf, CollectionsReadAll, CollectionsReceive,
+                CashFundRead, CashFundManage,
+                ReportRead, AuditRead,
             ],
 
             [AppRoles.Hr] =
@@ -180,6 +203,10 @@ public static class Permissions
 
             // Thủ kho: vai trò PHỤ, chỉ thêm quyền giao việc & nghiệm thu.
             [AppRoles.Warehouse] = [.. BaseEmployee, TasksAssign],
+
+            // Lái xe không có quyền xem sổ toàn công ty, tạo lệnh hay ghi công nợ; chỉ xử lý lệnh
+            // máy chủ đã giao đích danh cho tài khoản của mình.
+            [AppRoles.Driver] = [.. BaseEmployee, CollectionsSelf],
 
             // Máy kiosk: chỉ chấm công ẩn danh, không có gì khác.
             [AppRoles.Kiosk] = [AttendanceKiosk],
@@ -227,6 +254,13 @@ public static class Permissions
         PayoutCreate => "Lập phiếu chi tiền mặt",
         PayoutApprove => "Duyệt phiếu chi tiền mặt",
         PayoutPay => "Thực hiện chi tiền mặt",
+        CollectionsSelf => "Xử lý lệnh thu tiền được giao cho mình",
+        CollectionsReadAll => "Xem toàn bộ lệnh thu tiền khách hàng",
+        CollectionsCreate => "Tạo lệnh thu tiền khách hàng",
+        CollectionsReceive => "Kiểm đếm và nhận tiền từ tài xế",
+        CollectionsResolve => "Xử lý sai lệch lệnh thu tiền",
+        CashFundRead => "Xem quỹ tiền mặt & số dư",
+        CashFundManage => "Ghi bút toán thủ công vào quỹ tiền mặt",
         ReportRead => "Xem báo cáo",
         ReportExport => "Xuất báo cáo",
         AttendanceSelf => "Tự chấm công & xem bảng công của mình",

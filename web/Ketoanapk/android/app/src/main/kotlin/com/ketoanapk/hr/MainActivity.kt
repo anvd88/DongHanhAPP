@@ -1,8 +1,11 @@
 package com.ketoanapk.hr
 
 import android.content.Intent
+import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -25,10 +28,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        // Không để Android tự chèn scrim hình chữ nhật sau footer trong suốt ở chế độ 3 nút.
-        window.isNavigationBarContrastEnforced = false
+        // Không dùng scrim mặc định của enableEdgeToEdge: trên một số bản Android/MIUI nó trở thành
+        // một khung chữ nhật sáng chạy sau footer và ba nút điều hướng hệ thống.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
 
         // Tạo channel không làm hiện hộp xin quyền. Người dùng tự bật thông báo trong onboarding/Cài đặt.
         AppNotifier.ensureChannel(this)

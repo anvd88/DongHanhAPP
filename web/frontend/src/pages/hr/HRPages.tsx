@@ -16,7 +16,8 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { Field, Input, Select } from "../../components/ui";
+import { Field, Input, MoneyInput, Select } from "../../components/ui";
+import { EmployeePicker } from "../../components/hr/EmployeePicker";
 import { api } from "../../lib/api";
 import { PERM, useAccess } from "../../lib/access";
 import { date, dateTime, moneyVnd } from "../../lib/format";
@@ -30,6 +31,7 @@ import {
   type EmployeeCard,
   type EmployeeDetail,
   type PayLine,
+  type HardSalary,
   type PayrollCompute,
   type PayslipHistoryEnvelope,
   type PayslipHistoryEvent,
@@ -116,24 +118,6 @@ function HrButton({
     <button type={type} className="hr-button" data-tone={tone} onClick={onClick} disabled={disabled}>
       {children}
     </button>
-  );
-}
-
-/**
- * Ô nhập số tiền: hiển thị dấu ngăn cách hàng nghìn (1,000,000) cho dễ đọc, nhưng phát ra chuỗi
- * chỉ gồm chữ số (không dấu) để state/tính toán vẫn dùng Number() như bình thường.
- */
-function MoneyInput({ value, onChange, placeholder = "0" }: { value: string | number; onChange: (raw: string) => void; placeholder?: string }) {
-  const n = Number(String(value ?? "").replace(/[^\d]/g, "")) || 0;
-  const display = n ? n.toLocaleString("en-US") : "";
-  return (
-    <Input
-      type="text"
-      inputMode="numeric"
-      value={display}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))}
-    />
   );
 }
 
@@ -603,10 +587,14 @@ function PenaltyModal({ penalty, onClose, onSaved }: { penalty: Penalty | null; 
           <Field label="Nhân viên"><Input value={`${penalty.employeeName} (${penalty.employeeCode})`} disabled /></Field>
         ) : (
           <Field label="Nhân viên">
-            <Select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} className="w-full">
-              <option value="">-- Chọn nhân viên --</option>
-              {employees?.map((emp) => <option key={emp.id} value={emp.id}>{emp.fullName} ({emp.employeeCode})</option>)}
-            </Select>
+            <EmployeePicker
+              employees={employees ?? []}
+              value={employeeId}
+              onChange={setEmployeeId}
+              placeholder="Chọn nhân viên"
+              allowClear
+              clearLabel="-- Chọn nhân viên --"
+            />
           </Field>
         )}
         <Field label="Hình thức">
@@ -666,7 +654,7 @@ export function HRPayrollPage() {
         {[
           ["salary", "Mức lương"],
           ["published", "Phiếu đã phát hành"],
-          ["payslip", "Lập & lịch sử phiếu"],
+          ["payslip", "Tính & lập phiếu"],
         ].map(([key, label]) => (
           <button key={key} type="button" data-active={tab === key} onClick={() => setTab(key as typeof tab)}>{label}</button>
         ))}
@@ -809,9 +797,10 @@ function SalaryAdmin({ canManage }: { canManage: boolean }) {
               <span>{row.employeeCode}</span>
             </div>
             <small>
-              {row.hasSalary ? `CB ${moneyVnd(row.baseSalary)}` : "Chưa thiết lập mức lương"}
-              {row.hasSalary && row.allowance > 0 ? ` · PC ${moneyVnd(row.allowance)}` : ""}
+              {row.hasSalary ? `Lương cứng ${moneyVnd(row.baseSalary)}` : "Chưa thiết lập mức lương"}
+              {row.hardSalary?.raiseTotal ? ` (HĐ ${moneyVnd(row.hardSalary.contractBase)} + tăng ${moneyVnd(row.hardSalary.raiseTotal)})` : ""}
               {row.hasSalary && row.extraCount > 0 ? ` · +${row.extraCount} khoản` : ""}
+              {row.hardSalary && !row.hardSalary.fromContract ? " · chưa có hợp đồng" : ""}
             </small>
           </div>
           <div className="hr-penalty-right">
@@ -841,7 +830,9 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
   // đè lên con số kế toán đang gõ dở. Làm lúc render thay vì trong useEffect nên không có khung hình
   // nào hiện "0 đ" trước khi số thật kịp hiện — trên màn lương thì cái nháy đó rất dễ gây hiểu nhầm.
   if (data && !ready) {
-    setBase(String(data.baseSalary ?? 0));
+    // Ô "Lương cứng" chỉ còn dùng cho nhân viên CHƯA có hợp đồng nào (số nhập tay cũ). Có hợp đồng
+    // thì lương cứng là số dẫn xuất, hiển thị chứ không cho sửa ở đây.
+    setBase(String(data.legacyBaseSalary ?? 0));
     setOvertimeRate(String(data.overtimeRate ?? 0));
     // Gộp "Phụ cấp" cũ (nếu có) thành một khoản tự nhập để mọi khoản ngoài lương cứng nằm chung một chỗ.
     const extra: SalaryComponent[] = [...(data.components ?? [])];
@@ -856,15 +847,19 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
     setComponents((s) => s.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
   const removeComponent = (i: number) => setComponents((s) => s.filter((_, idx) => idx !== i));
 
+  const hard = data?.hardSalary;
+  const fromContract = Boolean(hard?.fromContract);
+  const hardAmount = fromContract ? hard!.amount : Number(base) || 0;
   const cleanComponents = components.filter((c) => c.label.trim());
   const extraEarn = cleanComponents.filter((c) => c.kind === "earning").reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const extraDeduct = cleanComponents.filter((c) => c.kind === "deduction").reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const monthly = (Number(base) || 0) + extraEarn - extraDeduct;
+  const monthly = hardAmount + extraEarn - extraDeduct;
 
   const submit = async () => {
     setSaving(true);
     try {
       await api.put(`/api/payroll/salaries/${item.employeeId}`, {
+        // Có hợp đồng: giữ nguyên con số cũ trong hr_salaries, lương cứng đã do hợp đồng quyết định.
         baseSalary: Number(base) || 0,
         allowance: 0, // Phụ cấp giờ là một khoản tự nhập trong "components" → không dùng ô riêng nữa.
         overtimeRate: Number(overtimeRate) || 0,
@@ -888,8 +883,17 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
     >
       {loading && !data ? <HrEmpty text="Đang tải..." /> : (
         <div className="hr-form-stack">
-          <Field label="Lương cứng (₫/tháng)"><MoneyInput value={base} onChange={setBase} /></Field>
-          <p className="hr-salary-empty">Lương cố định hằng tháng, chưa gồm các khoản khác bên dưới.</p>
+          {fromContract ? (
+            <HardSalaryBreakdown hard={hard!} />
+          ) : (
+            <>
+              <Field label="Lương cứng (₫/tháng)"><MoneyInput value={base} onChange={setBase} /></Field>
+              <p className="hr-salary-empty">
+                Nhân viên này chưa có hợp đồng nào nên lương cứng vẫn nhập tay ở đây. Thêm hợp đồng ở
+                Nhân sự → Quyền lợi → Hợp đồng để hệ thống tự lấy lương cơ bản + các kỳ tăng lương.
+              </p>
+            </>
+          )}
 
           <div className="hr-salary-components">
             <div className="hr-salary-components-head">
@@ -927,6 +931,39 @@ function SalaryModal({ item, onClose, onSaved }: { item: SalaryListItem; onClose
         </div>
       )}
     </HrModal>
+  );
+}
+
+/** Giải thích lương cứng của kỳ: lương cơ bản trên hợp đồng + từng lần tăng lương đã có hiệu lực. */
+function HardSalaryBreakdown({ hard, period }: { hard: HardSalary; period?: string }) {
+  if (!hard.fromContract) {
+    return <p className="hr-salary-empty">Nhân viên chưa có hợp đồng — lương cứng đang lấy từ mức nhập tay cũ.</p>;
+  }
+  return (
+    <div className="hr-salary-components">
+      <div className="hr-salary-components-head">
+        <strong>Lương cứng {period ? `kỳ ${addMonths(period, 0)}` : "hiện tại"}</strong>
+        <span className="hr-salary-comp-tag">
+          {hard.contractType || "Hợp đồng"}{hard.contractNo ? ` · ${hard.contractNo}` : ""}
+        </span>
+      </div>
+      <PaylineRow label="Lương cơ bản theo hợp đồng" amount={hard.contractBase} />
+      {hard.raises.map((r, i) => (
+        <PaylineRow
+          key={`${r.period}-${i}`}
+          label={`Tăng lương từ ${addMonths(r.period, 0)}${r.decisionNo ? ` · QĐ ${r.decisionNo}` : ""}${r.reason ? ` · ${r.reason}` : ""}`}
+          amount={r.amount}
+        />
+      ))}
+      <PaylineRow label="Lương cứng áp dụng" amount={hard.amount} total />
+      {!hard.contractEffective && (
+        <p className="hr-salary-empty">
+          Hợp đồng này không còn hiệu lực trong kỳ{hard.contractEndDate ? ` (hết hạn ${date(hard.contractEndDate)})` : ""}.
+          Hệ thống vẫn dùng mức lương gần nhất — hãy ký lại hợp đồng để số liệu đúng.
+        </p>
+      )}
+      {hard.raises.length === 0 && <p className="hr-salary-empty">Chưa có kỳ tăng lương nào. Ghi nhận ở Nhân sự → Quyền lợi → Hợp đồng → Tăng lương.</p>}
+    </div>
   );
 }
 
@@ -1059,10 +1096,14 @@ function PayslipMaker({
       <HrCard className="hr-payroll-filter-card">
         <div className="hr-form-grid">
           <Field label="Nhân viên">
-            <Select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} className="w-full">
-              <option value="">-- Chọn nhân viên --</option>
-              {employees?.map((emp) => <option key={emp.id} value={emp.id}>{emp.fullName} ({emp.employeeCode})</option>)}
-            </Select>
+            <EmployeePicker
+              employees={employees ?? []}
+              value={employeeId}
+              onChange={setEmployeeId}
+              placeholder="Chọn nhân viên"
+              allowClear
+              clearLabel="-- Chọn nhân viên --"
+            />
           </Field>
           <Field label="Kỳ lương"><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></Field>
         </div>
@@ -1092,13 +1133,19 @@ function PayslipMaker({
             <HrStat label="Đi muộn" value={`${compute.lateDays}`} tone={compute.lateDays > 0 ? "warning" : "neutral"} />
           </div>
 
+          {compute.hardSalary && <HrCard className="hr-payroll-preview-card"><HardSalaryBreakdown hard={compute.hardSalary} period={period} /></HrCard>}
+
           <HrCard className="hr-payroll-overtime-card">
             <div className="hr-salary-components-head">
               <strong>Duyệt tăng ca theo ngày</strong>
               {canManage && otDays.length > 0 && (
                 <div>
-                  <button type="button" onClick={() => setOtSelected(new Set(otDays.map((d) => d.date)))}>Chọn tất cả</button>
-                  <button type="button" onClick={() => setOtSelected(new Set())}>Bỏ chọn</button>
+                  <button
+                    type="button"
+                    onClick={() => setOtSelected(otSelected.size > 0 ? new Set() : new Set(otDays.map((d) => d.date)))}
+                  >
+                    {otSelected.size > 0 ? "Bỏ chọn" : "Chọn tất cả"}
+                  </button>
                 </div>
               )}
             </div>
@@ -1212,6 +1259,7 @@ function PayslipHistoryPanel({
   deleting: boolean;
   onDelete: () => void;
 }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   // useApi giữ dữ liệu cũ trong lúc đổi bộ lọc để tránh chớp trang. Với lương thì không được hiện tạm
   // phiếu của người vừa chọn trước dưới tên người mới, nên chặn dữ liệu không khớp ngay tại đây.
   const owner = data?.payslip ?? data?.history[0];
@@ -1233,7 +1281,13 @@ function PayslipHistoryPanel({
           {current?.status === "Published" && <small>Phiếu đã gửi cho nhân viên và đang chờ xác nhận đã xem.</small>}
           {current?.status === "Acknowledged" && <small>Nhân viên đã xác nhận phiếu lương này.</small>}
         </div>
-        <HrStatus status={payslipStatusTone(current?.status)}>{payslipStatusLabel(current?.status ?? (data.history[0]?.statusAfter))}</HrStatus>
+        <div className="hr-payroll-history-head-right">
+          <HrStatus status={payslipStatusTone(current?.status)}>{payslipStatusLabel(current?.status ?? (data.history[0]?.statusAfter))}</HrStatus>
+          <button type="button" className="hr-payroll-history-btn" onClick={() => setHistoryOpen(true)}>
+            <Clock3 className="h-4 w-4" /> Lịch sử
+            {data.history.length > 0 && <span>{data.history.length}</span>}
+          </button>
+        </div>
       </div>
 
       {current && canManage && (
@@ -1253,27 +1307,36 @@ function PayslipHistoryPanel({
         </div>
       )}
 
-      <div className="hr-payroll-timeline-title"><Clock3 className="h-4 w-4" /><strong>Lịch sử thay đổi</strong><span>{data.history.length} sự kiện</span></div>
-      <ol className="hr-payroll-timeline">
-        {data.history.map((event) => (
-          <li key={event.id} data-status={event.statusAfter}>
-            <span className="hr-payroll-timeline-dot" aria-hidden="true" />
-            <div className="hr-payroll-timeline-event">
-              <div>
-                <strong>{payslipActionLabel(event)}</strong>
-                <time dateTime={event.occurredAt}>{dateTime(event.occurredAt)}</time>
-              </div>
-              <p>
-                {event.statusBefore ? `${payslipStatusLabel(event.statusBefore)} → ` : ""}
-                <b>{payslipStatusLabel(event.statusAfter)}</b> · phiên bản {event.revision} · bởi {event.actor || "Hệ thống"}
-              </p>
-              {typeof event.summary?.netPay === "number" && (
-                <small>Thực nhận {moneyVnd(event.summary.netPay)}{event.summary.note ? ` · ${event.summary.note}` : ""}</small>
-              )}
-            </div>
-          </li>
-        ))}
-      </ol>
+      {historyOpen && (
+        <HrModal
+          title="Lịch sử thay đổi"
+          onClose={() => setHistoryOpen(false)}
+          footer={<HrButton tone="secondary" onClick={() => setHistoryOpen(false)}>Đóng</HrButton>}
+        >
+          {data.history.length === 0 ? <HrEmpty text="Chưa có sự kiện nào." /> : (
+            <ol className="hr-payroll-timeline">
+              {data.history.map((event) => (
+                <li key={event.id} data-status={event.statusAfter}>
+                  <span className="hr-payroll-timeline-dot" aria-hidden="true" />
+                  <div className="hr-payroll-timeline-event">
+                    <div>
+                      <strong>{payslipActionLabel(event)}</strong>
+                      <time dateTime={event.occurredAt}>{dateTime(event.occurredAt)}</time>
+                    </div>
+                    <p>
+                      {event.statusBefore ? `${payslipStatusLabel(event.statusBefore)} → ` : ""}
+                      <b>{payslipStatusLabel(event.statusAfter)}</b> · bởi {event.actor || "Hệ thống"}
+                    </p>
+                    {typeof event.summary?.netPay === "number" && (
+                      <small>Thực nhận {moneyVnd(event.summary.netPay)}{event.summary.note ? ` · ${event.summary.note}` : ""}</small>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </HrModal>
+      )}
     </HrCard>
   );
 }

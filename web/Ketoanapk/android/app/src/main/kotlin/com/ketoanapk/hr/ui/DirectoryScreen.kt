@@ -62,7 +62,7 @@ fun DirectoryScreen(vm: HrViewModel) {
     var selected by remember { mutableStateOf<CallContact?>(null) }
     selected?.let { contact -> ContactProfileDialog(contact, vm, onDismiss = { selected = null }) }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = screenPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             OutlinedTextField(
                 value = state.query,

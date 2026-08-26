@@ -25,7 +25,7 @@ namespace KetoanMini.Api.Endpoints;
 public static class AuditEndpoints
 {
     /// <summary>Đối tượng thuộc "phần tiền" mà phòng kế toán được tra cứu.</summary>
-    private static readonly string[] MoneyEntities = { "PayoutVoucher", "PenaltyRefund" };
+    private static readonly string[] MoneyEntities = { "PayoutVoucher", "PenaltyRefund", "CashCollection" };
 
     /// <summary>
     /// Nhóm nghiệp vụ → danh sách entity, để người dùng lọc theo việc thay vì phải nhớ tên kỹ thuật.
@@ -33,7 +33,7 @@ public static class AuditEndpoints
     /// </summary>
     private static readonly Dictionary<string, string[]> Groups = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["payout"] = new[] { "PayoutVoucher", "PenaltyRefund" },
+        ["payout"] = new[] { "PayoutVoucher", "PenaltyRefund", "CashCollection" },
         ["payroll"] = new[] { "Payslip", "Salary", "Contract", "LeaveBalance", "BankAccount" },
         ["penalty"] = new[] { "Penalty", "PenaltyRefund" },
         ["attendance"] = new[] { "ChamCong", "Shift", "ShiftAssignment", "Holiday" },

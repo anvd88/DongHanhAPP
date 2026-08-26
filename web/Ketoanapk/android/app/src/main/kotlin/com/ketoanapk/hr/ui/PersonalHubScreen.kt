@@ -33,7 +33,7 @@ fun PersonalHubScreen(user: HrUser, state: HomeUiState, onSelect: (HrDestination
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = screenPadding(16.dp, 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -66,12 +66,14 @@ fun PersonalHubScreen(user: HrUser, state: HomeUiState, onSelect: (HrDestination
             HrCard {
                 CardHeader("Của tôi")
                 HubList(
-                    destinations = listOf(
-                        HrDestination.Profile,
-                        HrDestination.MyPayslips,
-                        HrDestination.Payout,
-                        HrDestination.Benefits,
-                    ),
+                    destinations = buildList {
+                        add(HrDestination.Profile)
+                        add(HrDestination.MyPayslips)
+                        add(HrDestination.Payout)
+                        if (user.can(com.ketoanapk.hr.data.AppPermissions.CollectionsSelf))
+                            add(HrDestination.CashCollections)
+                        add(HrDestination.Benefits)
+                    },
                     onSelect = onSelect,
                 )
             }

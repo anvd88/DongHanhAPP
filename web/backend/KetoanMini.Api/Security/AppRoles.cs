@@ -11,6 +11,8 @@ public static class AppRoles
     /// <summary>Thủ quỹ — thực hiện chi tiền sau khi phiếu đã được kế toán trưởng duyệt.</summary>
     public const string Cashier = "Cashier";
     public const string Hr = "HR";
+    /// <summary>Lái xe — chỉ xem và xử lý các lệnh thu tiền được giao đích danh cho mình.</summary>
+    public const string Driver = "Driver";
     public const string Employee = "Employee";
     public const string Kiosk = "Kiosk";
     /// <summary>Thủ kho — người có thẩm quyền giao việc &amp; nghiệm thu. Thường là vai trò THỨ HAI
@@ -22,15 +24,15 @@ public static class AppRoles
     public const string Manager = "Manager";
 
     public static readonly string[] All =
-        [Admin, Executive, ChiefAccountant, Accounting, Payroll, Cashier, Warehouse, Hr, Manager, Employee, Kiosk];
+        [Admin, Executive, ChiefAccountant, Accounting, Payroll, Cashier, Warehouse, Hr, Manager, Driver, Employee, Kiosk];
 
     /// <summary>Vai trò có thể gắn cho hồ sơ nhân sự. Kiosk là danh tính kỹ thuật, không phải chức vụ.</summary>
     public static readonly string[] Assignable =
-        [Admin, Executive, ChiefAccountant, Accounting, Payroll, Cashier, Warehouse, Hr, Manager, Employee];
+        [Admin, Executive, ChiefAccountant, Accounting, Payroll, Cashier, Warehouse, Hr, Manager, Driver, Employee];
 
     /// <summary>Vai trò được phép cấp THÊM cho một tài khoản (ngoài vai trò chính) qua bảng user_roles.
     /// Cố ý KHÔNG có Admin/Kiosk: nâng lên Admin phải đổi vai trò CHÍNH để còn đối chiếu audit.</summary>
-    public static readonly string[] Secondary = [Warehouse, Manager, ChiefAccountant, Accounting, Payroll, Cashier, Hr];
+    public static readonly string[] Secondary = [Warehouse, Manager, ChiefAccountant, Accounting, Payroll, Cashier, Hr, Driver];
 
     /// <summary>
     /// Thứ tự chọn vai trò chính khi một nhân sự kiêm nhiệm nhiều chức vụ. Quyền thực tế luôn là hợp
@@ -48,6 +50,7 @@ public static class AppRoles
         Manager => 500,
         Warehouse => 400,
         Executive => 300,
+        Driver => 200,
         Employee => 100,
         Kiosk => 0,
         _ => -1,
@@ -67,6 +70,7 @@ public static class AppRoles
         Cashier => "Thủ quỹ",
         Hr => "Quản lý nhân sự",
         Manager => "Quản lý",
+        Driver => "Lái xe",
         Employee => "Nhân viên",
         Kiosk => "Kiosk",
         Warehouse => "Thủ kho",
@@ -86,6 +90,7 @@ public static class AppRoles
             "cashier" or "thuquy" or "thu quy" or "thủ quỹ" => Cashier,
             "manager" or "truongphong" or "truong phong" or "trưởng phòng" => Manager,
             "hr" or "humanresources" => Hr,
+            "driver" or "laixe" or "lai xe" or "lái xe" => Driver,
             "employee" or "user" => Employee,
             "kiosk" => Kiosk,
             "warehouse" or "thukho" or "thu kho" or "thủ kho" or "storekeeper" => Warehouse,

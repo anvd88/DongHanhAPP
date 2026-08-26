@@ -29,6 +29,9 @@ import { ensureWaterDailyLogin } from "./waterReminderClock";
 import { ensureEyeDailyLogin } from "./eyeReminderClock";
 import { loadUserPreferences } from "./userPreferences";
 import { restartRealtime, stopRealtime } from "./realtime";
+import { resetFileTransfers } from "./filetransfer";
+import { resetWebCall } from "./webcall";
+import { useAppNotifications } from "../components/app-notifications-context";
 
 interface AuthCtx {
   user: User | null;
@@ -133,6 +136,7 @@ function captureLogoutAvatar(user: User, preferred?: HTMLElement | null): Logout
 // (Ứng dụng Android vẫn dùng POST /api/auth/heartbeat khi SignalR tắt/ở nền — endpoint đó được giữ lại.)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const { clear: clearNotifications } = useAppNotifications();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(() => session.isSignedIn());
   const [loginTransition, setLoginTransition] = useState<LoginTransitionState | null>(null);
@@ -173,16 +177,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (Hiện diện online đã chuyển sang kết nối SignalR — xem ghi chú ở đầu tệp; không còn effect nhịp tim.)
 
   // Phiên đã nằm sẵn trong cookie do máy chủ đặt ở chính phản hồi đăng nhập — không có token nào để
-  // lưu, và đó là điểm mấu chốt của đợt này. Ở đây chỉ còn dựng trạng thái trong ứng dụng.
+  // lưu. Xóa thông báo của danh tính trước trước khi dựng trạng thái cho tài khoản vừa xác thực.
   const finishLogin = useCallback((res: { user: User }) => {
     // Dựng user trước; các tiện ích phụ không được phép chặn một phiên đã xác thực thành công
     // (một số trình duyệt có thể chặn storage hoặc ném lỗi quota).
+    // Dọn dấu vết của danh tính trước KHÔNG được phép làm hỏng phiên vừa xác thực: nếu một trong
+    // các hàm này ném lỗi mà không ai bắt thì `setUser` bên dưới không bao giờ chạy — người dùng
+    // đăng nhập đúng nhưng ở lại màn hình đăng nhập (đã bị chuyển cảnh làm mờ) và tưởng là trắng màn.
+    try { resetFileTransfers(); } catch { /* Gửi tệp P2P hỏng không được chặn đăng nhập. */ }
+    try { resetWebCall(); } catch { /* Cuộc gọi cũ hỏng không được chặn đăng nhập. */ }
+    try { clearNotifications(); } catch { /* Dọn toast hỏng không được chặn đăng nhập. */ }
     setUser(res.user);
     try { ensureWaterDailyLogin(res.user.id); } catch { /* Không chặn đăng nhập vì đồng hồ nhắc nước. */ }
     try { ensureEyeDailyLogin(res.user.id); } catch { /* Không chặn đăng nhập vì đồng hồ nhắc mắt. */ }
     try { loadUserPreferences(res.user.id).catch(() => {}); } catch { /* Storage có thể bị chặn. */ }
     void restartRealtime().catch(() => { /* Kết nối hub sẽ tự thử lại ở luồng realtime. */ });
-  }, []);
+  }, [clearNotifications]);
 
   const startLoginTransitionReveal = useCallback(() => {
     if (loginRevealStarted.current) return;
@@ -335,7 +345,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const finishLocalLogout = useCallback(() => {
     session.clearLocal();
+    resetFileTransfers();
+    resetWebCall();
     void stopRealtime();
+    clearNotifications();
 
     // Nếu người dùng đăng xuất ngay sau khi đăng nhập, dừng sạch chuyển cảnh chiều vào trước khi
     // dựng màn hình đăng nhập theo chiều ngược lại.
@@ -352,7 +365,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loginRevealStarted.current = false;
     setLoginTransition(null);
     setUser(null);
-  }, []);
+  }, [clearNotifications]);
 
   const removeLogoutTransition = useCallback(() => {
     if (logoutCoverTimer.current !== null) {

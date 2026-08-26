@@ -105,7 +105,6 @@ fun PayslipConfirmationScreen(
     var unlocked by remember(reviewKey) { mutableStateOf(false) }
     var showPin by remember(reviewKey) { mutableStateOf(true) }
     var checkedFigures by remember(reviewKey) { mutableStateOf(false) }
-    var checkedMeaning by remember(reviewKey) { mutableStateOf(false) }
     var inquiryOpen by remember(reviewKey) { mutableStateOf(false) }
     var inquiryText by remember(reviewKey) { mutableStateOf("") }
 
@@ -129,7 +128,6 @@ fun PayslipConfirmationScreen(
                 unlocked = false
                 showPin = true
                 checkedFigures = false
-                checkedMeaning = false
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -175,8 +173,6 @@ fun PayslipConfirmationScreen(
                 remainingOverdueCount = remainingOverdueCount,
                 checkedFigures = checkedFigures,
                 onCheckedFigures = { checkedFigures = it },
-                checkedMeaning = checkedMeaning,
-                onCheckedMeaning = { checkedMeaning = it },
                 loadError = loadError,
                 statusMessage = statusMessage,
                 submitting = submitting,
@@ -217,7 +213,7 @@ fun PayslipConfirmationScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Xác nhận chỉ ghi nhận bạn đã xem/nhận phiếu. Bạn vẫn có thể gửi nội dung cần bộ phận lương kiểm tra.",
+                        "Xác nhận phiếu lương không làm mất quyền khiếu nại. Bạn vẫn có thể gửi nội dung cần bộ phận lương kiểm tra.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -324,9 +320,9 @@ private fun PayslipConfirmationLockedIntro(required: Boolean, onUnlock: () -> Un
                 )
                 Text(
                     if (required)
-                        "Ứng dụng đang tạm khóa vì phiếu đã quá hạn xác nhận. Xác thực mã bảo mật để kiểm tra và ghi nhận đã xem/nhận phiếu."
+                        "Ứng dụng đang tạm khóa vì phiếu đã quá hạn xác nhận. Xác thực mã bảo mật để kiểm tra và xác nhận phiếu lương."
                     else
-                        "Xác thực mã bảo mật trước khi xem số tiền và thực hiện xác nhận.",
+                        "Xác thực mã bảo mật trước khi xem số tiền và xác nhận phiếu lương.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -348,8 +344,6 @@ private fun PayslipConfirmationReview(
     remainingOverdueCount: Int,
     checkedFigures: Boolean,
     onCheckedFigures: (Boolean) -> Unit,
-    checkedMeaning: Boolean,
-    onCheckedMeaning: (Boolean) -> Unit,
     loadError: String?,
     statusMessage: String?,
     submitting: Boolean,
@@ -414,13 +408,7 @@ private fun PayslipConfirmationReview(
                 ConfirmationCheckRow(
                     checked = checkedFigures,
                     onChecked = onCheckedFigures,
-                    text = "Tôi đã kiểm tra số ngày công, tăng ca, tổng thu nhập, khấu trừ và thực nhận hiển thị trên màn hình này.",
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                ConfirmationCheckRow(
-                    checked = checkedMeaning,
-                    onChecked = onCheckedMeaning,
-                    text = "Tôi hiểu thao tác này chỉ xác nhận đã xem/nhận phiếu; không làm mất quyền gửi thắc mắc về số liệu.",
+                    text = "Tôi đã kiểm tra số ngày công, tăng ca, tổng thu nhập, khấu trừ và thực nhận trên màn hình này và xác nhận phiếu lương.",
                 )
             }
         }
@@ -441,7 +429,7 @@ private fun PayslipConfirmationReview(
         item {
             Button(
                 onClick = onConfirm,
-                enabled = checkedFigures && checkedMeaning && !submitting && !awaitingSync,
+                enabled = checkedFigures && !submitting && !awaitingSync,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 shape = RoundedCornerShape(17.dp),
             ) {
@@ -459,8 +447,8 @@ private fun PayslipConfirmationReview(
                     if (submitting) "Đang ghi nhận…"
                     else if (awaitingSync) "Đã ghi nhận · đang chờ đồng bộ"
                     else if (required && remainingOverdueCount > 1) "Xác nhận phiếu này và tiếp tục"
-                    else if (required) "Xác nhận đã xem/nhận và mở khóa"
-                    else "Xác nhận đã xem/nhận phiếu",
+                    else if (required) "Xác nhận phiếu lương và mở khóa"
+                    else "Xác nhận phiếu lương",
                     fontWeight = FontWeight.ExtraBold,
                 )
             }

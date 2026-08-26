@@ -43,6 +43,9 @@ public sealed class RoleFoundationTests(ApiFactory factory)
         var canonicalCorrectionCount = Convert.ToInt32(await conn.Cmd(
                 "SELECT COUNT(*) FROM schema_migrations WHERE version=@v")
             .With("@v", CanonicalRolePositionCorrectionMigration.Version).ExecuteScalarAsync());
+        var driverRoleMigrationCount = Convert.ToInt32(await conn.Cmd(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version=@v")
+            .With("@v", DriverRoleMigration.Version).ExecuteScalarAsync());
         var roleCount = Convert.ToInt32(await conn.Cmd(
                 "SELECT COUNT(*) FROM system_roles WHERE code=ANY(@roles)")
             .With("@roles", AppRoles.All).ExecuteScalarAsync());
@@ -52,6 +55,9 @@ public sealed class RoleFoundationTests(ApiFactory factory)
         var directorRole = (string?)await conn.Cmd(
                 "SELECT default_role FROM hr_job_positions WHERE code='DIRECTOR'")
             .ExecuteScalarAsync();
+        var driverRole = (string?)await conn.Cmd(
+                "SELECT default_role FROM hr_job_positions WHERE code='DRIVER'")
+            .ExecuteScalarAsync();
 
         Assert.Equal(1, migrationCount);
         Assert.Equal(1, expansionCount);
@@ -59,9 +65,11 @@ public sealed class RoleFoundationTests(ApiFactory factory)
         Assert.Equal(1, catalogExpansion2Count);
         Assert.Equal(1, legacyBackfillCount);
         Assert.Equal(1, canonicalCorrectionCount);
+        Assert.Equal(1, driverRoleMigrationCount);
         Assert.Equal(AppRoles.All.Length, roleCount);
         Assert.True(positionCount >= 65, $"Danh mục chức vụ hệ thống còn thiếu: chỉ có {positionCount} mục.");
         Assert.Equal(AppRoles.Executive, directorRole);
+        Assert.Equal(AppRoles.Driver, driverRole);
         Assert.NotEqual(AppRoles.Admin, directorRole);
         var hasPrimaryIndex = await conn.Cmd("""
             SELECT EXISTS(

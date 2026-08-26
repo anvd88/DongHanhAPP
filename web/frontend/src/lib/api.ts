@@ -120,13 +120,20 @@ async function request<T>(method: string, path: string, body?: unknown, options:
     signal: options.signal,
   });
 
+  // Abort có thể xảy ra sau khi fetch đã resolve nhưng trước khi continuation
+  // này chạy. Kiểm tra lại trước xử lý 401 để response của danh tính cũ không
+  // redirect hoặc xóa trạng thái client của danh tính vừa đăng nhập.
+  options.signal?.throwIfAborted();
+
   if (res.status === 401) {
     if (options.anonymous) {
       const data = await res.clone().json().catch(() => null);
+      options.signal?.throwIfAborted();
       throw new ApiError(401, (data as { message?: string } | null)?.message || "Yêu cầu công khai không được chấp nhận.");
     }
     // Kiosk chưa được cấp quyền → KHÔNG đá về trang đăng nhập; để màn kiosk hiện ô nhập mã.
     const data = await res.clone().json().catch(() => null);
+    options.signal?.throwIfAborted();
     if (data && (data as { code?: string }).code === "kiosk_key_required")
       throw new ApiError(401, (data as { message?: string }).message || "Cần mã kiosk.");
     handleUnauthorized();
@@ -136,13 +143,18 @@ async function request<T>(method: string, path: string, body?: unknown, options:
     let msg = `Lỗi ${res.status}`;
     try {
       const data = await res.json();
+      options.signal?.throwIfAborted();
       msg = data.message || data.detail || msg;
-    } catch { /* body rỗng */ }
+    } catch {
+      options.signal?.throwIfAborted();
+      /* body rỗng */
+    }
     throw new ApiError(res.status, msg);
   }
 
   if (res.status === 204) return undefined as T;
   const text = await res.text();
+  options.signal?.throwIfAborted();
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
@@ -173,9 +185,16 @@ async function requestBlob(path: string, sameOrigin = false): Promise<Blob> {
 }
 
 /** Tải LÊN một blob nhị phân (octet-stream) kèm Bearer token; trả JSON kết quả. */
-async function postBlob<T>(path: string, blob: Blob): Promise<T> {
+async function postBlob<T>(path: string, blob: Blob, signal?: AbortSignal): Promise<T> {
   const headers = { ...authHeaders("POST"), "Content-Type": "application/octet-stream" };
-  const res = await fetch(appUrl(path), { method: "POST", headers, body: blob, credentials: "same-origin" });
+  const res = await fetch(appUrl(path), {
+    method: "POST",
+    headers,
+    body: blob,
+    credentials: "same-origin",
+    signal,
+  });
+  signal?.throwIfAborted();
 
   if (res.status === 401) {
     handleUnauthorized();
@@ -184,12 +203,17 @@ async function postBlob<T>(path: string, blob: Blob): Promise<T> {
     let msg = `Lỗi ${res.status}`;
     try {
       const data = await res.json();
+      signal?.throwIfAborted();
       msg = data.message || data.detail || msg;
-    } catch { /* body rỗng */ }
+    } catch {
+      signal?.throwIfAborted();
+      /* body rỗng */
+    }
     throw new ApiError(res.status, msg);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
+  signal?.throwIfAborted();
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
@@ -220,14 +244,14 @@ async function requestForm<T>(method: string, path: string, form: FormData): Pro
 }
 
 export const api = {
-  get: <T>(p: string) => request<T>("GET", p),
-  post: <T>(p: string, body?: unknown) => request<T>("POST", p, body ?? {}),
+  get: <T>(p: string, signal?: AbortSignal) => request<T>("GET", p, undefined, { signal }),
+  post: <T>(p: string, body?: unknown, signal?: AbortSignal) => request<T>("POST", p, body ?? {}, { signal }),
   postPublic: <T>(p: string, body?: unknown, signal?: AbortSignal) =>
     request<T>("POST", p, body ?? {}, { anonymous: true, cache: "no-store", signal }),
   put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body ?? {}),
   del: <T>(p: string) => request<T>("DELETE", p),
   getBlob: (p: string) => requestBlob(p),
   getSameOriginBlob: (p: string) => requestBlob(p, true),
-  postBlob: <T>(p: string, blob: Blob) => postBlob<T>(p, blob),
+  postBlob: <T>(p: string, blob: Blob, signal?: AbortSignal) => postBlob<T>(p, blob, signal),
   postForm: <T>(p: string, form: FormData) => requestForm<T>("POST", p, form),
 };

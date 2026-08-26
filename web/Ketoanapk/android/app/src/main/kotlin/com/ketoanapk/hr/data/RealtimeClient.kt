@@ -33,20 +33,23 @@ class RealtimeClient(private val tokenStore: TokenStore) {
     @Volatile private var hub: HubConnection? = null
     private var job: Job? = null
     @Volatile private var wantConnected = false
-    @Volatile private var selfUsername: String = ""
+    @Volatile private var lifecycleEpoch = 0L
     fun isConnected(): Boolean = hub?.connectionState == HubConnectionState.CONNECTED
 
     @Synchronized
     fun start(selfUsername: String) {
-        this.selfUsername = selfUsername
         if (wantConnected) return
+        lifecycleEpoch += 1
+        val epoch = lifecycleEpoch
         wantConnected = true
-        job = scope.launch { connectLoop() }
+        job = scope.launch { connectLoop(epoch, selfUsername) }
     }
 
     @Synchronized
     fun stop() {
         wantConnected = false
+        // Vô hiệu hóa đồng bộ mọi callback/coroutine của hub cũ trước khi stop() bất đồng bộ.
+        lifecycleEpoch += 1
         job?.cancel()
         job = null
         val h = hub
@@ -67,35 +70,78 @@ class RealtimeClient(private val tokenStore: TokenStore) {
     }
 
     /** Vòng kết nối bền: giữ kết nối khi còn muốn; rớt/ lỗi thì đợi rồi thử lại. */
-    private suspend fun connectLoop() {
-        while (wantConnected) {
+    private suspend fun connectLoop(epoch: Long, accountUsername: String) {
+        while (isEpochActive(epoch)) {
             val token = runCatching { tokenStore.token() }.getOrNull().orEmpty()
+            if (!isEpochActive(epoch)) return
             if (token.isBlank()) { delay(3000); continue }
 
-            val connection = build()
-            hub = connection
+            val connection = build(epoch)
+            if (!attachIfActive(connection, epoch)) {
+                runCatching { connection.stop().blockingAwait() }
+                return
+            }
             val started = runCatching { connection.start().blockingAwait() }.isSuccess
             if (!started) {
-                if (!wantConnected) return
+                detachIfCurrent(connection, epoch)
+                if (!isEpochActive(epoch)) return
                 delay(3000)
                 continue
             }
+            if (!bindSignalingIfCurrent(connection, epoch, accountUsername)) {
+                runCatching { connection.stop().blockingAwait() }
+                return
+            }
             // Đã kết nối → cắm kênh gửi tín hiệu cuộc gọi cho CallManager (nhận qua listener "signal").
-            CallManager.bindSignaling(selfUsername) { to, payload -> sendCallSignal(to, payload) }
             // Vừa (kết nối lại) WS → đồng bộ MỘT nhịp để bắt các thay đổi xảy ra lúc đang mất kết nối
             // (thay cho vòng poll định kỳ đã tắt khi WS khỏe). ViewModel nghe qua AppEvents.dataChanged.
-            AppEvents.signalDataChanged("all")
+            if (isCurrent(connection, epoch)) AppEvents.signalDataChanged("all")
             // Đã kết nối → chờ tới khi rớt (poll trạng thái nhẹ), rồi thử lại nếu vẫn muốn.
-            while (wantConnected && connection.connectionState == HubConnectionState.CONNECTED) {
+            while (isCurrent(connection, epoch) && connection.connectionState == HubConnectionState.CONNECTED) {
                 delay(2000)
             }
-            CallManager.unbindSignaling()
+            detachIfCurrent(connection, epoch)
             runCatching { connection.stop().blockingAwait() }
-            if (wantConnected) delay(2000)
+            if (isEpochActive(epoch)) delay(2000)
         }
     }
 
-    private fun build(): HubConnection {
+    private fun isEpochActive(epoch: Long): Boolean = wantConnected && lifecycleEpoch == epoch
+
+    private fun isCurrent(connection: HubConnection, epoch: Long): Boolean =
+        isEpochActive(epoch) && hub === connection
+
+    /** Không cho loop A gắn lại hub sau khi stop/start đã tạo epoch B. */
+    @Synchronized
+    private fun attachIfActive(connection: HubConnection, epoch: Long): Boolean {
+        if (!isEpochActive(epoch)) return false
+        hub = connection
+        return true
+    }
+
+    /** Chỉ hub đang sở hữu binding mới được tháo binding; hub cũ tuyệt đối không tháo của hub mới. */
+    @Synchronized
+    private fun detachIfCurrent(connection: HubConnection, epoch: Long) {
+        if (lifecycleEpoch != epoch || hub !== connection) return
+        hub = null
+        CallManager.unbindSignaling()
+    }
+
+    /** Ghép phép kiểm tra + bind dưới cùng khóa với stop() để không có khe bind lại sau logout. */
+    @Synchronized
+    private fun bindSignalingIfCurrent(
+        connection: HubConnection,
+        epoch: Long,
+        accountUsername: String,
+    ): Boolean {
+        if (!isCurrent(connection, epoch)) return false
+        CallManager.bindSignaling(accountUsername) { to, payload ->
+            if (isCurrent(connection, epoch)) sendCallSignal(to, payload)
+        }
+        return true
+    }
+
+    private fun build(epoch: Long): HubConnection {
         // Gắn token vào CẢ query "access_token" trên URL LẪN accessTokenProvider (header). Lý do: qua
         // reverse proxy/Cloudflare Tunnel, header Authorization có thể bị lược trên bước nâng cấp
         // WebSocket → hub sẽ kết nối ẨN DANH (UserIdentifier null) → Relay bị bỏ → KHÔNG nhận được cuộc
@@ -113,7 +159,7 @@ class RealtimeClient(private val tokenStore: TokenStore) {
             { scopeName: String ->
                 // Giữ nguyên scope để ViewModel chỉ nạp đúng phần bị cũ. Trước đây một tin chat cũng
                 // kéo lại đơn từ + công việc, tạo nhiều request không cần thiết trên server.
-                if (shouldForwardRealtimeRefreshScope(scopeName))
+                if (isCurrent(connection, epoch) && shouldForwardRealtimeRefreshScope(scopeName))
                     AppEvents.signalDataChanged(scopeName)
             },
             String::class.java,
@@ -122,7 +168,9 @@ class RealtimeClient(private val tokenStore: TokenStore) {
         // dùng khung JSON có "k":"call"; CallManager tự lọc, bỏ qua tín hiệu gửi tệp.
         connection.on(
             "signal",
-            { from: String, payload: String -> CallManager.onSignal(from, payload) },
+            { from: String, payload: String ->
+                if (isCurrent(connection, epoch)) CallManager.onSignal(from, payload)
+            },
             String::class.java,
             String::class.java,
         )
@@ -131,10 +179,17 @@ class RealtimeClient(private val tokenStore: TokenStore) {
         connection.on(
             "kicked",
             { activeSid: String ->
-                scope.launch {
-                    val mySid = runCatching { tokenStore.sessionId() }.getOrNull().orEmpty()
-                    if (mySid.isNotEmpty() && activeSid.isNotEmpty() && activeSid != mySid) {
-                        AppEvents.signalForceLogout("Tài khoản của bạn vừa đăng nhập trên thiết bị khác.")
+                if (isCurrent(connection, epoch)) {
+                    scope.launch {
+                        val mySid = runCatching { tokenStore.sessionId() }.getOrNull().orEmpty()
+                        // Đọc sid là suspend/blocking work: kiểm lại epoch sau đó để callback A không
+                        // thể ép đăng xuất tài khoản B vừa được dựng trong lúc đọc.
+                        if (
+                            isCurrent(connection, epoch) &&
+                            mySid.isNotEmpty() && activeSid.isNotEmpty() && activeSid != mySid
+                        ) {
+                            AppEvents.signalForceLogout("Tài khoản của bạn vừa đăng nhập trên thiết bị khác.")
+                        }
                     }
                 }
             },

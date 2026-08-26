@@ -71,7 +71,7 @@ fun StaffRequestsScreen(vm: HrViewModel) {
     val pending = state.inbox.filter { it.status.equals("Pending", true) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (state.loading && state.inbox.isEmpty()) item { LoadingBlock() }
@@ -114,7 +114,7 @@ private fun StaffRequestCard(req: RequestListItem, onOpen: () -> Unit) {
 fun PenaltyScreen(user: HrUser, state: HomeUiState, onAppeal: (Penalty) -> Unit) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (state.loading && state.penalties.isEmpty()) item { LoadingBlock() }
@@ -166,7 +166,7 @@ fun ManagerScreen(state: ManagerUiState) {
     val h = state.summary?.headcount
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { PageHeader(Icons.Filled.People, "Quản lý nhân sự", "Quân số, phòng ban, nhân viên", Tone.Neutral) }
@@ -241,7 +241,7 @@ private fun EmployeeRow(e: EmployeeCard) {
 fun PayrollScreen(state: HomeUiState) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (state.loading && state.salaries.isEmpty()) item { LoadingBlock() }

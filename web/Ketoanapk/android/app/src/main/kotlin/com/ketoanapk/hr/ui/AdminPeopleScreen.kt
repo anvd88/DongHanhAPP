@@ -13,8 +13,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 @Composable fun AdminPeopleScreen(vm:HrViewModel){val detail=vm.managedEmployee;if(detail!=null){BackHandler{vm.closeManagedEmployee()};ManagedEmployeeDetail(vm,detail);return};var query by remember{mutableStateOf("")};var dept by remember{mutableStateOf("")};var visible by remember(query,dept){mutableIntStateOf(20)};val rows=vm.managerState.employees.filter{(query.isBlank()||it.fullName.contains(query,true)||it.employeeCode.contains(query,true))&&(dept.isBlank()||it.departmentName==dept)}
-    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(14.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
-        // Dashboard / Bảng lương / Nhật ký thuộc cùng họ quản trị nên nằm ngay đây (thay ngăn kéo cũ).
+    LazyColumn(Modifier.fillMaxSize(),contentPadding=screenPadding(),verticalArrangement=Arrangement.spacedBy(10.dp)){
+        // Dashboard điều hành đã chuyển sang web; Bảng lương / Nhật ký vẫn thuộc nhóm quản trị này.
         item{HrCard{HubList(destinations=vm.hubFor(HrDestination.People),onSelect=vm::select)}}
         item{OutlinedTextField(query,{query=it},label={Text("Tìm tên hoặc mã")},modifier=Modifier.fillMaxWidth())}
         item{Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){FilterChip(dept.isBlank(),{dept=""},{Text("Tất cả")});vm.managerState.summary?.departments.orEmpty().take(4).forEach{d->FilterChip(dept==d.departmentName,{dept=d.departmentName},{Text(d.departmentName)})}}}

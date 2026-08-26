@@ -110,18 +110,22 @@ export function startRealtime() {
   const current = connection;
 
   connection.on("changed", (scope: RealtimeScope = "data", payload?: string) => {
+    if (connection !== current) return;
     emitChanged(scope, payload);
   });
 
   connection.on("signal", (fromUsername: string, payload: string) => {
+    if (connection !== current) return;
     for (const cb of signalListeners) cb(fromUsername, payload);
   });
 
   connection.on("feedbackResolved", (message: string) => {
+    if (connection !== current) return;
     for (const cb of feedbackResolvedListeners) cb(message);
   });
 
   connection.onreconnected(() => {
+    if (connection !== current) return;
     emitChanged("all");
   });
 

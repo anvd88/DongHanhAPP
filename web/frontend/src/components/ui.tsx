@@ -44,6 +44,51 @@ export function Input({ className = "", ...rest }: InputHTMLAttributes<HTMLInput
   );
 }
 
+/** "1000000" → "1.000.000" (kiểu Việt Nam: dấu chấm sau mỗi 3 chữ số). */
+const groupThousands = (digits: string) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+
+/**
+ * Ô nhập số tiền: vừa gõ vừa chèn dấu ngăn cách hàng nghìn (1.000.000) cho dễ đọc, nhưng phát ra
+ * chuỗi CHỈ gồm chữ số (kèm dấu "-" nếu cho phép số âm) nên nơi gọi vẫn `Number()` như bình thường.
+ */
+export function MoneyInput({
+  value,
+  onChange,
+  placeholder = "0",
+  allowNegative = false,
+  disabled,
+  className = "",
+}: {
+  value: string | number;
+  onChange: (raw: string) => void;
+  placeholder?: string;
+  /** Cho phép nhập số âm (vd: ghi nhận GIẢM lương). */
+  allowNegative?: boolean;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const raw = String(value ?? "");
+  const negative = allowNegative && raw.trimStart().startsWith("-");
+  const digits = raw.replace(/[^\d]/g, "");
+  // Giữ nguyên dấu "-" khi người dùng mới gõ mỗi dấu trừ, chưa kịp gõ số.
+  const display = digits ? (negative ? "-" : "") + groupThousands(digits) : negative ? "-" : "";
+  return (
+    <Input
+      type="text"
+      inputMode={allowNegative ? "text" : "numeric"}
+      value={display}
+      placeholder={placeholder}
+      disabled={disabled}
+      className={className}
+      onChange={(e) => {
+        const next = e.target.value;
+        const neg = allowNegative && next.trimStart().startsWith("-");
+        onChange((neg ? "-" : "") + next.replace(/[^\d]/g, ""));
+      }}
+    />
+  );
+}
+
 export function Select({ className = "", children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select

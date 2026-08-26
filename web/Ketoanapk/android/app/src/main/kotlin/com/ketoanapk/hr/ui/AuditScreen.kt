@@ -75,7 +75,7 @@ fun AuditScreen(vm: HrViewModel) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {

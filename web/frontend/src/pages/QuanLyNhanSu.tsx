@@ -3,7 +3,7 @@ import { Building2, CalendarDays, CalendarRange, Clock, Copy, Eye, HeartHandshak
 import { PageHeader } from "../components/Layout";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
-import { Badge, Button, Field, Input, Select } from "../components/ui";
+import { Badge, Button, Field, Input, MoneyInput, Select } from "../components/ui";
 import { Table } from "../components/Table";
 import { api } from "../lib/api";
 import { date, dateTime, moneyVnd } from "../lib/format";
@@ -19,6 +19,8 @@ import {
   leaveTypeLabel,
   ACCESS_ROLES,
   accessRoleLabel,
+  CONTRACT_TYPES,
+  INDEFINITE_CONTRACT_TYPE,
   type Contract,
   type Department,
   type EmployeeCard,
@@ -30,6 +32,7 @@ import {
   type Location,
   type Payslip,
   type PenaltyDeductions,
+  type SalaryRaise,
   type Shift,
   type ShiftAssignment,
 } from "../lib/hr";
@@ -937,43 +940,193 @@ function BenefitsPanel({ empId }: { empId: string }) {
   );
 }
 
+function currentPeriod() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** "2026-08" → "08/2026". */
+function periodLabel(p: string) {
+  return /^\d{4}-\d{2}$/.test(p) ? `${p.slice(5)}/${p.slice(0, 4)}` : p || "—";
+}
+
 function ContractAdmin({ empId }: { empId: string }) {
-  const { notify } = useAppNotifications();
+  const { notify, confirm } = useAppNotifications();
   const { data, loading, reload } = useApi<Contract[]>(`/api/hr/employees/${empId}/contracts`, [empId]);
-  const [f, setF] = useState({ contractNo: "", contractType: "Xác định thời hạn", startDate: "", endDate: "", baseSalary: "", allowance: "" });
+  const { data: raises, reload: reloadRaises } = useApi<SalaryRaise[]>(`/api/hr/employees/${empId}/salary-raises`, [empId]);
+  const [f, setF] = useState({ contractType: "Xác định thời hạn", startDate: "", endDate: "", baseSalary: "", allowance: "" });
+  const [raiseFor, setRaiseFor] = useState<Contract | null>(null);
   const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
+  // Hợp đồng không xác định thời hạn thì KHÔNG có ngày kết thúc — khoá ô luôn để khỏi nhập nhầm.
+  const indefinite = f.contractType === INDEFINITE_CONTRACT_TYPE;
   const add = async () => {
     try {
-      await api.post(`/api/hr/employees/${empId}/contracts`, {
-        ...f, startDate: f.startDate || null, endDate: f.endDate || null,
+      // Không gửi contractNo: máy chủ cấp số theo sequence nên không bao giờ trùng.
+      const created = await api.post<{ id: string; contractNo: string }>(`/api/hr/employees/${empId}/contracts`, {
+        ...f, startDate: f.startDate || null, endDate: indefinite ? null : f.endDate || null,
         baseSalary: Number(f.baseSalary) || 0, allowance: Number(f.allowance) || 0, status: "Active",
       });
-      setF({ contractNo: "", contractType: "Xác định thời hạn", startDate: "", endDate: "", baseSalary: "", allowance: "" });
+      setF({ contractType: "Xác định thời hạn", startDate: "", endDate: "", baseSalary: "", allowance: "" });
       reload({ silent: true });
-      notify.success("Đã thêm hợp đồng.");
+      notify.success(`Đã thêm hợp đồng ${created?.contractNo ?? ""}`.trim() + ".");
     } catch (e) { notify.error(e instanceof Error ? e.message : "Lỗi."); }
   };
-  const del = async (id: string) => { await api.del(`/api/hr/contracts/${id}`); reload({ silent: true }); };
+  const del = async (c: Contract) => {
+    const ok = await confirm({
+      title: "Xóa hợp đồng?",
+      description: `Hợp đồng ${c.contractNo || "(không số)"} sẽ bị xóa.`,
+      detail: c.raiseCount > 0 ? `${c.raiseCount} lần tăng lương gắn với hợp đồng này cũng bị xóa theo.` : undefined,
+      confirmLabel: "Xóa hợp đồng",
+      tone: "danger",
+    });
+    if (!ok) return;
+    await api.del(`/api/hr/contracts/${c.id}`);
+    reload({ silent: true });
+    reloadRaises({ silent: true });
+  };
   return (
     <div>
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <Field label="Số HĐ"><Input value={f.contractNo} onChange={(e) => set("contractNo", e.target.value)} /></Field>
-        <Field label="Loại HĐ"><Input value={f.contractType} onChange={(e) => set("contractType", e.target.value)} /></Field>
-        <Field label="Lương cơ bản"><Input type="number" value={f.baseSalary} onChange={(e) => set("baseSalary", e.target.value)} /></Field>
-        <Field label="Phụ cấp"><Input type="number" value={f.allowance} onChange={(e) => set("allowance", e.target.value)} /></Field>
+        <Field label="Số HĐ"><Input value="" placeholder="Hệ thống tự cấp khi lưu" disabled readOnly /></Field>
+        <Field label="Loại HĐ">
+          <Select className="w-full" value={f.contractType} onChange={(e) => set("contractType", e.target.value)}>
+            {CONTRACT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </Select>
+        </Field>
+        <Field label="Lương cơ bản (₫)"><MoneyInput value={f.baseSalary} onChange={(raw) => set("baseSalary", raw)} /></Field>
+        <Field label="Phụ cấp (₫)"><MoneyInput value={f.allowance} onChange={(raw) => set("allowance", raw)} /></Field>
         <Field label="Từ ngày"><Input type="date" value={f.startDate} onChange={(e) => set("startDate", e.target.value)} /></Field>
-        <Field label="Đến ngày"><Input type="date" value={f.endDate} onChange={(e) => set("endDate", e.target.value)} /></Field>
+        <Field label={indefinite ? "Đến ngày (không thời hạn)" : "Đến ngày"}>
+          <Input type="date" value={indefinite ? "" : f.endDate} disabled={indefinite}
+            onChange={(e) => set("endDate", e.target.value)} />
+        </Field>
       </div>
-      <div className="mb-4 flex justify-end"><Button onClick={add}><Plus className="h-4 w-4" /> Thêm hợp đồng</Button></div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <span className="text-xs text-[var(--text-muted)]">
+          Lương cứng trên bảng lương = lương cơ bản của hợp đồng + các kỳ tăng lương đã ghi nhận.
+        </span>
+        <Button onClick={add}><Plus className="h-4 w-4" /> Thêm hợp đồng</Button>
+      </div>
       <Table<Contract> loading={loading} rows={data ?? []} keyOf={(r) => r.id} empty="Chưa có hợp đồng"
         columns={[
           { header: "Số HĐ", cell: (r) => r.contractNo || "—" },
           { header: "Loại", cell: (r) => r.contractType || "—" },
-          { header: "Lương", align: "right", cell: (r) => moneyVnd(r.baseSalary) },
+          { header: "Lương ký", align: "right", cell: (r) => moneyVnd(r.baseSalary) },
+          {
+            header: "Tăng lương", align: "right", cell: (r) => r.raiseCount > 0
+              ? <span className="font-semibold text-emerald-600 dark:text-emerald-400">+{moneyVnd(r.raiseTotal)} <span className="text-xs font-normal text-[var(--text-muted)]">({r.raiseCount} lần)</span></span>
+              : <span className="text-[var(--text-muted)]">—</span>,
+          },
+          { header: "Đang hưởng", align: "right", cell: (r) => <span className="font-bold">{moneyVnd(r.currentSalary)}</span> },
           { header: "Từ", cell: (r) => r.startDate ? date(r.startDate) : "—" },
-          { header: "", align: "right", cell: (r) => <button onClick={() => del(r.id)} className="rounded-lg p-2 text-red-600 hover:bg-red-500/10"><Trash2 className="h-4 w-4" /></button> },
+          { header: "Đến", cell: (r) => r.endDate ? date(r.endDate) : <Badge color="success">Không thời hạn</Badge> },
+          {
+            header: "", align: "right", cell: (r) => (
+              <div className="flex justify-end gap-1">
+                <button onClick={() => setRaiseFor(r)} title="Tăng lương"
+                  className="rounded-lg px-2 py-1 text-xs font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)]">Tăng lương</button>
+                <button onClick={() => void del(r)} className="rounded-lg p-2 text-red-600 hover:bg-red-500/10"><Trash2 className="h-4 w-4" /></button>
+              </div>
+            ),
+          },
         ]} />
+
+      {raiseFor && (
+        <SalaryRaiseModal
+          empId={empId}
+          contract={raiseFor}
+          raises={(raises ?? []).filter((r) => r.contractId === raiseFor.id)}
+          onClose={() => setRaiseFor(null)}
+          onChanged={() => { reload({ silent: true }); reloadRaises({ silent: true }); }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Ghi nhận + xem lại lịch sử tăng lương của MỘT hợp đồng: tăng ở tháng nào, bao nhiêu. */
+function SalaryRaiseModal({
+  empId, contract, raises, onClose, onChanged,
+}: {
+  empId: string;
+  contract: Contract;
+  raises: SalaryRaise[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const { notify, confirm } = useAppNotifications();
+  const [f, setF] = useState({ effectivePeriod: currentPeriod(), amount: "", decisionNo: "", reason: "" });
+  const [saving, setSaving] = useState(false);
+  const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
+
+  const amount = Number(f.amount) || 0;
+  const total = raises.reduce((s, r) => s + r.amount, 0);
+
+  const add = async () => {
+    if (!f.effectivePeriod) { notify.error("Chọn tháng bắt đầu áp dụng."); return; }
+    if (amount === 0) { notify.error("Nhập mức tăng khác 0."); return; }
+    setSaving(true);
+    try {
+      await api.post(`/api/hr/employees/${empId}/salary-raises`, {
+        contractId: contract.id,
+        effectivePeriod: f.effectivePeriod,
+        amount,
+        decisionNo: f.decisionNo.trim(),
+        reason: f.reason.trim(),
+      });
+      setF({ effectivePeriod: currentPeriod(), amount: "", decisionNo: "", reason: "" });
+      notify.success("Đã ghi nhận lần tăng lương.");
+      onChanged();
+    } catch (e) { notify.error(e instanceof Error ? e.message : "Không lưu được."); }
+    finally { setSaving(false); }
+  };
+
+  const del = async (r: SalaryRaise) => {
+    const ok = await confirm({
+      title: "Xóa lần tăng lương?",
+      description: `Lần tăng ${moneyVnd(r.amount)} áp dụng từ ${periodLabel(r.effectivePeriod)} sẽ bị xóa.`,
+      detail: "Lương cứng của các kỳ lương chưa lập sẽ tính lại theo số còn lại.",
+      confirmLabel: "Xóa",
+      tone: "danger",
+    });
+    if (!ok) return;
+    await api.del(`/api/hr/salary-raises/${r.id}`);
+    onChanged();
+  };
+
+  return (
+    <Modal open onClose={onClose} wide panel title={`Tăng lương · HĐ ${contract.contractNo || "(không số)"}`}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-3 rounded-xl bg-[var(--accent-soft)] p-3 text-center">
+          <div><div className="text-xs text-[var(--text-muted)]">Lương ký</div><div className="font-bold">{moneyVnd(contract.baseSalary)}</div></div>
+          <div><div className="text-xs text-[var(--text-muted)]">Tổng đã tăng</div><div className="font-bold text-emerald-600 dark:text-emerald-400">+{moneyVnd(total)}</div></div>
+          <div><div className="text-xs text-[var(--text-muted)]">Đang hưởng</div><div className="font-bold">{moneyVnd(contract.baseSalary + total)}</div></div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Field label="Áp dụng từ tháng"><Input type="month" value={f.effectivePeriod} onChange={(e) => set("effectivePeriod", e.target.value)} /></Field>
+          <Field label="Mức tăng (₫)"><MoneyInput value={f.amount} placeholder="500.000" allowNegative onChange={(raw) => set("amount", raw)} /></Field>
+          <Field label="Số quyết định"><Input value={f.decisionNo} onChange={(e) => set("decisionNo", e.target.value)} /></Field>
+          <Field label="Lý do"><Input value={f.reason} placeholder="Vd: tăng lương định kỳ" onChange={(e) => set("reason", e.target.value)} /></Field>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="text-xs text-[var(--text-muted)]">
+            Từ tháng áp dụng trở đi, lương cứng thành {moneyVnd(contract.baseSalary + total + amount)}. Nhập số âm để ghi nhận giảm lương.
+          </span>
+          <Button onClick={add} loading={saving}><Plus className="h-4 w-4" /> Ghi nhận</Button>
+        </div>
+
+        <Table<SalaryRaise> rows={raises} keyOf={(r) => r.id} empty="Chưa có lần tăng lương nào"
+          columns={[
+            { header: "Áp dụng từ", cell: (r) => <span className="font-semibold">{periodLabel(r.effectivePeriod)}</span> },
+            { header: "Mức tăng", align: "right", cell: (r) => <span className={r.amount >= 0 ? "font-bold text-emerald-600 dark:text-emerald-400" : "font-bold text-red-600"}>{r.amount >= 0 ? "+" : "−"}{moneyVnd(Math.abs(r.amount))}</span> },
+            { header: "Số QĐ", cell: (r) => r.decisionNo || "—" },
+            { header: "Lý do", cell: (r) => r.reason || "—" },
+            { header: "Ghi bởi", cell: (r) => <span className="text-xs text-[var(--text-muted)]">{r.createdBy}{r.createdAt ? ` · ${date(r.createdAt)}` : ""}</span> },
+            { header: "", align: "right", cell: (r) => <button onClick={() => void del(r)} className="rounded-lg p-2 text-red-600 hover:bg-red-500/10"><Trash2 className="h-4 w-4" /></button> },
+          ]} />
+      </div>
+    </Modal>
   );
 }
 
@@ -1012,10 +1165,10 @@ function PayslipAdmin({ empId }: { empId: string }) {
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
         <Field label="Kỳ (yyyy-MM)"><Input type="month" value={f.period} onChange={(e) => set("period", e.target.value)} /></Field>
         <Field label="Ngày công"><Input type="number" value={f.workDays} onChange={(e) => set("workDays", e.target.value)} /></Field>
-        <Field label="Lương CB"><Input type="number" value={f.baseSalary} onChange={(e) => set("baseSalary", e.target.value)} /></Field>
-        <Field label="Phụ cấp"><Input type="number" value={f.allowance} onChange={(e) => set("allowance", e.target.value)} /></Field>
-        <Field label="Tăng ca (₫)"><Input type="number" value={f.overtimePay} onChange={(e) => set("overtimePay", e.target.value)} /></Field>
-        <Field label="Khấu trừ khác"><Input type="number" value={f.deductions} onChange={(e) => set("deductions", e.target.value)} /></Field>
+        <Field label="Lương CB (₫)"><MoneyInput value={f.baseSalary} onChange={(raw) => set("baseSalary", raw)} /></Field>
+        <Field label="Phụ cấp (₫)"><MoneyInput value={f.allowance} onChange={(raw) => set("allowance", raw)} /></Field>
+        <Field label="Tăng ca (₫)"><MoneyInput value={f.overtimePay} onChange={(raw) => set("overtimePay", raw)} /></Field>
+        <Field label="Khấu trừ khác (₫)"><MoneyInput value={f.deductions} onChange={(raw) => set("deductions", raw)} /></Field>
       </div>
       {penaltyTotal > 0 && (
         <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-sm">

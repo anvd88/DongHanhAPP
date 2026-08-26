@@ -41,6 +41,129 @@ export interface DocumentListItem {
   cancelledAt?: string | null;
   cancelledBy?: string;
   cancelReason?: string;
+  /** "" chưa gán · "driver" lái xe chở đi · "pickup" khách lấy tại kho. */
+  deliveryMode?: string;
+  deliveryDriverName?: string;
+  /** Trạng thái việc giao hàng của lái xe ("" nếu phiếu không đi bằng lái xe). */
+  deliveryTaskStatus?: string;
+  /** Mốc kế toán xác nhận đã nhận lại tờ phiếu giấy. Chưa nhận thì null. */
+  deliveryReturnedAt?: string | null;
+}
+
+/** Một phiếu trong "ngăn xếp phiếu" ở rìa trái trang chi tiết. Bản gọn, không kèm dòng hàng. */
+export interface DocumentStackItem {
+  id: string;
+  voucherNo: string;
+  docDate: string;
+  customerName: string;
+  total: number;
+  issuedAt?: string | null;
+  cancelledAt?: string | null;
+  deliveryMode: string;
+  deliveryTaskStatus: string;
+  deliveryReturnedAt?: string | null;
+}
+
+/** Lái xe có thể nhận phiếu xuất kho. */
+export interface DeliveryDriver {
+  username: string;
+  fullName: string;
+  department: string;
+}
+
+/** Trạng thái giao hàng của một phiếu xuất kho. */
+export interface DeliveryState {
+  mode: string;
+  driverUsername: string;
+  driverName: string;
+  note: string;
+  taskNo: string;
+  taskStatus: string;
+  voucherNo: string;
+  customerName: string;
+  issuedAt?: string | null;
+  /** Còn đổi được hình thức giao / người giao không (máy chủ chốt, đừng tự suy từ taskStatus). */
+  canChange?: boolean;
+  /** Lái xe đã NHẬN CHUYẾN ⇒ đổi người phải nhập lý do. */
+  changeNeedsReason?: boolean;
+  /** Vì sao hết đổi được (rỗng khi vẫn đổi được). */
+  lockMessage?: string;
+}
+
+/** Đối soát một phiếu: hàng xuất đi (ảnh chụp lúc in) so với hàng khách nhận thực tế. */
+export interface SettlementLine {
+  lineNo: number;
+  content: string;
+  spec: string;
+  note: string;
+  /** false = phiếu in trước khi có tính năng chụp mốc; không có gì để so. */
+  hasSnapshot: boolean;
+  /** Dòng có trong bản in nhưng đã bị xoá khỏi phiếu hiện tại. */
+  removed: boolean;
+  issuedQuantity: number;
+  issuedUnitPrice: number;
+  issuedAmount: number;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  quantityDiff: number;
+  unitPriceDiff: number;
+  amountDiff: number;
+}
+
+export interface SettlementEdit {
+  id: number;
+  lineNo: number;
+  content: string;
+  oldQuantity: number;
+  newQuantity: number;
+  oldUnitPrice: number;
+  newUnitPrice: number;
+  reason: string;
+  actorUsername: string;
+  actorName: string;
+  createdAt: string;
+}
+
+/** Việc giao hàng của lái xe, kèm dòng thời gian — để nghiệm thu ngay trong màn Phiếu. */
+export interface SettlementTask {
+  id: string;
+  taskNo: string;
+  status: string;
+  assigneeName: string;
+  assignerName: string;
+  submitNote: string;
+  canReview: boolean;
+  /** Việc giao hàng bỏ nghiệm thu; chỉ còn đường trả lại khi lái xe báo nhầm. */
+  canReject: boolean;
+  events: { id: number; actorName: string; kind: string; note: string; createdAt: string }[];
+}
+
+export interface SettlementResult {
+  document: {
+    id: string;
+    voucherNo: string;
+    docDate: string;
+    customerName: string;
+    issuedAt?: string | null;
+    cancelledAt?: string | null;
+  };
+  delivery: {
+    mode: string;
+    driverUsername: string;
+    driverName: string;
+    taskId?: string | null;
+    taskNo: string;
+    taskStatus: string;
+    returnedAt?: string | null;
+    returnedBy: string;
+    returnNote: string;
+  };
+  task: SettlementTask | null;
+  lines: SettlementLine[];
+  totals: { issuedTotal: number; actualTotal: number; diffTotal: number };
+  history: SettlementEdit[];
+  flags: { canEdit: boolean; canConfirmReturn: boolean; returned: boolean };
 }
 
 export interface AccountingSystemStatus {
@@ -68,6 +191,95 @@ export interface DocumentLine {
   quantity: number;
   unitPrice: number;
   note: string;
+  /** Mã hàng trong danh mục nếu dòng này chọn từ đó. Bỏ trống = gõ tay, vẫn hợp lệ. */
+  productId?: string | null;
+}
+
+/** Một mặt hàng trong danh mục, kèm số liệu bán hàng để người lập phiếu khỏi lục phiếu cũ tra giá. */
+export interface Product {
+  id: string;
+  code: string;
+  name: string;
+  spec: string;
+  unit: string;
+  note: string;
+  isActive: boolean;
+  timesUsed: number;
+  soldQuantity: number;
+  soldAmount: number;
+  lastPrice?: number | null;
+  lastSoldDate?: string | null;
+  /** Chiều MUA — nửa còn lại để sau này tính được giá vốn. */
+  boughtQuantity: number;
+  boughtAmount: number;
+  lastCost?: number | null;
+  lastBoughtDate?: string | null;
+}
+
+/** Nhà cung cấp, kèm số đã mua / đã trả để biết còn nợ ai bao nhiêu. */
+export interface Supplier {
+  id: string;
+  name: string;
+  taxCode: string;
+  phone: string;
+  address: string;
+  note: string;
+  isActive: boolean;
+  purchaseCount: number;
+  purchasedTotal: number;
+  paidTotal: number;
+  /** Dương = mình còn nợ nhà cung cấp. */
+  balance: number;
+  lastPurchaseDate?: string | null;
+}
+
+export interface PurchaseLine {
+  lineNo?: number;
+  productId?: string | null;
+  lineContent: string;
+  spec: string;
+  quantity: number;
+  unitPrice: number;
+  note: string;
+}
+
+export interface Purchase {
+  id: string;
+  voucherNo: string;
+  docDate: string;
+  supplierName: string;
+  supplierInvoiceNo: string;
+  note: string;
+  total: number;
+  paidAmount: number;
+  remaining: number;
+  cancelledAt?: string | null;
+  cancelReason: string;
+  createdBy: string;
+}
+
+export interface PurchaseDetail {
+  purchase: {
+    id: string;
+    voucherNo: string;
+    docDate: string;
+    supplierId?: string | null;
+    supplierName: string;
+    supplierInvoiceNo: string;
+    note: string;
+    paidAmount: number;
+    cancelledAt?: string | null;
+    cancelReason: string;
+  };
+  lines: PurchaseLine[];
+}
+
+/** Cặp (chủng loại, quy cách) đã gõ trên phiếu nhưng chưa có trong danh mục. */
+export interface ProductSuggestion {
+  name: string;
+  spec: string;
+  timesUsed: number;
+  lastUsed?: string | null;
 }
 export interface DocumentDetail {
   id: string;
@@ -108,6 +320,8 @@ export interface DebtSummary {
   openingDate?: string | null;
   openingNote: string;
   salesTotal: number;
+  /** Hàng khách trả về, tính theo giá của chính đơn đã bán. Không phải tiền khách trả. */
+  returnsTotal: number;
   collectedTotal: number;
   balance: number;
   invoiceCount: number;
@@ -117,13 +331,51 @@ export interface DebtSummary {
 export interface DebtOverview {
   totalOpeningBalance: number;
   totalSales: number;
+  totalReturns: number;
   totalCollected: number;
   totalReceivable: number;
   debtorCount: number;
   customers: DebtSummary[];
 }
 
-export type DebtTransactionKind = "opening" | "sale" | "receipt" | "payment";
+export type DebtTransactionKind = "opening" | "sale" | "receipt" | "payment" | "return";
+
+/** Một dòng hàng ĐÃ BÁN, ứng viên để nhận hàng trả về — trả lời "món này nằm ở đơn nào, giá bao nhiêu". */
+export interface ReturnSourceLine {
+  documentId: string;
+  voucherNo: string;
+  docDate: string;
+  lineNo: number;
+  content: string;
+  spec: string;
+  quantity: number;
+  unitPrice: number;
+  returnedQuantity: number;
+  remaining: number;
+  /** true = phiếu đã xác nhận về kho ⇒ trả hàng phải qua phiếu trả riêng, không hạ số trên phiếu. */
+  settled: boolean;
+}
+
+export interface GoodsReturn {
+  id: string;
+  voucherNo: string;
+  docDate: string;
+  customerName: string;
+  content: string;
+  note: string;
+  total: number;
+  cancelledAt?: string | null;
+  cancelReason: string;
+}
+
+export interface GoodsReturnResult {
+  returnId?: string | null;
+  returnNo: string;
+  returnTotal: number;
+  /** Số dòng được hạ thẳng trên phiếu chưa chốt (không sinh phiếu trả). */
+  adjustedLines: number;
+  vouchisedLines: number;
+}
 
 export interface DebtTransaction {
   id: string;

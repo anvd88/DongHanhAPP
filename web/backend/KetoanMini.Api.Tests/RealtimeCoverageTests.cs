@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using KetoanMini.Api.Realtime;
 using Xunit;
 
@@ -25,6 +25,11 @@ public sealed class RealtimeCoverageTests
         ["web_chat_members"] = "chat nhắm đúng thành viên qua NotifyChat",
         ["web_chat_messages"] = "chat nhắm đúng thành viên qua NotifyChat",
         ["web_chat_reactions"] = "chat nhắm đúng thành viên qua NotifyChat",
+
+        // Đối soát phiếu: hai bảng này CHỈ được ghi trong cùng giao dịch với documents, và documents
+        // đã phát tín hiệu "data". Thêm trigger riêng chỉ nhân đôi cùng một lần đánh thức client.
+        ["document_issued_lines"] = "luôn ghi kèm documents (đã phát scope data)",
+        ["document_line_edits"] = "luôn ghi kèm documents (đã phát scope data)",
 
         // Không hiện trên giao diện nào: hạ tầng nội bộ.
         ["hr_device_tokens"] = "token FCM, không hiển thị",

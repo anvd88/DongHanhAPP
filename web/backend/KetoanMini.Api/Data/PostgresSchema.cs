@@ -1,4 +1,4 @@
-using KetoanMini.Api.Security;
+﻿using KetoanMini.Api.Security;
 using Npgsql;
 
 namespace KetoanMini.Api.Data;
@@ -232,6 +232,55 @@ public static class PostgresSchema
         FOR EACH ROW
         EXECUTE FUNCTION prevent_issued_warehouse_voucher_no_change();
 
+        -- ── Giao hàng cho phiếu xuất kho ────────────────────────────────────────────────────
+        -- Phiếu xuất kho ĐÃ IN phải đi tới khách bằng một trong hai đường: lái xe chở đi, hoặc
+        -- khách tự lấy tại kho. Ghi rõ đường nào để đối soát được khi thiếu phiếu.
+        --   delivery_mode = ''       chưa gán (phiếu vừa in, chưa quyết định)
+        --                 = 'driver' đã gán cho lái xe
+        --                 = 'pickup' khách lấy tại kho
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_mode varchar(16) NOT NULL DEFAULT '';
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_driver_username varchar(128) NOT NULL DEFAULT '';
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_driver_name varchar(200) NOT NULL DEFAULT '';
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_assigned_at timestamptz NULL;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_assigned_by varchar(128) NOT NULL DEFAULT '';
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_note text NOT NULL DEFAULT '';
+        -- Việc giao hàng sinh tự động cho lái xe. Giữ khoá ở đây để màn "Việc được giao" nối
+        -- ngược lại phiếu mà không cần bảng trung gian.
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_task_id uuid NULL;
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_documents_delivery_mode'
+                  AND conrelid = 'documents'::regclass
+            ) THEN
+                ALTER TABLE documents
+                ADD CONSTRAINT ck_documents_delivery_mode
+                CHECK (
+                    delivery_mode IN ('', 'driver', 'pickup')
+                    -- Gán cho lái xe thì bắt buộc phải biết là lái xe nào.
+                    AND (delivery_mode <> 'driver' OR BTRIM(delivery_driver_username) <> '')
+                    -- Khách tự lấy thì không được đứng tên lái xe nào.
+                    AND (delivery_mode <> 'pickup' OR BTRIM(delivery_driver_username) = '')
+                );
+            END IF;
+        END $$;
+        -- Truy vấn nóng: "lái xe X đang cầm những phiếu nào" (đối soát cuối ngày).
+        CREATE INDEX IF NOT EXISTS ix_documents_delivery_driver
+            ON documents (delivery_driver_username, doc_date DESC)
+            WHERE delivery_mode = 'driver';
+
+        -- ── Đối soát phiếu khi lái xe giao xong, nộp tờ phiếu về cho kế toán ────────────────
+        -- Số cân/số lượng khách nhận thực tế hiếm khi trùng đúng số đã xuất, và đơn giá đôi khi bị
+        -- viết sai lúc xuất kho. Kế toán sửa lại theo tờ phiếu có chữ ký khách, rồi xác nhận
+        -- "phiếu đã về kho" để đóng việc của lái xe.
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_returned_at timestamptz NULL;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_returned_by varchar(128) NOT NULL DEFAULT '';
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS delivery_return_note text NOT NULL DEFAULT '';
+        CREATE INDEX IF NOT EXISTS ix_documents_delivery_pending_return
+            ON documents (doc_date DESC)
+            WHERE delivery_mode = 'driver' AND delivery_returned_at IS NULL;
+
         -- Chứng từ kế toán đã nhập chỉ được chuyển sang trạng thái hủy, tuyệt đối không xóa vật lý.
         CREATE OR REPLACE FUNCTION prevent_document_physical_delete()
         RETURNS trigger
@@ -259,6 +308,156 @@ public static class PostgresSchema
             unit_price numeric(18,2) NOT NULL DEFAULT 0,
             note text NOT NULL DEFAULT ''
         );
+
+        -- Ảnh chụp các dòng phiếu tại thời điểm PHÁT HÀNH = "hàng xuất đi" trên tờ giấy đã in.
+        -- Bảng riêng chứ không phải cột thêm vào document_lines, vì mỗi lần lưu phiếu là xoá sạch
+        -- rồi chèn lại document_lines — snapshot nằm chung sẽ bị cuốn theo và mất mốc so sánh.
+        CREATE TABLE IF NOT EXISTS document_issued_lines (
+            document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            line_no integer NOT NULL,
+            line_content text NOT NULL DEFAULT '',
+            spec text NOT NULL DEFAULT '',
+            quantity numeric(18,2) NOT NULL DEFAULT 0,
+            unit_price numeric(18,2) NOT NULL DEFAULT 0,
+            note text NOT NULL DEFAULT '',
+            captured_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (document_id, line_no)
+        );
+        -- Phiếu đã phát hành từ trước khi có tính năng này chưa có ảnh chụp. Lấy hiện trạng làm mốc
+        -- để chúng hiện "chênh lệch 0" thay vì lệch toàn bộ so với một mốc rỗng.
+        INSERT INTO document_issued_lines (document_id, line_no, line_content, spec, quantity, unit_price, note)
+        SELECT DISTINCT ON (l.document_id, l.line_no)
+               l.document_id, l.line_no, l.line_content, l.spec, l.quantity, l.unit_price, l.note
+        FROM document_lines l
+        JOIN documents d ON d.id = l.document_id
+        WHERE d.document_type = 'document' AND d.issued_at IS NOT NULL
+        ORDER BY l.document_id, l.line_no, l.id
+        ON CONFLICT (document_id, line_no) DO NOTHING;
+
+        -- Lịch sử chỉnh sửa hàng thực nhận. Mỗi lần kế toán bấm lưu, mỗi dòng THỰC SỰ đổi đẻ ra
+        -- một bản ghi cũ→mới; không đổi thì không ghi, để sổ không loãng.
+        CREATE TABLE IF NOT EXISTS document_line_edits (
+            id bigserial PRIMARY KEY,
+            document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            line_no integer NOT NULL DEFAULT 0,
+            line_content text NOT NULL DEFAULT '',
+            old_quantity numeric(18,2) NOT NULL DEFAULT 0,
+            new_quantity numeric(18,2) NOT NULL DEFAULT 0,
+            old_unit_price numeric(18,2) NOT NULL DEFAULT 0,
+            new_unit_price numeric(18,2) NOT NULL DEFAULT 0,
+            reason text NOT NULL DEFAULT '',
+            actor_username varchar(128) NOT NULL DEFAULT '',
+            actor_name varchar(200) NOT NULL DEFAULT '',
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_document_line_edits_doc ON document_line_edits (document_id, id);
+
+        -- ── Hàng khách trả về ───────────────────────────────────────────────────────────────
+        -- Phiếu trả hàng là một documents có document_type='return', dòng hàng nằm trong
+        -- document_lines như mọi phiếu khác. Nhờ vậy tổng tiền, công nợ, sổ giao dịch dùng chung
+        -- một đường tính, không phải dựng bảng tiền song song.
+        --
+        -- Hai cột dưới đây trả lời câu hỏi cốt lõi: món hàng trả về NẰM Ở ĐƠN NÀO. Hệ thống không
+        -- có bảng giá — cùng một mặt hàng mỗi đơn một giá — nên phải trỏ đúng dòng của đơn nguồn
+        -- thì mới trừ công nợ đúng số tiền đã bán.
+        ALTER TABLE document_lines ADD COLUMN IF NOT EXISTS source_document_id uuid NULL
+            REFERENCES documents(id) ON DELETE RESTRICT;
+        ALTER TABLE document_lines ADD COLUMN IF NOT EXISTS source_line_no integer NULL;
+        CREATE INDEX IF NOT EXISTS ix_document_lines_source
+            ON document_lines (source_document_id, source_line_no)
+            WHERE source_document_id IS NOT NULL;
+
+        CREATE SEQUENCE IF NOT EXISTS goods_return_seq START 1;
+
+        -- ── Danh mục hàng hoá ───────────────────────────────────────────────────────────────
+        -- Trước đây chủng loại/quy cách là CHỮ TỰ DO trên từng dòng phiếu, nên "Thép tấm 10mm",
+        -- "thep tam 10 ly" và "Thép tấm 10 mm" là ba mặt hàng khác nhau với máy: không thống kê
+        -- được theo mặt hàng, và tra hàng khách trả về phải dò chữ nên gõ lệch là không ra.
+        --
+        -- Danh mục này KHÔNG ép: ô nhập trên phiếu vẫn cho gõ tự do, chọn từ danh mục chỉ là đường
+        -- nhanh. Dòng nào chọn từ danh mục thì đóng dấu product_id để thống kê đi theo mã chứ không
+        -- theo chính tả.
+        CREATE TABLE IF NOT EXISTS products (
+            id uuid NOT NULL PRIMARY KEY,
+            code varchar(32) NOT NULL DEFAULT '',
+            name varchar(256) NOT NULL DEFAULT '',
+            spec varchar(256) NOT NULL DEFAULT '',
+            unit varchar(24) NOT NULL DEFAULT 'kg',
+            note text NOT NULL DEFAULT '',
+            is_active boolean NOT NULL DEFAULT TRUE,
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        -- Một mặt hàng = một cặp (tên, quy cách). Khoá theo chữ thường để không đẻ bản trùng chỉ
+        -- khác hoa/thường — đúng thứ danh mục sinh ra để ngăn.
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_products_name_spec
+            ON products (lower(name), lower(spec));
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_products_code
+            ON products (lower(code)) WHERE code <> '';
+        CREATE SEQUENCE IF NOT EXISTS product_code_seq START 1;
+
+        -- ON DELETE SET NULL: xoá một mặt hàng khỏi danh mục KHÔNG được phép làm hỏng phiếu cũ.
+        ALTER TABLE document_lines ADD COLUMN IF NOT EXISTS product_id uuid NULL
+            REFERENCES products(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS ix_document_lines_product
+            ON document_lines (product_id) WHERE product_id IS NOT NULL;
+
+        -- ── Mua hàng: nhà cung cấp + phiếu nhập mua ─────────────────────────────────────────
+        -- Đây là vế NHẬP mà hệ thống chưa từng có (trước nay chỉ ghi bán ra + tiền + công nợ phải
+        -- thu). Không có nó thì không thể tính tồn kho lẫn giá vốn — "tồn = nhập − xuất".
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id uuid NOT NULL PRIMARY KEY,
+            name varchar(256) NOT NULL,
+            tax_code varchar(64) NOT NULL DEFAULT '',
+            phone varchar(64) NOT NULL DEFAULT '',
+            address text NOT NULL DEFAULT '',
+            note text NOT NULL DEFAULT '',
+            is_active boolean NOT NULL DEFAULT TRUE,
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_suppliers_name ON suppliers (lower(name));
+
+        -- Phiếu nhập mua đứng RIÊNG, không dùng chung bảng documents như phiếu bán/thu/chi/trả hàng.
+        -- Lý do: documents đã gánh quá nhiều thứ của vòng đời phiếu BÁN (số phiếu in ra bất biến,
+        -- giao hàng, đối soát, hàng trả về, công nợ phải THU). Nhét chiều mua vào đó là mỗi truy vấn
+        -- tiền lại phải nhớ loại trừ thêm một document_type nữa — đúng cái bẫy đã dính với 'return'.
+        CREATE TABLE IF NOT EXISTS purchases (
+            id uuid NOT NULL PRIMARY KEY,
+            voucher_no varchar(64) NOT NULL DEFAULT '',
+            doc_date date NOT NULL,
+            supplier_id uuid NULL REFERENCES suppliers(id) ON DELETE SET NULL,
+            supplier_name varchar(256) NOT NULL DEFAULT '',
+            -- Số hoá đơn/phiếu giấy của nhà cung cấp — thứ để đối chiếu khi họ đòi tiền.
+            supplier_invoice_no varchar(64) NOT NULL DEFAULT '',
+            note text NOT NULL DEFAULT '',
+            paid_amount numeric(18,2) NOT NULL DEFAULT 0,
+            cancelled_at timestamptz NULL,
+            cancelled_by varchar(128) NOT NULL DEFAULT '',
+            cancel_reason text NOT NULL DEFAULT '',
+            created_by varchar(128) NOT NULL DEFAULT '',
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_purchases_date ON purchases (doc_date DESC, voucher_no DESC);
+        CREATE INDEX IF NOT EXISTS ix_purchases_supplier ON purchases (supplier_id, doc_date DESC);
+        CREATE SEQUENCE IF NOT EXISTS purchase_voucher_seq START 1;
+
+        CREATE TABLE IF NOT EXISTS purchase_lines (
+            id bigserial NOT NULL PRIMARY KEY,
+            purchase_id uuid NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+            line_no integer NOT NULL DEFAULT 0,
+            product_id uuid NULL REFERENCES products(id) ON DELETE SET NULL,
+            line_content text NOT NULL DEFAULT '',
+            spec text NOT NULL DEFAULT '',
+            quantity numeric(18,2) NOT NULL DEFAULT 0,
+            unit_price numeric(18,2) NOT NULL DEFAULT 0,
+            note text NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS ix_purchase_lines_purchase ON purchase_lines (purchase_id, line_no);
+        CREATE INDEX IF NOT EXISTS ix_purchase_lines_product
+            ON purchase_lines (product_id) WHERE product_id IS NOT NULL;
+
 
         CREATE TABLE IF NOT EXISTS payments (
             id uuid NOT NULL PRIMARY KEY,

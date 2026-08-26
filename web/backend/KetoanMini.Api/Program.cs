@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -111,8 +111,20 @@ builder.Services.AddSingleton<AttendanceReminderService>();
 builder.Services.AddHostedService<AttendanceReminderWorker>();
 
 // Bộ máy nhận diện khuôn mặt cho chấm công: YuNet + căn chỉnh 5 điểm + AdaFace R50 ONNX Runtime.
-// Development dựng lười ở request đầu; Production chủ động nạp lúc khởi động để kiểm chứng đủ model.
-builder.Services.AddSingleton<IFaceEngine, AdaFaceR50Engine>();
+//
+// Bọc qua LazyFaceEngine: engine chiếm ~348 MB private (adaface.onnx 166 MB + arena ONNX Runtime),
+// tức ~79% bộ nhớ tiến trình, trong khi phần lớn thời gian không ai chấm công. Nạp lại chỉ ~0,8 giây
+// nên model được thả sau một khoảng nhàn rỗi và nạp lại khi có lượt quét.
+// Tắt cơ chế này: đặt FaceRecognition:IdleUnloadMinutes = 0 (giữ thường trú như trước).
+builder.Services.Configure<FaceEngineIdleOptions>(
+    builder.Configuration.GetSection(FaceEngineIdleOptions.Section));
+builder.Services.AddSingleton(sp => new LazyFaceEngine(
+    () => new AdaFaceR50Engine(
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetRequiredService<ILogger<AdaFaceR50Engine>>()),
+    sp.GetRequiredService<ILogger<LazyFaceEngine>>()));
+builder.Services.AddSingleton<IFaceEngine>(sp => sp.GetRequiredService<LazyFaceEngine>());
+builder.Services.AddHostedService<FaceEngineIdleUnloader>();
 
 // Bộ nhớ đệm RAM dùng chung (token xác nhận chấm công, và các thứ tạm thời khác).
 builder.Services.AddMemoryCache();
@@ -741,12 +753,19 @@ app.MapHr();
 app.MapRequests();
 app.MapWorklist();
 app.MapTasks();
+app.MapDeliveryAssignments();
+app.MapDeliverySettlements();
+app.MapGoodsReturns();
+app.MapProductCatalog();
+app.MapPurchases();
 app.MapNotifications();
 app.MapShifts();
 app.MapTimesheet();
 app.MapPenalties();
 app.MapPenaltyRefunds();
 app.MapPayoutVouchers();
+app.MapCashCollections();
+app.MapCashFund();
 app.MapPayroll();
 app.MapBankAccounts();
 app.MapAppConfig();
@@ -847,6 +866,18 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang hoan tien phat
 // Sau bang hoan tien phat va hr_employees: phieu chi tham chieu ca hai.
 try { await PayoutVoucherEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang phieu chi luc khoi dong: {Msg}", ex.Message); }
+
+// Sau customers/payments và hr_employees: lệnh thu tiền tham chiếu cả khách hàng lẫn tài xế.
+try { await CashCollectionEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "Khong khoi tao duoc so lenh thu tien khach hang bat buoc; dung khoi dong.");
+    throw;
+}
+
+// PHẢI sau lệnh thu, phiếu chi và documents: view sổ quỹ đọc thẳng cả ba bảng đó.
+try { await CashFundEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc so quy tien mat luc khoi dong: {Msg}", ex.Message); }
 
 try { await PayrollEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang bang luong luc khoi dong: {Msg}", ex.Message); }

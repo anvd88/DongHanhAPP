@@ -95,6 +95,41 @@ public static class HrEndpoints
             );
             CREATE INDEX IF NOT EXISTS ix_hr_contracts_emp ON hr_contracts (employee_id, start_date DESC);
 
+            -- Số hợp đồng do hệ thống sinh (HD{năm}-{số chạy}). Dùng sequence toàn cục nên không
+            -- bao giờ cấp lại một số, kể cả khi hai người thêm hợp đồng cùng lúc hay hợp đồng bị xóa.
+            CREATE SEQUENCE IF NOT EXISTS hr_contract_seq START 1;
+
+            -- Chốt chống trùng ở tầng DB. Dữ liệu cũ có thể đã trùng/để trống số hợp đồng, nên bọc
+            -- trong DO: trùng thì bỏ qua chứ không làm hỏng cả bước khởi tạo schema.
+            DO $ct$
+            BEGIN
+                BEGIN
+                    CREATE UNIQUE INDEX IF NOT EXISTS ux_hr_contracts_no
+                        ON hr_contracts (contract_no) WHERE contract_no <> '';
+                EXCEPTION WHEN unique_violation THEN
+                    RAISE NOTICE 'hr_contracts.contract_no đang có giá trị trùng — bỏ qua tạo unique index.';
+                END;
+            END
+            $ct$;
+
+            -- Các kỳ TĂNG LƯƠNG của một hợp đồng. Lương cứng của một kỳ lương =
+            -- lương cơ bản trên hợp đồng + tổng các lần tăng có effective_period <= kỳ đó.
+            -- Gắn theo contract_id (không phải chỉ employee_id) để khi ký hợp đồng mới với mức
+            -- lương mới, các lần tăng của hợp đồng cũ không bị cộng dồn thêm lần nữa.
+            CREATE TABLE IF NOT EXISTS hr_salary_raises (
+                id uuid PRIMARY KEY,
+                employee_id uuid NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,
+                contract_id uuid NULL REFERENCES hr_contracts(id) ON DELETE CASCADE,
+                effective_period varchar(7) NOT NULL,
+                amount numeric(18,2) NOT NULL DEFAULT 0,
+                decision_no varchar(64) NOT NULL DEFAULT '',
+                reason text NOT NULL DEFAULT '',
+                created_by varchar(128) NOT NULL DEFAULT '',
+                created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_hr_salary_raises_emp ON hr_salary_raises (employee_id, effective_period);
+            CREATE INDEX IF NOT EXISTS ix_hr_salary_raises_contract ON hr_salary_raises (contract_id, effective_period);
+
             CREATE TABLE IF NOT EXISTS hr_payslips (
                 id uuid PRIMARY KEY,
                 employee_id uuid NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,
@@ -177,6 +212,7 @@ public static class HrEndpoints
         await CanonicalRolePositionCorrectionMigration.ApplyAsync(conn, ct);
         await IdentityConsistencyMigration.ApplyAsync(conn, ct);
         await PayrollRoleAndScopedBranchMigration.ApplyAsync(conn, ct);
+        await DriverRoleMigration.ApplyAsync(conn, ct);
         await EnsureAccountingDepartment(conn, ct);
         await BackfillMissingDepartments(conn, ct);
         await BackfillSharedEmployeeAccountData(conn, ct);
@@ -1160,10 +1196,20 @@ public static class HrEndpoints
             if (!u.IsHrManager() && !await IsEmployeeOwner(conn, id, u.Username())) return Results.Forbid();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
-                SELECT id, contract_no, contract_type, start_date, end_date, base_salary, allowance, status, note
-                FROM hr_contracts WHERE employee_id=@id ORDER BY start_date DESC NULLS LAST, created_at DESC
+                SELECT c.id, c.contract_no, c.contract_type, c.start_date, c.end_date, c.base_salary,
+                       c.allowance, c.status, c.note,
+                       COALESCE(rz.raise_total, 0) AS raise_total, COALESCE(rz.raise_count, 0) AS raise_count
+                FROM hr_contracts c
+                LEFT JOIN (
+                    SELECT contract_id, SUM(amount) AS raise_total, COUNT(*) AS raise_count
+                    FROM hr_salary_raises WHERE employee_id=@id GROUP BY contract_id
+                ) rz ON rz.contract_id = c.id
+                WHERE c.employee_id=@id ORDER BY c.start_date DESC NULLS LAST, c.created_at DESC
                 """).With("@id", id).ExecuteReaderAsync();
             while (await r.ReadAsync())
+            {
+                var baseSalary = r.Dec("base_salary");
+                var raiseTotal = r.Dec("raise_total");
                 list.Add(new
                 {
                     id = r.Guid("id"),
@@ -1171,11 +1217,16 @@ public static class HrEndpoints
                     contractType = r.Str("contract_type"),
                     startDate = DateOrNull(r, "start_date"),
                     endDate = DateOrNull(r, "end_date"),
-                    baseSalary = r.Dec("base_salary"),
+                    baseSalary,
                     allowance = r.Dec("allowance"),
                     status = r.Str("status"),
                     note = r.Str("note"),
+                    // Lương hiện hưởng của hợp đồng = lương ký + tất cả các lần tăng đã ghi nhận.
+                    raiseTotal,
+                    raiseCount = r.Int("raise_count"),
+                    currentSalary = baseSalary + raiseTotal,
                 });
+            }
             return Results.Ok(list);
         });
 
@@ -1184,32 +1235,54 @@ public static class HrEndpoints
             if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
             var cid = Guid.NewGuid();
+            // Số hợp đồng do hệ thống cấp. Client vẫn gửi được số riêng (nhập liệu cũ / import),
+            // khi đó chỉ kiểm tra trùng chứ không tự sinh đè lên.
+            var manualNo = (req.ContractNo ?? "").Trim();
+            if (manualNo.Length > 0 && await ContractNoExists(conn, manualNo, null))
+                return Results.Conflict(new { message = $"Số hợp đồng {manualNo} đã tồn tại." });
+
+            string contractNo = manualNo;
+            // Sequence không cấp lại số, nhưng dữ liệu import tay vẫn có thể chiếm sẵn một số —
+            // thử vài lần cho chắc thay vì để 23505 hắt lên người dùng.
+            for (var attempt = 0; contractNo.Length == 0 && attempt < 10; attempt++)
+            {
+                var candidate = await NextContractNo(conn);
+                if (!await ContractNoExists(conn, candidate, null)) contractNo = candidate;
+            }
+            if (contractNo.Length == 0) return Results.Problem("Không cấp được số hợp đồng, vui lòng thử lại.");
+
             await conn.Cmd("""
                 INSERT INTO hr_contracts (id, employee_id, contract_no, contract_type, start_date, end_date, base_salary, allowance, status, note)
                 VALUES (@id, @emp, @no, @type, @start, @end, @base, @allow, @status, @note)
                 """)
-                .With("@id", cid).With("@emp", id).With("@no", req.ContractNo ?? "").With("@type", req.ContractType ?? "")
+                .With("@id", cid).With("@emp", id).With("@no", contractNo).With("@type", req.ContractType ?? "")
                 .With("@start", (object?)req.StartDate ?? DBNull.Value).With("@end", (object?)req.EndDate ?? DBNull.Value)
                 .With("@base", req.BaseSalary).With("@allow", req.Allowance).With("@status", req.Status ?? "Active")
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
-            await Signal(db, u, "Thêm hợp đồng", "Contract", req.ContractNo ?? "");
-            return Results.Ok(new { id = cid });
+            await Signal(db, u, "Thêm hợp đồng", "Contract", contractNo);
+            return Results.Ok(new { id = cid, contractNo });
         });
 
         g.MapPut("/contracts/{cid:guid}", async (Guid cid, SaveContractReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
+            var newNo = (req.ContractNo ?? "").Trim();
+            if (newNo.Length > 0 && await ContractNoExists(conn, newNo, cid))
+                return Results.Conflict(new { message = $"Số hợp đồng {newNo} đã tồn tại." });
+            // Bỏ trống = GIỮ số cũ. Số hợp đồng là số hệ thống đã cấp, không được xóa mất vì một
+            // lần lưu thiếu trường.
             var n = await conn.Cmd("""
-                UPDATE hr_contracts SET contract_no=@no, contract_type=@type, start_date=@start, end_date=@end,
+                UPDATE hr_contracts SET contract_no=COALESCE(NULLIF(@no,''), contract_no),
+                    contract_type=@type, start_date=@start, end_date=@end,
                     base_salary=@base, allowance=@allow, status=@status, note=@note WHERE id=@id
                 """)
-                .With("@id", cid).With("@no", req.ContractNo ?? "").With("@type", req.ContractType ?? "")
+                .With("@id", cid).With("@no", newNo).With("@type", req.ContractType ?? "")
                 .With("@start", (object?)req.StartDate ?? DBNull.Value).With("@end", (object?)req.EndDate ?? DBNull.Value)
                 .With("@base", req.BaseSalary).With("@allow", req.Allowance).With("@status", req.Status ?? "Active")
                 .With("@note", req.Note ?? "").ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
-            await Signal(db, u, "Cập nhật hợp đồng", "Contract", req.ContractNo ?? "");
+            await Signal(db, u, "Cập nhật hợp đồng", "Contract", newNo.Length > 0 ? newNo : cid.ToString());
             return Results.NoContent();
         });
 
@@ -1220,6 +1293,72 @@ public static class HrEndpoints
             var n = await conn.Cmd("DELETE FROM hr_contracts WHERE id=@id").With("@id", cid).ExecuteNonQueryAsync();
             if (n == 0) return Results.NotFound();
             await Signal(db, u, "Xóa hợp đồng", "Contract", cid.ToString());
+            return Results.NoContent();
+        });
+
+        // ---------------- Tăng lương (lịch sử theo hợp đồng) ----------------
+        // Mỗi bản ghi = một lần tăng: áp dụng TỪ tháng nào và tăng thêm bao nhiêu. Lương cứng của
+        // một kỳ lương do bảng lương tự cộng lại, không ai gõ tay con số cuối cùng.
+        g.MapGet("/employees/{id:guid}/salary-raises", async (Guid id, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            if (!u.IsHrManager() && !await IsEmployeeOwner(conn, id, u.Username())) return Results.Forbid();
+            return Results.Ok(await ReadSalaryRaises(conn, id));
+        });
+
+        g.MapPost("/employees/{id:guid}/salary-raises", async (Guid id, SaveSalaryRaiseReq req, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
+            var period = NormalizeRaisePeriod(req.EffectivePeriod);
+            if (period is null) return Results.BadRequest(new { message = "Tháng áp dụng phải có dạng yyyy-MM." });
+            if (req.Amount == 0) return Results.BadRequest(new { message = "Mức tăng phải khác 0." });
+
+            await using var conn = await db.OpenAsync();
+            var contractId = req.ContractId ?? await ResolveRaiseContractId(conn, id);
+            if (contractId is null) return Results.BadRequest(new { message = "Nhân viên chưa có hợp đồng để ghi nhận tăng lương." });
+            // Hợp đồng phải thuộc đúng nhân viên: id hợp đồng đến từ client nên không tin được.
+            var owner = await conn.Cmd("SELECT employee_id FROM hr_contracts WHERE id=@c").With("@c", contractId).ExecuteScalarAsync();
+            if (owner is not Guid ownerId || ownerId != id) return Results.BadRequest(new { message = "Hợp đồng không thuộc nhân viên này." });
+
+            var rid = Guid.NewGuid();
+            await conn.Cmd("""
+                INSERT INTO hr_salary_raises (id, employee_id, contract_id, effective_period, amount, decision_no, reason, created_by)
+                VALUES (@id, @emp, @c, @period, @amount, @no, @reason, @by)
+                """)
+                .With("@id", rid).With("@emp", id).With("@c", contractId).With("@period", period)
+                .With("@amount", req.Amount).With("@no", (req.DecisionNo ?? "").Trim())
+                .With("@reason", (req.Reason ?? "").Trim()).With("@by", u.Username())
+                .ExecuteNonQueryAsync();
+            await Signal(db, u, "Ghi nhận tăng lương", "SalaryRaise", $"{period} · {req.Amount:0}");
+            return Results.Ok(new { id = rid });
+        });
+
+        g.MapPut("/salary-raises/{rid:guid}", async (Guid rid, SaveSalaryRaiseReq req, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
+            var period = NormalizeRaisePeriod(req.EffectivePeriod);
+            if (period is null) return Results.BadRequest(new { message = "Tháng áp dụng phải có dạng yyyy-MM." });
+            if (req.Amount == 0) return Results.BadRequest(new { message = "Mức tăng phải khác 0." });
+            await using var conn = await db.OpenAsync();
+            var n = await conn.Cmd("""
+                UPDATE hr_salary_raises SET effective_period=@period, amount=@amount, decision_no=@no, reason=@reason
+                WHERE id=@id
+                """)
+                .With("@id", rid).With("@period", period).With("@amount", req.Amount)
+                .With("@no", (req.DecisionNo ?? "").Trim()).With("@reason", (req.Reason ?? "").Trim())
+                .ExecuteNonQueryAsync();
+            if (n == 0) return Results.NotFound();
+            await Signal(db, u, "Sửa lần tăng lương", "SalaryRaise", $"{period} · {req.Amount:0}");
+            return Results.NoContent();
+        });
+
+        g.MapDelete("/salary-raises/{rid:guid}", async (Guid rid, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            var n = await conn.Cmd("DELETE FROM hr_salary_raises WHERE id=@id").With("@id", rid).ExecuteNonQueryAsync();
+            if (n == 0) return Results.NotFound();
+            await Signal(db, u, "Xóa lần tăng lương", "SalaryRaise", rid.ToString());
             return Results.NoContent();
         });
 
@@ -2838,6 +2977,65 @@ public static class HrEndpoints
     private static DateOnly? DateOrNull(NpgsqlDataReader r, string col)
         => r.IsDBNull(r.GetOrdinal(col)) ? (DateOnly?)null : r.DateOnly(col);
 
+    // ---- Số hợp đồng ----
+
+    /// <summary>Số hợp đồng kế tiếp: HD{năm}-{số chạy 5 chữ số} lấy từ sequence toàn cục.</summary>
+    private static async Task<string> NextContractNo(NpgsqlConnection conn)
+    {
+        var seq = Convert.ToInt64(await conn.Cmd("SELECT nextval('hr_contract_seq')").ExecuteScalarAsync() ?? 1L);
+        return $"HD{DateTime.UtcNow.AddHours(7):yyyy}-{seq:D5}";
+    }
+
+    /// <summary><paramref name="exceptId"/>: hợp đồng đang sửa, không tự coi là trùng chính nó.</summary>
+    private static async Task<bool> ContractNoExists(NpgsqlConnection conn, string contractNo, Guid? exceptId)
+        => await conn.Cmd("SELECT 1 FROM hr_contracts WHERE contract_no=@no AND (@except::uuid IS NULL OR id <> @except::uuid) LIMIT 1")
+            .With("@no", contractNo).With("@except", (object?)exceptId ?? DBNull.Value)
+            .ExecuteScalarAsync() is not null;
+
+    // ---- Tăng lương ----
+
+    /// <summary>"yyyy-MM" hợp lệ hoặc null. Nhận cả "yyyy-MM-dd" (ô &lt;input type=month&gt; cũ) rồi cắt về tháng.</summary>
+    private static string? NormalizeRaisePeriod(string? raw)
+    {
+        var s = (raw ?? "").Trim();
+        if (s.Length > 7) s = s[..7];
+        return PayrollEndpoints.ValidPeriod(s) ? s : null;
+    }
+
+    /// <summary>Hợp đồng mặc định để gắn lần tăng lương: hợp đồng còn hiệu lực mới nhất, không có thì hợp đồng gần nhất.</summary>
+    private static async Task<Guid?> ResolveRaiseContractId(NpgsqlConnection conn, Guid employeeId)
+        => await conn.Cmd("""
+            SELECT id FROM hr_contracts WHERE employee_id=@emp
+            ORDER BY (status='Active') DESC, start_date DESC NULLS LAST, created_at DESC LIMIT 1
+            """).With("@emp", employeeId).ExecuteScalarAsync() as Guid?;
+
+    private static async Task<List<object>> ReadSalaryRaises(NpgsqlConnection conn, Guid employeeId)
+    {
+        var list = new List<object>();
+        await using var r = await conn.Cmd("""
+            SELECT z.id, z.contract_id, z.effective_period, z.amount, z.decision_no, z.reason,
+                   z.created_by, z.created_at, COALESCE(c.contract_no,'') AS contract_no
+            FROM hr_salary_raises z
+            LEFT JOIN hr_contracts c ON c.id = z.contract_id
+            WHERE z.employee_id=@emp
+            ORDER BY z.effective_period DESC, z.created_at DESC
+            """).With("@emp", employeeId).ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            list.Add(new
+            {
+                id = r.Guid("id"),
+                contractId = r.IsDBNull(r.GetOrdinal("contract_id")) ? (Guid?)null : r.Guid("contract_id"),
+                contractNo = r.Str("contract_no"),
+                effectivePeriod = r.Str("effective_period"),
+                amount = r.Dec("amount"),
+                decisionNo = r.Str("decision_no"),
+                reason = r.Str("reason"),
+                createdBy = r.Str("created_by"),
+                createdAt = r.Dt("created_at"),
+            });
+        return list;
+    }
+
     // ---- Thư tri ân "tròn X năm gắn bó" ----
     private const int AnniversaryWindowDays = 7; // hiện suốt tuần kỷ niệm: ngày tròn năm + 6 ngày sau
 
@@ -2945,6 +3143,8 @@ public static class HrEndpoints
     public record SaveAnniversaryLetterReq(bool Enabled, string? Title, string? Body, string? Signature);
     public record SaveContractReq(string? ContractNo, string? ContractType, DateOnly? StartDate, DateOnly? EndDate,
         decimal BaseSalary, decimal Allowance, string? Status, string? Note);
+    public record SaveSalaryRaiseReq(Guid? ContractId, string? EffectivePeriod, decimal Amount,
+        string? DecisionNo, string? Reason);
     public record SavePayslipReq(string? Period, decimal WorkDays, decimal OvertimeHours, decimal BaseSalary,
         decimal Allowance, decimal OvertimePay, decimal Deductions, string? Note, bool Published);
     public record SaveLeaveBalanceReq(int Year, string? LeaveType, decimal TotalDays, decimal UsedDays);

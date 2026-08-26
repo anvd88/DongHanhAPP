@@ -36,8 +36,17 @@ public sealed class PermissionMapTests
     }
 
     [Fact]
-    public void Admin_CoMoiQuyen()
-        => Assert.Empty(Permissions.All.Except(Permissions.For([AppRoles.Admin])));
+    public void Admin_CoMoiQuyenKyThuat_NhungKhongTuThamGiaThuTienMat()
+    {
+        var admin = Permissions.For([AppRoles.Admin]);
+        var collectionPermissions = new[]
+        {
+            Permissions.CollectionsSelf, Permissions.CollectionsReadAll, Permissions.CollectionsCreate,
+            Permissions.CollectionsReceive, Permissions.CollectionsResolve,
+        };
+        Assert.Empty(Permissions.All.Except(collectionPermissions).Except(admin));
+        Assert.All(collectionPermissions, permission => Assert.DoesNotContain(permission, admin));
+    }
 
     [Fact]
     public void Kiosk_ChiChamCong_KhongChamVaoGiKhac()
@@ -58,6 +67,7 @@ public sealed class PermissionMapTests
     [InlineData(AppRoles.Hr)]
     [InlineData(AppRoles.Manager)]
     [InlineData(AppRoles.Warehouse)]
+    [InlineData(AppRoles.Driver)]
     [InlineData(AppRoles.Kiosk)]
     public void ChiAdmin_MoiQuanTriDuocTaiKhoanVaCauHinh(string role)
     {
@@ -109,6 +119,52 @@ public sealed class PermissionMapTests
         Assert.DoesNotContain(Permissions.VouchersApprove, executive);
         Assert.DoesNotContain(Permissions.PayoutApprove, executive);
         Assert.DoesNotContain(Permissions.PayoutPay, executive);
+        Assert.DoesNotContain(Permissions.CollectionsReadAll, executive);
+    }
+
+    [Fact]
+    public void LenhThuTien_TachDungQuyenKeToanLaiXeVaThuQuy()
+    {
+        var driver = Permissions.For([AppRoles.Driver]);
+        Assert.Contains(Permissions.CollectionsSelf, driver);
+        Assert.DoesNotContain(Permissions.CollectionsReadAll, driver);
+        Assert.DoesNotContain(Permissions.CollectionsCreate, driver);
+        Assert.DoesNotContain(Permissions.CollectionsReceive, driver);
+        Assert.DoesNotContain(Permissions.CollectionsResolve, driver);
+
+        foreach (var accountingRole in new[] { AppRoles.Accounting, AppRoles.ChiefAccountant })
+        {
+            var permissions = Permissions.For([accountingRole]);
+            Assert.Contains(Permissions.CollectionsSelf, permissions);
+            Assert.Contains(Permissions.CollectionsReadAll, permissions);
+            Assert.Contains(Permissions.CollectionsCreate, permissions);
+            Assert.DoesNotContain(Permissions.CollectionsReceive, permissions);
+            if (accountingRole == AppRoles.ChiefAccountant)
+                Assert.Contains(Permissions.CollectionsResolve, permissions);
+            else
+                Assert.DoesNotContain(Permissions.CollectionsResolve, permissions);
+        }
+
+        var cashier = Permissions.For([AppRoles.Cashier]);
+        Assert.Contains(Permissions.CollectionsSelf, cashier);
+        Assert.Contains(Permissions.CollectionsReadAll, cashier);
+        Assert.Contains(Permissions.CollectionsReceive, cashier);
+        Assert.DoesNotContain(Permissions.CollectionsCreate, cashier);
+        Assert.DoesNotContain(Permissions.CollectionsResolve, cashier);
+
+        foreach (var forbiddenRole in new[]
+                 {
+                     AppRoles.Employee, AppRoles.Admin, AppRoles.Executive, AppRoles.Payroll,
+                     AppRoles.Hr, AppRoles.Manager, AppRoles.Warehouse, AppRoles.Kiosk,
+                 })
+        {
+            var permissions = Permissions.For([forbiddenRole]);
+            Assert.DoesNotContain(Permissions.CollectionsSelf, permissions);
+            Assert.DoesNotContain(Permissions.CollectionsReadAll, permissions);
+            Assert.DoesNotContain(Permissions.CollectionsCreate, permissions);
+            Assert.DoesNotContain(Permissions.CollectionsReceive, permissions);
+            Assert.DoesNotContain(Permissions.CollectionsResolve, permissions);
+        }
     }
 
     [Fact]

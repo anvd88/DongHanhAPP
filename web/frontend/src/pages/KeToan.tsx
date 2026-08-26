@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useNavigate } from "react-router-dom";
 import { MotionConfig, motion } from "motion/react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CalendarDays, Download, FileText, FilterX, Loader2, Pencil, Printer, Search, Server, TriangleAlert, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CalendarDays, Download, FileText, FilterX, FileEdit, Loader2, Printer, Search, Server, TriangleAlert, X } from "lucide-react";
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Button as GlassButton } from "../shadcn/button";
@@ -252,6 +253,7 @@ function buildExcelHtml(items: PrintableDocument[], companyName: string, dateFro
 export function KeToan() {
   const { user } = useAuth();
   const { notify } = useAppNotifications();
+  const navigate = useNavigate();
   const { data, loading, error, reload } = useApi<DocumentListItem[]>("/api/documents");
   const { data: customers } = useApi<Customer[]>("/api/customers");
   const [search, setSearch] = useState("");
@@ -730,7 +732,7 @@ export function KeToan() {
                   </tr>
                 ) : (
                   rows.map((row) => (
-                    <tr key={row.id} onClick={() => setEditing(row.id)} className={row.cancelledAt ? "opacity-60" : ""}>
+                    <tr key={row.id} onClick={() => navigate(`/ban-hang/${row.id}`)} className={row.cancelledAt ? "opacity-60" : ""}>
                       <td className="whitespace-nowrap font-bold text-[var(--gc-text)]">
                         {row.voucherNo || <span className="font-semibold text-[var(--gc-text-muted)]">Chưa nhập</span>}
                       </td>
@@ -774,14 +776,24 @@ export function KeToan() {
                           >
                             {printingId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
                           </button>
+                          {/* MỘT nút mở phiếu: sửa nội dung, giao hàng và đối soát nằm chung một
+                              màn có tab. Ba việc này đều xoay quanh cùng một tờ phiếu, tách ba nút
+                              (và ba hộp thoại) chỉ bắt kế toán đóng/mở qua lại. In và Hủy đứng
+                              riêng vì là hai việc dứt khoát, làm xong là xong. */}
                           <button
                             type="button"
-                            title={row.cancelledAt ? "Xem phiếu đã hủy" : "Sửa phiếu"}
-                            aria-label={`${row.cancelledAt ? "Xem" : "Sửa"} phiếu ${row.voucherNo || row.customerName || row.id}`}
-                            onClick={() => setEditing(row.id)}
-                            className="gc-icon-btn h-8 w-8"
+                            title={openHint(row)}
+                            aria-label={`Mở phiếu ${row.voucherNo || row.customerName || row.id}`}
+                            onClick={() => navigate(`/ban-hang/${row.id}`)}
+                            className="gc-icon-btn relative h-8 w-8"
                           >
-                            <Pencil className="h-4 w-4" />
+                            <FileEdit className="h-4 w-4" />
+                            {waitingReturn(row) && (
+                              <span
+                                aria-hidden="true"
+                                className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500"
+                              />
+                            )}
                           </button>
                           {!row.cancelledAt && (
                             <button
@@ -820,29 +832,19 @@ export function KeToan() {
           </div>
         </GlassPanel>
 
-        {editing !== null && (
+        {/* Hộp thoại chỉ còn cho việc TẠO phiếu mới — nhập nhanh, lặp lại nhiều lần. Phiếu đã có
+            thì mở TRANG /ban-hang/:id: cả vòng đời một tờ phiếu cần chỗ rộng, không nhét vào popup. */}
+        {editing === "new" && (
           <DocumentEditor
-            // Mỗi chứng từ (và mỗi loại chứng từ mới) là một form riêng: đổi key ⇒ React dựng lại
-            // component với giá trị khởi tạo đúng, thay cho việc dọn/nạp lại từng ô bằng useEffect.
-            key={`${editing}:document`}
-            id={editing}
+            key="new:document"
+            id="new"
             initialKind="document"
             allowedKinds={["document"]}
             customers={customers ?? []}
-            onPrint={
-              editing !== "new"
-                ? () => {
-                    const row = data?.find((item) => item.id === editing);
-                    if (row) requestPrint(row);
-                  }
-                : undefined
-            }
-            printLoading={editing !== "new" && printingId === editing}
-            keepOpenAfterSave={editing === "new" && keepCreateOpen}
-            readOnly={editing !== "new" && !!data?.find((item) => item.id === editing)?.cancelledAt}
+            keepOpenAfterSave={keepCreateOpen}
             onClose={() => setEditing(null)}
             onSaved={() => {
-              if (!(editing === "new" && keepCreateOpen)) setEditing(null);
+              if (!keepCreateOpen) setEditing(null);
               reload();
             }}
           />
@@ -1070,3 +1072,21 @@ function SortHeader({
     </th>
   );
 }
+
+/** Việc cần làm NGAY: lái xe đã báo giao xong, đang chờ kế toán nhận lại tờ phiếu. */
+function waitingReturn(row: DocumentListItem) {
+  return (
+    !row.cancelledAt &&
+    !!row.issuedAt &&
+    !row.deliveryReturnedAt &&
+    // 'accepted' chỉ còn ở phiếu cũ (trước khi bỏ chặng nghiệm thu của việc giao hàng).
+    (row.deliveryTaskStatus === "submitted" || row.deliveryTaskStatus === "accepted")
+  );
+}
+
+function openHint(row: DocumentListItem) {
+  if (row.cancelledAt) return "Xem phiếu đã hủy";
+  if (waitingReturn(row)) return "Mở phiếu · đang chờ nhận lại phiếu để đối soát";
+  return "Mở phiếu · sửa, giao hàng, đối soát";
+}
+

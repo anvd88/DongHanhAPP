@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using KetoanMini.Api.Data;
 
@@ -29,7 +29,15 @@ public static class DatabaseChangePublisher
         ("documents", ["data"]),
         ("document_lines", ["data"]),
         ("payments", ["data"]),
+        ("cash_collection_orders", ["data", "hr"]),
+        ("cash_count_sessions", ["data", "hr"]),
+        ("cash_count_lines", ["data", "hr"]),
+        ("cash_collection_events", ["data", "hr"]),
         ("customers", ["data"]),
+        ("products", ["data"]),
+        ("suppliers", ["data"]),
+        ("purchases", ["data"]),
+        ("purchase_lines", ["data"]),
         ("customer_opening_balances", ["data"]),
         ("customer_aliases", ["data"]),
         // Kế toán lõi: mọi thay đổi tài khoản, bút toán, kỳ, đối chiếu và ngân sách
@@ -73,6 +81,7 @@ public static class DatabaseChangePublisher
         ("hr_employee_positions", ["hr"]),
         ("hr_employees", ["hr"]),
         ("hr_contracts", ["hr"]),
+        ("hr_salary_raises", ["hr"]),
         ("hr_payslips", ["hr"]),
         ("hr_payslip_history", ["hr"]),
         ("hr_leave_balances", ["hr"]),

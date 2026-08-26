@@ -1,7 +1,15 @@
 import { api } from "./api";
 
 // ── Kiểu dữ liệu Giao việc & nghiệm thu (khớp TaskAssignmentEndpoints của backend) ──
-export type TaskStatus = "assigned" | "in_progress" | "submitted" | "accepted" | "rejected" | "cancelled";
+// "completed" chỉ dùng cho việc GIAO HÀNG: kế toán đã nhận lại tờ phiếu giấy sau khi nghiệm thu.
+export type TaskStatus =
+  | "assigned"
+  | "in_progress"
+  | "submitted"
+  | "accepted"
+  | "completed"
+  | "rejected"
+  | "cancelled";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 
 export interface WorkTask {
@@ -26,6 +34,25 @@ export interface WorkTask {
   createdAt: string;
   updatedAt: string;
   overdue: boolean;
+  /** Có giá trị khi việc sinh từ phiếu xuất kho (source_kind='delivery'). */
+  delivery?: WorkTaskDelivery | null;
+}
+
+/** Phần phiếu xuất kho của một việc giao hàng, kèm lệnh thu tiền cùng khách (nếu có). */
+export interface WorkTaskDelivery {
+  documentId: string;
+  voucherNo: string;
+  customerName: string;
+  customerId?: string | null;
+  collection?: {
+    id: string;
+    orderNo: string;
+    customerId: string;
+    customerName: string;
+    expectedAmount: number;
+    status: string;
+    handoverDueAt: string;
+  } | null;
 }
 
 export interface WorkTaskEvent {
@@ -42,7 +69,14 @@ export interface TaskListResult {
   isAdmin: boolean;
   inbox: WorkTask[];
   outbox: WorkTask[];
-  summary: { inbox: number; inboxActionable: number; outbox: number; outboxReview: number };
+  summary: {
+    inbox: number;
+    inboxActionable: number;
+    outbox: number;
+    outboxReview: number;
+    /** Việc giao hàng đã giao xong, đang chờ tờ phiếu về kho (không phải "chờ nghiệm thu"). */
+    outboxAwaitingVoucher?: number;
+  };
 }
 
 export interface TaskAssignee {
@@ -66,6 +100,8 @@ export interface TaskDetailResult {
     canSubmit: boolean;
     canStart: boolean;
     canReview: boolean;
+    /** Trả lại chuyến/việc — việc giao hàng không nghiệm thu nhưng vẫn trả lại được. */
+    canReject: boolean;
     canEdit: boolean;
     canCancel: boolean;
   };
@@ -80,11 +116,21 @@ export interface CreateTaskBody {
 }
 
 // ── Nhãn & màu hiển thị ──
+/**
+ * Việc GIAO HÀNG không có chặng nghiệm thu: 'submitted' nghĩa là lái xe đã giao xong và đang chờ
+ * nộp tờ phiếu ký nhận về kho, chứ không phải "chờ ai đó chấm điểm".
+ */
+export function statusLabel(status: string, isDelivery = false): string {
+  if (isDelivery && status === "submitted") return "Đã giao, chờ nộp phiếu";
+  return STATUS_LABEL[status] ?? status;
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   assigned: "Chờ nhận",
   in_progress: "Đang làm",
   submitted: "Chờ nghiệm thu",
   accepted: "Đã nghiệm thu",
+  completed: "Đã hoàn thành",
   rejected: "Bị trả lại",
   cancelled: "Đã huỷ",
 };
@@ -93,9 +139,17 @@ export const STATUS_COLOR: Record<string, string> = {
   in_progress: "purple",
   submitted: "warning",
   accepted: "success",
+  completed: "success",
   rejected: "danger",
   cancelled: "muted",
 };
+/**
+ * Việc đã ĐÓNG SỔ: không sửa, không huỷ, không thao tác được nữa. Giữ chung một chỗ để thêm
+ * trạng thái kết thúc mới (như "completed") không phải đi sửa từng điều kiện rải rác.
+ */
+export const isTaskClosed = (status: string) =>
+  status === "accepted" || status === "completed" || status === "cancelled";
+
 export const PRIORITY_LABEL: Record<string, string> = {
   low: "Thấp",
   normal: "Bình thường",

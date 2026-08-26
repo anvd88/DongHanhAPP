@@ -13,6 +13,7 @@ function scopesForPath(path: string): RealtimeScope[] {
     return ["chat", "presence"];
   if (path.startsWith("/api/tasks")) return ["tasks", "hr"];
   if (path.startsWith("/api/worklist")) return ["tasks", "hr"];
+  if (path.startsWith("/api/cash-collections")) return ["data", "hr"];
   if (path.startsWith("/api/portal")) return ["portal"];
   if (path.startsWith("/api/app-config")) return ["config"];
   if (path.startsWith("/api/audit")) return ["audit"];

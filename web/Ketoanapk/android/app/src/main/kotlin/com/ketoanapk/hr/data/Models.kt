@@ -151,6 +151,11 @@ object AppPermissions {
     const val PayoutCreate = "payout.create"
     const val PayoutApprove = "payout.approve"
     const val PayoutPay = "payout.pay"
+    const val CollectionsReadAll = "collections.read.all"
+    const val CollectionsSelf = "collections.self"
+    const val CollectionsCreate = "collections.create"
+    const val CollectionsReceive = "collections.receive"
+    const val CollectionsResolve = "collections.resolve"
 }
 
 @Serializable
@@ -194,6 +199,7 @@ data class HrUser(
             "hr" -> "Quản lý nhân sự"
             "manager" -> "Trưởng phòng"
             "warehouse" -> "Thủ kho"
+            "driver" -> "Lái xe"
             "kiosk" -> "Máy chấm công"
             else -> "Nhân viên"
         }
@@ -289,6 +295,13 @@ data class LoginRequest(
     val sid: String? = null,
     // Đánh dấu client native để backend KHÔNG chặn bằng cờ "tắt đăng nhập web".
     val client: String = "apk",
+)
+
+// Bước 2 màn quên mật khẩu: CHỈ kiểm tra mã khôi phục, chưa đổi mật khẩu.
+@Serializable
+data class RecoveryVerifyRequest(
+    val username: String,
+    val code: String,
 )
 
 // Khôi phục mật khẩu bằng MÃ do admin cấp (thay cho reset khuôn mặt đã tắt ở backend).
@@ -1096,6 +1109,73 @@ data class CreatePayoutBody(
 @Serializable data class CancelPayoutBody(val reason: String = "")
 @Serializable data class TransitionPayoutBody(val note: String = "")
 
+// ---------------- Lệnh thu tiền khách hàng ----------------
+// Không có GPS và địa chỉ. Tài xế xác nhận bảng mệnh giá; kế toán đếm lại trước khi ghi công nợ.
+
+@Serializable
+data class CashCollection(
+    val id: String = "",
+    val orderNo: String = "",
+    val customerId: String = "",
+    val customerName: String = "",
+    val customerPhone: String = "",
+    val driverEmployeeId: String = "",
+    val driverUsername: String = "",
+    val driverName: String = "",
+    val expectedAmount: Double = 0.0,
+    val scheduledDate: String = "",
+    val handoverDueAt: String = "",
+    val note: String = "",
+    val status: String = "",
+    val createdBy: String = "",
+    val createdAt: String = "",
+    val acceptedAt: String? = null,
+    val collectedAt: String? = null,
+    val collectedAmount: Double? = null,
+    val failureReason: String = "",
+    val receivedBy: String = "",
+    val receivedAt: String? = null,
+    val receivedAmount: Double? = null,
+    val paymentId: String? = null,
+    val cancelReason: String = "",
+    val driverCash: Map<String, Int> = emptyMap(),
+    val accountantCash: Map<String, Int> = emptyMap(),
+    val overdue: Boolean = false,
+    val expectedVariance: Boolean = false,
+    val cashVariance: Boolean = false,
+    val mine: Boolean = false,
+    val canAccept: Boolean = false,
+    val canCollect: Boolean = false,
+    val canFail: Boolean = false,
+    val canReceive: Boolean = false,
+    val canCancel: Boolean = false,
+    val canResolve: Boolean = false,
+)
+
+@Serializable data class CashCollectionDriver(
+    val id: String = "", val username: String = "", val name: String = "",
+    val employeeCode: String = "", val position: String = "",
+)
+
+@Serializable data class CashCollectionCustomer(
+    val id: String = "", val name: String = "", val phone: String = "",
+)
+
+@Serializable data class CashCountLineBody(val denomination: Long, val quantity: Int)
+@Serializable data class CashCountBody(val lines: List<CashCountLineBody>, val reason: String = "")
+@Serializable data class CashCollectionReasonBody(val reason: String)
+@Serializable data class ResolveCashCollectionBody(val action: String, val reason: String)
+@Serializable data class CreatedCashCollection(val id: String = "", val orderNo: String = "")
+@Serializable data class CashCollectionResult(val paymentId: String? = null, val amount: Double = 0.0, val collectedAmount: Double = 0.0)
+@Serializable data class CreateCashCollectionBody(
+    val customerId: String,
+    val driverEmployeeId: String,
+    val expectedAmount: Double,
+    val scheduledDate: String,
+    val handoverDueAt: String,
+    val note: String = "",
+)
+
 // ───────────────────────── Giao việc & nghiệm thu ─────────────────────────
 /** Một công việc được giao (khớp WorkTaskDto của backend). */
 @Serializable
@@ -1121,6 +1201,34 @@ data class WorkTask(
     val createdAt: String = "",
     val updatedAt: String = "",
     val overdue: Boolean = false,
+    /** Có giá trị khi việc sinh từ một phiếu xuất kho được gán cho lái xe. */
+    val delivery: WorkTaskDelivery? = null,
+)
+
+/**
+ * Phần giao hàng của một việc: phiếu xuất kho nào, giao cho khách nào.
+ * [collection] có giá trị khi CHÍNH khách đó cũng đang có lệnh thu tiền giao cho lái xe này —
+ * máy chủ ghép sẵn để lái xe nhìn một thẻ là biết phải giao hàng VÀ thu tiền.
+ */
+@Serializable
+data class WorkTaskDelivery(
+    val documentId: String = "",
+    val voucherNo: String = "",
+    val customerName: String = "",
+    val customerId: String? = null,
+    val collection: TaskCollection? = null,
+)
+
+/** Lệnh thu tiền hiển thị kèm trong mục "Việc được giao". */
+@Serializable
+data class TaskCollection(
+    val id: String = "",
+    val orderNo: String = "",
+    val customerId: String = "",
+    val customerName: String = "",
+    val expectedAmount: Double = 0.0,
+    val status: String = "",
+    val handoverDueAt: String = "",
 )
 
 @Serializable
@@ -1139,6 +1247,10 @@ data class WorkTaskSummary(
     val inboxActionable: Int = 0,
     val outbox: Int = 0,
     val outboxReview: Int = 0,
+    /** Việc giao hàng đã giao xong, đang chờ tờ phiếu về kho (không phải "chờ nghiệm thu"). */
+    val outboxAwaitingVoucher: Int = 0,
+    val collections: Int = 0,
+    val collectionsStandalone: Int = 0,
 )
 
 @Serializable
@@ -1147,6 +1259,8 @@ data class WorkTaskListResult(
     val isAdmin: Boolean = false,
     val inbox: List<WorkTask> = emptyList(),
     val outbox: List<WorkTask> = emptyList(),
+    /** Lệnh thu tiền KHÔNG gộp được vào việc giao hàng nào; vẫn phải hiện để lái xe không bỏ sót. */
+    val collections: List<TaskCollection> = emptyList(),
     val summary: WorkTaskSummary = WorkTaskSummary(),
 )
 
@@ -1172,6 +1286,8 @@ data class WorkTaskFlags(
     val canSubmit: Boolean = false,
     val canStart: Boolean = false,
     val canReview: Boolean = false,
+    /** Trả lại chuyến/việc. Việc giao hàng bỏ nghiệm thu nhưng vẫn trả lại được. */
+    val canReject: Boolean = false,
     val canEdit: Boolean = false,
     val canCancel: Boolean = false,
 )

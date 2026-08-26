@@ -77,6 +77,7 @@ export function NhanSuPortal() {
   const canApprove = can(PERM.requestsApprove);
   const canPayroll = can(PERM.payrollRead);
   const canHrManage = can(PERM.hrManage);
+  const canExecutiveDashboard = can(PERM.hrRead);
   const canMainWeb = can(PERM.accountingAccess);
   const admin = canHrManage;
   const { data: me } = useApi<EmployeeDetail>("/api/hr/me");
@@ -202,6 +203,7 @@ export function NhanSuPortal() {
           <PortalAction icon={<Gavel />} title="Phạt / kỷ luật" hint={can(PERM.penaltyManage) ? "Lập & quản lý quyết định phạt" : "Xem các lần bị phạt"} to="/phat" />
           <PortalAction icon={<CreditCard />} title="Tài khoản ngân hàng" hint="Thẻ nhận lương của bạn" to="/tai-khoan-ngan-hang" />
           {canPayroll && <PortalAction icon={<Wallet />} title="Bảng lương" hint="Mức lương & lập phiếu lương" to="/bang-luong" />}
+          {canExecutiveDashboard && <PortalAction icon={<LayoutDashboard />} title="Dashboard điều hành" hint="Quân số, hiện diện và các trường hợp cần theo dõi" to="/dashboard-dieu-hanh" />}
           {canHrManage && <PortalAction icon={<UserCog />} title="Quản lý nhân sự" hint="Nhân viên, phòng ban, ca làm" to="/quanly-nhansu" />}
         </div>
       </section>

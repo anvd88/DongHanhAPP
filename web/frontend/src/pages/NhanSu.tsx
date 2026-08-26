@@ -24,6 +24,7 @@ const ROLES = [
   { key: "HR", label: "Nhân sự (HR)" },
   { key: "Manager", label: "Trưởng phòng" },
   { key: "Warehouse", label: "Thủ kho" },
+  { key: "Driver", label: "Lái xe" },
   { key: "Employee", label: "Nhân viên" },
   { key: "Pending", label: "Chờ duyệt" },
   { key: "Locked", label: "Đã khóa" },
@@ -43,6 +44,7 @@ export const ASSIGNABLE_ROLES = [
   { key: "HR", label: "Nhân sự (HR)" },
   { key: "Manager", label: "Trưởng phòng" },
   { key: "Warehouse", label: "Thủ kho" },
+  { key: "Driver", label: "Lái xe" },
   // "User" là bí danh cũ của Employee (backend tự quy đổi) nên không đưa vào đây cho khỏi trùng.
   { key: "Employee", label: "Nhân viên" },
 ];
@@ -60,6 +62,7 @@ const SECONDARY_ROLES = [
   { key: "Payroll", label: "Kế toán tiền lương", hint: "Lập và phát hành phiếu lương" },
   { key: "Cashier", label: "Thủ quỹ", hint: "Thực hiện chi phiếu đã duyệt" },
   { key: "HR", label: "Nhân sự", hint: "Quản lý nghiệp vụ nhân sự" },
+  { key: "Driver", label: "Lái xe", hint: "Nhận và xử lý lệnh thu tiền được giao" },
 ];
 
 /** Vai trò + danh sách quyền nó cấp, lấy từ /api/roles/catalog (nguồn duy nhất: backend Permissions.cs). */

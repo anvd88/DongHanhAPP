@@ -170,9 +170,10 @@ fun TaskCenterEntryCard(count: Int, canAssign: Boolean, onClick: () -> Unit) {
  * Màn "Việc cần làm" HỢP NHẤT: một chỗ duy nhất cho mọi việc của người đăng nhập — việc được giao
  * (giao việc & nghiệm thu) + đơn chờ duyệt, chấm công, hợp đồng sắp hết hạn.
  *
- * Phần GIAO việc (tab "Việc tôi giao" + nút "Giao việc mới") chỉ dựng khi máy chủ trả `canAssign`
- * (Thủ kho/Admin), nên nhân viên thường không còn thấy màn/nhãn "Giao việc" ở bất kỳ đâu — họ chỉ
- * thấy việc được giao cho mình. Quyền thật vẫn do máy chủ chốt; đây chỉ là lớp giao diện.
+ * Tab "Việc tôi giao" mở khi có VIỆC MÌNH ĐÃ GIAO, còn nút "Giao việc mới" mới cần `canAssign`
+ * (Thủ kho/Admin). Tách đôi vì kế toán gán phiếu xuất kho cho lái xe là đã thành người giao việc đó
+ * và phải nghiệm thu nó, dù không có quyền tạo việc mới. Nhân viên thường không giao việc cho ai
+ * nên vẫn không thấy tab này. Quyền thật vẫn do máy chủ chốt; đây chỉ là lớp giao diện.
  */
 @Composable
 fun TaskCenterScreen(vm: HrViewModel) {
@@ -183,8 +184,10 @@ fun TaskCenterScreen(vm: HrViewModel) {
     var formOpen by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<WorkTask?>(null) }
 
-    // Bị thu quyền giao việc khi đang đứng ở tab "Việc tôi giao" → kéo về tab của nhân viên.
-    LaunchedEffect(work.canAssign) { if (!work.canAssign) tab = 0 }
+    // Có gì để hiện ở tab "Việc tôi giao" không: việc mình đã giao, hoặc quyền tạo việc mới.
+    val hasOutbox = work.canAssign || work.outbox.isNotEmpty()
+    // Tab đang đứng bỗng hết nội dung (bị thu quyền, việc cuối bị xoá) → kéo về tab của nhân viên.
+    LaunchedEffect(hasOutbox) { if (!hasOutbox) tab = 0 }
 
     approving?.let { task ->
         AlertDialog(
@@ -205,8 +208,8 @@ fun TaskCenterScreen(vm: HrViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        // Chỉ người có quyền giao mới thấy thanh tab + nút giao việc.
-        if (work.canAssign) {
+        // Có việc mình giao thì mới dựng thanh tab.
+        if (hasOutbox) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -214,10 +217,17 @@ fun TaskCenterScreen(vm: HrViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                SegTab("Việc cần làm", tasks.size + work.summary.inboxActionable, tab == 0, Modifier.weight(1f)) { tab = 0 }
-                SegTab("Việc tôi giao", work.summary.outboxReview, tab == 1, Modifier.weight(1f)) { tab = 1 }
+                SegTab("Việc cần làm", tasks.size + work.summary.inboxActionable + work.summary.collectionsStandalone, tab == 0, Modifier.weight(1f)) { tab = 0 }
+                // Số trên tab = việc CẦN BẤM: chờ nghiệm thu (việc thường) + chờ thu tờ phiếu (giao hàng).
+                SegTab(
+                    "Việc tôi giao",
+                    work.summary.outboxReview + work.summary.outboxAwaitingVoucher,
+                    tab == 1,
+                    Modifier.weight(1f),
+                ) { tab = 1 }
             }
-            if (tab == 1) {
+            // Nút tạo việc mới thì vẫn phải có quyền giao việc thật.
+            if (tab == 1 && work.canAssign) {
                 Button(
                     onClick = { editing = null; formOpen = true },
                     modifier = Modifier
@@ -233,7 +243,7 @@ fun TaskCenterScreen(vm: HrViewModel) {
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(14.dp),
+            contentPadding = screenPadding(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (tab == 1) {
@@ -253,9 +263,9 @@ fun TaskCenterScreen(vm: HrViewModel) {
             } else {
                 val loading = vm.homeState.loading || work.loading
                 val error = vm.homeState.error ?: work.error
-                if (loading && tasks.isEmpty() && work.inbox.isEmpty()) {
+                if (loading && tasks.isEmpty() && work.inbox.isEmpty() && work.collections.isEmpty()) {
                     item { LoadingBlock() }
-                } else if (tasks.isEmpty() && work.inbox.isEmpty()) {
+                } else if (tasks.isEmpty() && work.inbox.isEmpty() && work.collections.isEmpty()) {
                     item { EmptyState("Đã xử lý hết", error ?: "Hiện không có công việc nào cần bạn xử lý.") }
                     if (error != null) item { Button(onClick = vm::refreshTasks, modifier = Modifier.fillMaxWidth()) { Text("Thử lại") } }
                 } else {
@@ -264,6 +274,14 @@ fun TaskCenterScreen(vm: HrViewModel) {
                         item(key = "header-assigned") { GroupHeader("Việc được giao cho bạn") }
                         items(work.inbox, key = { "in-${it.id}" }) { task ->
                             WorkTaskCard(task = task, isInbox = true) { vm.openWorkTask(task.id) }
+                        }
+                    }
+                    // Lệnh thu tiền không đi kèm phiếu giao nào. Lệnh có phiếu đã được máy chủ gộp
+                    // vào chính thẻ việc giao hàng ở trên nên không lặp lại ở đây.
+                    if (work.collections.isNotEmpty()) {
+                        item(key = "header-collections") { GroupHeader("Tiền cần thu") }
+                        items(work.collections, key = { "col-${it.id}" }) { collection ->
+                            StandaloneCollectionCard(collection) { vm.select(HrDestination.CashCollections) }
                         }
                     }
                     TaskBucket.entries.forEach { bucket ->

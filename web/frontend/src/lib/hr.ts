@@ -97,6 +97,52 @@ export interface Contract {
   allowance: number;
   status: string;
   note: string;
+  /** Tổng các lần tăng lương đã ghi nhận cho hợp đồng này. */
+  raiseTotal: number;
+  raiseCount: number;
+  /** baseSalary + raiseTotal — lương cứng đang hưởng theo hợp đồng. */
+  currentSalary: number;
+}
+
+/** Loại hợp đồng chọn được. Hợp đồng "Không xác định thời hạn" không có ngày kết thúc. */
+export const CONTRACT_TYPES = [
+  "Xác định thời hạn",
+  "Không xác định thời hạn",
+  "Thử việc",
+  "Thời vụ",
+  "Khoán việc",
+] as const;
+
+export const INDEFINITE_CONTRACT_TYPE = "Không xác định thời hạn";
+
+/** Một lần tăng lương: áp dụng từ tháng nào, tăng thêm bao nhiêu. */
+export interface SalaryRaise {
+  id: string;
+  contractId?: string | null;
+  contractNo: string;
+  /** yyyy-MM */
+  effectivePeriod: string;
+  amount: number;
+  decisionNo: string;
+  reason: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Lương cứng của một kỳ được dựng lại từ hợp đồng + các lần tăng lương. */
+export interface HardSalary {
+  amount: number;
+  /** false = nhân viên chưa có hợp đồng nào, số đang dùng là mức lương nhập tay cũ. */
+  fromContract: boolean;
+  contractId?: string | null;
+  contractNo: string;
+  contractType: string;
+  contractBase: number;
+  raiseTotal: number;
+  /** Hợp đồng còn hiệu lực trong kỳ đang tính hay không. */
+  contractEffective: boolean;
+  contractEndDate?: string | null;
+  raises: { period: string; amount: number; decisionNo: string; reason: string }[];
 }
 
 export interface PayLine {
@@ -239,16 +285,21 @@ export interface SalaryListItem {
   allowance: number;
   overtimeRate: number;
   extraCount: number;
+  hardSalary: HardSalary;
 }
 
 export interface SalaryDetail {
   employeeId: string;
   hasSalary: boolean;
+  /** Lương cứng đã dẫn xuất (hợp đồng + tăng lương). Chỉ đọc. */
   baseSalary: number;
+  /** Mức nhập tay cũ ở hr_salaries — chỉ dùng khi nhân viên chưa có hợp đồng nào. */
+  legacyBaseSalary: number;
   allowance: number;
   overtimeRate: number;
   components: SalaryComponent[];
   note: string;
+  hardSalary: HardSalary;
 }
 
 export interface PayrollCompute {
@@ -270,6 +321,7 @@ export interface PayrollCompute {
   totalDeductions: number;
   netPay: number;
   overtimeDays: OvertimeDay[];
+  hardSalary: HardSalary;
 }
 
 export interface OvertimeDay {

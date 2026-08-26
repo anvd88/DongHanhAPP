@@ -45,7 +45,7 @@ private fun ProfileDocuments(vm: HrViewModel) {
     var unlocked by rememberSaveable { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
     var showPin by remember { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = screenPadding(16.dp, 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { PageHeader(Icons.Filled.Folder, "Hồ sơ điện tử", "CCCD, hợp đồng, bằng cấp và chứng chỉ", Tone.Info) }
         item {
             OutlinedButton(onClick = {

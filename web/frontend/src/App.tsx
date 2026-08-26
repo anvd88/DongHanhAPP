@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from "react";
+import { useEffect, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { startRealtime, subscribeFeedbackResolved } from "./lib/realtime";
 import { initFileTransfers } from "./lib/filetransfer";
@@ -19,47 +19,56 @@ import { EyeReminderPopup } from "./components/EyeReminderPopup";
 // nhất là các trang nặng (Chấm công + nhận diện khuôn mặt, Chat, Cài đặt, HR...).
 // Suspense fallback bên dưới hiển thị skeleton trong lúc chunk đang tải.
 // ─────────────────────────────────────────────────────────────────────────────
-const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
+const Login = lazyPage(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 // Kiosk tạm ngừng phát triển: giữ nguyên pages/KioskPage.tsx nhưng không đưa vào route/bundle.
-const FarewellPage = lazy(() => import("./pages/FarewellPage").then((m) => ({ default: m.FarewellPage })));
-const TinhToan = lazy(() => import("./pages/TinhToan").then((m) => ({ default: m.TinhToan })));
-const ApkDownload = lazy(() => import("./pages/ApkDownload").then((m) => ({ default: m.ApkDownload })));
-const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
-const KeToan = lazy(() => import("./pages/KeToan").then((m) => ({ default: m.KeToan })));
-const CoreAccounting = lazy(() => import("./pages/CoreAccounting").then((m) => ({ default: m.CoreAccounting })));
-const ThuChi = lazy(() => import("./pages/ThuChi").then((m) => ({ default: m.ThuChi })));
-const CongNo = lazy(() => import("./pages/CongNo").then((m) => ({ default: m.CongNo })));
-const PhieuChi = lazy(() => import("./pages/PhieuChi").then((m) => ({ default: m.PhieuChi })));
-const KhachHang = lazy(() => import("./pages/KhachHang").then((m) => ({ default: m.KhachHang })));
-const GiaCongPage = lazy(() => import("./features/giacong/GiaCongPage").then((m) => ({ default: m.GiaCongPage })));
-const ChamCongPage = lazy(() => import("./features/chamcong/ChamCongPage").then((m) => ({ default: m.ChamCongPage })));
-const ChamCongScannerPage = lazy(() =>
+const FarewellPage = lazyPage(() => import("./pages/FarewellPage").then((m) => ({ default: m.FarewellPage })));
+const TinhToan = lazyPage(() => import("./pages/TinhToan").then((m) => ({ default: m.TinhToan })));
+const ApkDownload = lazyPage(() => import("./pages/ApkDownload").then((m) => ({ default: m.ApkDownload })));
+const Dashboard = lazyPage(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
+const KeToan = lazyPage(() => import("./pages/KeToan").then((m) => ({ default: m.KeToan })));
+const PhieuDetail = lazyPage(() => import("./pages/PhieuDetail").then((m) => ({ default: m.PhieuDetail })));
+const CoreAccounting = lazyPage(() => import("./pages/CoreAccounting").then((m) => ({ default: m.CoreAccounting })));
+const ThuChi = lazyPage(() => import("./pages/ThuChi").then((m) => ({ default: m.ThuChi })));
+const CongNo = lazyPage(() => import("./pages/CongNo").then((m) => ({ default: m.CongNo })));
+const DanhMucHang = lazyPage(() => import("./pages/DanhMucHang").then((m) => ({ default: m.DanhMucHang })));
+const MuaHang = lazyPage(() => import("./pages/MuaHang").then((m) => ({ default: m.MuaHang })));
+const NhaCungCap = lazyPage(() => import("./pages/NhaCungCap").then((m) => ({ default: m.NhaCungCap })));
+const PhieuChi = lazyPage(() => import("./pages/PhieuChi").then((m) => ({ default: m.PhieuChi })));
+const CashCollections = lazyPage(() => import("./pages/CashCollections").then((m) => ({ default: m.CashCollections })));
+const QuyTienMat = lazyPage(() => import("./pages/QuyTienMat").then((m) => ({ default: m.QuyTienMat })));
+const KhachHang = lazyPage(() => import("./pages/KhachHang").then((m) => ({ default: m.KhachHang })));
+const GiaCongPage = lazyPage(() => import("./features/giacong/GiaCongPage").then((m) => ({ default: m.GiaCongPage })));
+const ChamCongPage = lazyPage(() => import("./features/chamcong/ChamCongPage").then((m) => ({ default: m.ChamCongPage })));
+const ChamCongScannerPage = lazyPage(() =>
   import("./features/chamcong/ChamCongScannerPage").then((m) => ({ default: m.ChamCongScannerPage })),
 );
-const NhanSuPortal = lazy(() => import("./pages/NhanSuPortal").then((m) => ({ default: m.NhanSuPortal })));
-const HoSo = lazy(() => import("./pages/HoSo").then((m) => ({ default: m.HoSo })));
-const DonTu = lazy(() => import("./pages/DonTu").then((m) => ({ default: m.DonTu })));
-const PheDuyet = lazy(() => import("./pages/PheDuyet").then((m) => ({ default: m.PheDuyet })));
-const QuanLyDonTu = lazy(() => import("./pages/QuanLyDonTu").then((m) => ({ default: m.QuanLyDonTu })));
-const BangCong = lazy(() => import("./pages/BangCong").then((m) => ({ default: m.BangCong })));
-const QuanLyBangCong = lazy(() => import("./pages/QuanLyBangCong").then((m) => ({ default: m.QuanLyBangCong })));
-const QuanLyNhanSu = lazy(() => import("./pages/QuanLyNhanSu").then((m) => ({ default: m.QuanLyNhanSu })));
-const TaiKhoanNganHang = lazy(() => import("./pages/TaiKhoanNganHang").then((m) => ({ default: m.TaiKhoanNganHang })));
+const NhanSuPortal = lazyPage(() => import("./pages/NhanSuPortal").then((m) => ({ default: m.NhanSuPortal })));
+const ExecutiveDashboard = lazyPage(() => import("./pages/ExecutiveDashboard").then((m) => ({ default: m.ExecutiveDashboard })));
+const HoSo = lazyPage(() => import("./pages/HoSo").then((m) => ({ default: m.HoSo })));
+const DonTu = lazyPage(() => import("./pages/DonTu").then((m) => ({ default: m.DonTu })));
+const PheDuyet = lazyPage(() => import("./pages/PheDuyet").then((m) => ({ default: m.PheDuyet })));
+const QuanLyDonTu = lazyPage(() => import("./pages/QuanLyDonTu").then((m) => ({ default: m.QuanLyDonTu })));
+const BangCong = lazyPage(() => import("./pages/BangCong").then((m) => ({ default: m.BangCong })));
+const QuanLyBangCong = lazyPage(() => import("./pages/QuanLyBangCong").then((m) => ({ default: m.QuanLyBangCong })));
+const QuanLyNhanSu = lazyPage(() => import("./pages/QuanLyNhanSu").then((m) => ({ default: m.QuanLyNhanSu })));
+const TaiKhoanNganHang = lazyPage(() => import("./pages/TaiKhoanNganHang").then((m) => ({ default: m.TaiKhoanNganHang })));
 // Chỉ còn HAI trang HR dùng trên web (/phat và /bang-luong). Chín trang HR* còn lại từng là giao diện
 // riêng cho vỏ APK Capacitor — đã xoá cùng vỏ đó.
-const HRPayrollPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPayrollPage })));
-const HRPenaltyPage = lazy(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPenaltyPage })));
-const BaoCao = lazy(() => import("./pages/BaoCao").then((m) => ({ default: m.BaoCao })));
-const CongCu = lazy(() => import("./pages/CongCu").then((m) => ({ default: m.CongCu })));
-const Chats = lazy(() => import("./pages/Chats").then((m) => ({ default: m.Chats })));
-const CallPage = lazy(() => import("./pages/CallPage").then((m) => ({ default: m.CallPage })));
-const SaoLuu = lazy(() => import("./pages/SaoLuu").then((m) => ({ default: m.SaoLuu })));
-const PhanHoi = lazy(() => import("./pages/PhanHoi").then((m) => ({ default: m.PhanHoi })));
-const StubPage = lazy(() => import("./pages/StubPage").then((m) => ({ default: m.StubPage })));
-const SystemSettings = lazy(() => import("./pages/SystemSettings").then((m) => ({ default: m.SystemSettings })));
-const CongThongTin = lazy(() => import("./pages/CongThongTin").then((m) => ({ default: m.CongThongTin })));
-const CongViec = lazy(() => import("./pages/CongViec").then((m) => ({ default: m.CongViec })));
+const HRPayrollPage = lazyPage(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPayrollPage })));
+const HRPenaltyPage = lazyPage(() => import("./pages/hr/HRPages").then((m) => ({ default: m.HRPenaltyPage })));
+const BaoCao = lazyPage(() => import("./pages/BaoCao").then((m) => ({ default: m.BaoCao })));
+const CongCu = lazyPage(() => import("./pages/CongCu").then((m) => ({ default: m.CongCu })));
+const Chats = lazyPage(() => import("./pages/Chats").then((m) => ({ default: m.Chats })));
+const CallPage = lazyPage(() => import("./pages/CallPage").then((m) => ({ default: m.CallPage })));
+const SaoLuu = lazyPage(() => import("./pages/SaoLuu").then((m) => ({ default: m.SaoLuu })));
+const PhanHoi = lazyPage(() => import("./pages/PhanHoi").then((m) => ({ default: m.PhanHoi })));
+const StubPage = lazyPage(() => import("./pages/StubPage").then((m) => ({ default: m.StubPage })));
+const SystemSettings = lazyPage(() => import("./pages/SystemSettings").then((m) => ({ default: m.SystemSettings })));
+const CongThongTin = lazyPage(() => import("./pages/CongThongTin").then((m) => ({ default: m.CongThongTin })));
+const CongViec = lazyPage(() => import("./pages/CongViec").then((m) => ({ default: m.CongViec })));
 import { DEFAULT_AUTH_PATH, isHrModulePath } from "./lib/appConfig";
+import { lazyPage } from "./lib/lazyPage";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { BootSkeleton } from "./components/PageSkeleton";
 import { Loader2 } from "lucide-react";
 
@@ -366,6 +375,10 @@ function LoginTransitionCoordinator() {
 export default function App() {
   return (
     <ThemeProvider>
+      {/* Ranh giới lỗi bọc NGOÀI CÙNG: một lỗi render bất kỳ (hay gặp nhất là chunk lazy của bản
+          build cũ đã bị xoá, lộ ra ngay sau khi đăng nhập vì lúc đó mới điều hướng sang trang đích)
+          từng gỡ sạch cây component và để lại màn hình trắng. */}
+      <AppErrorBoundary label="app">
       <AppNotificationProvider>
         <div className="liquid-bg"><div className="orb" /></div>
         <BrowserRouter>
@@ -407,7 +420,11 @@ export default function App() {
             <Route path="/dashboard" element={<Protected requires={PERM.accountingAccess}><Dashboard /></Protected>} />
             <Route path="/ketoan" element={<Protected requires={PERM.accountingAccess}><CoreAccounting /></Protected>} />
             <Route path="/ban-hang" element={<Protected requires={PERM.accountingAccess}><KeToan /></Protected>} />
+            {/* Trang phiếu: sửa nội dung, giao hàng, nghiệm thu, đối soát — cả vòng đời một tờ phiếu. */}
+            <Route path="/ban-hang/:id" element={<Protected requires={PERM.accountingAccess}><PhieuDetail /></Protected>} />
             <Route path="/thu-chi" element={<Protected requires={PERM.accountingAccess}><ThuChi /></Protected>} />
+            <Route path="/lenh-thu-tien" element={<Protected requires={PERM.collectionsReadAll}><CashCollections /></Protected>} />
+            <Route path="/quy-tien-mat" element={<Protected requires={PERM.cashFundRead}><QuyTienMat /></Protected>} />
             {/* payout.read chứ không phải "chỉ admin": kế toán mới là người lập/duyệt chi (Admin cố ý
                 không được đụng tiền mặt). Ai lập/duyệt được thì server chốt tiếp theo phòng ban. */}
             <Route path="/phieu-chi" element={<Protected requires={PERM.payoutRead}><PhieuChi /></Protected>} />
@@ -425,15 +442,18 @@ export default function App() {
             <Route path="/quanly-nhansu" element={<Protected requiresAny={[PERM.hrManage, PERM.usersManage]}><QuanLyNhanSu /></Protected>} />
             <Route path="/quanly-dontu" element={<Protected requires={PERM.requestsManage}><QuanLyDonTu /></Protected>} />
             <Route path="/quanly-bangcong" element={<Protected requires={PERM.attendanceRead}><QuanLyBangCong /></Protected>} />
+            <Route path="/dashboard-dieu-hanh" element={<Protected requires={PERM.hrRead}><ExecutiveDashboard /></Protected>} />
             <Route path="/cong-thong-tin" element={<Protected requires={PERM.portalManage}><CongThongTin /></Protected>} />
             <Route path="/bang-luong" element={<Protected requires={PERM.payrollRead}><HRPayrollPage /></Protected>} />
 
             {/* Module chưa hiện thực — hiển thị "đang phát triển" giống bản desktop */}
             <Route path="/kho" element={<Protected requires={PERM.accountingAccess}><StubPage title="Hàng tồn kho" /></Protected>} />
-            <Route path="/muahang" element={<Protected requires={PERM.accountingAccess}><StubPage title="Mua hàng" /></Protected>} />
+            <Route path="/muahang" element={<Protected requires={PERM.accountingAccess}><MuaHang /></Protected>} />
+            <Route path="/nha-cung-cap" element={<Protected requires={PERM.accountingAccess}><NhaCungCap /></Protected>} />
             <Route path="/taisan" element={<Protected requires={PERM.accountingAccess}><StubPage title="Tài sản cố định" /></Protected>} />
             <Route path="/danhmuc" element={<Protected requires={PERM.accountingAccess}><StubPage title="Danh mục" /></Protected>} />
             <Route path="/congno" element={<Protected requires={PERM.accountingAccess}><CongNo /></Protected>} />
+            <Route path="/danh-muc-hang" element={<Protected requires={PERM.accountingAccess}><DanhMucHang /></Protected>} />
             <Route path="/nganhang" element={<Protected requires={PERM.accountingAccess}><StubPage title="Ngân hàng" /></Protected>} />
             <Route path="/chiphi" element={<Protected requires={PERM.accountingAccess}><StubPage title="Chi phí" /></Protected>} />
             <Route path="/lichhen" element={<Protected><StubPage title="Lịch hẹn" /></Protected>} />
@@ -447,6 +467,7 @@ export default function App() {
         </AuthProvider>
         </BrowserRouter>
       </AppNotificationProvider>
+      </AppErrorBoundary>
     </ThemeProvider>
   );
 }

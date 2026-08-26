@@ -171,7 +171,7 @@ private fun SettingsHome(
     val canPreviewAnniversary = user.can(AppPermissions.HrManage)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -284,7 +284,6 @@ private fun PersonalizationSettings(onBack: () -> Unit) {
                         FilterChip(selected = AppPersonalization.language == "vi", onClick = { AppPersonalization.updateLanguage("vi") }, label = { Text("Tiếng Việt") })
                         FilterChip(selected = AppPersonalization.language == "en", onClick = { AppPersonalization.updateLanguage("en") }, label = { Text("English") })
                     }
-                    SettingsSwitchRow(Icons.Filled.Tune, "Đưa tác vụ nhanh lên trước", "Thay đổi thứ tự các thẻ trên trang chủ", AppPersonalization.reverseHomeCards, enabled = true, onCheckedChange = AppPersonalization::setReverseHome)
                     SettingsSwitchRow(Icons.Filled.PhoneAndroid, "Tiết kiệm dữ liệu", "Hạn chế dữ liệu chạy ngầm khi dùng mạng di động", AppPersonalization.dataSaver, enabled = true, onCheckedChange = AppPersonalization::updateDataSaver)
                     Text(
                         "Mục đích: đỡ hao dữ liệu di động và pin. Khi BẬT, ứng dụng giãn nhịp tự động đồng bộ ở chế " +
@@ -1093,7 +1092,7 @@ private fun SubScreen(
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 24.dp, top = 4.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = BottomBarScrollRoom, top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
         )

@@ -28,6 +28,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -118,10 +119,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
@@ -130,6 +133,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -138,11 +142,66 @@ import androidx.core.view.WindowCompat
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import com.ketoanapk.hr.data.AnniversaryGreeting
+import com.ketoanapk.hr.R
 import com.ketoanapk.hr.data.HrUser
 import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.ui.theme.BrandGradientBottom
 import com.ketoanapk.hr.ui.theme.BrandGradientTop
 import com.ketoanapk.hr.ui.theme.KetoanTheme
+
+/**
+ * Artwork dùng chung cho toàn app. Màn xác thực chấm công không dùng ảnh nền chung, nhưng nền trống
+ * đồng thành công vẫn được vẽ ở lớp gốc để chạy liền mạch dưới header, footer và thanh điều hướng.
+ */
+@Composable
+private fun AppWallpaper(
+    darkTheme: Boolean,
+    showArtwork: Boolean,
+    attendanceCapture: AttendanceCapture,
+) {
+    val showAttendanceArtwork = !showArtwork && when (attendanceCapture) {
+        is AttendanceCapture.AwaitingConfirm -> true
+        is AttendanceCapture.Done -> attendanceCapture.result.status.equals("ok", true) ||
+            attendanceCapture.result.status.equals("offline", true) ||
+            attendanceCapture.result.status.equals("pending", true)
+        else -> false
+    }
+    val attendanceReveal by animateFloatAsState(
+        targetValue = if (showAttendanceArtwork) 1f else 0f,
+        animationSpec = tween(900, easing = FastOutSlowInEasing),
+        label = "attendance-root-background-reveal",
+    )
+    val attendanceSettle by animateFloatAsState(
+        targetValue = if (showAttendanceArtwork) 1f else 0f,
+        animationSpec = tween(1400, easing = FastOutSlowInEasing),
+        label = "attendance-root-background-settle",
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(if (showArtwork) MaterialTheme.colorScheme.background else Color.White),
+    ) {
+        if (showArtwork) {
+            Image(
+                painter = painterResource(R.drawable.app_background),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (darkTheme) {
+                // Asset gốc là tông sáng; phủ lớp tối để giữ tương phản mà vẫn thấy logo/họa tiết.
+                Box(Modifier.fillMaxSize().background(Color(0xD9061923)))
+            }
+        } else if (attendanceReveal > 0f) {
+            DongSonSuccessBackground(
+                revealProgress = attendanceReveal,
+                settleProgress = attendanceSettle,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
 
 @Composable
 fun HrApp(vm: HrViewModel) {
@@ -191,7 +250,7 @@ fun HrApp(vm: HrViewModel) {
         // Bấm ra vùng trống bất kỳ → thu bàn phím + bỏ focus ô nhập (nút/ô bấm con vẫn tự nuốt sự
         // kiện của chúng nên không bị ảnh hưởng). Áp ở gốc app nên có tác dụng trên MỌI màn hình nhập.
         val focusManager = LocalFocusManager.current
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
             EdgeBackContainer(
                 enabled = backDispatcher != null,
                 onBack = { backDispatcher?.onBackPressed() },
@@ -203,6 +262,18 @@ fun HrApp(vm: HrViewModel) {
                             detectTapGestures(onTap = { focusManager.clearFocus() })
                         },
                 ) {
+                val attendanceVerification = vm.selected == HrDestination.Scan && when (vm.attendanceCapture) {
+                    AttendanceCapture.Recognizing,
+                    AttendanceCapture.Submitting,
+                    is AttendanceCapture.AwaitingConfirm,
+                    is AttendanceCapture.Done -> true
+                    else -> false
+                }
+                AppWallpaper(
+                    darkTheme = dark,
+                    showArtwork = !attendanceVerification,
+                    attendanceCapture = vm.attendanceCapture,
+                )
                 val introDestination = if (vm.authState is AuthState.SignedIn) {
                     IntroDestination.Home
                 } else {
@@ -252,6 +323,7 @@ fun HrApp(vm: HrViewModel) {
                                 resetLoading = vm.resetPasswordLoading,
                                 rememberedUsername = vm.rememberedUsername,
                                 onLogin = vm::login,
+                                onVerifyRecoveryCode = vm::verifyRecoveryCode,
                                 onResetPasswordWithCode = vm::resetPasswordWithCode,
                             )
                             is AuthState.SignedIn -> HrShell(state.user, vm, qrScanner)
@@ -594,15 +666,14 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
     // Khai SAU cái trên nên được ưu tiên hơn: đang mở tìm kiếm thì Back đóng tìm kiếm, chưa rời màn.
     BackHandler(enabled = vm.searchOpen) { vm.closeSearch() }
 
-    // Màu icon thanh trạng thái đổi theo màn: Trang chủ có header tối tràn viền phủ dưới thanh trạng thái
-    // nên phải để icon SÁNG (trắng) cho đọc được; các màn nền sáng thì icon TỐI; nền tối luôn icon sáng.
+    // Header mọi màn đã trong suốt: icon hệ thống chỉ cần đi theo theme của artwork toàn màn hình.
     val statusBarDark = when (AppPersonalization.themeMode) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
     val shellContext = LocalContext.current
     LaunchedEffect(vm.selected, statusBarDark) {
         val window = shellContext.findActivity()?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         // isAppearanceLightStatusBars = true → nền sáng → icon tối. Chỉ dùng icon tối khi nền sáng và KHÔNG ở Trang chủ.
-        controller.isAppearanceLightStatusBars = !statusBarDark && vm.selected != HrDestination.Home
+        controller.isAppearanceLightStatusBars = !statusBarDark
         // Footer không còn nền đặc nên màu icon thanh điều hướng cũng phải theo theme của app,
         // không theo theme hệ thống vốn có thể đang ngược sáng/tối.
         controller.isAppearanceLightNavigationBars = !statusBarDark
@@ -622,6 +693,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
         HrDestination.Timesheet -> vm.timesheetState.loading
         HrDestination.MyPayslips -> vm.payslipsState.loading
         HrDestination.Payout -> vm.payoutState.loading
+        HrDestination.CashCollections -> vm.cashCollectionState.loading
         HrDestination.Portal -> vm.portalState.loading
         HrDestination.Tasks -> vm.homeState.loading || vm.workTasksState.loading
         HrDestination.Chat -> vm.realChatState.loading
@@ -639,10 +711,11 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
             // Khóa vùng nội dung vào safe drawing kể cả trong lúc màn camera phủ ngoài Scaffold đổi
             // trạng thái; tiêu đề và kết quả chấm công luôn nằm dưới status bar/navigation bar.
             contentWindowInsets = WindowInsets.safeDrawing,
+            containerColor = Color.Transparent,
             snackbarHost = {
                 SnackbarHost(
                     hostState = snackbar,
-                    modifier = Modifier.padding(bottom = if (chatFullScreen) 0.dp else 84.dp),
+                    modifier = Modifier.padding(bottom = if (chatFullScreen) 0.dp else BottomBarHeight),
                 )
             },
             topBar = {
@@ -652,7 +725,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     onQuery = vm::typeSearch,
                     onClose = vm::closeSearch,
                 )
-                // Trang chủ dùng header tràn viền riêng (nền tối kéo lên dưới thanh trạng thái, ghim đỉnh).
+                // Trang chủ dùng header danh tính riêng, trong suốt để giữ artwork liền mạch.
                 else if (vm.selected == HrDestination.Home) HomeHeaderBar(
                     user = user,
                     state = vm.homeState,
@@ -683,18 +756,14 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         NotificationBell(count = vm.unreadCount, onClick = vm::openNotifications)
                         Spacer(Modifier.width(4.dp))
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 )
             },
         ) { padding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .background(MaterialTheme.colorScheme.background)
-                    // Footer nổi trên nền màn hình; chỉ chừa chỗ cho nội dung tương tác để hàng cuối
-                    // không bị khung 5 nút che, không tạo một lớp nền footer hình chữ nhật riêng.
-                    .padding(bottom = if (chatFullScreen) 0.dp else 84.dp),
+                    .padding(padding),
             ) {
                 // Thanh cập nhật nằm ngoài nội dung từng màn nên luôn được ghim ở cùng một vị trí,
                 // kể cả Chat toàn màn hình. Không có nút tắt; bấm vào sẽ mở lại bảng chi tiết.
@@ -783,12 +852,11 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     HrDestination.Home -> HomeScreen(
                         user = user,
                         state = vm.homeState,
-                        manager = vm.managerState,
-                        hub = vm.hubFor(HrDestination.Home),
-                        workTasks = vm.workTasksState,
+                        actions = vm.homeActions(user),
                         notifications = vm.notifications,
                         announcement = vm.appConfig.announcement,
                         serverNotices = vm.appConfig.notices,
+                        badgeCount = vm::badgeCount,
                         onOpenNotifications = vm::openNotifications,
                         onSelect = vm::select,
                     )
@@ -825,6 +893,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         onVerifyAccountPassword = vm::verifyAccountPassword,
                     )
                     HrDestination.Payout -> PayoutScreen(vm)
+                    HrDestination.CashCollections -> CashCollectionScreen(vm)
                     HrDestination.Requests -> RequestsScreen(vm)
                     HrDestination.Tasks -> TaskCenterScreen(vm)
                     HrDestination.Chat -> RealChatScreen(vm)
@@ -989,7 +1058,7 @@ private fun SearchTopBar(query: String, onQuery: (String) -> Unit, onClose: () -
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Đóng tìm kiếm")
             }
         },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
     )
 }
 
@@ -1003,7 +1072,7 @@ private fun SearchResults(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = screenPadding(16.dp, 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         when {
@@ -1247,9 +1316,35 @@ private fun NotificationBell(count: Int, onClick: () -> Unit) {
     }
 }
 
+/** Chiều cao footer nổi: khung nút 64.dp + phần nút quét QR nhô lên trên. */
+internal val BottomBarHeight = 84.dp
+
 /**
- * Footer nổi: khôi phục khung bo tròn bao toàn bộ thanh; tab đang chọn chỉ đổi màu/độ đậm và có
- * gạch nhỏ bên dưới, không còn khung chữ nhật chạy theo từng tab. QR thương hiệu vẫn nổi ở giữa.
+ * Khoảng CUỘN THÊM ở đáy mỗi trang.
+ *
+ * Footer là thanh NỔI: nội dung vẫn trôi ngay dưới nó để artwork chạy liền mạch — tuyệt đối KHÔNG
+ * chèn một lớp nền chữ nhật hay đẩy cả trang lên trên footer, vì làm vậy là dựng lại đúng cái khung
+ * chữ nhật đã bỏ. Thay vào đó chỉ nới đáy vùng cuộn: cuộn tới cuối thì hàng cuối vẫn lên được
+ * phía trên footer để đọc và bấm.
+ *
+ * Dùng qua [screenPadding] cho mọi màn có trong footer. Đây là chỗ DUY NHẤT giữ con số này.
+ */
+internal val BottomBarScrollRoom = BottomBarHeight + 26.dp
+
+/**
+ * contentPadding chuẩn của một màn: lề như cũ, riêng đáy nới thêm cho footer nổi.
+ * Danh sách lồng trong màn (tin nhắn, hàng ngang, nội dung hộp thoại) KHÔNG dùng hàm này.
+ */
+internal fun screenPadding(horizontal: Dp = 14.dp, top: Dp = 14.dp) = PaddingValues(
+    start = horizontal,
+    top = top,
+    end = horizontal,
+    bottom = BottomBarScrollRoom,
+)
+
+/**
+ * Chỉ khung bo tròn chứa các nút có nền. Lớp bao ngoài trong suốt để artwork tiếp tục hiện ở bốn góc
+ * và dưới thanh điều hướng Android; tab đang chọn vẫn giữ gạch xanh riêng bên dưới.
  */
 @Composable
 private fun BottomBar(
@@ -1273,7 +1368,7 @@ private fun BottomBar(
             // bị che. Không thêm khoảng đệm đáy riêng vì nó tạo một dải trống sau footer.
             .navigationBarsPadding()
             .padding(horizontal = 14.dp)
-            .height(84.dp),
+            .height(BottomBarHeight),
     ) {
         Box(
             modifier = Modifier
@@ -1284,19 +1379,14 @@ private fun BottomBar(
                 .clip(navShape)
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(surface, surfaceVariant.copy(alpha = 0.72f)),
+                        // Khung phải đục hoàn toàn: nếu đáy bán trong suốt, mép các thẻ nội dung
+                        // chạy phía sau sẽ xuyên qua thành một vệt trắng dài dưới hàng nút.
+                        colors = listOf(surface, surfaceVariant),
                     ),
                 )
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.72f), navShape),
         ) {
             val rowPadding = 8.dp
-
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(Color.White.copy(alpha = 0.20f)),
-            )
 
             Row(
                 modifier = Modifier

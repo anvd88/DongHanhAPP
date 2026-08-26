@@ -6,15 +6,29 @@ tunnel: ketoanmini
 credentials-file: C:\Users\Admin\.cloudflared\<TUNNEL_ID>.json
 
 ingress:
-  # Web + API + SignalR hub, tất cả cùng origin trên Kestrel :5443
+  # Web + API + SignalR hub, tất cả cùng origin.
+  #
+  # TRỎ VÀO :5239 (HTTP loopback), KHÔNG phải :5443.
+  # Giao diện "Published application" mới của Cloudflare đã BỎ nút No TLS Verify, nên origin
+  # HTTPS dùng cert tự ký (mkcert) sẽ bị 502. Kestrel đã có sẵn cổng HTTP thuần :5239 chỉ bind
+  # loopback; cloudflared chạy cùng máy nên chặng này không ra khỏi máy chủ.
+  # Backend đọc X-Forwarded-Proto (UseForwardedHeaders, KnownProxies=loopback) nên không bị vòng
+  # lặp UseHttpsRedirection, mà request http thật (không header) vẫn bị ép sang HTTPS.
   - hostname: <DOMAIN>
-    service: https://localhost:5443
+    service: http://localhost:5239
     originRequest:
-      # Kestrel dùng cert tự ký (mkcert) cho 192.168.1.88/localhost.
-      # Chặng localhost này vẫn mã hóa nhưng bỏ verify tên miền cho khỏi lỗi cert.
-      noTLSVerify: true
       connectTimeout: 30s
       # SignalR/WebSocket (/hubs) cần kết nối sống lâu.
       keepAliveTimeout: 90s
   # Bắt buộc có rule chốt cuối.
   - service: http_status:404
+
+# LƯU Ý 1 — ĐỪNG đóng cổng 5443 ra LAN.
+# appsettings.json bind https://0.0.0.0:5443 là CHỦ ĐÍCH: riêng chấm công trên APK gọi thẳng
+# https://192.168.1.88:5443, KHÔNG qua tunnel, để chống gian lận "chấm từ xa" và không đẩy ảnh
+# khuôn mặt ra Internet. Kéo về loopback = APK mất chức năng chấm công.
+#
+# LƯU Ý 2 — nếu sau này cho gateway Rust đứng trước:
+# đổi service thành http://localhost:5240 (Rust), và Rust tự stream tiếp sang .NET :5239.
+# Rust CHỈ nhận upstream HTTP loopback (có test chặn https://127.0.0.1:5443), nên không thể cho
+# Rust fronting cổng 5443. Chỉ đổi sau khi Rust đã chạy như service và đã test rollback.

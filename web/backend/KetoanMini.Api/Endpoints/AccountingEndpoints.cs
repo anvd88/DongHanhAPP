@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
@@ -39,7 +39,7 @@ public static class AccountingEndpoints
             await using (var r = await conn.Cmd(
                 $@"SELECT d.id, d.voucher_no, d.doc_date, d.customer_name, d.content, {TotalSub} AS total
                    FROM documents d
-                   WHERE d.cancelled_at IS NULL
+                   WHERE d.cancelled_at IS NULL AND d.document_type <> 'return'
                    ORDER BY d.doc_date DESC, d.voucher_no DESC LIMIT 12").ExecuteReaderAsync())
             {
                 while (await r.ReadAsync())
@@ -63,6 +63,58 @@ public static class AccountingEndpoints
         {
             httpContext.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
             return Results.Ok(printer.GetSystemStatus());
+        });
+
+        // "Ngăn xếp phiếu" ở rìa trái trang chi tiết: danh sách gọn của MỘT NGÀY, tìm được theo tên
+        // khách, số phiếu, và cả CHỦNG LOẠI HÀNG / QUY CÁCH — thứ chỉ có trong document_lines nên
+        // phải lọc ở máy chủ, không thể lọc trên máy trạm (danh sách phiếu không mang theo dòng hàng).
+        api.MapGet("/documents/stack", async (string? date, string? q, Database db) =>
+        {
+            var day = DateOnly.TryParse(date, out var parsed) ? parsed : (DateOnly?)null;
+            var keyword = (q ?? "").Trim();
+            var like = $"%{keyword}%";
+
+            await using var conn = await db.OpenAsync();
+            var items = new List<object>();
+            await using var r = await conn.Cmd($"""
+                SELECT d.id, d.voucher_no, d.doc_date,
+                       COALESCE(NULLIF(d.customer_name,''), d.customer_input_name, '') AS customer_name,
+                       {TotalSub} AS total,
+                       d.issued_at, d.cancelled_at,
+                       d.delivery_mode, d.delivery_returned_at,
+                       COALESCE(t.status,'') AS delivery_task_status
+                FROM documents d
+                LEFT JOIN work_tasks t ON t.id = d.delivery_task_id
+                WHERE d.document_type = 'document'
+                  AND (@day IS NULL OR d.doc_date = @day)
+                  AND (@q = '' OR d.voucher_no ILIKE @like
+                       OR d.customer_name ILIKE @like OR d.customer_input_name ILIKE @like
+                       OR EXISTS (
+                            SELECT 1 FROM document_lines l
+                            WHERE l.document_id = d.id
+                              AND (l.line_content ILIKE @like OR l.spec ILIKE @like)))
+                ORDER BY d.doc_date DESC, d.voucher_no DESC
+                LIMIT 300
+                """)
+                .With("@day", (object?)day ?? DBNull.Value)
+                .With("@q", keyword)
+                .With("@like", like)
+                .ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                items.Add(new
+                {
+                    id = r.Guid("id"),
+                    voucherNo = r.Str("voucher_no"),
+                    docDate = r.DateOnly("doc_date"),
+                    customerName = r.Str("customer_name"),
+                    total = r.Dec("total"),
+                    issuedAt = r.DtNull("issued_at"),
+                    cancelledAt = r.DtNull("cancelled_at"),
+                    deliveryMode = r.Str("delivery_mode"),
+                    deliveryTaskStatus = r.Str("delivery_task_status"),
+                    deliveryReturnedAt = r.DtNull("delivery_returned_at"),
+                });
+            return Results.Ok(new { items });
         });
 
         api.MapGet("/documents/{id:guid}", async (Guid id, Database db) =>
@@ -373,8 +425,9 @@ public static class AccountingEndpoints
                           COALESCE(ob.note, '') AS opening_note,
                           COALESCE(s.sales_total, 0) AS sales_total,
                           COALESCE(s.invoice_count, 0)::int AS invoice_count,
+                          COALESCE(rt.return_total, 0) AS return_total,
                           COALESCE(rc.receipt_total, 0) + COALESCE(p.payment_total, 0) AS collected_total,
-                          GREATEST(ob.as_of_date, s.last_date, rc.last_date, p.last_date) AS last_activity_date
+                          GREATEST(ob.as_of_date, s.last_date, rc.last_date, p.last_date, rt.last_date) AS last_activity_date
                    FROM customers c
                    LEFT JOIN customer_opening_balances ob ON ob.customer_id = c.id
                    LEFT JOIN LATERAL (
@@ -387,6 +440,17 @@ public static class AccountingEndpoints
                        AND d.cancelled_at IS NULL
                        AND (ob.as_of_date IS NULL OR d.doc_date >= ob.as_of_date)
                    ) s ON TRUE
+                   LEFT JOIN LATERAL (
+                     -- Hàng khách trả về: giảm số ĐÃ BÁN, không phải khách trả tiền — để riêng chứ
+                     -- không cộng vào 'đã thu', nếu không sổ nói dối là khách đã thanh toán.
+                     SELECT COALESCE(SUM({TotalSub}), 0) AS return_total,
+                            MAX(d.doc_date) AS last_date
+                     FROM documents d
+                     WHERE (d.customer_id = c.id OR (d.customer_id IS NULL AND d.customer_name = c.name))
+                       AND d.document_type = 'return'
+                       AND d.cancelled_at IS NULL
+                       AND (ob.as_of_date IS NULL OR d.doc_date >= ob.as_of_date)
+                   ) rt ON TRUE
                    LEFT JOIN LATERAL (
                      SELECT COALESCE(SUM({TotalSub}), 0) AS receipt_total,
                             MAX(d.doc_date) AS last_date
@@ -405,7 +469,7 @@ public static class AccountingEndpoints
                        AND (ob.as_of_date IS NULL OR p.pay_date >= ob.as_of_date)
                    ) p ON TRUE
                    WHERE c.is_active = TRUE
-                   ORDER BY (COALESCE(ob.amount, 0) + COALESCE(s.sales_total, 0)
+                   ORDER BY (COALESCE(ob.amount, 0) + COALESCE(s.sales_total, 0) - COALESCE(rt.return_total, 0)
                              - COALESCE(rc.receipt_total, 0) - COALESCE(p.payment_total, 0)) DESC,
                             c.name").ExecuteReaderAsync();
 
@@ -418,9 +482,10 @@ public static class AccountingEndpoints
                     ? null
                     : DateOnly.FromDateTime(r.GetDateTime(r.GetOrdinal("opening_date")));
                 var sales = r.Dec("sales_total");
+                var returns = r.Dec("return_total");
                 var collected = r.Dec("collected_total");
                 customers.Add(new DebtSummaryDto(customer, openingBalance, openingDate, r.Str("opening_note"),
-                    sales, collected, openingBalance + sales - collected,
+                    sales, returns, collected, openingBalance + sales - returns - collected,
                     r.GetInt32(r.GetOrdinal("invoice_count")),
                     r.IsDBNull(r.GetOrdinal("last_activity_date"))
                         ? null
@@ -430,6 +495,7 @@ public static class AccountingEndpoints
             return Results.Ok(new DebtOverviewDto(
                 customers.Sum(x => x.OpeningBalance),
                 customers.Sum(x => x.SalesTotal),
+                customers.Sum(x => x.ReturnsTotal),
                 customers.Sum(x => x.CollectedTotal),
                 customers.Sum(x => Math.Max(x.Balance, 0)),
                 customers.Count(x => x.Balance > 0),
@@ -475,7 +541,7 @@ public static class AccountingEndpoints
                           {TotalSub} AS total, d.cancelled_at
                    FROM documents d
                    WHERE (d.customer_id = @id OR (d.customer_id IS NULL AND d.customer_name = @name))
-                     AND d.document_type IN ('document', 'receipt')
+                     AND d.document_type IN ('document', 'receipt', 'return')
                      AND d.doc_date >= @cutoff
                    ORDER BY d.doc_date, d.created_at, d.id")
                 .With("@id", customerId)
@@ -485,12 +551,15 @@ public static class AccountingEndpoints
             {
                 while (await r.ReadAsync())
                 {
-                    var isReceipt = r.Str("document_type") == "receipt";
+                    var type = r.Str("document_type");
                     var cancelled = !r.IsDBNull(r.GetOrdinal("cancelled_at"));
                     var total = cancelled ? 0 : r.Dec("total");
+                    // Phiếu xuất kho ghi NỢ; phiếu thu và phiếu trả hàng đều ghi CÓ, nhưng tách hai
+                    // loại để sổ nói rõ "khách trả tiền" khác "khách trả hàng".
+                    var kind = type == "receipt" ? "receipt" : type == "return" ? "return" : "sale";
                     raw.Add((r.Guid("id"), r.DateOnly("doc_date"), r.Str("voucher_no"),
-                        isReceipt ? "receipt" : "sale", r.Str("content"),
-                        isReceipt ? 0 : total, isReceipt ? total : 0, cancelled));
+                        kind, r.Str("content"),
+                        kind == "sale" ? total : 0, kind == "sale" ? 0 : total, cancelled));
                 }
             }
 
@@ -516,7 +585,7 @@ public static class AccountingEndpoints
             var balance = 0m;
             var transactions = raw
                 .OrderBy(x => x.Date)
-                .ThenBy(x => x.Kind == "opening" ? 0 : x.Kind == "sale" ? 1 : 2)
+                .ThenBy(x => x.Kind == "opening" ? 0 : x.Kind == "sale" ? 1 : x.Kind == "return" ? 2 : 3)
                 .ThenBy(x => x.Id)
                 .Select(x =>
                 {
@@ -529,10 +598,11 @@ public static class AccountingEndpoints
 
             var active = raw.Where(x => !x.Cancelled).ToList();
             var sales = active.Where(x => x.Kind == "sale").Sum(x => x.Debit);
+            var returns = active.Where(x => x.Kind == "return").Sum(x => x.Credit);
             var collected = active.Where(x => x.Kind is "receipt" or "payment").Sum(x => x.Credit);
             var lastDate = active.Count == 0 ? (DateOnly?)null : active.Max(x => x.Date);
             var summary = new DebtSummaryDto(customer, openingBalance, openingDate, openingNote,
-                sales, collected, openingBalance + sales - collected,
+                sales, returns, collected, openingBalance + sales - returns - collected,
                 active.Count(x => x.Kind == "sale"), lastDate);
             return Results.Ok(new DebtDetailDto(customer, summary, transactions));
         });
@@ -624,20 +694,27 @@ public static class AccountingEndpoints
             var totalPayments = (decimal)(await conn.Cmd("SELECT COALESCE(SUM(amount),0) FROM payments").ExecuteScalarAsync() ?? 0m);
             var totalDocuments = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM documents").ExecuteScalarAsync() ?? 0);
             var activeCustomers = Convert.ToInt32(await conn.Cmd("SELECT COUNT(*) FROM customers WHERE is_active = TRUE").ExecuteScalarAsync() ?? 0);
+            // Doanh thu = bán RÒNG (đã trừ hàng khách trả về). Phải lọc document_type rõ ràng:
+            // phiếu trả hàng cũng có dòng hàng, không lọc là nó cộng vào doanh thu thay vì trừ đi.
             var monthRevenue = (decimal)(await conn.Cmd(
-                @"SELECT COALESCE(SUM(l.quantity * l.unit_price),0) FROM documents d
+                @"SELECT COALESCE(SUM(CASE WHEN d.document_type = 'return' THEN -1 ELSE 1 END
+                                          * l.quantity * l.unit_price),0)
+                  FROM documents d
                   JOIN document_lines l ON l.document_id = d.id
                   WHERE d.cancelled_at IS NULL
+                    AND d.document_type IN ('document', 'return')
                     AND EXTRACT(YEAR FROM d.doc_date)=@y AND EXTRACT(MONTH FROM d.doc_date)=@m")
                 .With("@y", now.Year).With("@m", now.Month).ExecuteScalarAsync() ?? 0m);
 
             var monthly = new List<MonthlyRowDto>();
             await using var r = await conn.Cmd(
                 @"SELECT EXTRACT(YEAR FROM d.doc_date)::int AS y, EXTRACT(MONTH FROM d.doc_date)::int AS m,
-                         COUNT(DISTINCT d.id)::int AS docs,
-                         COALESCE(SUM(l.quantity * l.unit_price),0) AS total
+                         COUNT(DISTINCT d.id) FILTER (WHERE d.document_type = 'document')::int AS docs,
+                         COALESCE(SUM(CASE WHEN d.document_type = 'return' THEN -1 ELSE 1 END
+                                          * l.quantity * l.unit_price),0) AS total
                   FROM documents d LEFT JOIN document_lines l ON l.document_id = d.id
                   WHERE d.cancelled_at IS NULL
+                    AND d.document_type IN ('document', 'return')
                   GROUP BY EXTRACT(YEAR FROM d.doc_date), EXTRACT(MONTH FROM d.doc_date)
                   ORDER BY y DESC, m DESC LIMIT 12").ExecuteReaderAsync();
             while (await r.ReadAsync())
@@ -663,8 +740,11 @@ public static class AccountingEndpoints
                        END AS document_type,
                       d.customer_name, d.content, {TotalSub} AS total,
                       COALESCE(NULLIF(au.full_name, ''), creator.username, '') AS created_by,
-                      d.issued_at, d.cancelled_at, d.cancelled_by, d.cancel_reason
+                      d.issued_at, d.cancelled_at, d.cancelled_by, d.cancel_reason,
+                      d.delivery_mode, d.delivery_driver_name,
+                      d.delivery_returned_at, COALESCE(dt.status, '') AS delivery_task_status
                FROM documents d
+               LEFT JOIN work_tasks dt ON dt.id = d.delivery_task_id
                LEFT JOIN LATERAL (
                    SELECT a.username
                    FROM audit_logs a
@@ -681,7 +761,9 @@ public static class AccountingEndpoints
             list.Add(new DocumentListItemDto(r.Guid("id"), r.Str("voucher_no"), r.DateOnly("doc_date"),
                 r.Str("document_type"), r.Str("customer_name"), r.Str("content"), r.Dec("total"),
                 r.Str("created_by"), r.DtNull("issued_at"), r.DtNull("cancelled_at"),
-                r.Str("cancelled_by"), r.Str("cancel_reason")));
+                r.Str("cancelled_by"), r.Str("cancel_reason"),
+                r.Str("delivery_mode"), r.Str("delivery_driver_name"),
+                r.Str("delivery_task_status"), r.DtNull("delivery_returned_at")));
         return Results.Ok(list);
     }
 
@@ -748,7 +830,21 @@ public static class AccountingEndpoints
             .With("@id", id)
             .With("@voucherNo", voucherNo)
             .ExecuteScalarAsync();
-        return value is null or DBNull ? null : Convert.ToDateTime(value);
+        if (value is null or DBNull) return null;
+
+        // Chốt "hàng xuất đi": bản in đã rời máy in nên các dòng lúc này là con số trên tờ giấy
+        // khách sẽ ký. Đây là mốc để đối chiếu với hàng thực nhận khi lái xe nộp phiếu về.
+        // In lại phiếu cũ không được ghi đè mốc (ON CONFLICT DO NOTHING).
+        await conn.Cmd(
+                @"INSERT INTO document_issued_lines
+                      (document_id, line_no, line_content, spec, quantity, unit_price, note)
+                  SELECT l.document_id, l.line_no, l.line_content, l.spec, l.quantity, l.unit_price, l.note
+                  FROM document_lines l
+                  WHERE l.document_id = @id
+                  ON CONFLICT (document_id, line_no) DO NOTHING")
+            .With("@id", id)
+            .ExecuteNonQueryAsync();
+        return Convert.ToDateTime(value);
     }
 
     private static async Task<DocumentDetailDto?> ReadDocument(Database db, Guid id, bool cashOnly)
@@ -772,12 +868,16 @@ public static class AccountingEndpoints
         if (document is null) return null;
 
         await using (var r = await conn.Cmd(
-            @"SELECT line_content, spec, quantity, unit_price, note FROM document_lines
+            @"SELECT line_content, spec, quantity, unit_price, note, product_id FROM document_lines
               WHERE document_id = @id ORDER BY line_no").With("@id", id).ExecuteReaderAsync())
         {
             while (await r.ReadAsync())
+            {
+                var productOrdinal = r.GetOrdinal("product_id");
                 document.Lines.Add(new DocumentLineDto(r.Str("line_content"), r.Str("spec"),
-                    r.Dec("quantity"), r.Dec("unit_price"), r.Str("note")));
+                    r.Dec("quantity"), r.Dec("unit_price"), r.Str("note"),
+                    r.IsDBNull(productOrdinal) ? null : r.GetGuid(productOrdinal)));
+            }
         }
         return document;
     }
@@ -1020,9 +1120,16 @@ public static class AccountingEndpoints
             var lineNo = 1;
             foreach (var line in req.Lines ?? new())
             {
+                // product_id: nếu người lập phiếu không chọn từ danh mục thì thử khớp đúng
+                // tên + quy cách. Khớp được thì thống kê theo mặt hàng có số liệu ngay, không khớp
+                // vẫn lưu bình thường — danh mục là gợi ý, không phải rào chắn.
                 var lc = new NpgsqlCommand(
-                    @"INSERT INTO document_lines (document_id, line_no, line_content, category, spec, quantity, unit_price, note)
-                      VALUES (@d, @ln, @lc, '', @sp, @q, @up, @nt)", conn, tx);
+                    @"INSERT INTO document_lines (document_id, line_no, line_content, category, spec, quantity, unit_price, note, product_id)
+                      VALUES (@d, @ln, @lc, '', @sp, @q, @up, @nt,
+                              COALESCE(@pid, (SELECT p.id FROM products p
+                                              WHERE lower(p.name) = lower(BTRIM(@lc))
+                                                AND lower(p.spec) = lower(BTRIM(@sp))
+                                              LIMIT 1)))", conn, tx);
                 lc.Parameters.AddWithValue("@d", docId);
                 lc.Parameters.AddWithValue("@ln", lineNo++);
                 lc.Parameters.AddWithValue("@lc", line.LineContent ?? "");
@@ -1030,6 +1137,7 @@ public static class AccountingEndpoints
                 lc.Parameters.AddWithValue("@q", line.Quantity);
                 lc.Parameters.AddWithValue("@up", line.UnitPrice);
                 lc.Parameters.AddWithValue("@nt", line.Note ?? "");
+                lc.Parameters.AddWithValue("@pid", (object?)line.ProductId ?? DBNull.Value);
                 await lc.ExecuteNonQueryAsync();
             }
 

@@ -175,13 +175,17 @@ export async function syncOfflineAttendance(): Promise<SyncSummary> {
 }
 
 let booted = false;
+let syncedListener: ((s: SyncSummary) => void) | undefined;
 /** Tự đồng bộ khi cửa sổ online trở lại (gọi 1 lần lúc app khởi động). */
 export function initOfflineAttendanceSync(onSynced?: (s: SyncSummary) => void) {
+  // Provider thông báo đổi generation khi đổi tài khoản. Luôn thay callback bằng bản thuộc phiên
+  // hiện tại, dù listener `online` toàn cục chỉ được đăng ký đúng một lần.
+  syncedListener = onSynced;
   if (booted) return;
   booted = true;
   const run = () => {
     void syncOfflineAttendance().then((s) => {
-      if (s.synced > 0) onSynced?.(s);
+      if (s.synced > 0) syncedListener?.(s);
     });
   };
   window.addEventListener("online", run);

@@ -42,18 +42,16 @@ import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.FlightTakeoff
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Gavel
-import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Info
@@ -63,7 +61,6 @@ import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonOff
-import androidx.compose.material.icons.filled.PostAdd
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
@@ -101,7 +98,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -118,13 +114,11 @@ import androidx.compose.ui.unit.sp
 import com.ketoanapk.hr.data.AppNotification
 import com.ketoanapk.hr.data.AppPermissions
 import com.ketoanapk.hr.data.HrUser
-import com.ketoanapk.hr.data.ManagerHeadcount
 import com.ketoanapk.hr.data.PayEstimate
 import com.ketoanapk.hr.data.PayLine
 import com.ketoanapk.hr.data.PayslipItem
 import com.ketoanapk.hr.data.PayslipOvertimeDay
 import com.ketoanapk.hr.data.PayslipRequirement
-import com.ketoanapk.hr.data.RequestListItem
 import com.ketoanapk.hr.data.Timesheet
 import com.ketoanapk.hr.data.TimesheetDay
 import com.ketoanapk.hr.data.ShiftReminderSettings
@@ -132,8 +126,6 @@ import com.ketoanapk.hr.data.AppPersonalization
 import com.ketoanapk.hr.data.ServerClock
 import com.ketoanapk.hr.ui.theme.BrandRed
 import com.ketoanapk.hr.ui.theme.Danger
-import com.ketoanapk.hr.ui.theme.HeroBottom
-import com.ketoanapk.hr.ui.theme.HeroTop
 import com.ketoanapk.hr.ui.theme.InfoBlue
 import com.ketoanapk.hr.ui.theme.Success
 import com.ketoanapk.hr.ui.theme.Warning
@@ -153,12 +145,11 @@ import kotlinx.coroutines.launch
 fun HomeScreen(
     user: HrUser,
     state: HomeUiState,
-    manager: ManagerUiState,
-    hub: List<HrDestination>,
-    workTasks: WorkTasksUiState,
+    actions: List<HrDestination>,
     notifications: List<AppNotification>,
     announcement: String,
     serverNotices: List<String>,
+    badgeCount: (HrDestination) -> Int,
     onOpenNotifications: () -> Unit,
     onSelect: (HrDestination) -> Unit,
 ) {
@@ -192,7 +183,7 @@ fun HomeScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = screenPadding(16.dp, 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -206,19 +197,7 @@ fun HomeScreen(
 
         item { CheckInCard(today) { onSelect(HrDestination.Scan) } }
 
-        item { PortalEntryCard { onSelect(HrDestination.Portal) } }
-        // MỘT thẻ công việc duy nhất: việc được giao và việc cần xử lý đã gộp về cùng một màn.
-        item {
-            val taskCount = buildTaskCenterItems(state.inbox, state.timesheet, manager.summary?.headcount).size
-            TaskCenterEntryCard(
-                count = taskCount + workTasks.badge,
-                canAssign = workTasks.canAssign,
-            ) { onSelect(HrDestination.Tasks) }
-        }
-
-        if (user.can(AppPermissions.HrRead)) {
-            item { AdminDashboardCard(manager.summary?.headcount) { onSelect(HrDestination.Approval) } }
-        } else {
+        if (!user.can(AppPermissions.HrRead)) {
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     StatTile(Icons.Filled.EventAvailable, "Ngày công", trimNum(summary?.workedDays ?: 0.0), Success, Modifier.weight(1f))
@@ -233,29 +212,19 @@ fun HomeScreen(
             }
         }
 
-        if (AppPersonalization.reverseHomeCards) item { AttentionCard(state.requests) { onSelect(HrDestination.Requests) } }
-
-        item { QuickActionsCard(onSelect) }
-
-        // Mục thuộc "Công ty" chưa có thẻ riêng trên Trang chủ (thay ngăn kéo cũ).
-        if (hub.isNotEmpty()) {
-            item { HrCard { CardHeader("Công ty"); HubList(destinations = hub, onSelect = onSelect) } }
-        }
+        item { ActionsCard(actions = actions, badgeCount = badgeCount, onSelect = onSelect) }
 
         if (!user.can(AppPermissions.HrRead)) {
             item { MiniWeekCard(state.timesheet) { onSelect(HrDestination.Timesheet) } }
         }
-
-        if (!AppPersonalization.reverseHomeCards) item { AttentionCard(state.requests) { onSelect(HrDestination.Requests) } }
 
         state.error?.let { item { ErrorText(it) } }
     }
 }
 
 /**
- * Header Trang chủ tràn viền: nền tối gradient kéo lên dưới thanh trạng thái và sát hai mép màn hình,
- * chỉ bo hai góc dưới. Dùng làm topBar của Scaffold để tự "ăn" phần chèn thanh trạng thái và ghim ở
- * đỉnh. Gồm avatar + tên + phòng ban + trạng thái ca, kèm chuông thông báo ở góc phải.
+ * Header Trang chủ trong suốt để artwork toàn màn hình không bị một hình chữ nhật che ngang.
+ * Nội dung vẫn ghim dưới thanh trạng thái và giữ đủ tương phản trên nền sáng/tối.
  */
 @Composable
 fun HomeHeaderBar(user: HrUser, state: HomeUiState, unread: Int, onBell: () -> Unit) {
@@ -281,8 +250,6 @@ fun HomeHeaderBar(user: HrUser, state: HomeUiState, unread: Int, onBell: () -> U
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp))
-            .background(Brush.verticalGradient(listOf(HeroTop, HeroBottom)))
             .statusBarsPadding()
             .padding(start = 18.dp, end = 10.dp, top = 8.dp, bottom = 16.dp),
     ) {
@@ -291,8 +258,8 @@ fun HomeHeaderBar(user: HrUser, state: HomeUiState, unread: Int, onBell: () -> U
                 UserAvatar(name, 56, avatar = state.employee?.avatar)
                 Spacer(Modifier.width(14.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(name, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(position, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C0CE), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(name, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(position, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     HeroBadge(statusText, statusColor)
                 }
             }
@@ -301,7 +268,7 @@ fun HomeHeaderBar(user: HrUser, state: HomeUiState, unread: Int, onBell: () -> U
     }
 }
 
-/** Chuông thông báo trên nền hero tối, kèm chấm đỏ đếm số chưa đọc. */
+/** Chuông thông báo trên header trong suốt, kèm chấm đỏ đếm số chưa đọc. */
 @Composable
 private fun HeroBell(unread: Int, onClick: () -> Unit) {
     Box(contentAlignment = Alignment.TopEnd) {
@@ -309,7 +276,7 @@ private fun HeroBell(unread: Int, onClick: () -> Unit) {
             Icon(
                 if (unread > 0) Icons.Filled.Notifications else Icons.Filled.NotificationsNone,
                 contentDescription = "Thông báo",
-                tint = Color.White,
+                tint = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.size(26.dp),
             )
         }
@@ -642,29 +609,97 @@ private fun HeroPunch(icon: ImageVector, label: String, value: String, accent: C
     }
 }
 
-/** Tác vụ nhanh: 4 phím tắt tròn màu. */
+/** Tất cả tác vụ trong app, có chế độ chỉnh sửa và lưu thứ tự ngay trên thiết bị. */
 @Composable
-private fun QuickActionsCard(onSelect: (HrDestination) -> Unit) {
+private fun ActionsCard(
+    actions: List<HrDestination>,
+    badgeCount: (HrDestination) -> Int,
+    onSelect: (HrDestination) -> Unit,
+) {
+    var editing by rememberSaveable { mutableStateOf(false) }
+    val savedOrder = AppPersonalization.homeActionOrder
+    val ordered = remember(actions, savedOrder) { orderHomeActions(actions, savedOrder) }
+
+    fun saveVisibleOrder(next: List<HrDestination>) {
+        val visibleNames = next.map { it.name }
+        // Giữ lại thứ tự các tác vụ thuộc quyền khác để đổi tài khoản không làm mất cấu hình cũ.
+        val hiddenNames = savedOrder.filterNot(visibleNames::contains)
+        AppPersonalization.updateHomeActionOrder(visibleNames + hiddenNames)
+    }
+
     HrCard {
-        CardHeader("Tác vụ nhanh")
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            QuickAction(Icons.Filled.PostAdd, "Tạo đơn", BrandRed, Modifier.weight(1f)) { onSelect(HrDestination.Requests) }
-            QuickAction(Icons.Filled.CalendarMonth, "Bảng công", Success, Modifier.weight(1f)) { onSelect(HrDestination.Timesheet) }
-            QuickAction(Icons.Filled.Folder, "Hồ sơ", InfoBlue, Modifier.weight(1f)) { onSelect(HrDestination.Profile) }
-            QuickAction(Icons.Filled.Gavel, "Kỷ luật", Warning, Modifier.weight(1f)) { onSelect(HrDestination.Penalty) }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Tác vụ", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+            TextButton(onClick = { editing = !editing }) {
+                Icon(if (editing) Icons.Filled.Done else Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (editing) "Xong" else "Sắp xếp", fontWeight = FontWeight.Bold)
+            }
+        }
+        if (editing) {
+            Text(
+                "Dùng mũi tên trên từng tác vụ để đổi vị trí. Thứ tự được tự động lưu.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        ordered.chunked(4).forEachIndexed { rowIndex, rowActions ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                rowActions.forEachIndexed { columnIndex, destination ->
+                    val index = rowIndex * 4 + columnIndex
+                    ActionTile(
+                        destination = destination,
+                        accent = homeActionColor(destination),
+                        badge = badgeCount(destination),
+                        editing = editing,
+                        canMoveBack = index > 0,
+                        canMoveForward = index < ordered.lastIndex,
+                        modifier = Modifier.weight(1f),
+                        onMoveBack = {
+                            saveVisibleOrder(ordered.toMutableList().apply {
+                                add(index - 1, removeAt(index))
+                            })
+                        },
+                        onMoveForward = {
+                            saveVisibleOrder(ordered.toMutableList().apply {
+                                add(index + 1, removeAt(index))
+                            })
+                        },
+                        onClick = { onSelect(destination) },
+                    )
+                }
+                repeat(4 - rowActions.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+        if (editing && savedOrder.isNotEmpty()) {
+            TextButton(
+                onClick = { AppPersonalization.updateHomeActionOrder(emptyList()) },
+                modifier = Modifier.align(Alignment.End),
+            ) { Text("Khôi phục mặc định") }
         }
     }
 }
 
 @Composable
-private fun QuickAction(icon: ImageVector, label: String, accent: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun ActionTile(
+    destination: HrDestination,
+    accent: Color,
+    badge: Int,
+    editing: Boolean,
+    canMoveBack: Boolean,
+    canMoveForward: Boolean,
+    modifier: Modifier = Modifier,
+    onMoveBack: () -> Unit,
+    onMoveForward: () -> Unit,
+    onClick: () -> Unit,
+) {
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
+            .clickable(enabled = !editing, onClick = onClick)
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(
             modifier = Modifier
@@ -673,10 +708,57 @@ private fun QuickAction(icon: ImageVector, label: String, accent: Color, modifie
                 .background(accent.copy(alpha = 0.14f)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(26.dp))
+            Icon(destination.icon, contentDescription = null, tint = accent, modifier = Modifier.size(26.dp))
+            if (badge > 0) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(19.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.error),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (badge > 9) "9+" else badge.toString(),
+                        color = MaterialTheme.colorScheme.onError,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
         }
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        Text(homeActionLabel(destination), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        if (editing) {
+            Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onMoveBack, enabled = canMoveBack, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Đưa ${destination.title} về trước", modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = onMoveForward, enabled = canMoveForward, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Đưa ${destination.title} ra sau", modifier = Modifier.size(20.dp))
+                }
+            }
+        }
     }
+}
+
+internal fun orderHomeActions(actions: List<HrDestination>, savedOrder: List<String>): List<HrDestination> {
+    val rank = savedOrder.withIndex().associate { it.value to it.index }
+    val fallback = actions.withIndex().associate { it.value to it.index }
+    return actions.sortedWith(compareBy({ rank[it.name] ?: Int.MAX_VALUE }, { fallback[it] ?: Int.MAX_VALUE }))
+}
+
+private fun homeActionLabel(destination: HrDestination): String = when (destination) {
+    HrDestination.Requests -> "Tạo đơn"
+    HrDestination.Tasks -> "Công việc"
+    HrDestination.MyPayslips -> "Phiếu lương"
+    else -> destination.label
+}
+
+private fun homeActionColor(destination: HrDestination): Color = when (destination) {
+    HrDestination.Scan, HrDestination.Requests, HrDestination.Penalty -> BrandRed
+    HrDestination.Timesheet, HrDestination.MyPayslips, HrDestination.Payroll -> Success
+    HrDestination.Tasks, HrDestination.Approval, HrDestination.Audit -> Warning
+    else -> InfoBlue
 }
 
 /** Bảng công mini: dải tuần hiện tại + số ngày đủ công + số lần đi muộn + nút xem đầy đủ. */
@@ -756,69 +838,6 @@ private fun MiniSummaryStat(value: String, label: String, accent: Color, modifie
     }
 }
 
-/** Việc cần chú ý: số đơn của tôi đang chờ + đơn gần nhất. */
-@Composable
-private fun AttentionCard(requests: List<RequestListItem>, onOpen: () -> Unit) {
-    val pending = requests.count { it.status.equals("Pending", true) }
-    val latest = requests.firstOrNull()
-    HrCard {
-        CardHeader("Việc cần chú ý", onMore = onOpen)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .clickable(onClick = onOpen),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .background(Warning.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Filled.AssignmentLate, contentDescription = null, tint = Warning, modifier = Modifier.size(24.dp))
-            }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    if (pending > 0) "$pending đơn chờ duyệt" else "Không có đơn chờ duyệt",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (pending > 0) Warning else MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    latest?.let { "Đơn gần nhất: ${it.typeLabel} · ${requestStatusLabel(it.status)}" } ?: "Bạn chưa gửi đơn nào",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-/** Dashboard quản trị trên Trang chủ: quân số, có mặt, nghỉ/công tác, vắng, đi muộn, đơn chờ duyệt. */
-@Composable
-private fun AdminDashboardCard(h: ManagerHeadcount?, onApprovals: () -> Unit) {
-    val onLeave = (h?.leave ?: 0) + (h?.business ?: 0)
-    HrCard {
-        CardHeader("Tổng quan hôm nay")
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            StatTile(Icons.Filled.Groups, "Quân số", "${h?.active ?: 0}", InfoBlue, Modifier.weight(1f))
-            StatTile(Icons.Filled.CheckCircle, "Có mặt", "${h?.present ?: 0}", Success, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            StatTile(Icons.Filled.FlightTakeoff, "Nghỉ / công tác", "$onLeave", Warning, Modifier.weight(1f))
-            StatTile(Icons.Filled.PersonOff, "Vắng", "${h?.absent ?: 0}", Danger, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            StatTile(Icons.Filled.WatchLater, "Đi muộn", "${h?.late ?: 0}", Warning, Modifier.weight(1f))
-            StatTile(Icons.Filled.Inbox, "Đơn chờ duyệt", "${h?.pendingApprovals ?: 0}", InfoBlue, Modifier.weight(1f), onClick = onApprovals)
-        }
-    }
-}
-
 /** Bỏ đuôi ".0" cho số ngày công (18.0 → 18, 18.5 → 18.5). */
 private fun trimNum(v: Double): String =
     if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
@@ -833,7 +852,7 @@ fun ProfileScreen(state: HomeUiState, onCapturePortrait: () -> Unit = {}) {
     val e = state.employee
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = screenPadding(16.dp, 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (e == null) {
@@ -963,7 +982,7 @@ fun TimesheetScreen(
     val currentStart = timesheetMonthStart(period)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { PageHeader(Icons.Filled.CalendarMonth, "Bảng công", formatTimesheetPeriod(period), Tone.Neutral) }
@@ -973,22 +992,6 @@ fun TimesheetScreen(
             onRequestReveal = { salaryPinOpen = true },
             onHide = { salaryRevealed = false },
         )
-        item {
-            MonthSelectorBar(
-                label = formatTimesheetPeriod(period),
-                onPrev = { onMonthOffset(-1) },
-                onNext = { onMonthOffset(1) },
-                onPick = { pickerOpen = true },
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                if (weekMode) OutlinedButton({ weekMode = false }, Modifier.weight(1f)) { Text("Tháng") }
-                else Button({ weekMode = false }, Modifier.weight(1f)) { Text("Tháng") }
-                if (weekMode) Button({ weekMode = true }, Modifier.weight(1f)) { Text("Tuần") }
-                else OutlinedButton({ weekMode = true }, Modifier.weight(1f)) { Text("Tuần") }
-            }
-        }
         val daysByDate = ts?.days?.associateBy { it.date.take(10) }.orEmpty()
         item {
             TimesheetCalendarCard(
@@ -1002,6 +1005,10 @@ fun TimesheetScreen(
                 loading = state.loading,
                 onSelectDate = { selectedDate = it },
                 onMonthOffset = onMonthOffset,
+                onPrev = { onMonthOffset(-1) },
+                onNext = { onMonthOffset(1) },
+                onPick = { pickerOpen = true },
+                onWeekModeChange = { weekMode = it },
             )
         }
         if (ts == null) {
@@ -1109,12 +1116,6 @@ private fun LazyListScope.timesheetSalarySection(
                 Spacer(Modifier.height(10.dp))
                 Text("Thực nhận dự tính", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("***********", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Bấm con mắt và xác thực để xem chi tiết.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
             }
         }
     }
@@ -1200,11 +1201,15 @@ private fun LazyListScope.timesheetSalarySection(
  */
 @Composable
 private fun MonthSelectorBar(
-    label: String,
+    basePeriod: String,
+    dragFraction: Float,
+    weekOnly: Boolean,
+    selectedDate: String?,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onPick: () -> Unit,
 ) {
+    var labelWidthPx by remember { mutableFloatStateOf(0f) }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -1220,18 +1225,48 @@ private fun MonthSelectorBar(
             IconButton(onClick = onPrev) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Tháng trước", tint = MaterialTheme.colorScheme.primary)
             }
-            Row(
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(12.dp))
                     .clickable(onClick = onPick)
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
+                    .clipToBounds()
+                    .height(44.dp)
+                    .onSizeChanged { labelWidthPx = it.width.toFloat() },
+                contentAlignment = Alignment.Center,
             ) {
-                Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.width(4.dp))
-                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Chọn tháng/năm", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                listOf(-1, 0, 1).forEach { slot ->
+                    val slotPeriod = shiftTimesheetPeriod(basePeriod, slot)
+                    val distance = (dragFraction + slot).absoluteValue.coerceIn(0f, 1f)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                translationX = (dragFraction + slot) * labelWidthPx
+                                alpha = 1f - distance * 0.55f
+                                val scale = 1f - distance * 0.10f
+                                scaleX = scale
+                                scaleY = scale
+                            },
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (weekOnly) timesheetWeekPeriodLabel(slotPeriod, selectedDate)
+                            else formatTimesheetPeriod(slotPeriod),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            Icons.Filled.ArrowDropDown,
+                            contentDescription = "Chọn tháng/năm",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
             IconButton(onClick = onNext) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Tháng sau", tint = MaterialTheme.colorScheme.primary)
@@ -1319,6 +1354,10 @@ private fun TimesheetCalendarCard(
     loading: Boolean,
     onSelectDate: (String) -> Unit,
     onMonthOffset: (Int) -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onPick: () -> Unit,
+    onWeekModeChange: (Boolean) -> Unit,
 ) {
     // Băng chuyền 3 trang: tháng trước | tháng đang xem | tháng sau. Kéo tới đâu thấy tháng liền kề tới đó.
     var pagerWidthPx by remember { mutableFloatStateOf(0f) }
@@ -1351,65 +1390,95 @@ private fun TimesheetCalendarCard(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clipToBounds()
-            .testTag("timesheet-calendar")
-            .onSizeChanged { pagerWidthPx = it.width.toFloat() }
-            .draggable(
-                state = dragState,
-                orientation = Orientation.Horizontal,
-                onDragStopped = { velocity ->
-                    val monthOffset = timesheetMonthOffsetForSwipe(
-                        dragDistancePx = dragOffset.value,
-                        thresholdPx = maxOf(minimumSwipePx, pagerWidthPx * 0.16f),
-                    )
-                    if (monthOffset == null) {
-                        dragOffset.animateTo(
-                            targetValue = 0f,
-                            initialVelocity = velocity,
-                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 520f),
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        MonthSelectorBar(
+            basePeriod = basePeriod,
+            dragFraction = if (pageStridePx > 0f) (dragOffset.value / pageStridePx).coerceIn(-1f, 1f) else 0f,
+            weekOnly = weekOnly,
+            selectedDate = selectedDate,
+            onPrev = onPrev,
+            onNext = onNext,
+            onPick = onPick,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            if (weekOnly) OutlinedButton({ onWeekModeChange(false) }, Modifier.weight(1f)) { Text("Tháng") }
+            else Button({ onWeekModeChange(false) }, Modifier.weight(1f)) { Text("Tháng") }
+            if (weekOnly) Button({ onWeekModeChange(true) }, Modifier.weight(1f)) { Text("Tuần") }
+            else OutlinedButton({ onWeekModeChange(true) }, Modifier.weight(1f)) { Text("Tuần") }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clipToBounds()
+                .testTag("timesheet-calendar")
+                .onSizeChanged { pagerWidthPx = it.width.toFloat() }
+                .draggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    onDragStopped = { velocity ->
+                        val monthOffset = timesheetMonthOffsetForSwipe(
+                            dragDistancePx = dragOffset.value,
+                            thresholdPx = maxOf(minimumSwipePx, pagerWidthPx * 0.16f),
                         )
-                    } else {
-                        // Trượt nốt cho trang tháng kề vào giữa, rồi đổi mốc + trả offset về 0 trong cùng
-                        // một nhịp: trang đang hiển thị y hệt nên mắt không thấy nháy.
-                        dragOffset.animateTo(
-                            targetValue = if (monthOffset > 0) -pageStridePx else pageStridePx,
-                            initialVelocity = velocity,
-                            animationSpec = spring(dampingRatio = 0.9f, stiffness = 420f),
-                        )
-                        basePeriod = shiftTimesheetPeriod(basePeriod, monthOffset)
-                        dragOffset.snapTo(0f)
-                        onMonthOffset(monthOffset)
-                    }
-                },
-            ),
-    ) {
-        listOf(-1, 0, 1).forEach { slot ->
-            val slotPeriod = shiftTimesheetPeriod(basePeriod, slot)
-            val slotDays = if (slot == 0) daysByDate else daysForPeriod(slotPeriod)
-            TimesheetCalendarPage(
-                period = slotPeriod,
-                daysByDate = slotDays,
-                selectedDate = if (slot == 0) selectedDate else null,
-                weekOnly = weekOnly,
-                loading = loading && slot == 0,
-                current = slot == 0,
-                onSelectDate = onSelectDate,
-                modifier = Modifier.graphicsLayer {
-                    val stride = size.width + pageGapPx
-                    translationX = dragOffset.value + slot * stride
-                    // Trang càng xa giữa càng thu nhỏ + mờ đi: kéo tới đâu tháng kề "phóng to" vào tới đó.
-                    val distance = if (stride > 0f) (translationX / stride).absoluteValue.coerceIn(0f, 1f) else 1f
-                    val scale = 1f - 0.25f * distance
-                    scaleX = scale
-                    scaleY = scale
-                    alpha = 1f - 0.45f * distance
-                },
-            )
+                        if (monthOffset == null) {
+                            dragOffset.animateTo(
+                                targetValue = 0f,
+                                initialVelocity = velocity,
+                                animationSpec = spring(dampingRatio = 0.85f, stiffness = 520f),
+                            )
+                        } else {
+                            // Lịch và tiêu đề kỳ dùng chung dragOffset nên hoàn tất chuyển trang cùng lúc.
+                            dragOffset.animateTo(
+                                targetValue = if (monthOffset > 0) -pageStridePx else pageStridePx,
+                                initialVelocity = velocity,
+                                animationSpec = spring(dampingRatio = 0.9f, stiffness = 420f),
+                            )
+                            basePeriod = shiftTimesheetPeriod(basePeriod, monthOffset)
+                            dragOffset.snapTo(0f)
+                            onMonthOffset(monthOffset)
+                        }
+                    },
+                ),
+        ) {
+            listOf(-1, 0, 1).forEach { slot ->
+                val slotPeriod = shiftTimesheetPeriod(basePeriod, slot)
+                val slotDays = if (slot == 0) daysByDate else daysForPeriod(slotPeriod)
+                TimesheetCalendarPage(
+                    period = slotPeriod,
+                    daysByDate = slotDays,
+                    selectedDate = if (slot == 0) selectedDate else null,
+                    weekOnly = weekOnly,
+                    loading = loading && slot == 0,
+                    current = slot == 0,
+                    onSelectDate = onSelectDate,
+                    modifier = Modifier.graphicsLayer {
+                        val stride = size.width + pageGapPx
+                        translationX = dragOffset.value + slot * stride
+                        // Trang càng xa giữa càng thu nhỏ + mờ đi: kéo tới đâu tháng kề "phóng to" vào tới đó.
+                        val distance = if (stride > 0f) (translationX / stride).absoluteValue.coerceIn(0f, 1f) else 1f
+                        val scale = 1f - 0.25f * distance
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = 1f - 0.45f * distance
+                    },
+                )
+            }
         }
     }
+}
+
+private fun timesheetWeekPeriodLabel(period: String, selectedDate: String?): String {
+    val monthStart = timesheetMonthStart(period)
+    val anchor = selectedDate
+        ?.takeIf { it.startsWith(period.take(7)) }
+        ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        ?: LocalDate.now().takeIf { it.toString().startsWith(period.take(7)) }
+        ?: monthStart
+    val monday = anchor.minusDays((anchor.dayOfWeek.value - 1).toLong())
+    val sunday = monday.plusDays(6)
+    val start = monday.format(DateTimeFormatter.ofPattern("dd/MM"))
+    val end = sunday.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    return "Tuần $start – $end"
 }
 
 /** Một trang lịch (một tháng) trong băng chuyền vuốt. */
@@ -1828,7 +1897,7 @@ private fun timesheetCalendarColor(tone: TimesheetCalendarTone): Color = when (t
 fun SimpleScreen(title: String, message: String) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { PageHeader(Icons.Filled.History, title, "Thông tin", Tone.Neutral) }
@@ -1895,7 +1964,7 @@ fun MyPayslipsScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (state.loading && state.items.isEmpty()) item { LoadingBlock() }
@@ -2043,7 +2112,7 @@ private fun PayslipDetailView(
     val deductions = payslipDisplayDeductions(p)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = screenPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {

@@ -156,7 +156,7 @@ fun FaceEnrollScreen(vm: HrViewModel, onBack: () -> Unit) {
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 24.dp, top = 4.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = BottomBarScrollRoom, top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item { EnrollHero(registered, pending, vm.faceEnrollmentStatus, vm.faceEnrollmentReviewNote) }

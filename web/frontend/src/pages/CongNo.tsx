@@ -13,9 +13,11 @@ import {
   Landmark,
   Loader2,
   Search,
+  Undo2,
   WalletCards,
 } from "lucide-react";
 import { DatePicker } from "../components/DateField";
+import { GoodsReturnModal } from "../components/GoodsReturnModal";
 import { GlassCapsule } from "../components/glass/GlassCapsule";
 import { GlassPanel } from "../components/glass/GlassPanel";
 import { Modal } from "../components/Modal";
@@ -50,12 +52,15 @@ function transactionLabel(transaction: DebtTransaction) {
   if (transaction.kind === "opening") return "Đầu kỳ";
   if (transaction.kind === "sale") return "Bán hàng";
   if (transaction.kind === "receipt") return "Phiếu thu";
+  // Trả HÀNG khác trả TIỀN: cả hai đều ghi Có nhưng đọc sổ phải phân biệt được.
+  if (transaction.kind === "return") return "Hàng trả về";
   return "Thu công nợ";
 }
 
 function transactionTone(transaction: DebtTransaction) {
   if (transaction.cancelled) return "100, 116, 139";
   if (transaction.kind === "opening") return "124, 70, 255";
+  if (transaction.kind === "return") return "245, 158, 11";
   return transaction.debit > 0 ? "225, 29, 72" : "0, 150, 110";
 }
 
@@ -120,6 +125,10 @@ export function CongNo() {
     data?.customers.find((item) => item.customer.id === selectedId) ?? detail?.summary ?? null;
   const canCollect = access.can(PERM.vouchersCreate);
   const canEditOpening = access.can(PERM.vouchersUpdate);
+  // Hàng trả về của ĐƠN CŨ không gắn với chuyến giao nào hôm nay, nên phải vào được từ sổ công nợ
+  // chứ không chỉ từ trang phiếu.
+  const canReturn = access.can(PERM.accountingAccess);
+  const [returning, setReturning] = useState<DebtSummary | null>(null);
 
   const exportOverview = () => {
     if (!data?.customers.length) return;
@@ -135,6 +144,7 @@ export function CongNo() {
         <td>${escape(item.openingDate ? date(item.openingDate) : "")}</td>
         <td>${item.openingBalance}</td>
         <td>${item.salesTotal}</td>
+        <td>${item.returnsTotal}</td>
         <td>${item.collectedTotal}</td>
         <td>${item.balance}</td>
         <td>${escape(statusOf(item.balance).label)}</td>
@@ -142,7 +152,7 @@ export function CongNo() {
     const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>
       <table border="1"><thead><tr>
         <th>Khách hàng</th><th>Mã số thuế</th><th>Ngày đầu kỳ</th><th>Nợ đầu kỳ</th>
-        <th>Phát sinh bán hàng</th><th>Đã thu</th><th>Dư nợ</th><th>Trạng thái</th>
+        <th>Phát sinh bán hàng</th><th>Hàng trả về</th><th>Đã thu</th><th>Dư nợ</th><th>Trạng thái</th>
       </tr></thead><tbody>${tableRows}</tbody></table></body></html>`;
     const url = URL.createObjectURL(new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" }));
     const anchor = document.createElement("a");
@@ -354,8 +364,22 @@ export function CongNo() {
             summary={selectedSummary}
             canCollect={canCollect}
             canEditOpening={canEditOpening}
+            canReturn={canReturn}
             onCollect={() => selectedSummary && setCollecting(selectedSummary)}
             onEditOpening={() => selectedSummary && setEditingOpening(selectedSummary)}
+            onReturn={() => selectedSummary && setReturning(selectedSummary)}
+          />
+
+          <GoodsReturnModal
+            open={!!returning}
+            onClose={() => setReturning(null)}
+            customerId={returning?.customer.id}
+            customerName={returning?.customer.name ?? ""}
+            onSaved={() => {
+              setReturning(null);
+              reload();
+              reloadDetail();
+            }}
           />
         </div>
 
@@ -393,8 +417,10 @@ function DebtLedger({
   summary,
   canCollect,
   canEditOpening,
+  canReturn,
   onCollect,
   onEditOpening,
+  onReturn,
 }: {
   detail: DebtDetail | null;
   loading: boolean;
@@ -402,8 +428,10 @@ function DebtLedger({
   summary: DebtSummary | null;
   canCollect: boolean;
   canEditOpening: boolean;
+  canReturn: boolean;
   onCollect: () => void;
   onEditOpening: () => void;
+  onReturn: () => void;
 }) {
   const status = summary ? statusOf(summary.balance) : null;
   return (
@@ -442,6 +470,9 @@ function DebtLedger({
         <div className="grid grid-cols-1 gap-2.5 border-b border-[var(--gc-border)] p-4 sm:grid-cols-2 2xl:grid-cols-4">
           <LedgerMetric label="Nợ đầu kỳ" value={summary.openingBalance} icon={Landmark} tone="violet" />
           <LedgerMetric label="Phát sinh nợ" value={summary.salesTotal} icon={ArrowUpRight} tone="rose" />
+          {summary.returnsTotal > 0 && (
+            <LedgerMetric label="Hàng trả về" value={summary.returnsTotal} icon={Undo2} tone="amber" />
+          )}
           <LedgerMetric label="Đã thu" value={summary.collectedTotal} icon={ArrowDownLeft} tone="emerald" />
           <LedgerMetric label={summary.balance < 0 ? "Khách trả trước" : "Dư nợ"} value={Math.abs(summary.balance)} icon={WalletCards} tone="blue" />
         </div>
@@ -522,12 +553,18 @@ function DebtLedger({
         </table>
       </div>
 
-      {summary && (canCollect || canEditOpening) && (
+      {summary && (canCollect || canEditOpening || canReturn) && (
         <div className="flex items-center justify-between gap-3 border-t border-[var(--gc-border)] px-4 py-3">
           <p className="text-xs font-semibold text-[var(--gc-text-muted)]">
-            Cập nhật đầu kỳ hoặc ghi nhận khoản khách đã thanh toán.
+            Cập nhật đầu kỳ, nhận hàng khách trả về, hoặc ghi nhận khoản khách đã thanh toán.
           </p>
           <div className="flex gap-2">
+            {canReturn && (
+              <GlassButton variant="soft" onClick={onReturn}>
+                <Undo2 className="h-4 w-4" />
+                Hàng trả về
+              </GlassButton>
+            )}
             {canEditOpening && (
               <GlassButton variant="soft" onClick={onEditOpening}>
                 <Landmark className="h-4 w-4" />
@@ -556,13 +593,14 @@ function LedgerMetric({
   label: string;
   value: number;
   icon: typeof ArrowUpRight;
-  tone: "rose" | "emerald" | "violet" | "blue";
+  tone: "rose" | "emerald" | "violet" | "blue" | "amber";
 }) {
   const color = {
     rose: "text-rose-600 dark:text-rose-400 bg-rose-500/10",
     emerald: "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10",
     violet: "text-violet-600 dark:text-violet-400 bg-violet-500/10",
     blue: "text-blue-600 dark:text-cyan-300 bg-blue-500/10",
+    amber: "text-amber-600 dark:text-amber-300 bg-amber-500/10",
   }[tone];
   return (
     <div className="rounded-2xl border border-[var(--gc-border)] bg-white/20 p-3 dark:bg-white/5">
@@ -781,6 +819,7 @@ function CollectDebtModal({
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold text-[var(--gc-text-muted)]">
             <span>Dư nợ hiện tại: {money(Math.max(debt.balance, 0))} ₫</span>
             <span>Đã thu: {money(debt.collectedTotal)} ₫</span>
+            {debt.returnsTotal > 0 && <span>Hàng trả về: {money(debt.returnsTotal)} ₫</span>}
           </div>
         </div>
 

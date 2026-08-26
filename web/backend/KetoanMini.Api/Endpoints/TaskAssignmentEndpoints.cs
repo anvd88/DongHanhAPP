@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
@@ -11,9 +11,17 @@ namespace KetoanMini.Api.Endpoints;
 /// THỦ KHO (Warehouse) — giao việc cho nhân viên; nhân viên nhận, làm, nộp; người giao nghiệm thu (đạt/trả lại).
 ///
 /// Vòng đời trạng thái:
-///   assigned → in_progress → submitted → accepted            (nghiệm thu đạt = hoàn thành)
+///   assigned → in_progress → submitted → accepted            (nghiệm thu đạt)
 ///                              submitted → rejected → in_progress (trả lại làm tiếp, có thể nộp lại)
 ///   bất kỳ trạng thái chưa kết thúc → cancelled              (người giao huỷ)
+///
+/// VIỆC GIAO HÀNG (source_kind='delivery') đi đường NGẮN HƠN — KHÔNG có chặng nghiệm thu:
+///   assigned → in_progress → submitted → completed
+/// 'submitted' = lái xe báo đã giao xong, đang chờ nộp tờ phiếu ký nhận; 'completed' do kế toán
+/// xác nhận phiếu về kho (DeliverySettlementEndpoints). Khách đã nhận hàng thì tờ phiếu có chữ ký
+/// mới là bằng chứng, thêm một cú bấm "nghiệm thu" của chính người đó chỉ là thủ tục thừa (chốt của
+/// người dùng 2026-08-24). Đường 'rejected' vẫn giữ cho tình huống lái xe báo đã giao nhưng hàng
+/// phải quay đầu.
 ///
 /// Realtime: PostgreSQL phát scope "tasks" sau khi giao dịch ghi hoàn tất; thông báo FCM vẫn nhắm
 /// tới đúng người liên quan khi app đang ở nền.
@@ -23,6 +31,9 @@ public static class TaskAssignmentEndpoints
     private static readonly string[] Priorities = ["low", "normal", "high", "urgent"];
     // Trạng thái nhân viên còn được thao tác (nhận/nộp).
     private static readonly string[] AssigneeOpen = ["assigned", "in_progress", "rejected"];
+    // Trạng thái ĐÃ ĐÓNG SỔ: không sửa, không huỷ, không kéo lệnh thu vào nữa, và xếp xuống cuối
+    // danh sách. 'completed' là bước sau 'accepted' của việc giao hàng (phiếu giấy đã về kho).
+    internal static bool IsClosed(string status) => status is "accepted" or "completed" or "cancelled";
 
     public static async Task EnsureTables(Database db, CancellationToken ct = default)
     {
@@ -54,6 +65,16 @@ public static class TaskAssignmentEndpoints
             );
             CREATE INDEX IF NOT EXISTS ix_work_tasks_assignee ON work_tasks (assignee_username, status);
             CREATE INDEX IF NOT EXISTS ix_work_tasks_assigner ON work_tasks (assigner_username, status);
+
+            -- Nguồn sinh ra việc. '' = người dùng tự giao (mặc định cũ);
+            -- 'delivery' = sinh tự động khi gán phiếu xuất kho cho lái xe.
+            ALTER TABLE work_tasks ADD COLUMN IF NOT EXISTS source_kind varchar(24) NOT NULL DEFAULT '';
+            ALTER TABLE work_tasks ADD COLUMN IF NOT EXISTS source_document_id uuid NULL;
+            -- Mỗi phiếu xuất kho chỉ đẻ ra ĐÚNG MỘT việc giao hàng còn sống. Gán lại lái xe thì
+            -- sửa chính việc đó chứ không tạo việc thứ hai, nếu không lái xe cũ vẫn thấy việc cũ.
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_work_tasks_delivery_document
+                ON work_tasks (source_document_id)
+                WHERE source_kind = 'delivery' AND source_document_id IS NOT NULL;
 
             CREATE TABLE IF NOT EXISTS work_task_events (
                 id bigserial PRIMARY KEY,
@@ -125,8 +146,34 @@ public static class TaskAssignmentEndpoints
                 .With("@me", me).ExecuteReaderAsync())
                 while (await r.ReadAsync()) inbox.Add(ReadTask(r));
 
+            // ── Gộp "giao hàng" và "thu tiền" của CÙNG một khách thành một dòng việc ──────────
+            // Lái xe tới một khách để làm hai chuyện; tách hai thẻ khiến họ dễ bỏ sót khoản thu.
+            // Hai bản ghi vẫn nằm riêng dưới CSDL, chỉ nối lại khi trả về cho máy đọc.
+            var openCollections = await LoadOpenCollections(conn, me);
+            var mergedCollectionIds = new HashSet<Guid>();
+            for (var i = 0; i < inbox.Count; i++)
+            {
+                var task = inbox[i];
+                if (task.Delivery?.CustomerId is not { } customerId) continue;
+                // Việc đã nghiệm thu/huỷ thì không kéo khoản thu vào nữa.
+                if (IsClosed(task.Status)) continue;
+                var match = openCollections.FirstOrDefault(
+                    c => c.CustomerId == customerId && !mergedCollectionIds.Contains(c.Id));
+                if (match is null) continue;
+                mergedCollectionIds.Add(match.Id);
+                inbox[i] = task with { Delivery = task.Delivery with { Collection = match } };
+            }
+            // Lệnh thu không đi kèm phiếu giao nào vẫn phải hiện trong "Việc được giao".
+            var standaloneCollections = openCollections
+                .Where(c => !mergedCollectionIds.Contains(c.Id))
+                .ToList();
+
+            // "Việc tôi giao" bám theo VIỆC MÌNH ĐÃ GIAO, không bám theo quyền TasksAssign.
+            // Lý do: kế toán gán phiếu xuất kho cho lái xe là sinh ra một việc giao hàng và trở
+            // thành người giao việc đó — nhưng kế toán KHÔNG có TasksAssign (quyền đó chỉ mở cửa
+            // "Giao việc mới" cho Thủ kho/Trưởng phòng). Nếu lọc theo quyền thì chính người giao
+            // không thấy việc mình giao để nghiệm thu, và phiếu kẹt mãi ở "Chờ nghiệm thu".
             var outbox = new List<WorkTaskDto>();
-            if (canAssign)
             {
                 var where = admin ? "" : " WHERE t.assigner_username = @me";
                 await using var r = await conn.Cmd(SelectTask + where + " ORDER BY " + ListOrder)
@@ -139,9 +186,24 @@ public static class TaskAssignmentEndpoints
                 inbox = inbox.Count,
                 inboxActionable = inbox.Count(t => AssigneeOpen.Contains(t.Status)),
                 outbox = outbox.Count,
-                outboxReview = outbox.Count(t => t.Status == "submitted"),
+                // "Chờ nghiệm thu" chỉ đếm việc THƯỜNG. Việc giao hàng nằm ở 'submitted' cho tới khi
+                // tờ phiếu về kho — đếm vào đây thì kế toán thấy một đống việc treo mà không có gì
+                // để bấm ở màn Công việc.
+                outboxReview = outbox.Count(t => t.Status == "submitted" && t.Delivery is null),
+                outboxAwaitingVoucher = outbox.Count(t => t.Status == "submitted" && t.Delivery is not null),
+                // Việc phải làm ở màn lái xe = việc còn mở + lệnh thu chưa gộp vào việc nào.
+                collections = openCollections.Count,
+                collectionsStandalone = standaloneCollections.Count,
             };
-            return Results.Ok(new { canAssign, isAdmin = admin, inbox, outbox, summary });
+            return Results.Ok(new
+            {
+                canAssign,
+                isAdmin = admin,
+                inbox,
+                outbox,
+                collections = standaloneCollections,
+                summary,
+            });
         });
 
         // Chi tiết một việc + dòng thời gian sự kiện. Chỉ người giao/người nhận (hoặc Admin) xem được.
@@ -173,9 +235,12 @@ public static class TaskAssignmentEndpoints
                 assignedByMe = isAssigner || u.Can(Permissions.UsersManage),
                 canSubmit = isAssignee && AssigneeOpen.Contains(task.Status),
                 canStart = isAssignee && task.Status == "assigned",
-                canReview = canReview && task.Status == "submitted",
-                canEdit = canReview && task.Status != "accepted" && task.Status != "cancelled",
-                canCancel = canReview && task.Status != "accepted" && task.Status != "cancelled",
+                // Việc giao hàng không nghiệm thu: nó đóng ở màn Phiếu khi kế toán nhận lại tờ phiếu.
+                canReview = canReview && task.Status == "submitted" && task.Delivery is null,
+                // Trả lại thì việc giao hàng VẪN cần: lái xe báo đã giao nhưng hàng phải quay đầu.
+                canReject = canReview && task.Status == "submitted",
+                canEdit = canReview && !IsClosed(task.Status),
+                canCancel = canReview && !IsClosed(task.Status),
             };
             return Results.Ok(new { task, events, flags });
         });
@@ -229,7 +294,7 @@ public static class TaskAssignmentEndpoints
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
             if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
-            if (t.Status is "accepted" or "cancelled")
+            if (IsClosed(t.Status))
                 return Results.BadRequest(new { message = "Việc đã kết thúc, không sửa được." });
 
             var title = (req.Title ?? "").Trim();
@@ -324,6 +389,13 @@ public static class TaskAssignmentEndpoints
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
             if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
+            // Việc giao hàng bỏ hẳn chặng nghiệm thu: khách nhận hàng rồi thì chỉ còn chờ tờ phiếu ký
+            // nhận về kho, và chính cú "xác nhận phiếu về kho" đóng việc luôn.
+            if (t.IsDelivery)
+                return Results.BadRequest(new
+                {
+                    message = "Việc giao hàng không cần nghiệm thu. Mở phiếu và bấm “Xác nhận phiếu đã về kho” là xong.",
+                });
             if (t.Status != "submitted") return Results.BadRequest(new { message = "Chỉ nghiệm thu được việc đang chờ nghiệm thu." });
 
             var note = (req.Note ?? "").Trim();
@@ -374,7 +446,7 @@ public static class TaskAssignmentEndpoints
             var t = await LoadCore(conn, id);
             if (t is null) return Results.NotFound();
             if (!CanReview(t, me, u.Can(Permissions.UsersManage))) return Results.Forbid();
-            if (t.Status is "accepted" or "cancelled") return Results.BadRequest(new { message = "Việc đã kết thúc." });
+            if (IsClosed(t.Status)) return Results.BadRequest(new { message = "Việc đã kết thúc." });
 
             var note = (req.Note ?? "").Trim();
             await conn.Cmd("UPDATE work_tasks SET status='cancelled', review_note=@note, updated_at=CURRENT_TIMESTAMP WHERE id=@id")
@@ -493,20 +565,22 @@ public static class TaskAssignmentEndpoints
     private static bool CanReview(TaskCore t, string me, bool admin) =>
         admin || string.Equals(t.AssignerUsername, me, StringComparison.OrdinalIgnoreCase);
 
-    private static async Task<string> DisplayName(NpgsqlConnection conn, string username)
+    // internal: việc giao hàng sinh từ phiếu xuất kho (DeliveryAssignmentEndpoints) phải dùng CHUNG
+    // bộ đánh số và sổ sự kiện này, nếu không sẽ có hai nguồn sinh số việc lệch nhau.
+    internal static async Task<string> DisplayName(NpgsqlConnection conn, string username)
     {
         var n = await conn.Cmd("SELECT COALESCE(NULLIF(full_name,''), username) FROM app_users WHERE username=@u LIMIT 1")
             .With("@u", username).ExecuteScalarAsync() as string;
         return string.IsNullOrWhiteSpace(n) ? username : n;
     }
 
-    private static async Task<string> NextTaskNo(NpgsqlConnection conn)
+    internal static async Task<string> NextTaskNo(NpgsqlConnection conn)
     {
         var n = Convert.ToInt64(await conn.Cmd("SELECT nextval('work_task_seq')").ExecuteScalarAsync());
         return $"CV{n:D4}";
     }
 
-    private static async Task AddEvent(NpgsqlConnection conn, Guid taskId, string actor, string actorName, string kind, string note) =>
+    internal static async Task AddEvent(NpgsqlConnection conn, Guid taskId, string actor, string actorName, string kind, string note) =>
         await conn.Cmd(
             "INSERT INTO work_task_events (task_id, actor_username, actor_name, kind, note) VALUES (@t, @au, @an, @k, @n)")
             .With("@t", taskId).With("@au", actor).With("@an", actorName).With("@k", kind).With("@n", note)
@@ -532,47 +606,106 @@ public static class TaskAssignmentEndpoints
     private static async Task<TaskCore?> LoadCore(NpgsqlConnection conn, Guid id)
     {
         await using var r = await conn.Cmd(
-            "SELECT task_no, title, assigner_username, assignee_username, assignee_name, status, progress FROM work_tasks WHERE id=@id")
+            """
+            SELECT task_no, title, assigner_username, assignee_username, assignee_name, status, progress,
+                   COALESCE(source_kind,'') AS source_kind
+            FROM work_tasks WHERE id=@id
+            """)
             .With("@id", id).ExecuteReaderAsync();
         if (!await r.ReadAsync()) return null;
         return new TaskCore(r.Str("task_no"), r.Str("title"), r.Str("assigner_username"),
-            r.Str("assignee_username"), r.Str("assignee_name"), r.Str("status"), r.Int("progress"));
+            r.Str("assignee_username"), r.Str("assignee_name"), r.Str("status"), r.Int("progress"),
+            r.Str("source_kind"));
     }
 
     private const string SelectTask = """
         SELECT t.id, t.task_no, t.title, t.description, t.assigner_username, t.assigner_name,
                t.assignee_username, t.assignee_name, t.priority, t.due_at, t.status, t.progress,
                t.submit_note, t.submitted_at, t.review_note, t.rating, t.reviewed_at, t.reviewed_by,
-               t.created_at, t.updated_at
+               t.created_at, t.updated_at,
+               COALESCE(t.source_kind,'') AS source_kind, t.source_document_id,
+               COALESCE(d.voucher_no,'') AS doc_voucher_no,
+               COALESCE(NULLIF(d.customer_name,''), d.customer_input_name, '') AS doc_customer_name,
+               d.customer_id AS doc_customer_id
         FROM work_tasks t
+        LEFT JOIN documents d ON d.id = t.source_document_id
         """;
 
-    // Ưu tiên việc còn "sống" (chưa accepted/cancelled) lên trước, rồi theo hạn gần nhất, mới nhất.
+    // Ưu tiên việc còn "sống" (chưa đóng sổ) lên trước, rồi theo hạn gần nhất, mới nhất.
     private const string ListOrder =
-        "(CASE WHEN t.status IN ('accepted','cancelled') THEN 1 ELSE 0 END), t.due_at NULLS LAST, t.created_at DESC";
+        "(CASE WHEN t.status IN ('accepted','completed','cancelled') THEN 1 ELSE 0 END), t.due_at NULLS LAST, t.created_at DESC";
 
     private static WorkTaskDto ReadTask(NpgsqlDataReader r)
     {
         var due = r.DtNull("due_at");
         var status = r.Str("status");
-        var overdue = due is not null && due.Value < DateTime.UtcNow && status is not ("accepted" or "cancelled");
+        var overdue = due is not null && due.Value < DateTime.UtcNow && !IsClosed(status);
+        var documentOrdinal = r.GetOrdinal("source_document_id");
+        var customerOrdinal = r.GetOrdinal("doc_customer_id");
+        // Việc sinh từ phiếu xuất kho mang thêm số phiếu + khách hàng để lái xe không phải mở
+        // sang màn khác mới biết mình đang chở phiếu nào cho ai.
+        var delivery = r.Str("source_kind") == "delivery" && !r.IsDBNull(documentOrdinal)
+            ? new TaskDeliveryDto(
+                r.GetGuid(documentOrdinal),
+                r.Str("doc_voucher_no"),
+                r.Str("doc_customer_name"),
+                r.IsDBNull(customerOrdinal) ? null : r.GetGuid(customerOrdinal),
+                null)
+            : null;
         return new WorkTaskDto(
             r.Guid("id"), r.Str("task_no"), r.Str("title"), r.Str("description"),
             r.Str("assigner_username"), r.Str("assigner_name"), r.Str("assignee_username"), r.Str("assignee_name"),
             r.Str("priority"), due, status, r.Int("progress"),
             r.Str("submit_note"), r.DtNull("submitted_at"), r.Str("review_note"),
             r.IsDBNull(r.GetOrdinal("rating")) ? null : r.Int("rating"),
-            r.DtNull("reviewed_at"), r.Str("reviewed_by"), r.Dt("created_at"), r.Dt("updated_at"), overdue);
+            r.DtNull("reviewed_at"), r.Str("reviewed_by"), r.Dt("created_at"), r.Dt("updated_at"), overdue,
+            delivery);
+    }
+
+    /// <summary>
+    /// Lệnh thu tiền còn hiệu lực của một lái xe, khoá theo khách hàng để ghép vào việc giao hàng.
+    /// Dữ liệu vẫn nằm nguyên ở <c>cash_collection_orders</c>; đây chỉ là bản đọc để hiển thị.
+    /// </summary>
+    private static async Task<List<TaskCollectionDto>> LoadOpenCollections(NpgsqlConnection conn, string driverUsername)
+    {
+        var collections = new List<TaskCollectionDto>();
+        await using var r = await conn.Cmd("""
+            SELECT id, order_no, customer_id, customer_name, expected_amount, status, handover_due_at
+            FROM cash_collection_orders
+            WHERE lower(driver_username) = lower(@me)
+              AND status IN ('Assigned','Accepted','PendingHandover','Variance')
+            ORDER BY handover_due_at
+            """).With("@me", driverUsername).ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            collections.Add(new TaskCollectionDto(
+                r.Guid("id"), r.Str("order_no"), r.Guid("customer_id"), r.Str("customer_name"),
+                r.Dec("expected_amount"), r.Str("status"), r.Dt("handover_due_at")));
+        return collections;
     }
 
     private sealed record TaskCore(string TaskNo, string Title, string AssignerUsername,
-        string AssigneeUsername, string AssigneeName, string Status, int Progress);
+        string AssigneeUsername, string AssigneeName, string Status, int Progress, string SourceKind)
+    {
+        /// <summary>
+        /// Việc GIAO HÀNG sinh tự động từ phiếu xuất kho — không đi qua nghiệm thu như việc thường
+        /// (xem <see cref="DeliverySettlementEndpoints"/>).
+        /// </summary>
+        public bool IsDelivery => SourceKind == "delivery";
+    }
 
     public record WorkTaskDto(Guid Id, string TaskNo, string Title, string Description,
         string AssignerUsername, string AssignerName, string AssigneeUsername, string AssigneeName,
         string Priority, DateTime? DueAt, string Status, int Progress,
         string SubmitNote, DateTime? SubmittedAt, string ReviewNote, int? Rating,
-        DateTime? ReviewedAt, string ReviewedBy, DateTime CreatedAt, DateTime UpdatedAt, bool Overdue);
+        DateTime? ReviewedAt, string ReviewedBy, DateTime CreatedAt, DateTime UpdatedAt, bool Overdue,
+        TaskDeliveryDto? Delivery = null);
+
+    /// <summary>Phần phiếu xuất kho của một việc giao hàng, kèm lệnh thu tiền cùng khách (nếu có).</summary>
+    public record TaskDeliveryDto(Guid DocumentId, string VoucherNo, string CustomerName,
+        Guid? CustomerId, TaskCollectionDto? Collection);
+
+    public record TaskCollectionDto(Guid Id, string OrderNo, Guid CustomerId, string CustomerName,
+        decimal ExpectedAmount, string Status, DateTime HandoverDueAt);
 
     public record WorkTaskEventDto(long Id, string ActorUsername, string ActorName, string Kind, string Note, DateTime CreatedAt);
 

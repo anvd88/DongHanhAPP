@@ -105,7 +105,7 @@ fun PortalScreen(
     val isEmpty = !feed.about.hasContent && feed.news.isEmpty() && feed.events.isEmpty()
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = screenPadding(16.dp, 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         // Sự kiện sắp tới lên ĐẦU (nhân viên hay hóng): bài gần nhất làm thẻ nổi bật đếm ngược.
@@ -377,7 +377,8 @@ private fun PortalDetailScreen(post: PortalPost, onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                // Chừa đáy cho footer nổi: bài viết cuộn hết vẫn đọc được dòng cuối.
+                .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = BottomBarScrollRoom),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             val bitmap = rememberPortalBitmap(post.coverImage)

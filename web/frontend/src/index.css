@@ -1904,6 +1904,57 @@ html[data-theme="dark"] .km-chat-toast {
   flex: 0 0 var(--sidebar-rail-w);
   width: var(--sidebar-rail-w);
   z-index: 40;
+  /* Trang mượn thanh bên (ngăn xếp phiếu) thì rìa trái nở ra — đi cùng nhịp với hiệu ứng trượt. */
+  transition: flex-basis 0.42s cubic-bezier(0.22, 1, 0.36, 1), width 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Khi trang mượn: bề rộng phải ĐẶT RÕ. Trước đây nó nở ra do min-content của ô tìm kiếm — ăn may,
+   đổi nội dung một chút là bề rộng nhảy theo. */
+.km-sidebar-rail[data-rail="stack"] {
+  --sidebar-rail-w: 252px;
+}
+
+/* Hai lớp chồng nhau để lớp cũ còn kịp trượt ra trong lúc lớp mới trượt vào. */
+.km-rail-swap {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+.km-rail-layer {
+  position: absolute;
+  inset: 0;
+}
+/* Lớp cũ: đi ra bên TRÁI. */
+.km-rail-layer.is-leaving {
+  animation: kmRailOutLeft 0.26s cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+/* Lớp mới: hiện ra ở bên PHẢI rồi trượt sang trái vào chỗ, bắt đầu trễ một nhịp để mắt kịp thấy
+   lớp cũ rời đi trước. */
+.km-rail-layer.is-entering {
+  animation: kmRailInRight 0.36s cubic-bezier(0.16, 1, 0.3, 1) 0.14s both;
+}
+@keyframes kmRailOutLeft {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(-100%); opacity: 0; }
+}
+@keyframes kmRailInRight {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Máy yếu và người tắt chuyển động: đổi thẳng, không trượt. */
+html.perf-lite .km-sidebar-rail,
+html.perf-lite .km-rail-layer {
+  transition: none;
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .km-sidebar-rail,
+  .km-rail-layer {
+    transition: none;
+    animation: none;
+  }
 }
 
 /* Sidebar luôn giữ chiều rộng đầy đủ (không reflow). Chỉ animate clip-path
@@ -3219,3 +3270,55 @@ html[data-theme="dark"] .km-theme-knob {
     transform: translateX(20px);
   }
 }
+
+/* ── Màn hình lỗi giao diện (AppErrorBoundary) + nút dùng chung của các màn hình hệ thống ────────
+   Trước đây một lỗi render làm trắng cả trang; giờ nó rơi vào đây nên phải tự đứng được kể cả khi
+   vỏ app chưa dựng xong (không dựa vào biến của Layout). */
+.km-crash {
+  display: grid;
+  min-height: 100vh;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 32px 20px;
+  text-align: center;
+}
+
+.km-crash h1 { font-size: 1.1rem; font-weight: 800; }
+.km-crash p { max-width: 560px; font-size: 0.86rem; line-height: 1.6; opacity: 0.75; }
+
+.km-crash pre {
+  max-width: min(680px, 100%);
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.76rem;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  opacity: 0.8;
+}
+
+.km-crash-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+.km-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  border: 1px solid rgba(127, 127, 127, 0.34);
+  border-radius: 10px;
+  padding: 0 16px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.km-btn:hover { border-color: var(--accent, #2f5fd0); color: var(--accent, #2f5fd0); }
+
+/* Lỗi ở MỘT trang thì khung lỗi nằm gọn trong vùng nội dung, không đẩy dài cả màn hình. */
+.km-page .km-crash { min-height: 60vh; padding: 24px 12px; }

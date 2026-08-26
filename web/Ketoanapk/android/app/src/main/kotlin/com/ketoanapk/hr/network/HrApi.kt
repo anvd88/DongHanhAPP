@@ -24,6 +24,7 @@ import com.ketoanapk.hr.data.QuizResult
 import com.ketoanapk.hr.data.BenefitsSummary
 import com.ketoanapk.hr.data.FaceEngineStatus
 import com.ketoanapk.hr.data.RecoveryResetRequest
+import com.ketoanapk.hr.data.RecoveryVerifyRequest
 import com.ketoanapk.hr.data.MotionConfig
 import com.ketoanapk.hr.data.SmileConfig
 import com.ketoanapk.hr.data.OfflineAttendanceRecord
@@ -73,6 +74,9 @@ import retrofit2.http.Url
 interface HrApi {
     @POST("api/auth/login")
     suspend fun login(@Body body: LoginRequest): LoginResponse
+
+    @POST("api/auth/verify-recovery-code")
+    suspend fun verifyRecoveryCode(@Body body: RecoveryVerifyRequest): retrofit2.Response<Unit>
 
     @POST("api/auth/reset-with-recovery-code")
     suspend fun resetWithRecoveryCode(@Body body: RecoveryResetRequest): retrofit2.Response<Unit>
@@ -238,6 +242,37 @@ interface HrApi {
 
     @POST("api/payout-vouchers/{id}/cancel")
     suspend fun cancelPayoutVoucher(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.CancelPayoutBody): retrofit2.Response<Unit>
+
+    // ---- Lệnh thu tiền khách hàng ----
+    @GET("api/cash-collections")
+    suspend fun cashCollections(@Query("scope") scope: String): List<com.ketoanapk.hr.data.CashCollection>
+
+    @GET("api/cash-collections/drivers")
+    suspend fun cashCollectionDrivers(): List<com.ketoanapk.hr.data.CashCollectionDriver>
+
+    @GET("api/cash-collections/customers")
+    suspend fun accountingCustomers(): List<com.ketoanapk.hr.data.CashCollectionCustomer>
+
+    @POST("api/cash-collections")
+    suspend fun createCashCollection(@Body body: com.ketoanapk.hr.data.CreateCashCollectionBody): com.ketoanapk.hr.data.CreatedCashCollection
+
+    @POST("api/cash-collections/{id}/accept")
+    suspend fun acceptCashCollection(@Path("id") id: String): retrofit2.Response<Unit>
+
+    @POST("api/cash-collections/{id}/fail")
+    suspend fun failCashCollection(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.CashCollectionReasonBody): retrofit2.Response<Unit>
+
+    @POST("api/cash-collections/{id}/collect")
+    suspend fun collectCashCollection(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.CashCountBody): com.ketoanapk.hr.data.CashCollectionResult
+
+    @POST("api/cash-collections/{id}/receive")
+    suspend fun receiveCashCollection(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.CashCountBody): com.ketoanapk.hr.data.CashCollectionResult
+
+    @POST("api/cash-collections/{id}/cancel")
+    suspend fun cancelCashCollection(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.CashCollectionReasonBody): retrofit2.Response<Unit>
+
+    @POST("api/cash-collections/{id}/resolve")
+    suspend fun resolveCashCollection(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.ResolveCashCollectionBody): com.ketoanapk.hr.data.CashCollectionResult
 
     @GET("api/payroll/salaries")
     suspend fun salaries(): List<SalaryListItem>
