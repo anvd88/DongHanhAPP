@@ -167,10 +167,17 @@ export function DeliveryAssignPanel({
             onChange={(event) => setDriverUsername(event.target.value)}
           >
             <option value="">— Chọn lái xe —</option>
+            {/* Lái xe chưa chấm công / đang nghỉ phép bị khoá kèm chú thích, đúng như ô chọn người
+                nhận việc. Máy chủ cũng từ chối nếu vẫn cố gửi lên. */}
             {drivers.map((driver) => (
-              <option key={driver.username} value={driver.username}>
+              <option
+                key={driver.username}
+                value={driver.username}
+                disabled={driver.selectable === false && driver.username !== state?.driverUsername}
+              >
                 {driver.fullName}
                 {driver.department ? ` · ${driver.department}` : ""}
+                {driver.attendanceNote ? ` — ${driver.attendanceNote}` : ""}
               </option>
             ))}
           </Select>

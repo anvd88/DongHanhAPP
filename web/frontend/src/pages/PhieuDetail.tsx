@@ -33,6 +33,7 @@ import { api } from "../lib/api";
 import { date as fmtDate, dateTime, money, num } from "../lib/format";
 import type { Customer, DocumentDetail, DocumentLine, GoodsReturn, SettlementResult } from "../lib/types";
 import "./phieu-detail.css";
+import "./ban-hang.css";
 import "../features/giacong/giacong.css";
 
 const emptyLine = (): DocumentLine => ({ lineContent: "", spec: "", quantity: 1, unitPrice: 0, note: "" });
@@ -245,7 +246,7 @@ export function PhieuDetail() {
 
   if (loading) {
     return (
-      <div className="gc-root flex justify-center py-24">
+      <div className="gc-root bh flex justify-center py-24">
         <Spinner />
       </div>
     );
@@ -253,7 +254,7 @@ export function PhieuDetail() {
 
   if (!doc) {
     return (
-      <div className="gc-root">
+      <div className="gc-root bh">
         <PageHeader title="Phiếu xuất kho" subtitle={error || "Không tìm thấy phiếu."} />
         <Button variant="ghost" onClick={() => navigate("/ban-hang")}>
           <ArrowLeft className="h-4 w-4" /> Về danh sách
@@ -265,21 +266,28 @@ export function PhieuDetail() {
   const task = settlement?.task ?? null;
 
   return (
-    <div className="gc-root pd-root">
+    <div className="gc-root bh pd-root">
       {/* ── Đầu trang: danh tính phiếu + hành động toàn phiếu ─────────────────── */}
       <div className="pd-topbar">
-        <button type="button" className="gc-icon-btn h-9 w-9" onClick={() => navigate("/ban-hang")} aria-label="Về danh sách phiếu">
+        <button type="button" className="bh-ibtn" onClick={() => navigate("/ban-hang")} aria-label="Về danh sách phiếu">
           <ArrowLeft className="h-4 w-4" />
         </button>
         <div className="min-w-0">
           <h1 className="pd-title">
-            {doc.voucherNo ? `Phiếu ${doc.voucherNo}` : "Phiếu nháp"}
+            {doc.voucherNo ? (
+              <>
+                Phiếu <span className="pd-voucher-no">{doc.voucherNo}</span>
+              </>
+            ) : (
+              "Phiếu nháp"
+            )}
             {cancelled && <span className="pd-chip pd-chip--danger">Đã hủy</span>}
             {!cancelled && issued && <span className="pd-chip pd-chip--ok">Đã phát hành</span>}
             {!cancelled && !issued && <span className="pd-chip">Chưa in</span>}
           </h1>
           <p className="pd-sub">
-            {doc.customerName || "Khách lẻ"} · {fmtDate(doc.date)} · {money(total)} ₫
+            {doc.customerName || "Khách lẻ"} · <span className="bh-mono">{fmtDate(doc.date)}</span> ·{" "}
+            <span className="bh-mono">{money(total)} ₫</span>
           </p>
         </div>
         <div className="pd-topbar-actions">
@@ -448,7 +456,7 @@ export function PhieuDetail() {
                           <td>
                             <button
                               type="button"
-                              className="gc-icon-btn h-7 w-7 text-rose-500"
+                              className="bh-ibtn bh-ibtn--danger"
                               aria-label={`Xoá dòng ${i + 1}`}
                               onClick={() => setLines((a) => (a.length > 1 ? a.filter((_, j) => j !== i) : a))}
                             >

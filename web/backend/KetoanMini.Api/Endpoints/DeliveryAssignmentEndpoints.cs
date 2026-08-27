@@ -56,7 +56,8 @@ public static class DeliveryAssignmentEndpoints
         {
             await using var conn = await db.OpenAsync();
             var drivers = new List<object>();
-            await using var r = await conn.Cmd("""
+            var rows = new List<(string Username, string FullName, string Dept)>();
+            await using (var r = await conn.Cmd("""
                 SELECT au.username,
                        COALESCE(NULLIF(e.full_name,''), NULLIF(au.full_name,''), au.username) AS full_name,
                        COALESCE(d.name,'') AS dept
@@ -71,9 +72,30 @@ public static class DeliveryAssignmentEndpoints
                           AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)))
                   AND (e.id IS NULL OR e.status = 'Active')
                 ORDER BY full_name
-                """).With("@driver", AppRoles.Driver).ExecuteReaderAsync();
-            while (await r.ReadAsync())
-                drivers.Add(new { username = r.Str("username"), fullName = r.Str("full_name"), department = r.Str("dept") });
+                """).With("@driver", AppRoles.Driver).ExecuteReaderAsync())
+            {
+                while (await r.ReadAsync())
+                    rows.Add((r.Str("username"), r.Str("full_name"), r.Str("dept")));
+            }
+
+            // Cùng một chốt với ô chọn người nhận việc: lái xe chưa chấm công hoặc đang nghỉ phép vẫn
+            // hiện tên (kèm chú thích) nhưng không gán phiếu được — xem WorkforceAvailability.
+            var availability = await WorkforceAvailability.ForUsersAsync(
+                conn, rows.Select(x => x.Username).ToList());
+            foreach (var row in rows)
+            {
+                var state = availability.TryGetValue(row.Username, out var found)
+                    ? found : WorkforceAvailability.Unknown;
+                drivers.Add(new
+                {
+                    username = row.Username,
+                    fullName = row.FullName,
+                    department = row.Dept,
+                    attendanceStatus = state.Status,
+                    attendanceNote = state.Label,
+                    selectable = state.Selectable,
+                });
+            }
             return Results.Ok(new { drivers });
         });
 
@@ -190,6 +212,16 @@ public static class DeliveryAssignmentEndpoints
             // Thu chuyến khỏi tay một lái xe đang cầm việc (đổi sang người khác, sang khách tự lấy,
             // hoặc gỡ gán) — đây mới là việc cần lý do và cần báo cho người bị thu.
             var takingFromDriver = liveTask && !sameDriver && state.TaskAssignee.Length > 0;
+
+            // Chỉ chặn khi THẬT SỰ trao chuyến cho một người mới. Sửa ghi chú cho chuyến đang chạy
+            // không phải là giao việc, mà lái xe lúc ấy đã ở ngoài đường rồi.
+            if (mode == ModeDriver && !sameDriver
+                && await TaskAssignmentEndpoints.BlockUnavailableAsync(conn, driverUsername, driverName, tx)
+                   is { } unavailable)
+            {
+                await tx.RollbackAsync();
+                return unavailable;
+            }
 
             // Lái xe đã nhận chuyến: tờ phiếu đang ở ngoài đường. Vẫn cho đổi, nhưng phải nói vì sao
             // — cuối tháng đối soát còn biết ai làm và tại sao.

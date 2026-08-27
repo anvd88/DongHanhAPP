@@ -107,6 +107,13 @@ data class PickOption(
     val extra: String = "",
     /** Từ khóa phụ để tìm kiếm (mã nhân viên, số điện thoại…) mà không cần hiện lên màn hình. */
     val keywords: String = "",
+    /**
+     * Dòng CÓ HIỆN nhưng KHÔNG bấm được (vd. nhân viên chưa chấm công, đang nghỉ phép).
+     * Cố ý không lọc bỏ khỏi danh sách: thấy tên kèm lý do thì người dùng hiểu ngay vì sao không
+     * giao được, còn tên biến mất thì họ đi hỏi bộ phận kỹ thuật xem tài khoản có bị xoá không.
+     * Lý do hiển thị đặt ở [sub] hoặc [extra].
+     */
+    val disabled: Boolean = false,
 )
 
 private val diacriticMarks = "\\p{Mn}+".toRegex()
@@ -327,10 +334,13 @@ fun SearchablePickerDialog(
 
 @Composable
 private fun PickerRow(option: PickOption, selected: Boolean, showAvatar: Boolean, onClick: () -> Unit) {
+    // Dòng bị khoá: mờ đi và không nhận chạm, nhưng chữ vẫn đọc rõ để thấy được lý do bên dưới tên.
+    val locked = option.disabled
+    val dim = if (locked) 0.45f else 1f
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = !locked, onClick = onClick)
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else androidx.compose.ui.graphics.Color.Transparent)
             .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -341,14 +351,14 @@ private fun PickerRow(option: PickOption, selected: Boolean, showAvatar: Boolean
                 Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = dim)),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     initials(option.label),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = dim),
                 )
             }
         }
@@ -357,7 +367,7 @@ private fun PickerRow(option: PickOption, selected: Boolean, showAvatar: Boolean
                 option.label,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = dim),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -365,8 +375,10 @@ private fun PickerRow(option: PickOption, selected: Boolean, showAvatar: Boolean
                 Text(
                     option.sub,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    // Lý do bị khoá phải ĐỌC ĐƯỢC, nên dòng phụ của hàng khoá không mờ thêm nữa.
+                    color = if (locked) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -376,11 +388,11 @@ private fun PickerRow(option: PickOption, selected: Boolean, showAvatar: Boolean
                 option.extra,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = dim),
                 maxLines = 1,
             )
         }
-        if (selected) {
+        if (selected && !locked) {
             Icon(Icons.Filled.Check, contentDescription = "Đang chọn", tint = MaterialTheme.colorScheme.primary)
         }
     }

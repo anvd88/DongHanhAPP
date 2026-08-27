@@ -1165,7 +1165,7 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, LivenessMetricsLog livenessLog, AttendancePreviewTokens previewTokens, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, LivenessMetricsLog livenessLog, AttendancePreviewTokens previewTokens, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http, PushService push) =>
         {
             var currentUser = u.Username();
             var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.Can(Permissions.AttendanceManage);
@@ -1226,6 +1226,9 @@ public static class ChamCongEndpoints
                 await db.RecordAudit(pending.MatchedUser, $"Chấm công {confirmDecision.Loai}", "ChamCong",
                     pending.MatchedUser,
                     $"Độ khớp {pending.Similarity:0.000}, chất lượng ảnh {pending.Quality:0.00} (xác nhận sau xem trước).");
+
+                await ManagementFeed.AnnounceAttendanceAsync(push, lf.CreateLogger("ManagementFeed"),
+                    pending.MatchedUser, pending.MatchedName, confirmDecision.Loai, DateTime.UtcNow);
 
                 // Tự học vẫn chạy như luồng cũ nhờ vector đặc trưng đã giữ trong token.
                 try
@@ -1537,6 +1540,9 @@ public static class ChamCongEndpoints
 
             await db.RecordAudit(bestUser, $"Chấm công {loai}", "ChamCong", bestUser,
                 $"Độ khớp {bestSim:0.000}, chất lượng ảnh {best.Score:0.00}{(isOffline ? ", đồng bộ ngoại tuyến" : "")} (web).");
+
+            await ManagementFeed.AnnounceAttendanceAsync(push, lf.CreateLogger("ManagementFeed"),
+                bestUser, bestName ?? "", loai, occurredAtUtc ?? DateTime.UtcNow);
 
             try { await TryAdaptiveLearnAsync(conn, bestUser, bestName ?? "", probe, bestSim, cipher); }
             catch { /* tự học là phụ trợ, lỗi không được làm hỏng chấm công */ }

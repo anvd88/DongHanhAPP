@@ -546,7 +546,7 @@ public static class RequestEndpoints
         });
 
         g.MapPost("/", async (CreateRequestReq req, ClaimsPrincipal u, Database db, PushService push,
-            IConfiguration config) =>
+            IConfiguration config, ILoggerFactory lf) =>
         {
             if (string.IsNullOrWhiteSpace(req.Type) || Array.FindIndex(Types, t => t.Type == req.Type) < 0)
                 return Results.BadRequest(new { message = "Loại đơn không hợp lệ." });
@@ -555,10 +555,11 @@ public static class RequestEndpoints
             var me = u.Username();
             var empId = await HrEndpoints.EnsureEmployeeForUser(conn, me);
 
-            // Tìm quản lý trực tiếp để dựng chuỗi duyệt.
-            string mgrUsername = "", mgrName = "";
+            // Tìm quản lý trực tiếp để dựng chuỗi duyệt (kèm tên người gửi cho bảng tin điều hành).
+            string mgrUsername = "", mgrName = "", requesterName = "";
             await using (var r = await conn.Cmd("""
-                SELECT m.username, m.full_name FROM hr_employees e
+                SELECT m.username, m.full_name, COALESCE(e.full_name,'') AS requester_name
+                FROM hr_employees e
                 LEFT JOIN hr_employees m ON m.id = e.manager_id WHERE e.id=@id
                 """).With("@id", empId).ExecuteReaderAsync())
             {
@@ -566,6 +567,7 @@ public static class RequestEndpoints
                 {
                     mgrUsername = r.Str("username");
                     mgrName = r.Str("full_name");
+                    requesterName = r.Str("requester_name");
                 }
             }
             // A stale manager link must not create a step that no authorized account can process.
@@ -612,6 +614,8 @@ public static class RequestEndpoints
                     return Results.Conflict(new { message = "Ngày đã chọn chưa có ca của bạn để đổi. Hãy chọn Nhận ca nếu muốn đăng ký ca trống." });
             }
 
+            // Ai đã được báo đích danh về đơn này — bảng tin điều hành (dưới) sẽ bỏ qua họ.
+            var notified = new List<string>();
             await using var tx = (NpgsqlTransaction)await conn.BeginTransactionAsync();
             try
             {
@@ -641,11 +645,16 @@ public static class RequestEndpoints
                 var inboxSig = $"inbox:{reqId}";
                 if (!string.IsNullOrWhiteSpace(mgrUsername)
                     && !string.Equals(mgrUsername, me, StringComparison.OrdinalIgnoreCase))
+                {
                     await push.EnqueueToUserAsync(conn, tx, mgrUsername, "Đơn mới chờ duyệt", pushBody,
                         inboxSig, "Approval");
+                    notified.Add(mgrUsername);
+                }
                 else
-                    await EnqueueToPermissionHoldersAsync(conn, tx, push, Permissions.RequestsManage,
-                        "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval");
+                {
+                    notified.AddRange(await EnqueueToPermissionHoldersAsync(conn, tx, push,
+                        Permissions.RequestsManage, "Đơn mới chờ duyệt", pushBody, inboxSig, "Approval"));
+                }
 
                 await tx.CommitAsync();
             }
@@ -665,6 +674,11 @@ public static class RequestEndpoints
             }
 
             await db.RecordAudit(me, "Gửi đơn từ", "Request", no, $"{TypeLabel(req.Type)} (web).");
+
+            // Sau khi đã commit: cấp quản lý trở lên thấy "ai vừa gửi đơn gì" trên chuông web, kể cả
+            // khi đơn đó không chờ chính họ duyệt.
+            await ManagementFeed.AnnounceRequestAsync(push, lf.CreateLogger("ManagementFeed"),
+                me, requesterName, no, TypeLabel(req.Type), reqId, notified);
 
             return Results.Ok(new { id = reqId, requestNo = no });
         });
@@ -879,7 +893,8 @@ public static class RequestEndpoints
         return Permissions.For(roles).Contains(permission);
     }
 
-    private static async Task EnqueueToPermissionHoldersAsync(
+    /// <summary>Trả về danh sách người đã được xếp thông báo — bên gọi cần biết để không báo trùng.</summary>
+    private static async Task<List<string>> EnqueueToPermissionHoldersAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, PushService push, string permission,
         string title, string body, string notifId, string? target)
     {
@@ -903,8 +918,10 @@ public static class RequestEndpoints
             }
         }
 
-        foreach (var recipient in recipients.Distinct(StringComparer.OrdinalIgnoreCase))
+        var targets = recipients.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (var recipient in targets)
             await push.EnqueueToUserAsync(conn, tx, recipient, title, body, notifId, target);
+        return targets;
     }
 
     private static async Task<IResult> Decide(Guid id, DecideReq req, ClaimsPrincipal u, Database db,

@@ -1,381 +1,462 @@
-/* Trang PHIẾU XUẤT KHO. Bố cục theo trình tự: danh tính → tiến trình → việc cần làm → số liệu | quy trình. */
+/* Hallmark · genre: modern-minimal · macrostructure: Ledger Sheet (app page)
+ * theme: custom "Sổ cái" (xem ban-hang.tokens.css) · design-system: chung với /ban-hang
+ * -------------------------------------------------------------------------
+ * TRANG PHIẾU XUẤT KHO. Bố cục giữ nguyên trình tự cũ — danh tính → tiến trình
+ * → việc cần làm → số liệu | quy trình — vì đó là thứ đúng. Cái thay là LỚP
+ * HÌNH THỨC: kính mờ và bo tròn 14–18px nhường chỗ cho kẻ mảnh và góc 3px, để
+ * tờ phiếu trên màn hình đọc giống tờ phiếu trên giấy.
+ *
+ * Token sống trong .bh (PhieuDetail gắn kèm class này). Khối .pr-* ở cuối file
+ * là XẤP PHIẾU nằm trong thanh bên — nền tối riêng của sidebar — nên giữ
+ * nguyên hệ .gc-*, không kéo vào đây.
+ * ========================================================================= */
 
 .pd-root {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--bh-space-xs);
+  padding-bottom: var(--bh-space-md);
 }
 
 /* ── Đầu trang ───────────────────────────────────────────────────────────── */
 .pd-topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--bh-space-xs);
   flex-wrap: wrap;
+  padding: var(--bh-space-sm) 0 var(--bh-space-xs);
+  border-bottom: 2px solid var(--bh-rule-strong);
 }
 .pd-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
   margin: 0;
-  font-size: 1.35rem;
-  font-weight: 900;
-  color: var(--gc-text);
-  line-height: 1.2;
+  font-size: var(--bh-text-xl);
+  font-weight: 800;
+  font-style: normal;
+  letter-spacing: var(--bh-track-tight);
+  line-height: 1.15;
+  color: var(--bh-ink);
+}
+.pd-title .pd-voucher-no {
+  font-family: var(--bh-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 .pd-sub {
-  margin: 2px 0 0;
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--gc-text-muted);
+  margin: 4px 0 0;
+  font-size: var(--bh-text-sm);
+  font-weight: 500;
+  color: var(--bh-ink-2);
+}
+.pd-sub .bh-mono {
+  color: var(--bh-ink);
 }
 .pd-topbar-actions {
   margin-left: auto;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--bh-space-2xs);
 }
+
+/* Nhãn trạng thái: ô vuông đặc/rỗng + chữ, không viên thuốc phát sáng. */
 .pd-chip {
-  border-radius: 999px;
-  border: 1px solid var(--gc-border);
-  padding: 2px 10px;
-  font-size: 0.68rem;
-  font-weight: 800;
-  color: var(--gc-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--bh-text-sm);
+  font-weight: 600;
+  color: var(--bh-warn);
   white-space: nowrap;
 }
+.pd-chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
 .pd-chip--ok {
-  border-color: rgba(16, 185, 129, 0.45);
-  background: rgba(16, 185, 129, 0.12);
-  color: #047857;
+  color: var(--bh-ok);
+}
+.pd-chip--ok::before {
+  background: currentColor;
+  box-shadow: none;
 }
 .pd-chip--danger {
-  border-color: rgba(244, 63, 94, 0.45);
-  background: rgba(244, 63, 94, 0.12);
-  color: #be123c;
+  color: var(--bh-danger);
 }
-html[data-theme="dark"] .pd-chip--ok { color: #6ee7b7; }
-html[data-theme="dark"] .pd-chip--danger { color: #fda4af; }
+.pd-chip--danger::before {
+  background: currentColor;
+  box-shadow: none;
+}
 
-/* ── Thanh tiến trình ────────────────────────────────────────────────────── */
+/* ── Thanh tiến trình ─────────────────────────────────────────────────────
+   Bốn ô ngăn nhau bằng kẻ dọc trong MỘT khung — đọc ra ngay là một chuỗi,
+   thay cho bốn viên bo tròn nối bằng gạch nhỏ. */
 .pd-steps {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
   margin: 0;
-  padding: 10px;
+  padding: 0;
   list-style: none;
-  border: 1px solid var(--gc-border);
-  border-radius: 18px;
-  background: var(--gc-surface, rgba(255, 255, 255, 0.55));
+  border: 1px solid var(--bh-rule);
+  background: var(--bh-panel);
 }
 .pd-step {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   min-width: 0;
-  padding: 8px 10px;
-  border-radius: 14px;
+  padding: 11px var(--bh-space-xs);
+  border-left: 1px solid var(--bh-rule-soft);
 }
-/* Đường nối giữa các chặng: nhìn ra ngay đây là một chuỗi, không phải 5 ô rời. */
-.pd-step + .pd-step::before {
-  content: "";
-  position: absolute;
-  left: -6px;
-  top: 50%;
-  width: 6px;
-  height: 2px;
-  background: var(--gc-border);
+.pd-step:first-child {
+  border-left: 0;
 }
 .pd-step-dot {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-  border-radius: 999px;
-  border: 1.5px solid var(--gc-border);
-  font-size: 0.72rem;
-  font-weight: 900;
-  color: var(--gc-text-muted);
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border: 1px solid var(--bh-rule);
+  font-family: var(--bh-mono);
+  font-size: var(--bh-text-2xs);
+  font-weight: 600;
+  color: var(--bh-ink-3);
 }
 .pd-step-text {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  line-height: 1.25;
+  line-height: 1.3;
 }
 .pd-step-text b {
-  font-size: 0.8rem;
-  font-weight: 800;
-  color: var(--gc-text-soft);
+  font-size: var(--bh-text-sm);
+  font-weight: 700;
+  color: var(--bh-ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .pd-step-text small {
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: var(--gc-text-muted);
+  font-size: var(--bh-text-2xs);
+  font-weight: 500;
+  color: var(--bh-ink-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .pd-step.is-done .pd-step-dot {
-  border-color: rgba(16, 185, 129, 0.6);
-  background: rgba(16, 185, 129, 0.16);
-  color: #047857;
+  border-color: var(--bh-ok);
+  color: var(--bh-ok);
 }
-.pd-step.is-done .pd-step-text b { color: var(--gc-text); }
+.pd-step.is-done .pd-step-text b {
+  color: var(--bh-ink);
+}
+/* Chặng hiện tại: vạch dọc màu nhấn ở mép trái + nền nhạt. Không đổ bóng. */
 .pd-step.is-now {
-  background: rgba(var(--gc-accent-rgb), 0.12);
-  box-shadow: inset 0 0 0 1.5px rgba(var(--gc-accent-rgb), 0.45);
+  background: var(--bh-accent-wash);
+  box-shadow: inset 3px 0 0 var(--bh-accent);
 }
 .pd-step.is-now .pd-step-dot {
-  border-color: var(--gc-accent);
-  background: var(--gc-accent);
-  color: #fff;
+  border-color: var(--bh-accent);
+  background: var(--bh-accent);
+  color: var(--bh-accent-ink);
 }
-.pd-step.is-now .pd-step-text b { color: var(--gc-accent); }
-.pd-step.is-todo { opacity: 0.62; }
+.pd-step.is-now .pd-step-text b {
+  color: var(--bh-accent);
+}
+.pd-step.is-todo .pd-step-text b,
+.pd-step.is-todo .pd-step-text small {
+  color: var(--bh-ink-3);
+}
 
 /* ── Việc cần làm ngay ───────────────────────────────────────────────────── */
 .pd-next {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px;
-  border-radius: 18px;
-  border: 1.5px solid rgba(var(--gc-accent-rgb), 0.45);
-  background: rgba(var(--gc-accent-rgb), 0.09);
+  gap: var(--bh-space-2xs);
+  padding: var(--bh-space-xs) var(--bh-space-sm);
+  border: 1px solid var(--bh-rule);
+  border-left: 3px solid var(--bh-accent);
+  background: var(--bh-accent-wash);
 }
 .pd-next--calm {
-  border-color: var(--gc-border);
-  background: transparent;
+  border-left-color: var(--bh-rule-strong);
+  background: var(--bh-panel);
 }
 .pd-next--done {
-  border-color: rgba(16, 185, 129, 0.45);
-  background: rgba(16, 185, 129, 0.1);
+  border-left-color: var(--bh-ok);
+  background: var(--bh-ok-wash);
 }
 .pd-next-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 900;
-  color: var(--gc-text);
+  gap: var(--bh-space-2xs);
+  font-size: var(--bh-text-md);
+  font-weight: 700;
+  letter-spacing: var(--bh-track-tight);
+  color: var(--bh-ink);
 }
 .pd-next-note {
   margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--gc-text-muted);
+  font-size: var(--bh-text-sm);
+  font-weight: 500;
+  color: var(--bh-ink-2);
 }
 .pd-next textarea,
 .pd-reason textarea {
   width: 100%;
-  min-height: 56px;
-  border-radius: 12px;
-  border: 1px solid var(--gc-border);
-  background: var(--gc-surface, rgba(255, 255, 255, 0.6));
-  padding: 10px 12px;
-  font-size: 0.85rem;
-  color: var(--gc-text);
+  min-height: 58px;
+  border: 1px solid var(--bh-rule);
+  border-radius: var(--bh-r-sm);
+  background: var(--bh-paper);
+  padding: 9px 11px;
+  font-family: var(--bh-font);
+  font-size: var(--bh-text-md);
+  color: var(--bh-ink);
   outline: none;
   resize: vertical;
+}
+.pd-next textarea:focus-visible,
+.pd-reason textarea:focus-visible {
+  border-color: var(--bh-accent);
 }
 .pd-next-buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--bh-space-2xs);
 }
 
 /* ── Lưới hai cột: số liệu | quy trình ───────────────────────────────────── */
 .pd-grid {
   display: grid;
   grid-template-columns: minmax(0, 2.6fr) minmax(280px, 0.9fr);
-  gap: 14px;
+  gap: var(--bh-space-xs);
   align-items: start;
 }
 .pd-col {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--bh-space-xs);
   min-width: 0;
 }
+
+/* Thẻ = một khung có kẻ, tiêu đề nằm trên một dải nền nhạt có kẻ chân. */
 .pd-card {
-  padding: 16px;
+  padding: 0;
+  border: 1px solid var(--bh-rule);
+  background: var(--bh-panel);
+}
+.pd-card > *:not(.pd-card-title):not(.pd-card-head) {
+  margin-left: var(--bh-space-sm);
+  margin-right: var(--bh-space-sm);
+}
+.pd-card > *:last-child {
+  margin-bottom: var(--bh-space-sm);
+}
+.pd-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 var(--bh-space-xs);
+  padding: 9px var(--bh-space-sm);
+  border-bottom: 1px solid var(--bh-rule);
+  font-size: var(--bh-text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--bh-track-label);
+  text-transform: uppercase;
+  /* Tiêu đề mục IN HOA màu đất nung — giọng "CÔNG DÂN" / "DOANH NGHIỆP"
+     của Cổng Dịch vụ công. */
+  color: var(--bh-accent-deep);
 }
 .pd-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--bh-space-2xs);
   flex-wrap: wrap;
+  margin: 0 0 var(--bh-space-xs);
+  padding: 5px var(--bh-space-2xs) 5px var(--bh-space-sm);
+  border-bottom: 1px solid var(--bh-rule);
 }
-.pd-card-head .pd-card-title { flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
-/* Nút chữ, KHÔNG dùng .gc-icon-btn: lớp đó ép width 38px nên chữ bị cắt mất. */
+.pd-card-head .pd-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+/* Nút chữ, KHÔNG dùng .bh-ibtn: lớp đó ép vuông 30px nên chữ bị cắt mất. */
 .pd-add-line {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 34px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid var(--gc-border);
-  background: var(--gc-surface, rgba(255, 255, 255, 0.6));
-  font-size: 0.82rem;
-  font-weight: 800;
-  color: var(--gc-text-soft);
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--bh-rule);
+  border-radius: var(--bh-r-sm);
+  background: var(--bh-sheet);
+  font-size: var(--bh-text-sm);
+  font-weight: 600;
+  color: var(--bh-ink-2);
   white-space: nowrap;
   cursor: pointer;
+  transition: color var(--bh-dur) var(--bh-ease), border-color var(--bh-dur) var(--bh-ease);
 }
-.pd-add-line:hover { color: var(--gc-accent); border-color: rgba(var(--gc-accent-rgb), 0.55); }
-.pd-card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 12px;
-  font-size: 0.95rem;
-  font-weight: 900;
-  color: var(--gc-text);
+.pd-add-line:hover {
+  color: var(--bh-accent);
+  border-color: var(--bh-accent);
 }
-.pd-card-head .pd-card-title { margin-bottom: 0; }
 .pd-hint {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--gc-text-muted);
+  font-size: var(--bh-text-xs);
+  font-weight: 500;
+  color: var(--bh-ink-3);
+}
+/* Gợi ý nằm lọt trong tiêu đề mục thì KHÔNG được ăn theo IN HOA của tiêu đề —
+   nó là câu giải thích, không phải cái nhãn. */
+.pd-card-title .pd-hint {
+  text-transform: none;
+  letter-spacing: normal;
 }
 .pd-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
+  gap: var(--bh-space-xs);
 }
 
 /* ── Bảng hàng hoá ───────────────────────────────────────────────────────── */
 .pd-table-wrap {
-  margin-top: 12px;
+  margin-top: var(--bh-space-xs);
   overflow-x: auto;
 }
 .pd-table {
   width: 100%;
   min-width: 560px;
   border-collapse: collapse;
-  font-size: 0.84rem;
+  font-size: var(--bh-text-sm);
 }
 /* Hai cột chữ co được, các cột số thì không — để cột "Chênh lệch" luôn lọt trong khung. */
 .pd-table td:first-child { min-width: 120px; }
 .pd-table td:nth-child(2) { min-width: 88px; }
 .pd-table th {
-  padding: 8px 6px;
+  padding: 8px 7px;
   text-align: left;
-  font-size: 0.68rem;
-  font-weight: 900;
+  font-size: var(--bh-text-2xs);
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
-  color: var(--gc-text-muted);
-  border-bottom: 1px solid var(--gc-border);
+  letter-spacing: var(--bh-track-label);
+  color: var(--bh-ink-3);
+  border-bottom: 1px solid var(--bh-rule-strong);
   white-space: nowrap;
 }
 .pd-table td {
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--gc-border);
+  padding: 4px 7px;
+  border-bottom: 1px solid var(--bh-rule-soft);
   vertical-align: middle;
 }
 .pd-table tfoot td {
   border-bottom: 0;
-  border-top: 2px solid var(--gc-border);
+  /* Kẻ đôi dưới dòng cộng — quy ước sổ sách. */
+  border-top: 3px double var(--bh-rule-strong);
   padding-top: 10px;
-  font-weight: 900;
+  font-weight: 700;
 }
-.pd-num { text-align: right; white-space: nowrap; }
-/* Cột "theo bản in" là số CHẾT — làm mờ để mắt phân biệt ngay với ô nhập được. */
-.pd-muted-col {
-  color: var(--gc-text-muted);
-  background: rgba(127, 127, 127, 0.06);
+.pd-num {
+  text-align: right;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.pd-strong { font-weight: 800; color: var(--gc-text); }
-.pd-total { font-size: 1rem; font-weight: 900; color: var(--gc-accent); }
-.pd-up { color: #059669; font-weight: 800; }
-.pd-down { color: #e11d48; font-weight: 800; }
-html[data-theme="dark"] .pd-up { color: #34d399; }
-html[data-theme="dark"] .pd-down { color: #fb7185; }
-.pd-zero { color: var(--gc-text-muted); }
+/* Cột "theo bản in" là số CHẾT — nền xám nhạt để mắt phân biệt ngay với ô nhập được. */
+.pd-muted-col {
+  color: var(--bh-ink-3);
+  background: var(--bh-sheet-2);
+}
+.pd-strong { font-weight: 700; color: var(--bh-ink); }
+.pd-total {
+  font-size: var(--bh-text-lg);
+  font-weight: 700;
+  color: var(--bh-seal);
+}
+.pd-up { color: var(--bh-ok); font-weight: 700; }
+.pd-down { color: var(--bh-danger); font-weight: 700; }
+.pd-zero { color: var(--bh-ink-3); }
 .pd-delta {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  line-height: 1.2;
-  font-size: 0.78rem;
+  line-height: 1.25;
+  font-size: var(--bh-text-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .pd-reason {
-  margin-top: 12px;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid var(--gc-border);
+  margin-top: var(--bh-space-xs);
+  padding: var(--bh-space-xs);
+  border: 1px solid var(--bh-rule);
 }
-.pd-reason.is-missing { border-color: #e11d48; }
+.pd-reason.is-missing {
+  border-color: var(--bh-danger);
+  border-left-width: 3px;
+}
 .pd-reason label {
   display: block;
   margin-bottom: 6px;
-  font-size: 0.8rem;
-  font-weight: 800;
-  color: var(--gc-text);
+  font-size: var(--bh-text-sm);
+  font-weight: 700;
+  color: var(--bh-ink);
 }
 
 /* ── Nhật ký ─────────────────────────────────────────────────────────────── */
 .pd-journal {
   list-style: none;
   margin: 0;
-  padding: 0 0 0 14px;
-  border-left: 2px solid var(--gc-border);
+  padding: 0 0 0 var(--bh-space-sm);
+  border-left: 1px solid var(--bh-rule);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--bh-space-xs);
 }
 .pd-journal-item { position: relative; }
 .pd-journal-item::before {
   content: "";
   position: absolute;
-  left: -19px;
+  left: -21px;
   top: 5px;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--gc-accent);
+  width: 7px;
+  height: 7px;
+  background: var(--bh-accent);
 }
-/* Sửa số liệu là chuyện TIỀN — chấm khác màu để không lẫn với bước quy trình. */
-.pd-journal-item.is-edit::before { background: #f59e0b; }
+/* Sửa số liệu là chuyện TIỀN — dấu khác màu để không lẫn với bước quy trình. */
+.pd-journal-item.is-edit::before { background: var(--bh-warn); }
 .pd-journal-meta {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--gc-text-muted);
+  font-size: var(--bh-text-2xs);
+  font-weight: 600;
+  color: var(--bh-ink-3);
 }
 .pd-journal-text {
-  font-size: 0.82rem;
-  color: var(--gc-text-soft);
+  font-size: var(--bh-text-sm);
+  color: var(--bh-ink-2);
 }
 
 .pd-error {
-  border-radius: 14px;
-  background: rgba(244, 63, 94, 0.1);
-  padding: 10px 14px;
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: #e11d48;
-}
-
-@media (max-width: 1100px) {
-  .pd-grid { grid-template-columns: minmax(0, 1fr); }
-  .pd-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pd-step + .pd-step::before { display: none; }
-}
-@media (max-width: 560px) {
-  .pd-steps { grid-template-columns: minmax(0, 1fr); }
-  .pd-topbar-actions { margin-left: 0; width: 100%; }
+  border: 1px solid var(--bh-danger);
+  border-left-width: 3px;
+  background: var(--bh-danger-wash);
+  padding: 10px var(--bh-space-xs);
+  font-size: var(--bh-text-md);
+  font-weight: 600;
+  color: var(--bh-danger);
 }
 
 /* ── Ngăn xếp phiếu ở rìa trái (thay menu khi đang xem chi tiết) ───────────── */
@@ -512,21 +593,65 @@ html[data-theme="dark"] .pr-chip--dead { color: #fda4af; }
 .pd-returns {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 10px 0 12px;
+  gap: 0;
+  margin: var(--bh-space-2xs) 0 var(--bh-space-xs);
+  border: 1px solid var(--bh-rule);
 }
 .pd-returns li {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  border: 1px solid var(--gc-border);
-  border-radius: 12px;
+  gap: var(--bh-space-2xs);
+  border-top: 1px solid var(--bh-rule-soft);
   padding: 8px 10px;
-  font-size: 0.8rem;
+  font-size: var(--bh-text-sm);
+  font-weight: 500;
+}
+.pd-returns li:first-child { border-top: 0; }
+/* Cột phải hẹp: mã phiếu co được, số tiền thì không — cho xuống dòng số tiền
+   là mất luôn khả năng liếc một cái ra tổng. */
+.pd-returns li > span {
+  min-width: 0;
+  font-size: var(--bh-text-xs);
+}
+.pd-returns li > b {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
+.pd-returns li span b {
+  font-family: var(--bh-mono);
+  font-weight: 600;
+}
 .pd-returns li.is-dead {
-  opacity: 0.55;
+  color: var(--bh-ink-3);
   text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+/* Nút dùng chung lọt vào trang này cũng phải vuông góc như phần còn lại. */
+.bh .pd-topbar-actions button,
+.bh .pd-next-buttons button,
+.bh .pd-card button,
+.bh .pd-card input,
+.bh .pd-card select {
+  border-radius: var(--bh-r-sm);
+}
+.bh .pd-topbar-actions button {
+  transform: none !important;
+}
+
+@media (max-width: 1100px) {
+  .pd-grid { grid-template-columns: minmax(0, 1fr); }
+  .pd-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pd-step:nth-child(3) { border-left: 0; }
+  .pd-step:nth-child(n + 3) { border-top: 1px solid var(--bh-rule-soft); }
+}
+@media (max-width: 560px) {
+  .pd-steps { grid-template-columns: minmax(0, 1fr); }
+  .pd-step { border-left: 0; }
+  .pd-step + .pd-step { border-top: 1px solid var(--bh-rule-soft); }
+  .pd-topbar-actions { margin-left: 0; width: 100%; }
+  .pd-topbar-actions > * { flex: 1 1 auto; }
 }

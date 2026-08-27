@@ -286,6 +286,13 @@ public sealed class DeliverySettlementTests
         var accountantToken = await MakeUser(conn, tokens, accountant, AppRoles.Accounting, accountingDept);
         var driverToken = await MakeUser(conn, tokens, driver, AppRoles.Driver, driverDept);
 
+        // Gán chuyến đòi lái xe ĐÃ CHẤM CÔNG hôm nay (xem WorkforceAvailability). Các test ở đây nói
+        // về khâu nộp phiếu/đối soát sau khi đã giao, nên phải cho lái xe "đến công ty" trước.
+        await conn.Cmd("""
+            INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
+            VALUES (@u, @u, 'Vào', 0.99, CURRENT_TIMESTAMP, 'test')
+            """).With("@u", driver).ExecuteNonQueryAsync();
+
         await conn.Cmd("""
             INSERT INTO documents (id,voucher_no,doc_date,customer_id,customer_name,document_type,content,issued_at)
             VALUES (@id,@no,CURRENT_DATE,@cid,@cname,'document','Giao hàng test',CURRENT_TIMESTAMP)

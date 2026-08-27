@@ -116,6 +116,55 @@ public sealed class PushService
         }
     }
 
+    /// <summary>
+    /// Chỉ ghi HỘP THƯ WEB cho những người đang giữ một trong các quyền — CỐ Ý KHÔNG bắn FCM.
+    ///
+    /// Dành cho tin "để mà biết" phát sinh liên tục trong ngày: ai vừa chấm công vào/ra, ai vừa gửi
+    /// đơn từ. Quản lý cần thấy khi mở web, nhưng nếu rung điện thoại vài chục lần mỗi sáng thì thứ
+    /// duy nhất xảy ra là họ tắt sạch nhóm thông báo — và mất luôn những tin thật sự cần.
+    ///
+    /// Vẫn đi qua đúng bộ lọc "nhóm thông báo đã tắt" như push thường, nên ai đã tắt nhóm Nhân sự &amp;
+    /// chấm công thì cũng không có dòng nào trong chuông.
+    /// </summary>
+    /// <param name="skipUsernames">Người ĐÃ được báo bằng đường khác cho cùng sự kiện (vd. quản lý
+    /// trực tiếp vừa nhận "Đơn mới chờ duyệt") — báo lần nữa chỉ là đếm hai lần.</param>
+    /// <returns>Số người thật sự được ghi vào hộp thư.</returns>
+    public async Task<int> SendWebOnlyToPermissionAsync(IReadOnlyCollection<string> permissions,
+        string title, string body, string notifId, string? target = null, string? link = null,
+        string? category = null, bool includeAdmins = true, string? exceptUsername = null,
+        IReadOnlyCollection<string>? skipUsernames = null)
+    {
+        List<string> recipients;
+        try
+        {
+            var wanted = includeAdmins ? [.. permissions, Permissions.UsersManage] : permissions.ToArray();
+            recipients = await PermissionDirectory.UsersWithAnyPermissionAsync(_db, wanted);
+        }
+        catch (Exception ex)
+        {
+            // Mất một dòng thông báo còn hơn làm hỏng nghiệp vụ vừa ghi xong — nhưng phải kêu.
+            _log.LogError(ex, "Không tra được người nhận thông báo cho quyền {Perms}", string.Join(",", permissions));
+            return 0;
+        }
+
+        var skip = new HashSet<string>(skipUsernames ?? [], StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(exceptUsername)) skip.Add(exceptUsername!);
+
+        var targets = recipients.Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(r => !skip.Contains(r))
+            .ToList();
+        var muted = await MutedUsersAsync(targets, category ?? CategoryFor(target));
+
+        var written = 0;
+        foreach (var recipient in targets)
+        {
+            if (muted.Contains(recipient)) continue;
+            await RecordInboxAsync(recipient, title, body, notifId, target, link, category);
+            written++;
+        }
+        return written;
+    }
+
     /* ---- Nhóm thông báo người dùng đã TẮT (xem NotificationGroups) ----
      * Không có dòng preference = BẬT. Chỉ dòng ghi rõ "false" mới là tắt, nên người chưa từng vào
      * Cài đặt vẫn nhận đủ mọi thông báo. */

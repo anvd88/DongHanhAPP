@@ -1298,12 +1298,23 @@ data class WorkTaskListResult(
     val summary: WorkTaskSummary = WorkTaskSummary(),
 )
 
+/**
+ * Một người có thể nhận việc. Ba trường cuối do MÁY CHỦ tính cho ngày hôm nay:
+ *   • [selectable] = false ⇒ chưa chấm công hoặc đang nghỉ phép ⇒ không giao việc được.
+ *   • [attendanceNote] là chú thích hiện ngay dưới tên trong bảng chọn.
+ * Người không chọn được vẫn nằm trong danh sách (bị làm mờ) — danh sách tự ngắn đi thì người giao
+ * lại tưởng nhân viên đã bị xoá tài khoản. Máy chủ chốt lại lần nữa lúc lưu.
+ */
 @Serializable
 data class WorkTaskAssignee(
     val username: String = "",
     val fullName: String = "",
     val position: String = "",
     val department: String = "",
+    /** present | absent | leave | sick | trip */
+    val attendanceStatus: String = "",
+    val attendanceNote: String = "",
+    val selectable: Boolean = true,
 )
 
 @Serializable

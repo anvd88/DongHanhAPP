@@ -104,28 +104,48 @@ public static class TaskAssignmentEndpoints
             if (canAssign)
             {
                 var scope = await ResolveAssigneeScopeAsync(conn, u);
-                await using var r = await conn.Cmd("""
+                var rows = new List<(string Username, string FullName, string Position, string Dept)>();
+                await using (var r = await conn.Cmd("""
                     SELECT au.username, e.full_name, e.position, COALESCE(d.name,'') AS dept
                     FROM hr_employees e
                     JOIN app_users au ON au.is_deleted=FALSE
                      AND (au.id=e.user_id OR (e.user_id IS NULL AND lower(au.username)=lower(e.username)))
                     LEFT JOIN hr_departments d ON d.id = e.department_id
                     WHERE e.status = 'Active' AND e.username <> ''
-                      AND (@all OR (@location IS NOT NULL AND e.location_id=@location)
-                                OR (@department IS NOT NULL AND e.department_id=@department))
+                      -- ÉP KIỂU ::uuid là BẮT BUỘC, không phải cho đẹp: phạm vi "toàn công ty" gửi
+                      -- NULL cho cả hai tham số, mà "$n IS NOT NULL" một mình thì PostgreSQL không
+                      -- suy ra nổi kiểu → 42P08 và cả endpoint trả 503.
+                      AND (@all OR (@location::uuid IS NOT NULL AND e.location_id=@location::uuid)
+                                OR (@department::uuid IS NOT NULL AND e.department_id=@department::uuid))
                     ORDER BY d.name NULLS LAST, e.full_name
                     """).With("@all", scope.Kind == AssigneeScopeKind.All)
                     .With("@location", (object?)scope.LocationId ?? DBNull.Value)
                     .With("@department", (object?)scope.DepartmentId ?? DBNull.Value)
-                    .ExecuteReaderAsync();
-                while (await r.ReadAsync())
+                    .ExecuteReaderAsync())
+                {
+                    while (await r.ReadAsync())
+                        rows.Add((r.Str("username"), r.Str("full_name"), r.Str("position"), r.Str("dept")));
+                }
+
+                // Trạng thái hôm nay của cả danh sách (một truy vấn). Người chưa chấm công hoặc đang
+                // nghỉ phép vẫn hiện trong danh sách nhưng KHÔNG chọn được — xem WorkforceAvailability.
+                var availability = await WorkforceAvailability.ForUsersAsync(
+                    conn, rows.Select(x => x.Username).ToList());
+                foreach (var row in rows)
+                {
+                    var state = availability.TryGetValue(row.Username, out var found)
+                        ? found : WorkforceAvailability.Unknown;
                     assignees.Add(new
                     {
-                        username = r.Str("username"),
-                        fullName = r.Str("full_name"),
-                        position = r.Str("position"),
-                        department = r.Str("dept"),
+                        username = row.Username,
+                        fullName = row.FullName,
+                        position = row.Position,
+                        department = row.Dept,
+                        attendanceStatus = state.Status,
+                        attendanceNote = state.Label,
+                        selectable = state.Selectable,
                     });
+                }
             }
             return Results.Ok(new { canAssign, priorities = Priorities, assignees });
         });
@@ -325,6 +345,7 @@ public static class TaskAssignmentEndpoints
                 return Results.BadRequest(new { message = "Người nhận việc không nằm trong phạm vi bạn được giao." });
             assignee = target.Username;
             var assigneeName = target.FullName;
+            if (await BlockUnavailableAsync(conn, assignee, assigneeName) is { } blocked) return blocked;
 
             var priority = NormalizePriority(req.Priority);
             var assignerName = await DisplayName(conn, me);
@@ -375,6 +396,7 @@ public static class TaskAssignmentEndpoints
                     return Results.BadRequest(new { message = "Người nhận việc không nằm trong phạm vi bạn được giao." });
                 assignee = target.Username;
                 assigneeName = target.FullName;
+                if (await BlockUnavailableAsync(conn, assignee, assigneeName) is { } blocked) return blocked;
                 reassigned = true;
             }
             else assignee = t.AssigneeUsername;
@@ -605,6 +627,30 @@ public static class TaskAssignmentEndpoints
         return new AssigneeScope(AssigneeScopeKind.None, null, null);
     }
 
+    /// <summary>
+    /// CHỐT MÁY CHỦ cho "không giao việc cho người chưa chấm công / đang nghỉ phép".
+    ///
+    /// Giao diện đã làm mờ những người này, nhưng chốt phải nằm ở đây: web mở nhiều tab và app native
+    /// có bản cũ, cả hai đều có thể gửi lên một username đã đổi trạng thái từ lúc mở form. Trả về
+    /// <c>null</c> khi được phép giao.
+    ///
+    /// Trả 409 (chứ không 400) vì đây là XUNG ĐỘT TRẠNG THÁI chứ không phải dữ liệu sai: cùng một
+    /// yêu cầu ấy sẽ hợp lệ ngay khi nhân viên chấm công.
+    /// </summary>
+    internal static async Task<IResult?> BlockUnavailableAsync(
+        NpgsqlConnection conn, string username, string displayName, NpgsqlTransaction? tx = null)
+    {
+        var state = await WorkforceAvailability.ForUserAsync(conn, username, tx);
+        if (state.Selectable) return null;
+        var who = string.IsNullOrWhiteSpace(displayName) ? username : displayName;
+        return Results.Conflict(new
+        {
+            message = $"{who}: {state.Label.ToLowerInvariant()} — chưa giao việc được.",
+            attendanceStatus = state.Status,
+            attendanceNote = state.Label,
+        });
+    }
+
     private static async Task<AssignableEmployee?> LoadAssignableEmployeeAsync(
         NpgsqlConnection conn, AssigneeScope scope, string username)
     {
@@ -618,8 +664,9 @@ public static class TaskAssignmentEndpoints
               OR (e.user_id IS NULL AND lower(e.username)=lower(account.username))
             WHERE lower(account.username)=lower(@u)
               AND account.is_deleted=FALSE AND account.is_active=TRUE AND e.status='Active'
-              AND (@all OR (@location IS NOT NULL AND e.location_id=@location)
-                        OR (@department IS NOT NULL AND e.department_id=@department))
+              -- ::uuid — xem ghi chú ở truy vấn /meta: thiếu ép kiểu là 42P08, không giao việc được.
+              AND (@all OR (@location::uuid IS NOT NULL AND e.location_id=@location::uuid)
+                        OR (@department::uuid IS NOT NULL AND e.department_id=@department::uuid))
             ORDER BY (e.user_id=account.id) DESC
             LIMIT 1
             """).With("@u", username)

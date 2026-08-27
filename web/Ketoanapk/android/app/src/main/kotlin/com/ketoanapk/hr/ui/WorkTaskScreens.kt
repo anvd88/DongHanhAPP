@@ -538,9 +538,21 @@ private fun WorkTaskFormDialog(vm: HrViewModel, meta: WorkTaskMeta?, editing: Wo
     var dueText by remember { mutableStateOf(fmtDateInput(editing?.dueAt)) }
 
     val assignees = meta?.assignees ?: emptyList()
+    // Người chưa chấm công / đang nghỉ phép vẫn hiện tên nhưng bị khoá, dòng phụ nói rõ lý do.
+    // Máy chủ chốt lại lúc lưu nên bản app cũ cũng không giao được cho họ.
     val assigneeOptions = remember(assignees) {
-        assignees.map { PickOption(id = it.username, label = it.fullName, sub = it.department, keywords = it.username) }
+        assignees.map {
+            val reason = it.attendanceNote
+            PickOption(
+                id = it.username,
+                label = it.fullName,
+                sub = listOf(it.department, reason).filter { part -> part.isNotBlank() }.joinToString(" · "),
+                keywords = it.username,
+                disabled = !it.selectable,
+            )
+        }
     }
+    val blockedCount = assignees.count { !it.selectable }
     val assigneeLabel = assignees.firstOrNull { it.username == assignee }
         ?.let { it.fullName + if (it.department.isNotBlank()) " · ${it.department}" else "" }
         ?: editing?.assigneeName ?: ""
@@ -581,6 +593,8 @@ private fun WorkTaskFormDialog(vm: HrViewModel, meta: WorkTaskMeta?, editing: Wo
                     searchHint = "Tìm theo tên hoặc phòng ban",
                     emptyText = "Chưa có ai để giao việc.",
                     showAvatar = true,
+                    supportingText = if (blockedCount > 0)
+                        "$blockedCount người chưa chấm công hoặc đang nghỉ — chưa giao việc được." else "",
                     modifier = Modifier.fillMaxWidth(),
                 )
 

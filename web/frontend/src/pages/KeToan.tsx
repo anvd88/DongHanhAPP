@@ -1,9 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
-import { MotionConfig, motion } from "motion/react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CalendarDays, FileText, FilterX, FileEdit, Loader2, Printer, Search, Server, TriangleAlert, X } from "lucide-react";
-import { GlassCapsule } from "../components/glass/GlassCapsule";
-import { GlassPanel } from "../components/glass/GlassPanel";
+import { ArrowDown, ArrowUp, ArrowUpDown, Ban, FileText, FilterX, FileEdit, Loader2, Printer, Search, Server, TriangleAlert, X } from "lucide-react";
 import { Button as GlassButton } from "../shadcn/button";
 import { ExportExcelButton, type ProgressReport } from "../components/ExportExcelButton";
 import { Modal } from "../components/Modal";
@@ -17,19 +14,13 @@ import { useAuth } from "../lib/auth";
 import { APP_BRAND_NAME } from "../lib/branding";
 import { isKeepCreateVoucherOpenEnabled, subscribeKeepCreateVoucherOpenEnabled } from "../lib/accountingPreferences";
 import { money, date } from "../lib/format";
-import { documentTypeText, inferDocumentKind } from "../lib/documents";
+import { documentTypeText } from "../lib/documents";
 import type { AccountingSystemStatus, Customer, DocumentDetail, DocumentListItem } from "../lib/types";
-import { StatCard } from "../features/giacong/StatCard";
 import { DocumentEditor } from "./DocumentEditor";
 import "../features/giacong/giacong.css";
+import "./ban-hang.css";
 
 type PrintableDocument = { row: DocumentListItem; detail: DocumentDetail | null };
-
-const EASE_IOS = [0.22, 1, 0.36, 1] as const;
-const FORCE_FULL_MOTION =
-  import.meta.env.DEV &&
-  typeof localStorage !== "undefined" &&
-  localStorage.getItem("force-full-motion") === "true";
 
 const localIsoDate = (value: Date) => {
   const year = value.getFullYear();
@@ -61,13 +52,6 @@ const htmlEscape = (value: unknown) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const badgeTone = (row: DocumentListItem) => {
-  const kind = inferDocumentKind(row);
-  if (kind === "receipt") return "0, 184, 148";
-  if (kind === "payment") return "217, 119, 6";
-  return "88, 112, 152";
-};
-
 type SortKey = "voucherNo" | "date" | "customerName" | "total";
 type SortState = { key: SortKey; dir: "asc" | "desc" };
 
@@ -79,13 +63,16 @@ const compareRows = (a: DocumentListItem, b: DocumentListItem, key: SortKey) => 
 };
 
 function SkeletonRows() {
+  // Bề rộng vạch chờ đi theo bề rộng THẬT của từng cột, để lúc dữ liệu về bảng
+  // không nhảy — vạch đều nhau mới là thứ trông giả.
+  const widths = ["62%", "54%", "70%", "84%", "92%", "58%", "66%", "60%", "40%"];
   return (
     <>
-      {Array.from({ length: 6 }).map((_, i) => (
+      {Array.from({ length: 8 }).map((_, i) => (
         <tr key={i}>
-          {Array.from({ length: 9 }).map((_, j) => (
-            <td key={j} className="px-3.5 py-3">
-              <div className="gc-skeleton h-4" style={{ width: j === 8 ? "38%" : "86%" }} />
+          {widths.map((width, j) => (
+            <td key={j}>
+              <div className="bh-skel" style={{ width }} />
             </td>
           ))}
         </tr>
@@ -320,7 +307,6 @@ export function KeToan() {
   );
   const hasActiveFilters = search.trim() !== "";
   const hasAnyData = (data?.length ?? 0) > 0;
-  const periodLabel = dateRangeLabel(dateFrom, dateTo);
 
   const clearFilters = () => {
     setSearch("");
@@ -537,305 +523,284 @@ export function KeToan() {
   };
 
   return (
-    <MotionConfig reducedMotion={FORCE_FULL_MOTION ? "never" : "user"}>
-      <div className="gc-root space-y-4 pb-6">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <motion.h1
-              initial={{ opacity: 0, y: 18, scale: 0.985, filter: "blur(10px)" }}
-              animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-              transition={{ duration: 0.48, ease: EASE_IOS }}
-              className="text-[1.6rem] font-black leading-tight text-[var(--gc-text)]"
-            >
-              Kế toán
-            </motion.h1>
-            <motion.p
-              initial={{ opacity: 0, y: 12, filter: "blur(8px)" }}
-              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-              transition={{ duration: 0.44, delay: 0.08, ease: EASE_IOS }}
-              className="mt-1 text-sm font-semibold text-[var(--gc-text-soft)]"
-            >
-              Quản lý phiếu xuất kho bán hàng
-            </motion.p>
+    <div className="bh">
+      {/* ── Măng-sét: trang này là gì, kỳ nào, và những việc làm được ngay ─── */}
+      <header className="bh-masthead">
+        <div className="bh-masthead-id">
+          <span className="bh-mark" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="bh-org">{APP_BRAND_NAME}</p>
+            <h1 className="bh-title">Bán hàng</h1>
+            <p className="bh-sub">
+              Sổ phiếu xuất kho · kỳ{" "}
+              <span className="bh-mono">
+                {displayIsoDate(dateFrom)}–{displayIsoDate(dateTo)}
+              </span>
+            </p>
           </div>
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.14, ease: EASE_IOS }}
-            className="flex flex-wrap items-center gap-2.5"
-          >
-            <CompactSystemStatus
-              status={systemStatus}
-              error={systemStatusError}
-              loading={checkingSystemStatus}
-              onRefresh={() => void refreshSystemStatus()}
-            />
-            <GlassButton variant="soft" onClick={() => setEditing("new")}>
-              <FileText className="h-4 w-4" /> Tạo phiếu xuất kho
-            </GlassButton>
-            <ExportExcelButton variant="ghost" onExport={exportRangeExcel} />
-          </motion.div>
         </div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            index={0}
-            icon={FileText}
-            label="Phiếu xuất kho"
-            value={money(stats.documentCount)}
-            sub={`Bán hàng · ${periodLabel}`}
-            tone="31, 107, 255"
+        <div className="bh-masthead-actions">
+          <CompactSystemStatus
+            status={systemStatus}
+            error={systemStatusError}
+            loading={checkingSystemStatus}
+            onRefresh={() => void refreshSystemStatus()}
           />
-          <StatCard
-            index={1}
-            icon={CalendarDays}
-            label="Tổng giá trị"
-            value={`${money(stats.monthTotal)} ₫`}
-            sub={periodLabel}
-            tone="124, 70, 255"
-          />
-          <StatCard
-            index={2}
-            icon={Printer}
-            label="Đã phát hành"
-            value={money(stats.issuedCount)}
-            sub={`${stats.documentCount ? Math.round((stats.issuedCount / stats.documentCount) * 100) : 0}% số phiếu`}
-            tone="0, 150, 110"
-          />
-          <StatCard
-            index={3}
-            icon={FileText}
-            label="Phiếu nháp"
-            value={money(stats.draftCount)}
-            sub="Chưa in/phát hành"
-            tone="217, 119, 6"
-          />
+          <ExportExcelButton className="bh-btn" onExport={exportRangeExcel} />
+          <button type="button" className="bh-btn bh-btn--primary" onClick={() => setEditing("new")}>
+            <FileText className="h-4 w-4" /> Tạo phiếu xuất kho
+          </button>
         </div>
+      </header>
 
-        <GlassPanel className="flex flex-wrap items-center gap-3 rounded-[20px] p-3">
-          <div className="ml-auto grid flex-1 grid-cols-1 items-center gap-2.5 md:grid-cols-[minmax(220px,1fr)_minmax(280px,330px)_auto]">
-            <GlassCapsule className="gc-search min-w-[200px] px-4">
-              <Search className="mr-2.5 h-[18px] w-[18px] shrink-0 text-[var(--gc-text-muted)]" aria-hidden="true" />
-              <input
-                ref={searchRef}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => e.key === "Escape" && setSearch("")}
-                placeholder="Tìm số phiếu, khách hàng, nội dung..."
-                aria-label="Tìm số phiếu, khách hàng, nội dung"
-              />
-              {search ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearch("");
-                    searchRef.current?.focus();
-                  }}
-                  className="ml-1.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[var(--gc-text-muted)] transition-colors hover:bg-black/10 hover:text-[var(--gc-text)] dark:hover:bg-white/10"
-                  aria-label="Xóa từ khóa tìm kiếm"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              ) : (
-                <kbd className="ml-2 hidden rounded-md border border-[var(--gc-border)] bg-white/30 px-1.5 py-0.5 text-[0.68rem] font-bold text-[var(--gc-text-muted)] sm:block dark:bg-white/5">
-                  Ctrl K
-                </kbd>
-              )}
-            </GlassCapsule>
+      {/* ── Dải số liệu của kỳ ────────────────────────────────────────────────
+          Bốn con số ngăn nhau bằng kẻ dọc, KHÔNG phải bốn cái thẻ có biểu tượng
+          màu: ở đây người ta đọc số, biểu tượng chỉ chiếm chỗ. Chỉ "Tổng giá trị"
+          được ăn màu nhấn — đó là con số người ta mở trang này để xem. */}
+      <dl className="bh-figures">
+        <div className="bh-figure">
+          <dt className="bh-figure-label">Phiếu trong kỳ</dt>
+          <dd className="bh-figure-value">{money(stats.documentCount)}</dd>
+          <dd className="bh-figure-note">Tính cả phiếu đã hủy</dd>
+        </div>
+        <div className="bh-figure bh-figure--lead">
+          <dt className="bh-figure-label">Tổng giá trị</dt>
+          <dd className="bh-figure-value">
+            {money(stats.monthTotal)}
+            <small>₫</small>
+          </dd>
+          <dd className="bh-figure-note">Không tính phiếu đã hủy</dd>
+        </div>
+        <div className="bh-figure">
+          <dt className="bh-figure-label">Đã phát hành</dt>
+          <dd className="bh-figure-value">{money(stats.issuedCount)}</dd>
+          <dd className="bh-figure-note">
+            {stats.documentCount ? Math.round((stats.issuedCount / stats.documentCount) * 100) : 0}% số phiếu trong kỳ
+          </dd>
+        </div>
+        <div className="bh-figure">
+          <dt className="bh-figure-label">Còn là nháp</dt>
+          <dd className="bh-figure-value">{money(stats.draftCount)}</dd>
+          <dd className="bh-figure-note">Chưa in, chưa phát hành</dd>
+        </div>
+      </dl>
 
-            <DateRangePicker
-              from={dateFrom}
-              to={dateTo}
-              maxDays={60}
-              ariaLabel="Lọc phiếu theo khoảng ngày"
-              onChange={(nextFrom, nextTo) => {
-                setDateFrom(nextFrom);
-                setDateTo(nextTo);
+      {/* ── Thanh lọc ────────────────────────────────────────────────────── */}
+      <div className="bh-toolbar">
+        <div className="bh-search">
+          <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <input
+            ref={searchRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+            placeholder="Tìm số phiếu, khách hàng, nội dung..."
+            aria-label="Tìm số phiếu, khách hàng, nội dung"
+          />
+          {search ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                searchRef.current?.focus();
               }}
-            />
+              className="bh-search-clear"
+              aria-label="Xóa từ khóa tìm kiếm"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <kbd className="hidden sm:block">Ctrl K</kbd>
+          )}
+        </div>
 
-            <div className="flex items-center gap-2">
-              <div className="whitespace-nowrap rounded-xl border border-[var(--gc-border)] bg-white/20 px-3 py-2 text-sm font-bold text-[var(--gc-text-soft)] dark:bg-white/5">
-                {hasActiveFilters ? (
-                  <>
-                    {rows.length}<span className="text-[var(--gc-text-muted)]">/{rangeRows.length}</span> phiếu
-                  </>
-                ) : (
-                  <>{rangeRows.length} phiếu · {periodLabel}</>
-                )}
-              </div>
-              {hasActiveFilters && (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="gc-icon-btn inline-flex h-[38px] items-center gap-1.5 whitespace-nowrap px-3 text-sm font-bold text-[var(--gc-text-soft)]"
-                  aria-label="Xóa bộ lọc tìm kiếm"
-                >
-                  <FilterX className="h-4 w-4" /> Xóa lọc
-                </button>
-              )}
-            </div>
-          </div>
-        </GlassPanel>
+        <div className="bh-toolbar-date">
+          <DateRangePicker
+            from={dateFrom}
+            to={dateTo}
+            maxDays={60}
+            ariaLabel="Lọc phiếu theo khoảng ngày"
+            onChange={(nextFrom, nextTo) => {
+              setDateFrom(nextFrom);
+              setDateTo(nextTo);
+            }}
+          />
+        </div>
 
-        <GlassPanel strong className="overflow-hidden rounded-[20px]">
-          <div className="gc-scroll max-h-[calc(100vh-430px)] min-h-[260px] overflow-auto">
-            <table className="gc-table">
-              <thead>
+        <p className="bh-tally">
+          {hasActiveFilters ? (
+            <>
+              <b>{rows.length}</b>
+              <span>/ {rangeRows.length}</span> phiếu khớp bộ lọc
+            </>
+          ) : (
+            <>
+              <b>{rangeRows.length}</b> phiếu trong kỳ
+            </>
+          )}
+        </p>
+
+        {hasActiveFilters && (
+          <button type="button" onClick={clearFilters} className="bh-btn" aria-label="Xóa bộ lọc tìm kiếm">
+            <FilterX className="h-4 w-4" /> Xóa lọc
+          </button>
+        )}
+      </div>
+
+      {/* ── Tờ sổ ────────────────────────────────────────────────────────── */}
+      <section className="bh-sheet" aria-label="Danh sách phiếu xuất kho">
+        <div className="bh-sheet-scroll scroll-thin">
+          <table className="bh-table">
+            <thead>
+              <tr>
+                <SortHeader label="Số phiếu" sortKey="voucherNo" sort={sort} onSort={toggleSort} />
+                <SortHeader label="Ngày" sortKey="date" sort={sort} onSort={toggleSort} />
+                <th>Loại phiếu</th>
+                <SortHeader label="Khách hàng" sortKey="customerName" sort={sort} onSort={toggleSort} />
+                <th>Nội dung</th>
+                <SortHeader label="Tổng tiền" sortKey="total" sort={sort} onSort={toggleSort} align="right" />
+                <th>Người lập</th>
+                <th>Trạng thái</th>
+                <th className="text-right">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <SkeletonRows />
+              ) : error ? (
                 <tr>
-                  <SortHeader label="Số phiếu" sortKey="voucherNo" sort={sort} onSort={toggleSort} />
-                  <SortHeader label="Ngày" sortKey="date" sort={sort} onSort={toggleSort} />
-                  <th>Loại phiếu</th>
-                  <SortHeader label="Khách hàng" sortKey="customerName" sort={sort} onSort={toggleSort} />
-                  <th>Nội dung</th>
-                  <SortHeader label="Tổng tiền" sortKey="total" sort={sort} onSort={toggleSort} align="right" />
-                  <th>Người lập</th>
-                  <th>Trạng thái</th>
-                  <th className="w-28 text-right">Thao tác</th>
+                  <td colSpan={9} className="bh-error">
+                    {error}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <SkeletonRows />
-                ) : error ? (
-                  <tr>
-                    <td colSpan={9} className="py-14 text-center text-sm font-semibold text-rose-500">
-                      {error}
+              ) : rows.length === 0 ? (
+                <tr>
+                  <td colSpan={9}>
+                    <div className="bh-empty">
+                      {hasActiveFilters || hasAnyData ? (
+                        <>
+                          <p className="bh-empty-title">Không có phiếu nào khớp</p>
+                          <p className="bh-empty-note">
+                            Thử đổi từ khóa, hoặc nới rộng khoảng ngày đang lọc.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearFilters();
+                              const initialRange = currentDateRange();
+                              setDateFrom(initialRange.from);
+                              setDateTo(initialRange.to);
+                            }}
+                            className="bh-btn"
+                          >
+                            <FilterX className="h-4 w-4" /> Xóa toàn bộ bộ lọc
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <p className="bh-empty-title">Sổ chưa có phiếu nào</p>
+                          <p className="bh-empty-note">
+                            Bấm “Tạo phiếu xuất kho” ở đầu trang để lập tờ phiếu đầu tiên.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => (
+                  <tr
+                    key={row.id}
+                    onClick={() => navigate(`/ban-hang/${row.id}`)}
+                    className={row.cancelledAt ? "is-void" : ""}
+                  >
+                    <td className="bh-voucher">
+                      {row.voucherNo || <span className="bh-muted">Chưa nhập</span>}
                     </td>
-                  </tr>
-                ) : rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={9}>
-                      <div className="flex flex-col items-center justify-center gap-2.5 py-16 text-center">
-                        {hasActiveFilters || hasAnyData ? (
-                          <>
-                            <Search className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
-                            <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Không tìm thấy phiếu phù hợp</p>
-                            <p className="text-xs text-[var(--gc-text-muted)]">Thử đổi từ khóa hoặc khoảng ngày đang lọc.</p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                clearFilters();
-                                const initialRange = currentDateRange();
-                                setDateFrom(initialRange.from);
-                                setDateTo(initialRange.to);
-                              }}
-                              className="gc-icon-btn mt-1 inline-flex h-9 items-center gap-1.5 px-3.5 text-sm font-bold text-[var(--gc-text-soft)]"
-                            >
-                              <FilterX className="h-4 w-4" /> Xóa toàn bộ bộ lọc
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <FileText className="h-9 w-9 text-[var(--gc-text-muted)] opacity-70" />
-                            <p className="text-sm font-semibold text-[var(--gc-text-soft)]">Chưa có phiếu xuất kho</p>
-                            <p className="text-xs text-[var(--gc-text-muted)]">Bấm “Tạo phiếu xuất kho” để bắt đầu.</p>
-                          </>
+                    <td className="bh-date">{date(row.date)}</td>
+                    <td>
+                      <span className="bh-kind">{documentTypeText(row)}</span>
+                    </td>
+                    <td>{row.customerName || <span className="bh-muted">Khách lẻ</span>}</td>
+                    <td className="bh-cell-wide">{row.content}</td>
+                    <td className="bh-num">{money(row.total)} ₫</td>
+                    <td>{row.createdBy || <span className="bh-muted">Chưa rõ</span>}</td>
+                    <td>
+                      <span
+                        className={`bh-state bh-state--${
+                          row.cancelledAt ? "void" : row.issuedAt ? "ok" : "draft"
+                        }`}
+                        title={
+                          row.cancelledAt
+                            ? `Hủy bởi ${row.cancelledBy || "không rõ"}${row.cancelReason ? `: ${row.cancelReason}` : ""}`
+                            : row.issuedAt
+                              ? `Phát hành lúc ${new Date(row.issuedAt).toLocaleString("vi-VN")}`
+                              : "Phiếu chưa được in"
+                        }
+                      >
+                        {row.cancelledAt ? "Đã hủy" : row.issuedAt ? "Đã phát hành" : "Phiếu nháp"}
+                      </span>
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <div className="flex justify-end gap-1">
+                        <button
+                          type="button"
+                          title={row.cancelledAt ? "Phiếu đã hủy, không thể in" : "Xem trước và in"}
+                          aria-label={`Xem trước và in phiếu ${row.voucherNo || row.customerName || row.id}`}
+                          disabled={!!row.cancelledAt || printingId === row.id}
+                          onClick={() => requestPrint(row)}
+                          className="bh-ibtn"
+                        >
+                          {printingId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+                        </button>
+                        {/* MỘT nút mở phiếu: sửa nội dung, giao hàng và đối soát nằm chung một
+                            màn có tab. Ba việc này đều xoay quanh cùng một tờ phiếu, tách ba nút
+                            (và ba hộp thoại) chỉ bắt kế toán đóng/mở qua lại. In và Hủy đứng
+                            riêng vì là hai việc dứt khoát, làm xong là xong. */}
+                        <button
+                          type="button"
+                          title={openHint(row)}
+                          aria-label={`Mở phiếu ${row.voucherNo || row.customerName || row.id}`}
+                          onClick={() => navigate(`/ban-hang/${row.id}`)}
+                          className="bh-ibtn"
+                        >
+                          <FileEdit className="h-4 w-4" />
+                          {waitingReturn(row) && <span aria-hidden="true" className="bh-flag" />}
+                        </button>
+                        {!row.cancelledAt && (
+                          <button
+                            type="button"
+                            title="Hủy phiếu"
+                            aria-label={`Hủy phiếu ${row.voucherNo || row.customerName || row.id}`}
+                            onClick={() => {
+                              setCancelReason("");
+                              setDeleting(row);
+                            }}
+                            className="bh-ibtn bh-ibtn--danger"
+                          >
+                            <Ban className="h-4 w-4" />
+                          </button>
                         )}
                       </div>
                     </td>
                   </tr>
-                ) : (
-                  rows.map((row) => (
-                    <tr key={row.id} onClick={() => navigate(`/ban-hang/${row.id}`)} className={row.cancelledAt ? "opacity-60" : ""}>
-                      <td className="whitespace-nowrap font-bold text-[var(--gc-text)]">
-                        {row.voucherNo || <span className="font-semibold text-[var(--gc-text-muted)]">Chưa nhập</span>}
-                      </td>
-                      <td className="whitespace-nowrap text-[var(--gc-text-soft)]">{date(row.date)}</td>
-                      <td>
-                        <span
-                          className="gc-badge"
-                          style={{ "--gc-badge": badgeTone(row) } as CSSProperties}
-                        >
-                          <span className="gc-dot" />
-                          {documentTypeText(row)}
-                        </span>
-                      </td>
-                      <td>{row.customerName || "Khách lẻ"}</td>
-                      <td className="min-w-[220px] text-[var(--gc-text-soft)]">{row.content}</td>
-                      <td className="whitespace-nowrap text-right font-bold tabular-nums">{money(row.total)} ₫</td>
-                      <td className="whitespace-nowrap">{row.createdBy || "Chưa rõ"}</td>
-                      <td className="whitespace-nowrap">
-                        <span
-                          className="gc-badge"
-                          style={{ "--gc-badge": row.cancelledAt ? "225, 29, 72" : row.issuedAt ? "0, 150, 110" : "217, 119, 6" } as CSSProperties}
-                          title={row.cancelledAt
-                            ? `Hủy bởi ${row.cancelledBy || "không rõ"}${row.cancelReason ? `: ${row.cancelReason}` : ""}`
-                            : row.issuedAt
-                              ? `Phát hành lúc ${new Date(row.issuedAt).toLocaleString("vi-VN")}`
-                              : "Phiếu chưa được in"}
-                        >
-                          <span className="gc-dot" />
-                          {row.cancelledAt ? "Đã hủy" : row.issuedAt ? "Đã phát hành" : "Phiếu nháp"}
-                        </span>
-                      </td>
-                      <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            title={row.cancelledAt ? "Phiếu đã hủy, không thể in" : "Xem trước và in"}
-                            aria-label={`Xem trước và in phiếu ${row.voucherNo || row.customerName || row.id}`}
-                            disabled={!!row.cancelledAt || printingId === row.id}
-                            onClick={() => requestPrint(row)}
-                            className="gc-icon-btn h-8 w-8 disabled:pointer-events-none disabled:opacity-50"
-                          >
-                            {printingId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
-                          </button>
-                          {/* MỘT nút mở phiếu: sửa nội dung, giao hàng và đối soát nằm chung một
-                              màn có tab. Ba việc này đều xoay quanh cùng một tờ phiếu, tách ba nút
-                              (và ba hộp thoại) chỉ bắt kế toán đóng/mở qua lại. In và Hủy đứng
-                              riêng vì là hai việc dứt khoát, làm xong là xong. */}
-                          <button
-                            type="button"
-                            title={openHint(row)}
-                            aria-label={`Mở phiếu ${row.voucherNo || row.customerName || row.id}`}
-                            onClick={() => navigate(`/ban-hang/${row.id}`)}
-                            className="gc-icon-btn relative h-8 w-8"
-                          >
-                            <FileEdit className="h-4 w-4" />
-                            {waitingReturn(row) && (
-                              <span
-                                aria-hidden="true"
-                                className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500"
-                              />
-                            )}
-                          </button>
-                          {!row.cancelledAt && (
-                            <button
-                              type="button"
-                              title="Hủy phiếu"
-                              aria-label={`Hủy phiếu ${row.voucherNo || row.customerName || row.id}`}
-                              onClick={() => {
-                                setCancelReason("");
-                                setDeleting(row);
-                              }}
-                              className="gc-icon-btn h-8 w-8 text-rose-500 hover:text-rose-600"
-                            >
-                              <Ban className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-              {!loading && !error && rows.length > 0 && (
-                <tfoot>
-                  <tr className="gc-foot">
-                    <td colSpan={5} className="text-right font-bold text-[var(--gc-text-soft)]">
-                      Tổng cộng · {rows.length} phiếu
-                    </td>
-                    <td className="whitespace-nowrap text-right font-black tabular-nums text-[var(--gc-text)]">
-                      {money(visibleTotal)} ₫
-                    </td>
-                    <td colSpan={3} />
-                  </tr>
-                </tfoot>
+                ))
               )}
-            </table>
-          </div>
-        </GlassPanel>
+            </tbody>
+            {!loading && !error && rows.length > 0 && (
+              <tfoot>
+                <tr>
+                  <td colSpan={5} className="bh-foot-label">
+                    Cộng {rows.length} phiếu
+                  </td>
+                  <td className="bh-foot-total">{money(visibleTotal)} ₫</td>
+                  <td colSpan={3} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </section>
 
         {/* Hộp thoại chỉ còn cho việc TẠO phiếu mới — nhập nhanh, lặp lại nhiều lần. Phiếu đã có
             thì mở TRANG /ban-hang/:id: cả vòng đời một tờ phiếu cần chỗ rộng, không nhét vào popup. */}
@@ -976,9 +941,8 @@ export function KeToan() {
               </div>
             </div>
           </Modal>
-        )}
-      </div>
-    </MotionConfig>
+      )}
+    </div>
   );
 }
 
@@ -1006,6 +970,7 @@ function CompactSystemStatus({
       : healthy
         ? "Sẵn sàng"
         : "Cần kiểm tra";
+  const state = loading && !status ? "idle" : error || printerProblem ? "error" : healthy ? "ok" : "warn";
   const title = error
     ? `${error}\nBấm để kiểm tra lại.`
     : [
@@ -1017,33 +982,21 @@ function CompactSystemStatus({
         "Bấm để kiểm tra lại.",
       ].join("\n");
 
+  // Trạng thái máy in là thứ chặn cả việc phát hành phiếu, nên nó phải ĐỌC ĐƯỢC
+  // ngay chứ không nấp sau một chấm màu chỉ hiện chữ khi rê chuột.
   return (
     <button
       type="button"
       onClick={onRefresh}
       disabled={loading}
       title={title}
-      className="gc-icon-btn relative grid h-10 w-10 shrink-0 place-items-center overflow-visible rounded-xl p-0 disabled:opacity-70"
+      data-state={state}
+      className="bh-status"
       aria-label={`Trạng thái máy chủ và máy in: ${stateLabel}. Bấm để kiểm tra lại`}
     >
-      <span className="relative grid h-7 w-7 place-items-center text-[var(--gc-text-soft)]">
-        <Server className={`h-[18px] w-[18px] ${loading ? "animate-pulse" : ""}`} aria-hidden="true" />
-        <span className="absolute -bottom-1 -right-1 grid h-4 w-4 place-items-center rounded-full bg-white text-[var(--gc-text-soft)] shadow-sm dark:bg-slate-800">
-          <Printer className="h-2.5 w-2.5" aria-hidden="true" />
-        </span>
-      </span>
-      <span
-        className={`absolute right-0.5 top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white shadow-sm dark:border-slate-900 ${
-          loading && !status
-            ? "animate-pulse bg-sky-500"
-            : error || printerProblem
-              ? "bg-rose-500"
-              : healthy
-                ? "bg-emerald-500"
-                : "bg-amber-500"
-        }`}
-        aria-hidden="true"
-      />
+      <span className="bh-status-dot" aria-hidden="true" />
+      <Server className={`h-[15px] w-[15px] ${loading ? "animate-pulse" : ""}`} aria-hidden="true" />
+      <span className="bh-status-label">{stateLabel}</span>
     </button>
   );
 }
@@ -1068,8 +1021,9 @@ function SortHeader({
       <button
         type="button"
         onClick={() => onSort(sortKey)}
-        className={`gc-sort ${align === "right" ? "ml-auto flex-row-reverse" : ""} ${active ? "is-active" : ""}`}
+        className={`bh-sort ${align === "right" ? "bh-sort--right" : ""} ${active ? "is-active" : ""}`}
         aria-label={`Sắp xếp theo ${label}`}
+        aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
       >
         <span>{label}</span>
         <Icon className="h-3.5 w-3.5 shrink-0" />

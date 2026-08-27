@@ -119,6 +119,16 @@ function TaskFormModal({
   const [dueAt, setDueAt] = useState(editing?.dueAt ? toLocalInput(editing.dueAt) : "");
   const [saving, setSaving] = useState(false);
 
+  // Tóm tắt "ai đang không nhận việc được" ngay dưới ô chọn: người dùng thấy lý do mà không phải
+  // bung danh sách ra dò từng dòng bị làm mờ.
+  const blockedAssignees = useMemo(
+    () =>
+      (meta?.assignees ?? [])
+        .filter((a) => a.selectable === false)
+        .map((a) => `${a.fullName} (${a.attendanceNote || "chưa chấm công"})`),
+    [meta],
+  );
+
   const submit = async () => {
     if (!title.trim()) return notify.error("Vui lòng nhập tên công việc.");
     if (!assignee) return notify.error("Vui lòng chọn người nhận việc.");
@@ -177,13 +187,24 @@ function TaskFormModal({
           <Field label="Người nhận việc">
             <Select value={assignee} onChange={(e) => setAssignee(e.target.value)} className="w-full">
               <option value="">— Chọn nhân viên —</option>
-              {(meta?.assignees ?? []).map((a) => (
-                <option key={a.username} value={a.username}>
-                  {a.fullName}
-                  {a.department ? ` · ${a.department}` : ""}
-                </option>
-              ))}
+              {/* Người chưa chấm công / đang nghỉ phép vẫn hiện tên nhưng bị khoá, kèm chú thích lý
+                  do — bỏ hẳn khỏi danh sách thì người giao tưởng nhân viên đã bị xoá tài khoản. */}
+              {(meta?.assignees ?? []).map((a) => {
+                const blocked = a.selectable === false;
+                return (
+                  <option key={a.username} value={a.username} disabled={blocked}>
+                    {a.fullName}
+                    {a.department ? ` · ${a.department}` : ""}
+                    {a.attendanceNote ? ` — ${a.attendanceNote}` : ""}
+                  </option>
+                );
+              })}
             </Select>
+            {blockedAssignees.length > 0 && (
+              <p className="mt-1.5 text-xs font-semibold leading-relaxed text-[var(--gc-text-muted)]">
+                Không chọn được {blockedAssignees.length} người hôm nay: {blockedAssignees.join(", ")}.
+              </p>
+            )}
           </Field>
           <Field label="Mức ưu tiên">
             <Select value={priority} onChange={(e) => setPriority(e.target.value)} className="w-full">

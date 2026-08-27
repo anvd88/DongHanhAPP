@@ -123,14 +123,12 @@ html[data-theme="dark"] {
   --sidebar-end: #0b1826;
 }
 
-html,
-body,
-#root {
-  background: var(--bg);
-}
-
-body,
-html[data-theme="dark"] body {
+/* Màu nền của app tô ở ĐÚNG MỘT CHỖ: <html>.
+   Nền của html là nền canvas nên đã trải kín toàn bộ vùng vẽ. Trước đây luật
+   này còn liệt kê cả body và #root — và vì enterprise.css nạp sau index.css
+   nên nó âm thầm phủ kín .liquid-bg (lớp nền hoa văn, z-index:-1). Đừng thêm
+   body hay #root vào đây nữa. */
+html {
   background: var(--bg);
 }
 
@@ -143,17 +141,18 @@ html[data-theme="dark"] body {
   outline-offset: 2px;
 }
 
-/* Nền ứng dụng phẳng, không quầng sáng hay chuyển động trang trí. */
-.liquid-bg,
-html[data-theme="dark"] .liquid-bg,
+/* Nền ứng dụng phẳng, không quầng sáng hay chuyển động trang trí.
+   Luật này TRƯỚC KIA tắt cả năm lớp nền bằng display:none. Nay hoa văn trống
+   đồng + logo (định nghĩa ở index.css) được giữ lại: nó phẳng, tĩnh, không
+   animation nên vẫn đúng tinh thần "không trang trí động" — chỉ hai vệt sáng
+   chéo của .orb::before/::after mới thật sự là quầng sáng, nên vẫn tắt.
+   Lưu ý: nền của .liquid-bg phải để nguyên ở index.css, đặt lại ở đây là phủ
+   mất lớp hoa văn. */
 .liquid-bg--plain,
 html[data-theme="dark"] .liquid-bg--plain {
   background: var(--bg);
 }
 
-.liquid-bg::before,
-.liquid-bg::after,
-.liquid-bg .orb,
 .liquid-bg .orb::before,
 .liquid-bg .orb::after {
   display: none;

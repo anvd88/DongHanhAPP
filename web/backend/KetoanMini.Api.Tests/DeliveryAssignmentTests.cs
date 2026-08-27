@@ -38,6 +38,41 @@ public sealed class DeliveryAssignmentTests
         Assert.Contains("chưa in", body.GetProperty("message").GetString() ?? "");
     }
 
+    /// <summary>
+    /// Lái xe chưa chấm công hôm nay thì chưa nhận chuyến được: giao phiếu cho người còn chưa tới
+    /// công ty thì tờ phiếu nằm im tới chiều mà kế toán vẫn tưởng hàng đang trên đường. Giao diện đã
+    /// làm mờ tên họ, nhưng chốt phải nằm ở máy chủ vì app native có bản cũ.
+    /// </summary>
+    [Fact]
+    public async Task ADriverWhoHasNotCheckedInToday_CannotBeGivenAVoucher()
+    {
+        var world = await SetupAsync();
+        var document = await InsertDocumentAsync(world.CustomerId, "Khách " + world.Suffix, issued: true);
+        var absent = "__da_off_" + Guid.NewGuid().ToString("N")[..10];
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<Database>();
+            var tokens = scope.ServiceProvider.GetRequiredService<TokenService>();
+            await using var conn = await db.OpenAsync();
+            // Cố ý KHÔNG gọi CheckInAsync: đây chính là điều kiện đang kiểm.
+            await MakeUser(conn, tokens, absent, AppRoles.Driver, world.DriverDepartmentId, Guid.NewGuid());
+        }
+
+        using var accountant = Client(world.AccountantToken);
+        var response = await accountant.PostAsJsonAsync($"/api/documents/{document}/delivery",
+            new { mode = "driver", driverUsername = absent });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("chưa chấm công", body.GetProperty("message").GetString() ?? "");
+        // Danh sách chọn vẫn liệt kê người đó, kèm chú thích — chỉ là không chọn được.
+        var list = await accountant.GetFromJsonAsync<JsonElement>("/api/delivery-assignments/drivers");
+        var row = list.GetProperty("drivers").EnumerateArray()
+            .Single(d => d.GetProperty("username").GetString() == absent);
+        Assert.False(row.GetProperty("selectable").GetBoolean());
+        Assert.Equal("Chưa chấm công", row.GetProperty("attendanceNote").GetString());
+    }
+
     [Fact]
     public async Task Reassigning_UpdatesTheSameTask_AndNeverCreatesASecondOne()
     {
@@ -286,6 +321,11 @@ public sealed class DeliveryAssignmentTests
         await MakeUser(conn, tokens, driver2, AppRoles.Driver, driverDept, Guid.NewGuid());
         await MakeUser(conn, tokens, stranger, AppRoles.Employee, driverDept, Guid.NewGuid());
 
+        // Không giao chuyến được cho người CHƯA chấm công (xem WorkforceAvailability). Các test ở đây
+        // nói về việc gán/đổi người nên phải cho cả hai lái xe "đã đến công ty" trước.
+        await CheckInAsync(conn, driver);
+        await CheckInAsync(conn, driver2);
+
         return new(suffix, customerId, driverDept, driverEmployee, accountant, driver, driver2, stranger,
             accountantToken, driverToken);
     }
@@ -310,6 +350,13 @@ public sealed class DeliveryAssignmentTests
         return tokens.CreateToken(new UserDto(userId, username, username, "", role, true, "Approved", DateTime.UtcNow),
             "app:da:" + Guid.NewGuid().ToString("N")[..16]);
     }
+
+    /// <summary>Ghi một lượt chấm công VÀO cho hôm nay — đủ để tài khoản được coi là có mặt.</summary>
+    private static async Task CheckInAsync(NpgsqlConnection conn, string username) =>
+        await conn.Cmd("""
+            INSERT INTO cham_cong_log (username, full_name, loai, similarity, occurred_at, ghi_chu)
+            VALUES (@u, @u, 'Vào', 0.99, CURRENT_TIMESTAMP, 'test')
+            """).With("@u", username).ExecuteNonQueryAsync();
 
     /// <summary>
     /// Chèn thẳng phiếu xuất kho để không phải chạm vào máy in thật. Bất biến của schema vẫn được

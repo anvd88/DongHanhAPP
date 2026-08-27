@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Nền hoa văn + màu giấy dùng cho TOÀN WEB nằm ở đây (biến --bh-canvas,
+   --bh-ornament). Trang bán hàng nạp tiếp phần còn lại của hệ sổ cái. */
+@import "./pages/ban-hang.tokens.css";
 
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
@@ -25,7 +28,9 @@
   --btn-primary-text: #ffffff;
   --btn-primary-border: transparent;
 
-  --bg: #eef3fa;
+  /* Giấy nền lấy đúng --bg-secondary của Cổng Dịch vụ công Quốc gia: xám
+     trung tính, không ngả xanh — để hoa văn trống đồng nâu vàng không chỏi. */
+  --bg: var(--bh-canvas);
   --text: var(--brand-ink);
   --text-secondary: #52647f;
   --text-muted: #7a8ba4;
@@ -74,7 +79,7 @@ html[data-theme="dark"] {
   --btn-primary-text: #eaf6fb;
   --btn-primary-border: rgba(42, 193, 177, 0.42);
 
-  --bg: #070b12;
+  --bg: var(--bh-canvas);
   --text: #f0f5fb;
   --text-secondary: #b9c5d6;
   --text-muted: #8e9bb0;
@@ -101,18 +106,31 @@ html[data-theme="dark"] {
 
 * { box-sizing: border-box; }
 
-/* Nền gốc cho cả html/#root, không chỉ body — tránh lộ nền trắng mặc định
-   ở mép dưới khi chiều cao viewport thay đổi (bàn phím ảo, thanh trình duyệt). */
-html, body, #root {
+/* Nền gốc đặt Ở ĐÚNG MỘT CHỖ: html.
+   Nền của html chính là nền của canvas, trải kín toàn bộ vùng vẽ bất kể chiều
+   cao viewport đổi thế nào (bàn phím ảo, thanh trình duyệt) — nên nó đã đủ
+   chữa lỗi lộ mép trắng ở đáy.
+
+   KHÔNG được đặt thêm cho body và #root: nền của hai thẻ đó được tô ở bước 3
+   trong thứ tự tô của CSS, tức là SAU các lớp con có z-index âm (bước 2). Đặt
+   nền đục cho chúng là phủ kín .liquid-bg — lớp nền hoa văn nằm ở z-index:-1.
+   Đo thật: để nguyên như cũ thì hoa văn dù để độ đậm 0,55 vẫn không hiện một
+   nét nào. Đây cũng là lý do ba quả cầu màu trước đây không bao giờ thấy. */
+html {
   height: 100%;
   margin: 0;
   background: var(--bg);
 }
 
+body, #root {
+  height: 100%;
+  margin: 0;
+}
+
 body {
   font-family: "Be Vietnam Pro", "Segoe UI", system-ui, -apple-system, "Roboto", "Helvetica Neue", sans-serif;
   color: var(--text);
-  background: var(--bg);
+  /* KHÔNG đặt background ở đây — xem chú thích ở khối html phía trên. */
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
@@ -150,7 +168,7 @@ html[data-theme="dark"] input[list] {
   background: var(--bg);
 }
 .liquid-bg--plain {
-  background: #eef3fa;
+  background: var(--bh-canvas);
 }
 .liquid-bg--plain::before,
 .liquid-bg--plain::after,
@@ -158,43 +176,80 @@ html[data-theme="dark"] input[list] {
   display: none;
 }
 html[data-theme="dark"] .liquid-bg--plain {
-  background: #0f141b;
+  background: var(--bh-canvas);
 }
+/* ---------- Nền: hoa văn trống đồng ở hai góc chéo + logo mờ ở giữa --------
+   Thay cho ba quả cầu màu blur trước đây. Ba lý do đổi:
+     · Quầng màu blur động là dấu hiệu "trang do máy sinh" rõ nhất, và nó
+       repaint liên tục suốt phiên làm việc.
+     · Hoa văn Đông Sơn + logo công ty làm trang "có chủ" — đây là cách các
+       cổng nghiệp vụ trong nước (hoá đơn điện tử, dịch vụ công) tự định danh.
+     · Vẽ bằng mask-image chứ không phải background-image: tệp SVG chỉ chứa
+       NÉT (fill:none), phần tô là background-color của lớp — nên MÀU hoa văn
+       do biến CSS quyết định và tự đổi theo sáng/tối. Không có mảng đặc nào,
+       đúng yêu cầu "chỉ đổ màu viền các hoa văn chi tiết".
+   Máy yếu (html.perf-lite) đã ẩn sẵn cả ba lớp ở khối perf-lite bên dưới. */
 .liquid-bg::before,
 .liquid-bg::after,
 .liquid-bg .orb {
   content: "";
   position: absolute;
-  border-radius: 50%;
-  filter: blur(70px);
-  opacity: 0.55;
-  will-change: transform;
+  background-color: var(--bh-ornament);
+  pointer-events: none;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
-.liquid-bg::before {
-  width: 46vw; height: 46vw;
-  left: -8vw; top: -10vw;
-  background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), 0.55), transparent 70%);
-  animation: float1 22s ease-in-out infinite;
-}
-.liquid-bg::after {
-  width: 40vw; height: 40vw;
-  right: -6vw; bottom: -12vw;
-  background: radial-gradient(circle at 60% 40%, rgba(139, 92, 246, 0.45), transparent 70%);
-  animation: float2 26s ease-in-out infinite;
-}
-.liquid-bg .orb {
-  width: 32vw; height: 32vw;
-  left: 45vw; top: 35vh;
-  background: radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.35), transparent 70%);
-  animation: float3 30s ease-in-out infinite;
-}
-html[data-theme="dark"] .liquid-bg::before,
-html[data-theme="dark"] .liquid-bg::after,
-html[data-theme="dark"] .liquid-bg .orb { opacity: 0.12; }
 
-@keyframes float1 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(6vw,4vh) scale(1.12)} }
-@keyframes float2 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(-5vw,-3vh) scale(1.08)} }
-@keyframes float3 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(-4vw,5vh) scale(1.15)} }
+/* CẢ BA LỚP ĐỀU BÁM CẠNH DƯỚI — đây là điểm dễ làm sai nhất.
+   Màn nghiệp vụ xếp nội dung từ trên xuống, nên bốn góc màn hình luôn bị thanh
+   tiêu đề / thanh bên / thẻ bên phải che kín; khoảng giấy trống duy nhất còn
+   lại nằm ở DẢI DƯỚI. Neo hoa văn vào góc trên-trái và dưới-phải (như bản
+   trước) thì nó vẫn được vẽ nhưng nằm trọn dưới các tấm panel đục ⇒ không bao
+   giờ nhìn thấy. Đo trên màn 1920×917 thật: cả hai lớp bị che 100%.
+
+   Tấm gốc 941×1672 có hoa văn dồn ở góc trên-trái và dưới-phải. Kéo nguyên tấm
+   vào một khung nhỏ neo ở cạnh dưới thì cung dưới-phải của tấm rơi đúng vào
+   dải giấy trống. Lớp bên phải lật ngang để hai cung không lặp lại y hệt. */
+.liquid-bg::before {
+  left: 0;
+  bottom: 0;
+  width: min(42vw, 520px);
+  height: min(62vh, 700px);
+  opacity: var(--bh-ornament-alpha);
+  -webkit-mask-image: url("/backdrop-dongson.svg");
+  mask-image: url("/backdrop-dongson.svg");
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+
+.liquid-bg::after {
+  right: 0;
+  bottom: 0;
+  width: min(42vw, 520px);
+  height: min(62vh, 700px);
+  transform: scaleX(-1);
+  opacity: var(--bh-ornament-alpha);
+  -webkit-mask-image: url("/backdrop-dongson.svg");
+  mask-image: url("/backdrop-dongson.svg");
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+
+/* Logo công ty, nét rỗng — dấu chìm ở giữa dải dưới. */
+.liquid-bg .orb {
+  left: 50%;
+  bottom: 3vh;
+  width: min(34vw, 380px);
+  aspect-ratio: 1000 / 675;
+  transform: translateX(-50%);
+  opacity: var(--bh-ornament-logo-alpha);
+  -webkit-mask-image: url("/backdrop-logo.svg");
+  mask-image: url("/backdrop-logo.svg");
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
 
 /* ---------- Tấm kính (glass surface) ---------- */
 .glass {
@@ -1085,90 +1140,16 @@ html {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-body {
-  background:
-    radial-gradient(circle at 8% 6%, rgba(52, 87, 213, 0.26), transparent 32%),
-    radial-gradient(circle at 88% 12%, rgba(114, 89, 214, 0.22), transparent 34%),
-    linear-gradient(135deg, var(--background-start), var(--background-middle) 48%, var(--background-end));
-}
+/* Ở ĐÂY TRƯỚC KIA CÓ HAI LUẬT tô gradient quầng sáng lên <body>. Đã bỏ: chúng
+   phủ kín lớp nền hoa văn, và bản thân chúng cũng đã bị enterprise.css ghi đè
+   thành màu phẳng từ lâu nên không ai còn nhìn thấy gradient ấy. */
 
-html[data-theme="dark"] body {
-  background:
-    radial-gradient(circle at 8% 6%, rgba(42, 193, 177, 0.1), transparent 32%),
-    radial-gradient(circle at 88% 12%, rgba(114, 89, 214, 0.09), transparent 34%),
-    linear-gradient(135deg, var(--background-start), var(--background-middle) 48%, var(--background-end));
-}
-
-.liquid-bg {
-  background:
-    linear-gradient(135deg, rgba(223, 233, 247, 0.92), rgba(248, 251, 255, 0.78) 45%, rgba(238, 234, 248, 0.88)),
-    var(--bg);
-}
-
-html[data-theme="dark"] .liquid-bg {
-  background:
-    linear-gradient(135deg, rgba(7, 11, 18, 0.96), rgba(11, 19, 32, 0.9) 45%, rgba(17, 17, 38, 0.92)),
-    var(--bg);
-}
-
-.liquid-bg::before {
-  width: 62vw;
-  height: 62vw;
-  left: -20vw;
-  top: -16vw;
-  background:
-    radial-gradient(circle at 42% 42%, rgba(52, 87, 213, 0.38), transparent 58%),
-    radial-gradient(circle at 68% 32%, rgba(255, 255, 255, 0.42), transparent 48%);
-  opacity: 0.75;
-}
-
-.liquid-bg::after {
-  width: 52vw;
-  height: 52vw;
-  right: -10vw;
-  bottom: -18vw;
-  background: radial-gradient(circle at 50% 50%, rgba(126, 166, 255, 0.34), transparent 68%);
-  opacity: 0.65;
-}
-
-.liquid-bg .orb {
-  width: 44vw;
-  height: 44vw;
-  left: 42vw;
-  top: 10vh;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.45), transparent 54%),
-    radial-gradient(circle at 52% 56%, rgba(67, 167, 255, 0.22), transparent 70%);
-  opacity: 0.64;
-}
-
-.liquid-bg .orb::before,
-.liquid-bg .orb::after {
-  content: "";
-  position: fixed;
-  pointer-events: none;
-  border-radius: 999px;
-  filter: blur(1px);
-  opacity: 0.55;
-  transform: rotate(-18deg);
-}
-
-.liquid-bg .orb::before {
-  width: 68vw;
-  height: 2px;
-  left: 16vw;
-  top: 42vh;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.62), rgba(77,166,255,0.22), transparent);
-  box-shadow: 0 0 28px rgba(51, 152, 255, 0.32);
-}
-
-.liquid-bg .orb::after {
-  width: 42vw;
-  height: 2px;
-  right: -8vw;
-  top: 72vh;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), rgba(114,153,255,0.22), transparent);
-}
+/* Ở ĐÂY TRƯỚC KIA CÓ MỘT BỘ .liquid-bg THỨ HAI (quầng sáng gradient xanh +
+   hai vệt sáng chéo). Đã xoá: nó nằm sau bộ định nghĩa thật ở đầu tệp nên âm
+   thầm ghi đè lên đó — sửa bộ đầu không có tác dụng gì. Bản thân nó cũng đã bị
+   enterprise.css tắt bằng display:none từ lâu, nên xoá đi không đổi gì về mặt
+   hình ảnh. Nền hoa văn trống đồng giờ là định nghĩa DUY NHẤT, nằm ở đầu tệp
+   cạnh khai báo .liquid-bg. Đừng thêm bộ thứ hai ở đây nữa. */
 
 .glass {
   border-color: rgba(255, 255, 255, 0.54);
@@ -2586,16 +2567,20 @@ html.perf-lite *::after {
   -webkit-backdrop-filter: none !important;
 }
 
-/* Nền: bỏ các quả cầu blur động (tiết kiệm repaint liên tục) */
-html.perf-lite .liquid-bg::before,
-html.perf-lite .liquid-bg::after,
+/* Nền: hoa văn trống đồng là lớp TĨNH (vẽ một lần, không animation) nên KHÔNG
+   ẩn ở chế độ nhẹ nữa — luật cũ sinh ra để chặn ba quả cầu blur động repaint
+   liên tục, mà ba quả cầu ấy đã bỏ. Chỉ hạ bớt độ đậm và bỏ lớp logo giữa để
+   máy yếu đỡ phải rasterize thêm một mask toàn màn. */
 html.perf-lite .liquid-bg .orb {
   display: none !important;
+}
+html.perf-lite {
+  --bh-ornament-alpha: 0.2 !important;
 }
 
 /* Kính → đục để bù cho việc bỏ blur */
 html.perf-lite {
-  --glass-bg: #eef3fa !important;
+  --glass-bg: var(--bh-canvas) !important;
   --glass-bg-strong: #ffffff !important;
 }
 html.perf-lite .gc-root {

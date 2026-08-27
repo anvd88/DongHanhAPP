@@ -79,11 +79,23 @@ export interface TaskListResult {
   };
 }
 
+/**
+ * Một người có thể nhận việc. Ba trường cuối do máy chủ tính cho NGÀY HÔM NAY
+ * (xem WorkforceAvailability ở backend):
+ *   • `selectable=false` ⇒ chưa chấm công hoặc đang nghỉ phép ⇒ KHÔNG giao việc được.
+ *   • `attendanceNote` là chú thích hiện ngay cạnh tên ("Chưa chấm công", "Đang nghỉ phép…").
+ * Người không chọn được vẫn nằm trong danh sách — danh sách tự ngắn đi thì người giao lại tưởng
+ * nhân viên bị xoá tài khoản.
+ */
 export interface TaskAssignee {
   username: string;
   fullName: string;
   position: string;
   department: string;
+  /** present | absent | leave | sick | trip */
+  attendanceStatus?: string;
+  attendanceNote?: string;
+  selectable?: boolean;
 }
 export interface TaskMeta {
   canAssign: boolean;

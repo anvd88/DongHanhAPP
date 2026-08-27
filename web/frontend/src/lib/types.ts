@@ -64,11 +64,18 @@ export interface DocumentStackItem {
   deliveryReturnedAt?: string | null;
 }
 
-/** Lái xe có thể nhận phiếu xuất kho. */
+/**
+ * Lái xe có thể nhận phiếu xuất kho. Ba trường cuối do máy chủ tính cho NGÀY HÔM NAY — giống hệt ô
+ * chọn người nhận việc: `selectable=false` ⇒ chưa chấm công hoặc đang nghỉ phép, không gán được.
+ */
 export interface DeliveryDriver {
   username: string;
   fullName: string;
   department: string;
+  /** present | absent | leave | sick | trip */
+  attendanceStatus?: string;
+  attendanceNote?: string;
+  selectable?: boolean;
 }
 
 /** Trạng thái giao hàng của một phiếu xuất kho. */
