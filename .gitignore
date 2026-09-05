@@ -44,3 +44,11 @@ artifacts/
 .agents/
 .codex-build/
 .codex-work/
+
+# Thư mục nháp của agent/skill và kết quả build tạm — chỉ nằm trên máy
+.hallmark/
+.codex-spreadsheet-fix/
+.codex-spreadsheet-inspect/
+.codex-logs/
+**/.verify/
+_backup-frontend-*/

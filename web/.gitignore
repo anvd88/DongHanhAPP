@@ -62,3 +62,28 @@ TestResults/
 # File rác do lỗi redirect "echo ... -> public" trong restart.bat (đã sửa).
 # Giữ dòng này để lỡ chạy bản .bat cũ thì cũng không commit lại.
 /backend/KetoanMini.Api/public
+
+# ── Kết quả build/verify của .NET (dotnet build -o .verify): 561 tệp, ~700MB DLL
+# native + bản sao adaface.onnx 174MB. GitHub chặn tệp >100MB nên tuyệt đối không commit.
+.verify/
+**/.verify/
+*.dll
+*.pdb
+*.so
+*.dylib
+*.lib
+*.exp
+*.ilk
+# Model nhận diện khuôn mặt là nguồn thật, đi qua Git LFS (xem .gitattributes)
+!backend/KetoanMini.Api/Models/Face/*.onnx
+
+# Bản sao lưu frontend cũ trước đợt viết lại 2026-08-31 — chỉ giữ trên máy
+_backup-frontend-*/
+
+# Bộ nhớ đệm & thư mục làm việc của trình build
+.gradle/
+.cxx/
+*.hprof
+local.properties
+__pycache__/
+*.pyc
