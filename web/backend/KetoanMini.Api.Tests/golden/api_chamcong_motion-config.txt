@@ -1,0 +1,27 @@
+# /api/chamcong/motion-config
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.enforce : bool
+
+[Accounting] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.enforce : bool
+
+[HR] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.enforce : bool
+
+[Driver] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.enforce : bool
+
+[Employee] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.enforce : bool

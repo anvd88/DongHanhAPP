@@ -1,0 +1,27 @@
+# /api/help/status
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.db : string
+  $.serverTime : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.db : string
+  $.serverTime : string
+
+[HR] 200 application/json
+  $ : object
+  $.db : string
+  $.serverTime : string
+
+[Driver] 200 application/json
+  $ : object
+  $.db : string
+  $.serverTime : string
+
+[Employee] 200 application/json
+  $ : object
+  $.db : string
+  $.serverTime : string

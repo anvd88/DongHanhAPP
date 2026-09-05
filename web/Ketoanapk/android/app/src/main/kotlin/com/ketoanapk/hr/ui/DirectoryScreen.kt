@@ -15,12 +15,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -42,25 +39,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.ketoanapk.hr.data.CallContact
-import com.ketoanapk.hr.data.CallManager
+import com.ketoanapk.hr.data.DirectoryContact
 
 data class DirectoryUiState(
     val loading: Boolean = false,
     val query: String = "",
-    val contacts: List<CallContact> = emptyList(),
+    val contacts: List<DirectoryContact> = emptyList(),
     val organizationMode: Boolean = false,
     val error: String? = null,
 )
 
-internal fun organizationContacts(contacts: List<CallContact>): Pair<List<CallContact>, List<CallContact>> =
+internal fun organizationContacts(contacts: List<DirectoryContact>): Pair<List<DirectoryContact>, List<DirectoryContact>> =
     contacts.filter { it.isDirectManager } to contacts.filter { it.sameDepartment && !it.isDirectManager }
 
 @Composable
 fun DirectoryScreen(vm: HrViewModel) {
     val state = vm.directoryState
-    var selected by remember { mutableStateOf<CallContact?>(null) }
-    selected?.let { contact -> ContactProfileDialog(contact, vm, onDismiss = { selected = null }) }
+    var selected by remember { mutableStateOf<DirectoryContact?>(null) }
+    selected?.let { contact -> ContactProfileDialog(contact, onDismiss = { selected = null }) }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = screenPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
@@ -107,7 +103,7 @@ fun DirectoryScreen(vm: HrViewModel) {
 }
 
 @Composable
-private fun ContactCard(contact: CallContact, onOpen: () -> Unit) {
+private fun ContactCard(contact: DirectoryContact, onOpen: () -> Unit) {
     Surface(onClick = onOpen, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
         Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             UserAvatar(contact.displayName, 44, avatar = contact.avatarUrl)
@@ -121,7 +117,7 @@ private fun ContactCard(contact: CallContact, onOpen: () -> Unit) {
 }
 
 @Composable
-private fun ContactProfileDialog(contact: CallContact, vm: HrViewModel, onDismiss: () -> Unit) {
+private fun ContactProfileDialog(contact: DirectoryContact, onDismiss: () -> Unit) {
     val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -135,9 +131,6 @@ private fun ContactProfileDialog(contact: CallContact, vm: HrViewModel, onDismis
                 LabelValue("Điện thoại", contact.phone.ifBlank { "Đã ẩn theo quyền riêng tư" })
                 LabelValue("Email", contact.email.ifBlank { "Đã ẩn theo quyền riêng tư" })
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                    IconButton(onClick = { vm.chatWithContact(contact); onDismiss() }) { Icon(Icons.Filled.Chat, "Chat") }
-                    IconButton(onClick = { if (vm.ensureCallAllowed(false)) CallManager.startCall(contact.username, contact.displayName, initials(contact.displayName), CallManager.Media.Audio) }) { Icon(Icons.Filled.Call, "Gọi thoại") }
-                    IconButton(onClick = { if (vm.ensureCallAllowed(true)) CallManager.startCall(contact.username, contact.displayName, initials(contact.displayName), CallManager.Media.Video) }) { Icon(Icons.Filled.Videocam, "Gọi video") }
                     IconButton(
                         enabled = contact.email.isNotBlank(),
                         onClick = { context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${Uri.encode(contact.email)}"))) },

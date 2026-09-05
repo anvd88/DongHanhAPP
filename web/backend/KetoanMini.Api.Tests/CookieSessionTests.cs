@@ -17,7 +17,6 @@ namespace KetoanMini.Api.Tests;
 ///  • Trả token ra thân phản hồi cho trình duyệt ⇒ nó lại vào localStorage, XSS lại lấy được.
 ///  • Quên HttpOnly ⇒ JavaScript đọc được cookie, y như cũ.
 ///  • Bỏ chốt CSRF ⇒ trang lạ thao tác được thay người đang đăng nhập.
-///  • Bỏ chốt Origin ở /hubs ⇒ trang lạ mở được WebSocket và nghe lén tín hiệu realtime.
 ///  • Đụng vào đường Bearer ⇒ gãy ứng dụng Android đang chạy ngoài thực tế.
 /// </summary>
 /// <summary>
@@ -51,22 +50,6 @@ public sealed class AuthCookieAttributeTests
         => Assert.All(IssueAndRead(https: false),
             c => Assert.DoesNotContain("secure", c, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Origin lạ bị chặn, origin của chính hệ thống thì không — chốt chống Cross-Site
-    /// WebSocket Hijacking phải phân biệt được hai thứ đó kể cả khi chạy sau reverse proxy.</summary>
-    [Theory]
-    [InlineData("https://app.ketoancp.click", true)]   // chính mình
-    [InlineData("http://app.ketoancp.click", true)]    // chính mình, scheme lệch do proxy
-    [InlineData("https://ke-gian.example", false)]
-    [InlineData("https://app.ketoancp.click.ke-gian.example", false)] // tiền tố lừa mắt
-    [InlineData("", true)]                             // không phải trình duyệt (app native)
-    public void KiemTraOrigin(string origin, bool duocPhep)
-    {
-        var ctx = new Microsoft.AspNetCore.Http.DefaultHttpContext();
-        ctx.Request.Scheme = "https";
-        ctx.Request.Host = new Microsoft.AspNetCore.Http.HostString("app.ketoancp.click");
-        if (origin.Length > 0) ctx.Request.Headers.Origin = origin;
-        Assert.Equal(duocPhep, AuthCookies.IsAllowedOrigin(ctx, []));
-    }
 }
 
 [Collection(ApiCollection.Name)]
@@ -276,26 +259,6 @@ public sealed class CookieSessionTests : IDisposable
         app.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         Assert.Equal(HttpStatusCode.NoContent,
             (await app.PostAsJsonAsync("/api/auth/heartbeat", new { sid = "x" })).StatusCode);
-    }
-
-    /// <summary>
-    /// Cross-Site WebSocket Hijacking: WebSocket không bị CORS chặn, nên chốt duy nhất là Origin.
-    /// Nếu test này rớt, một trang web lạ có thể mở kết nối realtime dưới danh nghĩa người đang đăng
-    /// nhập và nghe lén tín hiệu (kể cả tin nhắn) của họ.
-    /// </summary>
-    [Fact]
-    public async Task Hub_TuOriginLa_BiTuChoi()
-    {
-        var (http, _) = await LoginAsync();
-
-        var evil = new HttpRequestMessage(HttpMethod.Post, "/hubs/changes/negotiate?negotiateVersion=1");
-        evil.Headers.Add("Origin", "https://ke-gian.example");
-        Assert.Equal(HttpStatusCode.Forbidden, (await http.SendAsync(evil)).StatusCode);
-
-        // Cùng origin thì vẫn phải thông (không thì realtime chết cả hệ thống).
-        var ours = new HttpRequestMessage(HttpMethod.Post, "/hubs/changes/negotiate?negotiateVersion=1");
-        ours.Headers.Add("Origin", "http://localhost");
-        Assert.Equal(HttpStatusCode.OK, (await http.SendAsync(ours)).StatusCode);
     }
 
     [Fact]

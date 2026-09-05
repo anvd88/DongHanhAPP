@@ -34,7 +34,7 @@ data class HomeSnapshot(
 /**
  * Kho ảnh chụp Trang chủ, mã hoá bằng Android Keystore ([OfflineCrypto]) vì chứa thông tin cá nhân
  * (hồ sơ, lương, đơn từ). Ghi theo kiểu atomic (ghi file tạm rồi đổi tên) để không bao giờ để lại
- * file hỏng một nửa nếu app bị tắt giữa chừng. Cùng khuôn với [ChatCacheStore].
+ * file hỏng một nửa nếu app bị tắt giữa chừng.
  */
 class HomeCacheStore(context: Context) {
     private val file = File(context.filesDir, "home_cache.bin")

@@ -1,0 +1,57 @@
+# /api/directory/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].canSeeContact : bool
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].online : bool
+  $[].position : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].canSeeContact : bool
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].online : bool
+  $[].position : string
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].canSeeContact : bool
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].online : bool
+  $[].position : string
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].canSeeContact : bool
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].online : bool
+  $[].position : string
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].canSeeContact : bool
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].online : bool
+  $[].position : string

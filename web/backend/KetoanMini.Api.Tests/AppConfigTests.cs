@@ -74,9 +74,9 @@ public sealed class AppConfigTests : IAsyncLifetime
     }
 
     private sealed record Features(bool LocationEnabled, bool OfflineAttendanceEnabled, bool BiometricAttendanceEnabled,
-        bool ChatFileTransferEnabled, bool CompanyPortalEnabled);
+        bool CompanyPortalEnabled);
     private sealed record Onboarding(string CameraReason, string LocationReason, string NotificationReason,
-        string MicrophoneReason, string IntroText);
+        string IntroText);
     private sealed record Config(Features Features, Onboarding Onboarding, string[] Notices);
 
     [Fact]

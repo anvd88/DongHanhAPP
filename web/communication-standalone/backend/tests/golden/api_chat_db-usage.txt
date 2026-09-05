@@ -1,0 +1,28 @@
+# /api/chat/db-usage
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.conversationCount : number
+  $.dataKb : number
+  $.databaseTotalKb : number
+  $.indexKb : number
+  $.memberCount : number
+  $.messageCount : number
+  $.tables : array
+  $.tables[] : object
+  $.tables[].dataKb : number
+  $.tables[].indexKb : number
+  $.tables[].label : string
+  $.tables[].rows : number
+  $.tables[].table : string
+  $.tables[].totalKb : number
+  $.totalKb : number
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

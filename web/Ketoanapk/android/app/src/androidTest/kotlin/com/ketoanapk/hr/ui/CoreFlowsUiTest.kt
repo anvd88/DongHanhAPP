@@ -33,11 +33,6 @@ class CoreFlowsUiTest {
         compose.onNodeWithText("Tạo đơn mới").assertIsDisplayed()
     }
 
-    @Test fun chatRendersRealInboxEmptyState() {
-        compose.setContent { MaterialTheme { RealChatScreen(viewModel()) } }
-        compose.onNodeWithText("Chat nội bộ").assertIsDisplayed()
-    }
-
     @Test fun salaryRendersProtectedPayslipList() {
         compose.setContent {
             MaterialTheme {

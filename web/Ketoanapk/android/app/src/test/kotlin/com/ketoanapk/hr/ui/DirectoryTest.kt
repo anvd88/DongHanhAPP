@@ -1,6 +1,6 @@
 package com.ketoanapk.hr.ui
 
-import com.ketoanapk.hr.data.CallContact
+import com.ketoanapk.hr.data.DirectoryContact
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -8,9 +8,9 @@ import org.junit.Test
 class DirectoryTest {
     @Test
     fun organizationSeparatesDirectManagerAndDepartmentPeers() {
-        val manager = CallContact(username = "manager", isDirectManager = true, sameDepartment = true)
-        val peer = CallContact(username = "peer", sameDepartment = true)
-        val outsider = CallContact(username = "other")
+        val manager = DirectoryContact(username = "manager", isDirectManager = true, sameDepartment = true)
+        val peer = DirectoryContact(username = "peer", sameDepartment = true)
+        val outsider = DirectoryContact(username = "other")
 
         val (managers, peers) = organizationContacts(listOf(manager, peer, outsider))
 
@@ -20,7 +20,7 @@ class DirectoryTest {
 
     @Test
     fun hiddenContactFieldsRemainEmptyInClientModel() {
-        val hidden = CallContact(username = "private")
+        val hidden = DirectoryContact(username = "private")
         assertTrue(hidden.phone.isEmpty())
         assertTrue(hidden.email.isEmpty())
     }

@@ -1,7 +1,12 @@
 using System.Text.Json;
 using System.Threading.Channels;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.BuildingBlocks.Messaging;
+using KetoanMini.Api.BuildingBlocks.Outbox;
+using Microsoft.Extensions.Options;
 using Npgsql;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace KetoanMini.Api.Services;
 
@@ -28,8 +33,13 @@ public sealed record OutboxMessage(long Id, string Kind, string Payload, int Att
 /// chứ chưa phải outbox nguyên tử đúng nghĩa — vẫn còn khe hẹp giữa lúc ghi nghiệp vụ và lúc ghi hàng
 /// chờ. Bịt hẳn phải bọc transaction cho mọi đường ghi, là việc lớn hơn nhiều.
 /// </summary>
-public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
+public sealed class OutboxQueue(
+    Database db,
+    ILogger<OutboxQueue> log,
+    IntegrationOutbox? integrationOutbox = null,
+    IOptions<RabbitMqOptions>? rabbitOptions = null)
 {
+    private readonly bool _rabbitEnabled = rabbitOptions?.Value.Enabled == true && integrationOutbox is not null;
     public const string KindUserPush = "push.user";
     public const string KindAdminsPush = "push.admins";
     public const string KindAllPush = "push.all";
@@ -80,7 +90,7 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
 
     /// <summary>
     /// Xếp một việc vào hàng chờ. <paramref name="dedupeKey"/> PHẢI gồm cả NGƯỜI NHẬN, không chỉ chữ
-    /// ký sự kiện: một tin nhắn chat gửi cho nhiều người dùng chung notif_id, nếu khoá chỉ có chữ ký
+    /// ký sự kiện: một sự kiện nghiệp vụ gửi cho nhiều người dùng chung notif_id, nếu khoá chỉ có chữ ký
     /// thì chỉ người đầu tiên được xếp hàng, những người sau bị coi là trùng và mất thông báo.
     /// </summary>
     public async Task EnqueueAsync(string kind, object payload, string dedupeKey, CancellationToken ct = default)
@@ -88,7 +98,13 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
         try
         {
             await using var conn = await db.OpenAsync(ct);
-            await EnqueueAsync(conn, null, kind, payload, dedupeKey, ct);
+            if (_rabbitEnabled)
+            {
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                await EnqueueAsync(conn, tx, kind, payload, dedupeKey, ct);
+                await tx.CommitAsync(ct);
+            }
+            else await EnqueueAsync(conn, null, kind, payload, dedupeKey, ct);
         }
         catch (Exception ex)
         {
@@ -105,6 +121,16 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
     internal async Task<bool> EnqueueAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string kind,
         object payload, string dedupeKey, CancellationToken ct = default)
     {
+        if (_rabbitEnabled)
+        {
+            if (tx is null) throw new InvalidOperationException("Rabbit notification enqueue requires a transaction.");
+            var eventId = StableEventId(dedupeKey);
+            var data = JsonSerializer.SerializeToElement(new { kind, payload }, IntegrationEventJson.Options);
+            var envelope = new IntegrationEventEnvelope(eventId, "notifications.push.requested.v1",
+                DateTimeOffset.UtcNow, "KetoanMini.Host", dedupeKey, null, null, null, null, ["all"], data);
+            await integrationOutbox!.EnqueueAsync(conn, tx, "notifications.push.requested.v1", envelope, ct);
+            return true;
+        }
         var inserted = await new NpgsqlCommand("""
             INSERT INTO app_outbox (kind, payload, dedupe_key)
             VALUES (@kind, @payload::jsonb, @dedupe)
@@ -120,6 +146,17 @@ public sealed class OutboxQueue(Database db, ILogger<OutboxQueue> log)
         }.ExecuteNonQueryAsync(ct) > 0;
         _wake.Writer.TryWrite(0);
         return inserted;
+    }
+
+    private static Guid StableEventId(string dedupeKey)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes("ketoan:push:" + dedupeKey));
+        Span<byte> id = stackalloc byte[16];
+        bytes.AsSpan(0, 16).CopyTo(id);
+        // RFC 4122 variant/version bits make diagnostics recognize this as deterministic UUID v5-like.
+        id[6] = (byte)((id[6] & 0x0f) | 0x50);
+        id[8] = (byte)((id[8] & 0x3f) | 0x80);
+        return new Guid(id);
     }
 
     /// <summary>

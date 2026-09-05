@@ -1,0 +1,12 @@
+# /api/payout-vouchers/recipients
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 403 
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

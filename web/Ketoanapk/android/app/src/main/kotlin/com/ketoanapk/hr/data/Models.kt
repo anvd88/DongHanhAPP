@@ -45,47 +45,10 @@ data class ServerNotificationFeed(
     val items: List<ServerNotification> = emptyList(),
 )
 
-/** Một cuộc gọi nhỡ (bền vững trong DB) để hiện khi mở app dù lúc gọi đang offline. */
-@Serializable
-data class MissedCall(
-    val id: Long = 0,
-    val fromUsername: String = "",
-    val fromName: String = "",
-    val media: String = "audio",
-    val callId: String = "",
-    val createdAt: String = "",
-)
 @Serializable data class PayslipInquiryBody(val lineLabel:String="",val message:String)
-
+/** Một đồng nghiệp trong danh bạ tổ chức. */
 @Serializable
-data class CallHistoryItem(
-    val id: Long = 0,
-    val peerUsername: String = "",
-    val peerName: String = "",
-    val callId: String = "",
-    val media: String = "audio",
-    val direction: String = "outgoing",
-    val outcome: String = "ended",
-    val startedAt: String? = null,
-    val endedAt: String = "",
-    val durationSeconds: Int = 0,
-)
-
-@Serializable
-data class RecordCallBody(
-    val peerUsername: String,
-    val peerName: String,
-    val callId: String,
-    val media: String,
-    val direction: String,
-    val outcome: String,
-    val startedAtEpochMs: Long? = null,
-    val endedAtEpochMs: Long,
-)
-
-/** Một đồng nghiệp trong danh bạ gọi nội bộ (khớp ChatContactDto của backend). */
-@Serializable
-data class CallContact(
+data class DirectoryContact(
     val username: String = "",
     val displayName: String = "",
     val avatarUrl: String? = null,
@@ -102,71 +65,6 @@ data class CallContact(
     val managerName: String = "",
     val isDirectManager: Boolean = false,
     val sameDepartment: Boolean = false,
-)
-
-@Serializable
-data class ChatConversation(
-    val id: String = "",
-    val isGroup: Boolean = false,
-    val title: String = "",
-    val username: String? = null,
-    val avatarUrl: String? = null,
-    val isOnline: Boolean = false,
-    val verified: Boolean = false,
-    val isDiamond: Boolean = false,
-    val preview: String = "",
-    val lastAt: String? = null,
-    val unread: Int = 0,
-    val lastSeen: String? = null,
-    val pinned: Boolean = false,
-    val supportConversation: Boolean = false,
-)
-
-@Serializable
-data class ChatReaction(val emoji: String = "", val count: Int = 0, val mine: Boolean = false)
-
-@Serializable
-data class ChatMessage(
-    val id: Long = 0,
-    val senderUsername: String = "",
-    val senderName: String = "",
-    val mine: Boolean = false,
-    val body: String = "",
-    val createdAt: String = "",
-    val editedAt: String? = null,
-    val removed: Boolean = false,
-    val forwarded: Boolean = false,
-    val reactions: List<ChatReaction> = emptyList(),
-    val kind: String = "text",
-    val fileName: String? = null,
-    val fileSize: Long? = null,
-    val fileMime: String? = null,
-    val hasBlob: Boolean = false,
-    val read: Boolean = false,
-)
-
-/** Voice chuẩn dùng kind=voice; nhánh file+audio chỉ để đọc lịch sử do APK cũ đã tạo. */
-internal fun ChatMessage.isVoiceMessage(): Boolean = !removed && (
-    kind.equals("voice", ignoreCase = true) ||
-        (kind.equals("file", ignoreCase = true) &&
-            (fileMime?.startsWith("audio", ignoreCase = true) == true ||
-                fileName?.endsWith(".m4a", ignoreCase = true) == true ||
-                fileName?.endsWith(".ogg", ignoreCase = true) == true))
-    )
-
-@Serializable data class ChatConversationId(val id: String = "")
-@Serializable data class SendChatMessageBody(val body: String, val forwarded: Boolean = false)
-@Serializable data class EditChatMessageBody(val body: String)
-@Serializable data class ReactChatMessageBody(val emoji: String)
-@Serializable data class PinChatConversationBody(val pinned: Boolean)
-@Serializable data class SendChatFileBody(
-    val fileName: String,
-    val fileSize: Long,
-    val fileMime: String? = null,
-    /** "file" cho đính kèm; recorder phải truyền rõ "voice" để backend áp dụng lưu trữ bền vững. */
-    val kind: String = "file",
-    /** Cùng một bản ghi dùng lại ID này khi retry để không tạo hai tin/push trùng. */
-    val clientMessageId: String? = null,
 )
 
 /**
@@ -255,31 +153,8 @@ data class AppConfig(
     val portraitVerticalNudge: Double = 0.15,
     val portraitAspect: Double = 0.75,
     val portraitMinWidthFactor: Double = 1.35,
-    // Cấu hình gọi thoại/video điều khiển từ xa (STUN, ép relay, timeout, chất lượng video, công tắc).
-    val call: CallRemoteConfig = CallRemoteConfig(),
     // Lời nhắc/thông báo chạy chữ trên Trang chủ (admin sửa từ xa) — luân phiên cùng lời chào theo buổi.
     val notices: List<String> = emptyList(),
-)
-
-/**
- * Cấu hình GỌI điều khiển từ xa (khớp CallConfigDto backend). Admin đổi qua /api/app-config là app áp
- * dụng ngay lần đăng nhập / quay lại foreground kế tiếp — KHÔNG cần build lại APK. Mặc định = hành vi cũ.
- */
-@Serializable
-data class CallRemoteConfig(
-    val callsEnabled: Boolean = true,          // công tắc tổng: tắt là không gọi được (kill switch)
-    val videoCallEnabled: Boolean = true,      // cho phép gọi video (tắt → chỉ thoại)
-    val stunServers: List<String> = listOf(
-        "stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302",
-    ),
-    val forceRelay: Boolean = false,           // ép mọi media qua TURN (ổn định + giấu IP; cần có TURN)
-    val outgoingTimeoutSeconds: Int = 30,
-    val incomingTimeoutSeconds: Int = 45,
-    val videoWidth: Int = 1280,
-    val videoHeight: Int = 720,
-    val videoFps: Int = 30,
-    val videoMaxBitrateKbps: Int = 0,          // 0 = không giới hạn
-    val audioMaxBitrateKbps: Int = 0,
 )
 
 // ----- Cổng thông tin công ty (tin tức, sự kiện, giới thiệu) -----

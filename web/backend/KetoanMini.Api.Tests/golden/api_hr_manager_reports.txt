@@ -1,0 +1,58 @@
+# /api/hr/manager/reports
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.byDepartment : array
+  $.byDepartment[] : object
+  $.byDepartment[].absentDays : number
+  $.byDepartment[].departmentName : string
+  $.byDepartment[].lateDays : number
+  $.byDepartment[].leaveDays : number
+  $.byDepartment[].overtimeHours : number
+  $.byDepartment[].workedDays : number
+  $.headcountChange : object
+  $.headcountChange.activeEnd : number
+  $.headcountChange.inactiveThisMonth : number
+  $.headcountChange.newHires : number
+  $.period : string
+  $.totals : object
+  $.totals.absentDays : number
+  $.totals.approvedRequests : number
+  $.totals.lateDays : number
+  $.totals.leaveDays : number
+  $.totals.overtimeHours : number
+  $.totals.pendingRequests : number
+  $.totals.rejectedRequests : number
+  $.totals.workedDays : number
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : object
+  $.byDepartment : array
+  $.byDepartment[] : object
+  $.byDepartment[].absentDays : number
+  $.byDepartment[].departmentName : string
+  $.byDepartment[].lateDays : number
+  $.byDepartment[].leaveDays : number
+  $.byDepartment[].overtimeHours : number
+  $.byDepartment[].workedDays : number
+  $.headcountChange : object
+  $.headcountChange.activeEnd : number
+  $.headcountChange.inactiveThisMonth : number
+  $.headcountChange.newHires : number
+  $.period : string
+  $.totals : object
+  $.totals.absentDays : number
+  $.totals.approvedRequests : number
+  $.totals.lateDays : number
+  $.totals.leaveDays : number
+  $.totals.overtimeHours : number
+  $.totals.pendingRequests : number
+  $.totals.rejectedRequests : number
+  $.totals.workedDays : number
+
+[Driver] 403 
+
+[Employee] 403 

@@ -1,178 +1,165 @@
-import * as signalR from "@microsoft/signalr";
-import { session } from "./api";
-import { appUrl } from "./appConfig";
+/**
+ * Kết nối realtime nghiệp vụ: một EventSource duy nhất tới GET /api/realtime/stream.
+ *
+ * Hợp đồng backend (BuildingBlocks/Realtime/RealtimeEndpoints.cs):
+ *  · Mỗi khung mang `id` = sequence_no; trình duyệt tự gửi lại `Last-Event-ID` khi nối lại.
+ *  · Loại sự kiện: resync.required, invalidated, access.changed, session.revoked,
+ *    presence.changed, feedback.resolved. Payload chỉ chứa `{ scope }`.
+ *  · Sự kiện không mang dữ liệu, chỉ báo một phạm vi đã cũ; máy khách tự gọi lại API.
+ *  · Nhịp tim khoảng 17 giây, gửi dưới dạng dòng chú thích `: heartbeat`.
+ *
+ * EventSource không tự nối lại sau 401/404 mà đóng hẳn. Vòng giám sát bên dưới xử lý việc đó:
+ * readyState = CLOSED thì tạo kết nối mới với thời gian chờ tăng dần, mỗi lần nối lại đều nạp
+ * lại toàn bộ dữ liệu.
+ */
 
 /**
- * Kết nối SignalR tới hub /hubs/changes của backend. Backend phát tín hiệu "changed"
- * kèm "phạm vi" (scope):
- *   • "data"     — thay đổi nghiệp vụ (chứng từ, thanh toán, gia công, chấm công…)
- *   • "presence" — hiện diện online + thay đổi tài khoản
- *   • "chat"     — tin nhắn mới/sửa/gỡ (chỉ gửi tới ĐÚNG thành viên cuộc trò chuyện)
- *   • "notify"   — hộp thư thông báo có dòng mới (chuông trên header)
- * Client chỉ LẮNG NGHE WebSocket — không poll. Mỗi listener đăng ký phạm vi quan tâm để
- * tránh refetch thừa: trang chat không tải lại khi có thay đổi kế toán và ngược lại.
+ * Chủ đề dữ liệu. Phần tử đầu của mọi queryKey là một tên trong danh sách này, và máy chủ chỉ gửi
+ * cho một kết nối những chủ đề mà kết nối đó đang mở (xem `topics` trong connectRealtime).
+ *
+ * Năm chủ đề đầu từng là một chủ đề duy nhất tên `data`. Gộp như thế nghĩa là một người sửa một
+ * phiếu thu làm MỌI máy đang mở tải lại bán hàng, mua hàng, công nợ, sổ quỹ và danh mục hàng hoá —
+ * đúng thứ lãng phí mà việc chẻ nhỏ này bỏ đi. Bảng nào phát chủ đề nào khai ở phía máy chủ, trong
+ * `Watched` của Realtime/DatabaseChangePublisher.cs; hai nơi phải khớp nhau.
  */
-export type RealtimeScope =
-  | "data"
-  | "presence"
-  | "chat"
-  | "feedback"
-  | "hr"
-  | "tasks"
-  | "portal"
-  | "config"
-  | "audit"
-  | "talent"
-  | "liveness"
-  | "release"
-  | "attendance"
-  // "notify" — có thông báo mới trong hộp thư (bảng web_notifications). Tín hiệu KHÔNG mang nội
-  // dung: mỗi máy khách tự gọi /api/notifications và chỉ nhận được phần của chính mình.
-  | "notify"
-  // "access" — quyền của CHÍNH tài khoản này vừa bị admin thay đổi. Chỉ gửi tới đúng người đó
-  // (Clients.User), không phát ra toàn hệ thống. Frontend nạp lại hồ sơ truy cập → menu/layout/route
-  // cập nhật ngay mà không phải đăng nhập lại. Xem lib/access.tsx.
-  | "access"
-  | "all";
-type Listener = (scope: RealtimeScope, payload?: string) => void;
+export const SCOPES = [
+  'sales',
+  'debts',
+  'cash',
+  'purchases',
+  'catalog',
+  'hr',
+  'attendance',
+  'presence',
+  'tasks',
+  'portal',
+  'config',
+  'audit',
+  'release',
+  'feedback',
+  'talent',
+  'notify',
+  'liveness',
+  'access',
+] as const
 
-const listeners = new Set<Listener>();
-let connection: signalR.HubConnection | null = null;
+export type Scope = (typeof SCOPES)[number]
 
-function emitChanged(scope: RealtimeScope, payload?: string) {
-  for (const cb of listeners) cb(scope, payload);
+export type RealtimeStatus = 'connecting' | 'live' | 'offline'
+
+/**
+ * Nạp lại đúng những chủ đề mà một thao tác vừa làm cũ, ngay tại máy vừa bấm.
+ *
+ * Máy chủ cũng sẽ báo qua realtime, nhưng tín hiệu đó đi vòng qua outbox nên đến sau một nhịp; chờ
+ * nó thì người vừa lưu phiếu nhìn thấy số cũ trong khoảnh khắc. Điểm khác so với trước là ở chỗ
+ * KHÔNG xoá sạch bộ nhớ đệm nữa: chỉ những chủ đề thật sự chịu ảnh hưởng mới phải tải lại.
+ */
+export function refreshTopics(
+  client: { invalidateQueries: (filters: { queryKey: readonly string[] }) => Promise<void> },
+  ...topics: Scope[]
+) {
+  for (const topic of topics) void client.invalidateQueries({ queryKey: [topic] })
 }
 
-/* ----- Tín hiệu bắt tay WebRTC để gửi tệp thẳng P2P qua LAN (xem lib/filetransfer.ts) -----
- * Server (ChangesHub.Relay) chỉ TRUNG CHUYỂN gói tín hiệu giữa 2 người; nội dung tệp KHÔNG
- * đi qua server. "signal" mang (fromUsername, payloadJson). */
-type SignalListener = (fromUsername: string, payload: string) => void;
-const signalListeners = new Set<SignalListener>();
-type FeedbackResolvedListener = (message: string) => void;
-const feedbackResolvedListeners = new Set<FeedbackResolvedListener>();
-
-/** Lắng nghe tín hiệu WebRTC gửi tới mình. */
-export function subscribeSignal(cb: SignalListener): () => void {
-  signalListeners.add(cb);
-  return () => {
-    signalListeners.delete(cb);
-  };
+export interface RealtimeHandlers {
+  /** Một phạm vi dữ liệu đã cũ; 'all' nghĩa là nạp lại toàn bộ. */
+  onInvalidate: (scope: Scope | 'all') => void
+  /** Quyền của tài khoản thay đổi: phải nạp lại hồ sơ truy cập vì menu có thể khác đi. */
+  onAccessChanged: () => void
+  /** Phiên bị thu hồi từ xa (đăng nhập máy khác, admin thu hồi thiết bị). */
+  onSessionRevoked: () => void
+  onStatus: (status: RealtimeStatus) => void
 }
 
-export function subscribeFeedbackResolved(cb: FeedbackResolvedListener): () => void {
-  feedbackResolvedListeners.add(cb);
-  return () => {
-    feedbackResolvedListeners.delete(cb);
-  };
-}
+const RETRY_STEPS = [1000, 2000, 5000, 10_000, 20_000, 30_000]
 
-/** Gửi một gói tín hiệu WebRTC tới đúng một người dùng (qua hub). Trả về true nếu đã gửi. */
-export async function sendSignal(toUsername: string, payload: string): Promise<boolean> {
-  if (!connection || connection.state !== signalR.HubConnectionState.Connected) return false;
-  try {
-    await connection.invoke("Relay", toUsername, payload);
-    return true;
-  } catch {
-    return false;
-  }
-}
+/**
+ * Mở luồng cho đúng những chủ đề `topics` đang cần. Danh sách rỗng nghĩa là nhận tất.
+ *
+ * Máy chủ bỏ khung ngoài danh sách nhưng KHÔNG bỏ mốc: `Last-Event-ID` của máy khách chỉ dừng ở
+ * khung cuối cùng thật sự nhận được. Nhờ đó khi danh sách chủ đề rộng ra — người dùng mở một màn
+ * hình mới — lần nối lại mang theo mốc cũ và máy chủ phát lại đúng những khung từng bị bỏ, nên dữ
+ * liệu của màn hình vừa mở không thể là bản đã cũ mà không ai hay.
+ */
+export function connectRealtime(handlers: RealtimeHandlers, topics: readonly string[] = []) {
+  let source: EventSource | null = null
+  let attempt = 0
+  let timer: number | undefined
+  let stopped = false
+  let lastEventId = ''
 
-/** Đăng ký lắng nghe. Bỏ trống `scopes` = nhận mọi phạm vi (tương thích ngược). */
-export function subscribeRealtime(cb: Listener, scopes?: RealtimeScope[]): () => void {
-  const wrapped: Listener =
-    scopes && scopes.length
-      ? (scope, payload) => {
-          if (scope === "all" || scopes.includes(scope)) cb(scope, payload);
-        }
-      : cb;
-  listeners.add(wrapped);
-  return () => {
-    listeners.delete(wrapped);
-  };
-}
-
-export function startRealtime() {
-  if (connection) return;
-  // Chỉ kết nối hub khi ĐÃ đăng nhập. Trang công khai (đăng nhập, kiosk, tải APK, tính toán) chưa có
-  // phiên → tránh spam negotiate 401 mỗi 3 giây (nhất là màn kiosk chạy liên tục). Sau khi đăng nhập,
-  // auth.tsx gọi restartRealtime() để kết nối lại.
-  if (!session.isSignedIn()) return;
-
-  connection = new signalR.HubConnectionBuilder()
-    // KHÔNG còn accessTokenFactory: phiên nằm trong cookie HttpOnly và trình duyệt tự đính cookie
-    // vào cả negotiate lẫn WebSocket handshake (cùng origin). Nhờ vậy token không còn xuất hiện trên
-    // URL — chỗ mà nó sẽ bị ghi lại trong log máy chủ, log proxy và lịch sử trình duyệt.
-    // (Ứng dụng Android vẫn dùng query access_token; backend vẫn chấp nhận đường đó cho app.)
-    //
-    // Đường /hubs được máy chủ chốt bằng kiểm tra ORIGIN chứ không bằng header CSRF — xem Program.cs.
-    // Lý do: WebSocket handshake không gắn được header tuỳ ý, nên CSRF token không bảo vệ nổi nó,
-    // trong khi Origin thì bảo vệ được cả handshake lẫn negotiate.
-    .withUrl(appUrl("/hubs/changes"), { withCredentials: true })
-    .withAutomaticReconnect([0, 2000, 5000, 10000])
-    .configureLogging(signalR.LogLevel.Warning)
-    .build();
-  const current = connection;
-
-  connection.on("changed", (scope: RealtimeScope = "data", payload?: string) => {
-    if (connection !== current) return;
-    emitChanged(scope, payload);
-  });
-
-  connection.on("signal", (fromUsername: string, payload: string) => {
-    if (connection !== current) return;
-    for (const cb of signalListeners) cb(fromUsername, payload);
-  });
-
-  connection.on("feedbackResolved", (message: string) => {
-    if (connection !== current) return;
-    for (const cb of feedbackResolvedListeners) cb(message);
-  });
-
-  connection.onreconnected(() => {
-    if (connection !== current) return;
-    emitChanged("all");
-  });
-
-  connection.onclose(() => {
-    if (connection !== current) return;
-    connection = null;
-    setTimeout(startRealtime, 3000);
-  });
-
-  // Tự thử lại nếu lần kết nối đầu thất bại (backend chưa sẵn sàng, hoặc phiên chưa kịp có).
-  //
-  // DỰNG LẠI KẾT NỐI MỚI chứ không gọi start() lại trên đối tượng cũ: đối tượng cũ giữ nguyên trạng
-  // thái phiên lúc nó được tạo. Trước đây nó chỉ mang token, nay là cookie/đăng nhập — nên nếu lần
-  // đầu thất bại vì CHƯA đăng nhập, thử lại đối tượng cũ sẽ hỏng mãi mãi kể cả sau khi đã đăng nhập
-  // xong. Dựng lại thì mỗi lần thử là một lần đọc lại trạng thái phiên hiện tại.
-  current.start().catch(() => {
-    if (connection !== current) return;
-    connection = null;
-    setTimeout(startRealtime, 3000);
-  });
-}
-
-export async function restartRealtime() {
-  const old = connection;
-  connection = null;
-  if (old) {
+  const parseScope = (raw: string): Scope | 'all' => {
     try {
-      await old.stop();
+      const scope = (JSON.parse(raw) as { scope?: string }).scope
+      return (scope as Scope) ?? 'all'
     } catch {
-      // The old connection may already be gone; build a fresh one with the current token.
+      return 'all'
     }
   }
-  startRealtime();
-}
 
-export async function stopRealtime() {
-  const old = connection;
-  connection = null;
-  if (old) {
-    try {
-      await old.stop();
-    } catch {
-      // Best effort when signing out or switching sessions.
+  const scheduleReconnect = () => {
+    if (stopped) return
+    handlers.onStatus('offline')
+    const wait = RETRY_STEPS[Math.min(attempt, RETRY_STEPS.length - 1)]
+    attempt += 1
+    timer = window.setTimeout(open, wait)
+  }
+
+  const streamUrl = () => {
+    const query = new URLSearchParams()
+    if (topics.length) query.set('topics', [...topics].join(','))
+    // EventSource chỉ tự gửi lại Last-Event-ID cho lần nối lại của CHÍNH nó. Kết nối do mã này tạo
+    // là một EventSource mới, mốc phải tự mang theo.
+    if (lastEventId) query.set('after', lastEventId)
+    const suffix = query.toString()
+    return suffix ? `/api/realtime/stream?${suffix}` : '/api/realtime/stream'
+  }
+
+  function open() {
+    if (stopped) return
+    handlers.onStatus(attempt === 0 ? 'connecting' : 'offline')
+    source = new EventSource(streamUrl(), { withCredentials: true })
+
+    source.onopen = () => {
+      attempt = 0
+      handlers.onStatus('live')
     }
+
+    source.onerror = () => {
+      // CONNECTING: trình duyệt đang tự thử lại. CLOSED: đã đóng hẳn, phải tạo kết nối mới.
+      if (source?.readyState === EventSource.CLOSED) {
+        source.close()
+        source = null
+        scheduleReconnect()
+      } else {
+        handlers.onStatus('offline')
+      }
+    }
+
+    const on = (type: string, fn: (event: MessageEvent) => void) =>
+      source?.addEventListener(type, ((event: MessageEvent) => {
+        if (event.lastEventId) lastEventId = event.lastEventId
+        fn(event)
+      }) as EventListener)
+
+    on('resync.required', () => handlers.onInvalidate('all'))
+    on('invalidated', (event) => handlers.onInvalidate(parseScope(event.data)))
+    on('presence.changed', () => handlers.onInvalidate('presence'))
+    on('feedback.resolved', () => handlers.onInvalidate('feedback'))
+    on('access.changed', () => handlers.onAccessChanged())
+    on('session.revoked', () => {
+      stopped = true
+      source?.close()
+      handlers.onSessionRevoked()
+    })
+  }
+
+  open()
+
+  return () => {
+    stopped = true
+    window.clearTimeout(timer)
+    source?.close()
+    source = null
   }
 }

@@ -21,6 +21,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::app_config::router())
         .merge(routes::auth::router())
         .merge(routes::bank_accounts::router())
+        .merge(routes::catalogs::router())
         .merge(routes::directory::router())
         .merge(routes::gia_cong::router())
         .merge(routes::help::router())

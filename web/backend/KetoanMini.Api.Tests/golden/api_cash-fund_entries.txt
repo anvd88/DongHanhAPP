@@ -1,0 +1,18 @@
+# /api/cash-fund/entries
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.entries : array
+  $.month : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.entries : array
+  $.month : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

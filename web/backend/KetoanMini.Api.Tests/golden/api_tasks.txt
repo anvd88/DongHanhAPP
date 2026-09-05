@@ -1,0 +1,108 @@
+# /api/tasks/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.canAssign : bool
+  $.collections : array
+  $.inbox : array
+  $.isAdmin : bool
+  $.outbox : array
+  $.outbox[] : object
+  $.outbox[].assigneeName : string
+  $.outbox[].assigneeUsername : string
+  $.outbox[].assignerName : string
+  $.outbox[].assignerUsername : string
+  $.outbox[].createdAt : string
+  $.outbox[].delivery : object
+  $.outbox[].delivery.customerId : string
+  $.outbox[].delivery.customerName : string
+  $.outbox[].delivery.documentId : string
+  $.outbox[].delivery.voucherNo : string
+  $.outbox[].description : string
+  $.outbox[].id : string
+  $.outbox[].overdue : bool
+  $.outbox[].priority : string
+  $.outbox[].progress : number
+  $.outbox[].rating : number
+  $.outbox[].reviewNote : string
+  $.outbox[].reviewedAt : string
+  $.outbox[].reviewedBy : string
+  $.outbox[].status : string
+  $.outbox[].submitNote : string
+  $.outbox[].submittedAt : string
+  $.outbox[].taskNo : string
+  $.outbox[].title : string
+  $.outbox[].updatedAt : string
+  $.summary : object
+  $.summary.collections : number
+  $.summary.collectionsStandalone : number
+  $.summary.inbox : number
+  $.summary.inboxActionable : number
+  $.summary.outbox : number
+  $.summary.outboxAwaitingVoucher : number
+  $.summary.outboxReview : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.canAssign : bool
+  $.collections : array
+  $.inbox : array
+  $.isAdmin : bool
+  $.outbox : array
+  $.summary : object
+  $.summary.collections : number
+  $.summary.collectionsStandalone : number
+  $.summary.inbox : number
+  $.summary.inboxActionable : number
+  $.summary.outbox : number
+  $.summary.outboxAwaitingVoucher : number
+  $.summary.outboxReview : number
+
+[HR] 200 application/json
+  $ : object
+  $.canAssign : bool
+  $.collections : array
+  $.inbox : array
+  $.isAdmin : bool
+  $.outbox : array
+  $.summary : object
+  $.summary.collections : number
+  $.summary.collectionsStandalone : number
+  $.summary.inbox : number
+  $.summary.inboxActionable : number
+  $.summary.outbox : number
+  $.summary.outboxAwaitingVoucher : number
+  $.summary.outboxReview : number
+
+[Driver] 200 application/json
+  $ : object
+  $.canAssign : bool
+  $.collections : array
+  $.inbox : array
+  $.isAdmin : bool
+  $.outbox : array
+  $.summary : object
+  $.summary.collections : number
+  $.summary.collectionsStandalone : number
+  $.summary.inbox : number
+  $.summary.inboxActionable : number
+  $.summary.outbox : number
+  $.summary.outboxAwaitingVoucher : number
+  $.summary.outboxReview : number
+
+[Employee] 200 application/json
+  $ : object
+  $.canAssign : bool
+  $.collections : array
+  $.inbox : array
+  $.isAdmin : bool
+  $.outbox : array
+  $.summary : object
+  $.summary.collections : number
+  $.summary.collectionsStandalone : number
+  $.summary.inbox : number
+  $.summary.inboxActionable : number
+  $.summary.outbox : number
+  $.summary.outboxAwaitingVoucher : number
+  $.summary.outboxReview : number

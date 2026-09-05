@@ -1,0 +1,22 @@
+# /api/chamcong/trangthai
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 401 application/json
+  $ : object
+  $.message : string
+
+[Accounting] 401 application/json
+  $ : object
+  $.message : string
+
+[HR] 401 application/json
+  $ : object
+  $.message : string
+
+[Driver] 401 application/json
+  $ : object
+  $.message : string
+
+[Employee] 401 application/json
+  $ : object
+  $.message : string

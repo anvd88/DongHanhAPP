@@ -112,10 +112,7 @@ class HrRepository(context: Context, background: Boolean = false) {
     // API chấm công đi RIÊNG qua máy chủ LAN (không qua Internet). Xem ApiClient.createAttendance.
     private val attendanceApi: HrApi = ApiClient.createAttendance(tokenStore)
     private val offlineStore = OfflineAttendanceStore(context.applicationContext)
-    private val chatCache = ChatCacheStore(context.applicationContext)
     private val homeCache = HomeCacheStore(context.applicationContext)
-    @Volatile private var chatFromCache = false
-    fun chatUsingCache(): Boolean = chatFromCache
 
     /** Ảnh chụp Trang chủ của lần mở trước (chỉ trả về khi đúng tài khoản). Xem [HomeCacheStore]. */
     suspend fun loadHomeSnapshot(username: String): HomeSnapshot? = homeCache.load(username)
@@ -189,7 +186,6 @@ class HrRepository(context: Context, background: Boolean = false) {
     /** Xoá phiên trên máy, KHÔNG gọi máy chủ (dùng khi máy chủ đã từ chối phiên, hoặc đang offline). */
     private suspend fun clearLocalSession() {
         tokenStore.clearToken()
-        chatCache.clear()
         homeCache.clear() // ảnh chụp Trang chủ chứa hồ sơ/lương → phải xoá khi phiên kết thúc/bị thu hồi
     }
 
@@ -612,164 +608,12 @@ class HrRepository(context: Context, background: Boolean = false) {
             }
         }
         return synced
+   }
+    suspend fun directoryContacts(search: String?): List<DirectoryContact> = call {
+        api.directoryContacts(search?.trim()?.takeIf { it.isNotBlank() })
     }
 
-    /** Danh bạ gọi nội bộ (đồng nghiệp + trạng thái online) để chọn người gọi. */
-    suspend fun callContacts(search: String?): List<CallContact> = call {
-        api.chatContacts(search?.trim()?.takeIf { it.isNotBlank() })
-    }
-
-    suspend fun chatConversations(): List<ChatConversation> = try {
-        val items = call { api.chatConversations() }
-        chatFromCache = false
-        chatCache.saveConversations(items)
-        items
-    } catch (error: Exception) {
-        chatCache.load().conversations.ifEmpty { throw error }.also { chatFromCache = true }
-    }
-    suspend fun openDirectConversation(username: String): ChatConversationId = call { api.openDirectConversation(username) }
-    suspend fun chatMessages(id: String, beforeId: Long? = null, search: String? = null): List<ChatMessage> = try {
-        val normalizedSearch = search?.trim()?.ifBlank { null }
-        val items = call { api.chatMessages(id, beforeId, 50, normalizedSearch) }
-        chatFromCache = false
-        if (beforeId == null && normalizedSearch == null) chatCache.saveMessages(id, items)
-        items
-    } catch (error: Exception) {
-        val cached = chatCache.load().messages[id].orEmpty()
-            .filter { search.isNullOrBlank() || it.body.contains(search, true) || it.fileName.orEmpty().contains(search, true) }
-        if (cached.isEmpty()) throw error else cached.also { chatFromCache = true }
-    }
-    suspend fun sendChatMessage(id: String, text: String, forwarded: Boolean = false): ChatMessage = call {
-        api.sendChatMessage(id, SendChatMessageBody(text.trim(), forwarded))
-    }
-    suspend fun editChatMessage(id: String, messageId: Long, text: String) = callUnit {
-        api.editChatMessage(id, messageId, EditChatMessageBody(text.trim()))
-    }
-    suspend fun deleteChatMessage(id: String, messageId: Long) = callUnit { api.deleteChatMessage(id, messageId) }
-    suspend fun reactChatMessage(id: String, messageId: Long, emoji: String) = callUnit {
-        api.reactChatMessage(id, messageId, ReactChatMessageBody(emoji))
-    }
-    suspend fun pinChatConversation(id: String, pinned: Boolean) = callUnit {
-        api.pinChatConversation(id, PinChatConversationBody(pinned))
-    }
-
-    suspend fun sendChatFile(context: Context, conversationId: String, uri: Uri, kind: String = "file"): ChatMessage = withContext(Dispatchers.IO) {
-        call {
-            val resolver = context.contentResolver
-            var name = "tep-dinh-kem"
-            var size = -1L
-            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = cursor.getString(it) ?: name }
-                    cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = cursor.getLong(it) }
-                }
-            }
-            val mime = resolver.getType(uri) ?: "application/octet-stream"
-            val normalizedKind = if (kind.equals("voice", ignoreCase = true)) "voice" else "file"
-            val clientMessageId = if (normalizedKind == "voice") voiceClientMessageId(conversationId, name, size) else null
-            val metadata = api.createChatFileMessage(
-                conversationId,
-                SendChatFileBody(name.take(260), size.coerceAtLeast(0), mime, normalizedKind, clientMessageId),
-            )
-            if (!metadata.hasBlob) {
-                val body = object : RequestBody() {
-                    override fun contentType() = mime.toMediaTypeOrNull()
-                    override fun contentLength(): Long = size
-                    override fun writeTo(sink: BufferedSink) {
-                        resolver.openInputStream(uri)?.use { input -> sink.writeAll(input.source()) }
-                            ?: throw java.io.IOException("Không mở được tệp đã chọn.")
-                    }
-                }
-                val response = api.uploadChatFile(conversationId, metadata.id, body)
-                if (!response.isSuccessful) throw HttpException(response)
-            }
-            val ready = metadata.copy(hasBlob = true)
-            // Người gửi cũng phát lại từ cùng cache key theo messageId; cache lỗi không được biến một lần
-            // upload server đã thành công thành trạng thái "gửi thất bại".
-            runCatching { cacheChatFileFromUri(context, uri, ready) }
-            ready
-        }
-    }
-
-    suspend fun downloadChatFile(context: Context, conversationId: String, message: ChatMessage): File = withContext(Dispatchers.IO) {
-        val target = chatFileCacheTarget(context, message)
-        if (isValidChatFileCache(target, message)) return@withContext target
-        if (target.exists()) target.delete()
-
-        val response = try { api.downloadChatFile(conversationId, message.id) }
-        catch (e: Exception) { throw ApiException("Không tải được tệp: ${e.message ?: "lỗi mạng"}.") }
-        if (!response.isSuccessful) throw ApiException(HttpException(response).friendlyMessage())
-        val body = response.body() ?: throw ApiException("Máy chủ không trả nội dung tệp.")
-        val partial = File(target.parentFile, "${target.name}.${System.nanoTime()}.part")
-        try {
-            body.byteStream().use { input -> partial.outputStream().use { output -> input.copyTo(output) } }
-            val expected = body.contentLength()
-            if (partial.length() <= 0L || (expected > 0L && partial.length() != expected))
-                throw java.io.IOException("Nội dung tải về không đầy đủ.")
-            replaceAtomically(partial, target)
-            target
-        } catch (e: Exception) {
-            partial.delete()
-            throw ApiException("Tải tệp bị gián đoạn: ${e.message ?: "lỗi đọc dữ liệu"}.")
-        }
-    }
-
-    private fun chatFileCacheTarget(context: Context, message: ChatMessage): File {
-        val safeName = message.fileName.orEmpty().ifBlank { "tep-${message.id}" }
-            .replace(Regex("[^A-Za-z0-9._-]"), "_").take(180)
-        val dir = File(context.cacheDir, "chat").apply { mkdirs() }
-        return File(dir, "${message.id}-$safeName")
-    }
-
-    private fun isValidChatFileCache(file: File, message: ChatMessage): Boolean {
-        if (!file.isFile || file.length() <= 0L) return false
-        val expected = message.fileSize ?: 0L
-        return expected <= 0L || file.length() == expected
-    }
-
-    private fun cacheChatFileFromUri(context: Context, uri: Uri, message: ChatMessage) {
-        val target = chatFileCacheTarget(context, message)
-        if (isValidChatFileCache(target, message)) return
-        val partial = File(target.parentFile, "${target.name}.${System.nanoTime()}.part")
-        try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                partial.outputStream().use { output -> input.copyTo(output) }
-            } ?: throw java.io.IOException("Không đọc được tệp vừa gửi.")
-            if (!isValidChatFileCache(partial, message)) throw java.io.IOException("Bản cache tệp vừa gửi không đầy đủ.")
-            replaceAtomically(partial, target)
-        } finally {
-            partial.delete()
-        }
-    }
-
-    private fun replaceAtomically(source: File, target: File) {
-        try {
-            java.nio.file.Files.move(
-                source.toPath(), target.toPath(),
-                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-            java.nio.file.Files.move(source.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-        }
-    }
-
-    /** Đổ chuông cuộc gọi qua FCM (best-effort — không chặn cuộc gọi nếu lỗi mạng). */
-    suspend fun ringCall(toUser: String, callId: String, media: String) {
-        runCatching { api.ringCall(com.ketoanapk.hr.network.CallRingBody(toUser, callId, media)) }
-    }
-
-    /** Hủy chuông đã đẩy (người gọi cúp trước khi người kia bắt máy). */
-    suspend fun cancelCallRing(toUser: String, callId: String) {
-        runCatching { api.cancelCallRing(com.ketoanapk.hr.network.CallCancelBody(toUser, callId)) }
-    }
-
-    /** Báo cuộc gọi NHỠ (người kia không bắt máy/không online) — lưu DB + gửi thông báo TTL dài. */
-    suspend fun missedCall(toUser: String, callId: String, media: String) {
-        runCatching { api.missedCall(com.ketoanapk.hr.network.CallMissedBody(toUser, callId, media)) }
-    }
-
-    /**
+   /**
      * Hộp thư thông báo trên máy chủ. Lỗi mạng trả danh sách rỗng chứ không ném: chuông trong app đã
      * có sẵn dữ liệu cũ trên máy, mất mạng không được làm trắng nó.
      */
@@ -792,47 +636,8 @@ class HrRepository(context: Context, background: Boolean = false) {
     /** Trả về bản đồ mới nhất từ máy chủ; rỗng nghĩa là lưu KHÔNG thành công. */
     suspend fun setNotificationGroup(group: String, enabled: Boolean): Map<String, Boolean> =
         runCatching { api.updateNotificationGroups(NotificationGroupSettings(mapOf(group to enabled))).groups }
-            .getOrDefault(emptyMap())
-
-    /** Lấy cuộc gọi nhỡ chưa xem (từ DB) — dùng khi mở app để hiện dù trước đó offline. */
-    suspend fun fetchMissedCalls(): List<MissedCall> =
-        runCatching { api.missedCalls() }.getOrDefault(emptyList())
-
-    /**
-     * Lấy TURN credential ĐỘNG (có hạn giờ) để gọi được khi 2 máy khác mạng. Backend cấp qua HMAC —
-     * KHÔNG có mật khẩu tĩnh trong app. Trả null nếu server chưa cấu hình TURN (app tự lùi về STUN).
-     */
-    suspend fun fetchTurnCreds(): CallManager.TurnCreds? = runCatching {
-        val r = api.turnCredentials()
-        if (r.urls.isEmpty() || r.username.isBlank()) null
-        else CallManager.TurnCreds(r.urls, r.username, r.credential)
-    }.getOrNull()
-
-    /** Đánh dấu đã xem hết cuộc gọi nhỡ. */
-    suspend fun markMissedCallsSeen() {
-        runCatching { api.markMissedCallsSeen() }
-    }
-
-    suspend fun recordCall(session: CallManager.Session, reason: String, endedAt: Long) {
-        runCatching {
-            api.recordCall(
-                RecordCallBody(
-                    peerUsername = session.peerUsername,
-                    peerName = session.peerName,
-                    callId = session.callId,
-                    media = session.media.name.lowercase(),
-                    direction = if (session.incoming) "incoming" else "outgoing",
-                    outcome = reason,
-                    startedAtEpochMs = session.startedAt,
-                    endedAtEpochMs = endedAt,
-                ),
-            )
-        }
-    }
-
-    suspend fun callHistory(): List<CallHistoryItem> = call { api.callHistory() }
-
-    private suspend fun <T> call(block: suspend () -> T): T =
+           .getOrDefault(emptyMap())
+   private suspend fun <T> call(block: suspend () -> T): T =
         try {
             block()
         } catch (e: HttpException) {

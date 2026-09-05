@@ -1,0 +1,46 @@
+# /api/hr/manager/attendance
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].checkIn : string
+  $[].checkOut : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].employeeName : string
+  $[].lateMinutes : number
+  $[].overtimeMinutes : number
+  $[].position : string
+  $[].requestNo : string
+  $[].requestTitle : string
+  $[].shiftName : string
+  $[].status : string
+  $[].statusLabel : string
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].checkIn : string
+  $[].checkOut : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].employeeName : string
+  $[].lateMinutes : number
+  $[].overtimeMinutes : number
+  $[].position : string
+  $[].requestNo : string
+  $[].requestTitle : string
+  $[].shiftName : string
+  $[].status : string
+  $[].statusLabel : string
+
+[Driver] 403 
+
+[Employee] 403 

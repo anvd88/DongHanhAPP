@@ -138,6 +138,63 @@ public static class ProductCatalogEndpoints
             return Results.Ok(new { items });
         });
 
+        // NGUỒN HÀNG của một mặt hàng: đã nhập của những nhà cung cấp nào, mỗi nguồn còn lại bao nhiêu.
+        //
+        // Cùng một mặt hàng nhập từ nhiều nơi với giá khác nhau, nên người lập phiếu xuất phải chọn
+        // đúng nguồn thì tồn kho từng nguồn mới khớp với hàng đếm được trong kho. Số còn lại tính
+        // ngay tại đây thay vì để máy khách tự trừ: phiếu trả hàng cộng ngược vào tồn, mà quy tắc đó
+        // không nên nằm rải rác ở hai nơi.
+        api.MapGet("/products/{productId:guid}/sources", async (Guid productId, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var items = new List<object>();
+            await using var r = await conn.Cmd("""
+                SELECT s.id, s.name,
+                       COALESCE(b.bought, 0) AS bought,
+                       COALESCE(x.sold, 0) AS sold,
+                       COALESCE(b.bought, 0) - COALESCE(x.sold, 0) AS remaining,
+                       b.last_cost, b.last_bought_date
+                FROM suppliers s
+                JOIN LATERAL (
+                    SELECT SUM(pl.quantity) AS bought,
+                           (SELECT pl2.unit_price
+                            FROM purchase_lines pl2
+                            JOIN purchases p2 ON p2.id = pl2.purchase_id
+                            WHERE pl2.product_id = @pid AND p2.supplier_id = s.id AND p2.cancelled_at IS NULL
+                            ORDER BY p2.doc_date DESC, p2.created_at DESC LIMIT 1) AS last_cost,
+                           MAX(p.doc_date) AS last_bought_date
+                    FROM purchase_lines pl
+                    JOIN purchases p ON p.id = pl.purchase_id
+                    WHERE pl.product_id = @pid AND p.supplier_id = s.id AND p.cancelled_at IS NULL
+                ) b ON b.bought IS NOT NULL
+                LEFT JOIN LATERAL (
+                    -- Phiếu bán trừ đi, phiếu khách trả về cộng lại: hàng quay đầu là hàng còn trong kho.
+                    SELECT SUM(CASE WHEN d.document_type = 'return' THEN -l.quantity ELSE l.quantity END) AS sold
+                    FROM document_lines l
+                    JOIN documents d ON d.id = l.document_id
+                    WHERE l.product_id = @pid AND l.supplier_id = s.id
+                      AND d.document_type IN ('document', 'return')
+                      AND d.cancelled_at IS NULL
+                ) x ON TRUE
+                WHERE s.is_active = TRUE
+                ORDER BY remaining DESC, s.name
+                """).With("@pid", productId).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                items.Add(new
+                {
+                    supplierId = r.Guid("id"),
+                    supplierName = r.Str("name"),
+                    bought = r.Dec("bought"),
+                    sold = r.Dec("sold"),
+                    remaining = r.Dec("remaining"),
+                    lastCost = r.IsDBNull(r.GetOrdinal("last_cost")) ? (decimal?)null : r.Dec("last_cost"),
+                    lastBoughtDate = r.IsDBNull(r.GetOrdinal("last_bought_date"))
+                        ? (DateOnly?)null
+                        : r.DateOnly("last_bought_date"),
+                });
+            return Results.Ok(new { items });
+        });
+
         api.MapPost("/products", async (SaveProductReq req, ClaimsPrincipal u, Database db) =>
         {
             if (!u.Can(Permissions.VouchersCreate)) return Results.Forbid();

@@ -6,7 +6,7 @@ tunnel: ketoanmini
 credentials-file: C:\Users\Admin\.cloudflared\<TUNNEL_ID>.json
 
 ingress:
-  # Web + API + SignalR hub, tất cả cùng origin.
+  # Web + API, cùng origin.
   #
   # TRỎ VÀO :5239 (HTTP loopback), KHÔNG phải :5443.
   # Giao diện "Published application" mới của Cloudflare đã BỎ nút No TLS Verify, nên origin
@@ -18,7 +18,7 @@ ingress:
     service: http://localhost:5239
     originRequest:
       connectTimeout: 30s
-      # SignalR/WebSocket (/hubs) cần kết nối sống lâu.
+      # SSE heartbeat cần kết nối sống lâu.
       keepAliveTimeout: 90s
   # Bắt buộc có rule chốt cuối.
   - service: http_status:404

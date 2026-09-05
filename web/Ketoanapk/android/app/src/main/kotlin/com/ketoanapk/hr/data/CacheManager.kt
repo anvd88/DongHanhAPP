@@ -10,10 +10,8 @@ import java.io.File
  * Dọn dẹp bộ nhớ tạm của ứng dụng theo yêu cầu người dùng (màn "Bộ nhớ & dữ liệu tạm" trong Cài đặt).
  *
  * ĐO & DỌN:
- *  - Toàn bộ `cacheDir` (và `externalCacheDir` nếu có): gói cập nhật APK đã tải sẵn, ảnh/PDF/âm thanh
- *    tạm (chat, phiếu lương, chân dung) — đều tạo lại được khi cần.
- *  - Hai file cache có tên trong `filesDir`: `chat_cache.bin` (lịch sử chat ngoại tuyến) và
- *    `home_cache.bin` (ảnh chụp Trang chủ để mở app nhanh) — sẽ tự dựng lại ở lần đồng bộ kế tiếp.
+ *  - Toàn bộ `cacheDir` (và `externalCacheDir` nếu có): gói cập nhật APK đã tải sẵn, ảnh/PDF tạm.
+ *  - `home_cache.bin` trong `filesDir`: ảnh chụp Trang chủ để mở app nhanh.
  *
  * TUYỆT ĐỐI KHÔNG đụng dữ liệu người dùng KHÔNG phải cache: phiên đăng nhập (DataStore), đơn nháp chưa
  * gửi (`request_drafts.bin`), hàng đợi chấm công ngoại tuyến chưa đồng bộ (`offline_attendance.bin`),
@@ -23,7 +21,6 @@ object CacheManager {
 
     /** Các file cache nằm trong filesDir (ngoài cacheDir) cần dọn kèm — nhưng không phải dữ liệu người dùng. */
     private fun namedCacheFiles(context: Context): List<File> = listOf(
-        File(context.filesDir, "chat_cache.bin"),
         File(context.filesDir, "home_cache.bin"),
     )
 

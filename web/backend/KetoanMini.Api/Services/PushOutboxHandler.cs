@@ -4,11 +4,6 @@ namespace KetoanMini.Api.Services;
 
 /// <summary>
 /// Thực thi các việc "push.*" trong hàng chờ bằng <see cref="PushService"/>.
-///
-/// CỐ Ý KHÔNG đi qua đây: lời mời gọi và huỷ gọi (<c>SendCallInviteAsync</c>/<c>SendCallCancelAsync</c>).
-/// Gói tin cuộc gọi có TTL 30 giây; thử lại một lời mời sau vài phút thì TỆ HƠN là bỏ luôn — máy người
-/// nhận sẽ đổ chuông cho cuộc gọi đã kết thúc từ lâu. Việc gì hết giá trị theo thời gian thì phải
-/// bắn-rồi-quên, đừng nhét vào hàng chờ có thử lại.
 /// </summary>
 public sealed class PushOutboxHandler(PushService push, ILogger<PushOutboxHandler> log) : IOutboxHandler
 {

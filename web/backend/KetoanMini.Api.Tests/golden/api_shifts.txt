@@ -1,0 +1,72 @@
+# /api/shifts/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].breakMinutes : number
+  $[].checkoutGraceMinutes : number
+  $[].code : string
+  $[].endTime : string
+  $[].id : string
+  $[].isOvernight : bool
+  $[].lateGraceMinutes : number
+  $[].name : string
+  $[].standardHours : number
+  $[].startTime : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].breakMinutes : number
+  $[].checkoutGraceMinutes : number
+  $[].code : string
+  $[].endTime : string
+  $[].id : string
+  $[].isOvernight : bool
+  $[].lateGraceMinutes : number
+  $[].name : string
+  $[].standardHours : number
+  $[].startTime : string
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].breakMinutes : number
+  $[].checkoutGraceMinutes : number
+  $[].code : string
+  $[].endTime : string
+  $[].id : string
+  $[].isOvernight : bool
+  $[].lateGraceMinutes : number
+  $[].name : string
+  $[].standardHours : number
+  $[].startTime : string
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].breakMinutes : number
+  $[].checkoutGraceMinutes : number
+  $[].code : string
+  $[].endTime : string
+  $[].id : string
+  $[].isOvernight : bool
+  $[].lateGraceMinutes : number
+  $[].name : string
+  $[].standardHours : number
+  $[].startTime : string
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].breakMinutes : number
+  $[].checkoutGraceMinutes : number
+  $[].code : string
+  $[].endTime : string
+  $[].id : string
+  $[].isOvernight : bool
+  $[].lateGraceMinutes : number
+  $[].name : string
+  $[].standardHours : number
+  $[].startTime : string

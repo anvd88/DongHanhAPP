@@ -74,11 +74,6 @@
             android:name=".data.InstallResultReceiver"
             android:exported="false" />
 
-        <!-- Nút "Từ chối" trên thông báo cuộc gọi đến (cúp máy không cần mở app). -->
-        <receiver
-            android:name=".data.CallActionReceiver"
-            android:exported="false" />
-
         <!-- Firebase Cloud Messaging: nhận thông báo đẩy tức thì. -->
         <service
             android:name=".data.HrMessagingService"
@@ -102,13 +97,7 @@
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- Gọi thoại/video P2P (WebRTC): thu âm micro + định tuyến loa/tai nghe. -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- Cuộc gọi đến kiểu toàn màn hình (reo khi máy khóa / app đóng). -->
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Vị trí (tùy chọn): kèm GPS vào bản chấm công ngoại tuyến để quản lý kiểm tra geofence khi duyệt. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

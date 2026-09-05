@@ -1,0 +1,112 @@
+# /api/hr/me
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.accessRole : string
+  $.address : string
+  $.departmentName : string
+  $.email : string
+  $.employeeCode : string
+  $.fullName : string
+  $.gender : string
+  $.hireDate : string
+  $.id : string
+  $.isAccounting : bool
+  $.locationName : string
+  $.managerName : string
+  $.phone : string
+  $.position : string
+  $.positionCode : string
+  $.positionIds : array
+  $.positions : array
+  $.status : string
+  $.username : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.accessRole : string
+  $.address : string
+  $.departmentName : string
+  $.email : string
+  $.employeeCode : string
+  $.fullName : string
+  $.gender : string
+  $.hireDate : string
+  $.id : string
+  $.isAccounting : bool
+  $.locationName : string
+  $.managerName : string
+  $.phone : string
+  $.position : string
+  $.positionCode : string
+  $.positionIds : array
+  $.positions : array
+  $.status : string
+  $.username : string
+
+[HR] 200 application/json
+  $ : object
+  $.accessRole : string
+  $.address : string
+  $.departmentName : string
+  $.email : string
+  $.employeeCode : string
+  $.fullName : string
+  $.gender : string
+  $.hireDate : string
+  $.id : string
+  $.isAccounting : bool
+  $.locationName : string
+  $.managerName : string
+  $.phone : string
+  $.position : string
+  $.positionCode : string
+  $.positionIds : array
+  $.positions : array
+  $.status : string
+  $.username : string
+
+[Driver] 200 application/json
+  $ : object
+  $.accessRole : string
+  $.address : string
+  $.departmentName : string
+  $.email : string
+  $.employeeCode : string
+  $.fullName : string
+  $.gender : string
+  $.hireDate : string
+  $.id : string
+  $.isAccounting : bool
+  $.locationName : string
+  $.managerName : string
+  $.phone : string
+  $.position : string
+  $.positionCode : string
+  $.positionIds : array
+  $.positions : array
+  $.status : string
+  $.username : string
+
+[Employee] 200 application/json
+  $ : object
+  $.accessRole : string
+  $.address : string
+  $.departmentName : string
+  $.email : string
+  $.employeeCode : string
+  $.fullName : string
+  $.gender : string
+  $.hireDate : string
+  $.id : string
+  $.isAccounting : bool
+  $.locationName : string
+  $.managerName : string
+  $.phone : string
+  $.position : string
+  $.positionCode : string
+  $.positionIds : array
+  $.positions : array
+  $.status : string
+  $.username : string

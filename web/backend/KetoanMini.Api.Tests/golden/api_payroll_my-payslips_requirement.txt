@@ -1,0 +1,37 @@
+# /api/payroll/my-payslips/requirement
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.mustAcknowledge : bool
+  $.overdueCount : number
+  $.pendingCount : number
+  $.serverNow : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.mustAcknowledge : bool
+  $.overdueCount : number
+  $.pendingCount : number
+  $.serverNow : string
+
+[HR] 200 application/json
+  $ : object
+  $.mustAcknowledge : bool
+  $.overdueCount : number
+  $.pendingCount : number
+  $.serverNow : string
+
+[Driver] 200 application/json
+  $ : object
+  $.mustAcknowledge : bool
+  $.overdueCount : number
+  $.pendingCount : number
+  $.serverNow : string
+
+[Employee] 200 application/json
+  $ : object
+  $.mustAcknowledge : bool
+  $.overdueCount : number
+  $.pendingCount : number
+  $.serverNow : string

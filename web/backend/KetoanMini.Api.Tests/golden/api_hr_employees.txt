@@ -1,0 +1,122 @@
+# /api/hr/employees
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].accessRole : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].fullName : string
+  $[].hireDate : string
+  $[].id : string
+  $[].locationName : string
+  $[].managerName : string
+  $[].phone : string
+  $[].position : string
+  $[].positionCode : string
+  $[].positionId : string
+  $[].positionIds : array
+  $[].positionIds[] : string
+  $[].positions : array
+  $[].positions[] : object
+  $[].positions[].code : string
+  $[].positions[].defaultRole : string
+  $[].positions[].defaultRoleLabel : string
+  $[].positions[].id : string
+  $[].positions[].isPrimary : bool
+  $[].positions[].name : string
+  $[].status : string
+  $[].username : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].accessRole : string
+  $[].departmentName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].fullName : string
+  $[].hireDate : string
+  $[].id : string
+  $[].locationName : string
+  $[].managerName : string
+  $[].phone : string
+  $[].position : string
+  $[].positionCode : string
+  $[].positionIds : array
+  $[].positions : array
+  $[].status : string
+  $[].username : string
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].accessRole : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].fullName : string
+  $[].hireDate : string
+  $[].id : string
+  $[].locationName : string
+  $[].managerName : string
+  $[].phone : string
+  $[].position : string
+  $[].positionCode : string
+  $[].positionId : string
+  $[].positionIds : array
+  $[].positionIds[] : string
+  $[].positions : array
+  $[].positions[] : object
+  $[].positions[].code : string
+  $[].positions[].defaultRole : string
+  $[].positions[].defaultRoleLabel : string
+  $[].positions[].id : string
+  $[].positions[].isPrimary : bool
+  $[].positions[].name : string
+  $[].status : string
+  $[].username : string
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].accessRole : string
+  $[].departmentName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].fullName : string
+  $[].hireDate : string
+  $[].id : string
+  $[].locationName : string
+  $[].managerName : string
+  $[].phone : string
+  $[].position : string
+  $[].positionCode : string
+  $[].positionIds : array
+  $[].positions : array
+  $[].status : string
+  $[].username : string
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].accessRole : string
+  $[].departmentName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].fullName : string
+  $[].hireDate : string
+  $[].id : string
+  $[].locationName : string
+  $[].managerName : string
+  $[].phone : string
+  $[].position : string
+  $[].positionCode : string
+  $[].positionIds : array
+  $[].positions : array
+  $[].status : string
+  $[].username : string

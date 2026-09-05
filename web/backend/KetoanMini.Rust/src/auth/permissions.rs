@@ -64,8 +64,6 @@ pub const TASKS_ASSIGN: &str = "tasks.assign";
 pub const PORTAL_READ: &str = "portal.read";
 pub const PORTAL_MANAGE: &str = "portal.manage";
 
-pub const CHAT_ACCESS: &str = "chat.access";
-
 /// JWT/identity claim type rebuilt from the current database role set.
 pub const CLAIM_TYPE: &str = "perm";
 
@@ -113,7 +111,6 @@ pub const ALL: &[&str] = &[
     TASKS_ASSIGN,
     PORTAL_READ,
     PORTAL_MANAGE,
-    CHAT_ACCESS,
 ];
 
 const BASE_EMPLOYEE: &[&str] = &[
@@ -121,7 +118,6 @@ const BASE_EMPLOYEE: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
 ];
@@ -131,7 +127,6 @@ const ACCOUNTING_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     ACCOUNTING_ACCESS,
@@ -187,7 +182,6 @@ const ADMIN_PERMISSIONS: &[&str] = &[
     TASKS_ASSIGN,
     PORTAL_READ,
     PORTAL_MANAGE,
-    CHAT_ACCESS,
 ];
 
 const EXECUTIVE_PERMISSIONS: &[&str] = &[
@@ -195,7 +189,6 @@ const EXECUTIVE_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     COMPANY_SCOPE_ALL,
@@ -215,7 +208,6 @@ const PAYROLL_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     PAYROLL_READ,
@@ -228,7 +220,6 @@ const CHIEF_ACCOUNTANT_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     ACCOUNTING_ACCESS,
@@ -255,7 +246,6 @@ const CASHIER_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     ACCOUNTING_ACCESS,
@@ -273,7 +263,6 @@ const HR_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     HR_READ,
@@ -293,7 +282,6 @@ const MANAGER_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     HR_READ,
@@ -308,7 +296,6 @@ const WAREHOUSE_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     TASKS_ASSIGN,
@@ -319,7 +306,6 @@ const DRIVER_PERMISSIONS: &[&str] = &[
     ATTENDANCE_SELF,
     REQUESTS_SELF,
     TASKS_SELF,
-    CHAT_ACCESS,
     PORTAL_READ,
     PENALTY_READ,
     COLLECTIONS_SELF,
@@ -420,7 +406,6 @@ pub fn label(permission: &str) -> &str {
         TASKS_ASSIGN => "Giao việc & nghiệm thu",
         PORTAL_READ => "Xem cổng thông tin",
         PORTAL_MANAGE => "Quản trị cổng thông tin",
-        CHAT_ACCESS => "Trò chuyện",
         _ => permission,
     }
 }
@@ -436,7 +421,7 @@ mod tests {
     #[test]
     fn catalog_and_role_matrix_are_complete_and_unique() {
         assert_eq!(ALL.len(), ALL.iter().copied().collect::<HashSet<_>>().len());
-        assert_eq!(ALL.len(), 43);
+        assert_eq!(ALL.len(), 42);
         assert_eq!(ROLE_PERMISSIONS.len(), roles::ALL.len());
 
         for role in roles::ALL {

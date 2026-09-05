@@ -1,30 +1,25 @@
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// https://vite.dev/config/
+// Backend phục vụ SPA từ chính wwwroot của nó → web và API cùng một origin, cookie km_auth đi thẳng.
+const backend = 'https://localhost:5443'
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
   server: {
-    host: true, // cho phép truy cập dev server qua LAN
+    host: true,
     proxy: {
-      // Chuyển tiếp gọi API sang backend ASP.NET Core khi chạy dev.
-      '/api': { target: 'https://localhost:5443', secure: false },
-      // Hub SignalR (WebSocket) khi chạy dev.
-      '/hubs': { target: 'https://localhost:5443', ws: true, secure: false },
+      '/api': { target: backend, secure: false, changeOrigin: false },
     },
   },
   build: {
-    // Build thẳng vào wwwroot của backend để backend phục vụ luôn (1 cổng, cùng origin).
     outDir: '../backend/KetoanMini.Api/wwwroot',
     emptyOutDir: true,
-    chunkSizeWarningLimit: 1000,
-    rolldownOptions: {
-      checks: {
-        // @microsoft/signalr emits PURE annotations on function declarations.
-        // Rolldown ignores them safely, so hide this dependency-only warning.
-        invalidAnnotation: false,
-      },
-    },
+    chunkSizeWarningLimit: 1200,
   },
 })

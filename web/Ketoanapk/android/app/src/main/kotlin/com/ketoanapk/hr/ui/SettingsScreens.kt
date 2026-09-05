@@ -51,7 +51,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -675,15 +674,13 @@ private fun PermissionCenterScreen(vm: HrViewModel, onBack: () -> Unit) {
     }
 
     val notificationsGranted = remember(refreshKey) { systemNotificationsAllowed(context) }
-    val fullScreenGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
-        (context.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() == true)
 
     SubScreen("Quyền ứng dụng", onBack) {
         item {
             HrCard {
                 Text("Bạn kiểm soát các quyền", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "KetoanAPK không xin camera, micro hoặc vị trí khi khởi động. Các quyền này chỉ được hỏi khi bạn mở đúng tính năng cần dùng.",
+                    "KetoanAPK không xin camera hoặc vị trí khi khởi động. Các quyền này chỉ được hỏi khi bạn mở đúng tính năng cần dùng.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -693,7 +690,7 @@ private fun PermissionCenterScreen(vm: HrViewModel, onBack: () -> Unit) {
             PermissionStatusCard(
                 icon = Icons.Filled.Notifications,
                 title = "Thông báo",
-                explanation = "Dùng cho đơn từ, tin nhắn và cuộc gọi đến khi app ở nền.",
+                explanation = "Dùng cho các thông báo nghiệp vụ khi app ở nền.",
                 granted = notificationsGranted,
                 actionLabel = if (notificationDenied) "Mở cài đặt" else "Cho phép",
                 onAction = {
@@ -707,18 +704,8 @@ private fun PermissionCenterScreen(vm: HrViewModel, onBack: () -> Unit) {
             PermissionStatusCard(
                 icon = Icons.Filled.CameraAlt,
                 title = "Camera",
-                explanation = "Chỉ dùng khi chấm công, chụp hồ sơ, đăng ký khuôn mặt hoặc gọi video.",
+                explanation = "Chỉ dùng khi chấm công, chụp hồ sơ hoặc đăng ký khuôn mặt.",
                 granted = granted(Manifest.permission.CAMERA),
-                actionLabel = "Mở cài đặt",
-                onAction = ::openAppSettings,
-            )
-        }
-        item {
-            PermissionStatusCard(
-                icon = Icons.Filled.Mic,
-                title = "Micro",
-                explanation = "Chỉ dùng sau khi bạn bắt đầu hoặc nhận cuộc gọi thoại/video.",
-                granted = granted(Manifest.permission.RECORD_AUDIO),
                 actionLabel = "Mở cài đặt",
                 onAction = ::openAppSettings,
             )
@@ -732,25 +719,6 @@ private fun PermissionCenterScreen(vm: HrViewModel, onBack: () -> Unit) {
                 actionLabel = "Mở cài đặt",
                 onAction = ::openAppSettings,
             )
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            item {
-                PermissionStatusCard(
-                    icon = Icons.Filled.PhoneAndroid,
-                    title = "Cuộc gọi toàn màn hình",
-                    explanation = "Tùy chọn để hiện cuộc gọi đến trên màn hình khóa. App không tự mở trang này khi khởi động.",
-                    granted = fullScreenGranted,
-                    actionLabel = "Bật thủ công",
-                    onAction = {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
-                                Uri.parse("package:${context.packageName}"),
-                            ),
-                        )
-                    },
-                )
-            }
         }
     }
 }
@@ -901,7 +869,7 @@ private fun StorageScreen(vm: HrViewModel, onBack: () -> Unit) {
                     Text("Dọn cache sẽ xoá", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                     BulletLine("Gói cập nhật đã tải sẵn")
                     BulletLine("Ảnh, PDF và âm thanh tạm")
-                    BulletLine("Bộ đệm chat và ảnh chụp Trang chủ (giúp mở app nhanh)")
+                    BulletLine("Ảnh chụp Trang chủ (giúp mở app nhanh)")
                     Spacer(Modifier.height(4.dp))
                     Text(
                         "Không ảnh hưởng: phiên đăng nhập, đơn nháp chưa gửi, và các lượt chấm công ngoại tuyến " +

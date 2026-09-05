@@ -1,0 +1,42 @@
+# /api/payroll/my-day
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.date : string
+  $.payouts : array
+  $.penalties : array
+  $.requests : array
+  $.tasks : array
+
+[Accounting] 200 application/json
+  $ : object
+  $.date : string
+  $.payouts : array
+  $.penalties : array
+  $.requests : array
+  $.tasks : array
+
+[HR] 200 application/json
+  $ : object
+  $.date : string
+  $.payouts : array
+  $.penalties : array
+  $.requests : array
+  $.tasks : array
+
+[Driver] 200 application/json
+  $ : object
+  $.date : string
+  $.payouts : array
+  $.penalties : array
+  $.requests : array
+  $.tasks : array
+
+[Employee] 200 application/json
+  $ : object
+  $.date : string
+  $.payouts : array
+  $.penalties : array
+  $.requests : array
+  $.tasks : array

@@ -1,0 +1,107 @@
+# /api/payroll/my-estimate
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.absentDays : number
+  $.baseSalary : number
+  $.deductions : array
+  $.earnings : array
+  $.earnings[] : object
+  $.earnings[].amount : number
+  $.earnings[].label : string
+  $.employeeCode : string
+  $.employeeName : string
+  $.hasSalary : bool
+  $.lateDays : number
+  $.netPay : number
+  $.overtimeHours : number
+  $.overtimePay : number
+  $.period : string
+  $.totalDeductions : number
+  $.totalEarnings : number
+  $.workedDays : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.absentDays : number
+  $.baseSalary : number
+  $.deductions : array
+  $.earnings : array
+  $.earnings[] : object
+  $.earnings[].amount : number
+  $.earnings[].label : string
+  $.employeeCode : string
+  $.employeeName : string
+  $.hasSalary : bool
+  $.lateDays : number
+  $.netPay : number
+  $.overtimeHours : number
+  $.overtimePay : number
+  $.period : string
+  $.totalDeductions : number
+  $.totalEarnings : number
+  $.workedDays : number
+
+[HR] 200 application/json
+  $ : object
+  $.absentDays : number
+  $.baseSalary : number
+  $.deductions : array
+  $.earnings : array
+  $.earnings[] : object
+  $.earnings[].amount : number
+  $.earnings[].label : string
+  $.employeeCode : string
+  $.employeeName : string
+  $.hasSalary : bool
+  $.lateDays : number
+  $.netPay : number
+  $.overtimeHours : number
+  $.overtimePay : number
+  $.period : string
+  $.totalDeductions : number
+  $.totalEarnings : number
+  $.workedDays : number
+
+[Driver] 200 application/json
+  $ : object
+  $.absentDays : number
+  $.baseSalary : number
+  $.deductions : array
+  $.earnings : array
+  $.earnings[] : object
+  $.earnings[].amount : number
+  $.earnings[].label : string
+  $.employeeCode : string
+  $.employeeName : string
+  $.hasSalary : bool
+  $.lateDays : number
+  $.netPay : number
+  $.overtimeHours : number
+  $.overtimePay : number
+  $.period : string
+  $.totalDeductions : number
+  $.totalEarnings : number
+  $.workedDays : number
+
+[Employee] 200 application/json
+  $ : object
+  $.absentDays : number
+  $.baseSalary : number
+  $.deductions : array
+  $.earnings : array
+  $.earnings[] : object
+  $.earnings[].amount : number
+  $.earnings[].label : string
+  $.employeeCode : string
+  $.employeeName : string
+  $.hasSalary : bool
+  $.lateDays : number
+  $.netPay : number
+  $.overtimeHours : number
+  $.overtimePay : number
+  $.period : string
+  $.totalDeductions : number
+  $.totalEarnings : number
+  $.workedDays : number

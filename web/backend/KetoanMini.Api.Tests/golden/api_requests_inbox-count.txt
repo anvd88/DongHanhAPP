@@ -1,0 +1,22 @@
+# /api/requests/inbox-count
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.count : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.count : number
+
+[HR] 200 application/json
+  $ : object
+  $.count : number
+
+[Driver] 200 application/json
+  $ : object
+  $.count : number
+
+[Employee] 200 application/json
+  $ : object
+  $.count : number

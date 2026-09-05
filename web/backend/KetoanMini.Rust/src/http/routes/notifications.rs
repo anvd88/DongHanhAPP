@@ -1,18 +1,29 @@
 use crate::{auth::AuthContext, state::AppState};
 use axum::{
     Extension, Json, Router,
-    extract::{State, rejection::JsonRejection},
-    http::StatusCode,
+    extract::{
+        FromRequestParts, Path, Query, State,
+        rejection::{JsonRejection, QueryRejection},
+    },
+    http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
-use serde::Deserialize;
+use chrono::{DateTime, SecondsFormat, Utc};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
 use std::sync::Arc;
 
+const FEED_PATH: &str = "/api/notifications";
 const REGISTER_TOKEN_PATH: &str = "/api/notifications/register-token";
 const UNREGISTER_TOKEN_PATH: &str = "/api/notifications/unregister-token";
+const READ_ONE_PATH: &str = "/api/notifications/{id}/read";
+const READ_ALL_PATH: &str = "/api/notifications/read-all";
+const DELETE_READ_PATH: &str = "/api/notifications/read";
+const DELETE_ONE_PATH: &str = "/api/notifications/{id}";
 const DEFAULT_PLATFORM: &str = "android";
+const DEFAULT_FEED: i64 = 30;
+const MAX_FEED: i64 = 50;
 const MISSING_TOKEN_MESSAGE: &str = "Thiếu token thiết bị.";
 const DATABASE_UNAVAILABLE_MESSAGE: &str = "Khong ket noi duoc co so du lieu PostgreSQL.";
 
@@ -30,6 +41,41 @@ const UNREGISTER_TOKEN_SQL: &str = r#"
     WHERE token = $1 AND lower(username) = lower($2)
 "#;
 
+const UNREAD_COUNT_SQL: &str = r#"
+    SELECT COUNT(*)::bigint
+    FROM web_notifications
+    WHERE lower(username) = lower($1) AND read_at IS NULL
+"#;
+
+const FEED_SQL: &str = r#"
+    SELECT id, title, body, category, link, app_target, notif_id, created_at,
+           read_at IS NOT NULL AS read
+    FROM web_notifications
+    WHERE lower(username) = lower($1)
+    ORDER BY created_at DESC, id DESC
+    LIMIT $2
+"#;
+
+const READ_ONE_SQL: &str = r#"
+    UPDATE web_notifications SET read_at = CURRENT_TIMESTAMP
+    WHERE id = $1 AND lower(username) = lower($2) AND read_at IS NULL
+"#;
+
+const READ_ALL_SQL: &str = r#"
+    UPDATE web_notifications SET read_at = CURRENT_TIMESTAMP
+    WHERE lower(username) = lower($1) AND read_at IS NULL
+"#;
+
+const DELETE_READ_SQL: &str = r#"
+    DELETE FROM web_notifications
+    WHERE lower(username) = lower($1) AND read_at IS NOT NULL
+"#;
+
+const DELETE_ONE_SQL: &str = r#"
+    DELETE FROM web_notifications
+    WHERE id = $1 AND lower(username) = lower($2)
+"#;
+
 /// The caller must place this router behind `auth::require_auth`.
 ///
 /// Both handlers require `Extension<AuthContext>` and derive the username only
@@ -37,8 +83,65 @@ const UNREGISTER_TOKEN_SQL: &str = r#"
 /// a push token.
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .route(FEED_PATH, get(feed))
         .route(REGISTER_TOKEN_PATH, post(register_token))
         .route(UNREGISTER_TOKEN_PATH, post(unregister_token))
+        .route(READ_ONE_PATH, post(read_one))
+        .route(READ_ALL_PATH, post(read_all))
+        .route(DELETE_READ_PATH, axum::routing::delete(delete_read))
+        .route(DELETE_ONE_PATH, axum::routing::delete(delete_one))
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+struct FeedQuery {
+    limit: Option<i64>,
+}
+
+impl FeedQuery {
+    fn take(self) -> i64 {
+        self.limit.unwrap_or(DEFAULT_FEED).clamp(1, MAX_FEED)
+    }
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct NotificationItem {
+    id: i64,
+    title: String,
+    body: String,
+    category: String,
+    link: String,
+    app_target: String,
+    notif_id: String,
+    #[serde(serialize_with = "serialize_dotnet_utc")]
+    created_at: DateTime<Utc>,
+    read: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct NotificationFeed {
+    unread: i64,
+    items: Vec<NotificationItem>,
+}
+
+/// An integer extractor whose rejection mirrors ASP.NET's `{id:long}` route constraint.
+struct NotificationId(i64);
+
+impl<S> FromRequestParts<S> for NotificationId
+where
+    S: Send + Sync,
+{
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let Path(raw) = Path::<String>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        raw.parse::<i64>()
+            .map(Self)
+            .map_err(|_| StatusCode::NOT_FOUND)
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Eq, PartialEq)]
@@ -104,6 +207,36 @@ impl UnregisterTokenMutation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MissingToken;
 
+async fn feed(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    query: Result<Query<FeedQuery>, QueryRejection>,
+) -> Response {
+    let take = match query {
+        Ok(Query(query)) => query.take(),
+        Err(rejection) => return rejection.status().into_response(),
+    };
+
+    let unread = sqlx::query_scalar::<_, i64>(UNREAD_COUNT_SQL)
+        .bind(&auth.username)
+        .fetch_one(&state.pool)
+        .await;
+    let unread = match unread {
+        Ok(unread) => unread,
+        Err(error) => return database_failure("count unread web notifications", error),
+    };
+
+    let items = sqlx::query_as::<_, NotificationItem>(FEED_SQL)
+        .bind(&auth.username)
+        .bind(take)
+        .fetch_all(&state.pool)
+        .await;
+    match items {
+        Ok(items) => Json(NotificationFeed { unread, items }).into_response(),
+        Err(error) => database_failure("load web notification feed", error),
+    }
+}
+
 async fn register_token(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
@@ -158,6 +291,73 @@ async fn unregister_token(
     }
 }
 
+async fn read_one(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    NotificationId(id): NotificationId,
+) -> Response {
+    empty_notification_mutation(
+        sqlx::query(READ_ONE_SQL)
+            .bind(id)
+            .bind(&auth.username)
+            .execute(&state.pool)
+            .await,
+        "mark one web notification as read",
+    )
+}
+
+async fn read_all(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+) -> Response {
+    empty_notification_mutation(
+        sqlx::query(READ_ALL_SQL)
+            .bind(&auth.username)
+            .execute(&state.pool)
+            .await,
+        "mark all web notifications as read",
+    )
+}
+
+async fn delete_read(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+) -> Response {
+    empty_notification_mutation(
+        sqlx::query(DELETE_READ_SQL)
+            .bind(&auth.username)
+            .execute(&state.pool)
+            .await,
+        "delete read web notifications",
+    )
+}
+
+async fn delete_one(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    NotificationId(id): NotificationId,
+) -> Response {
+    empty_notification_mutation(
+        sqlx::query(DELETE_ONE_SQL)
+            .bind(id)
+            .bind(&auth.username)
+            .execute(&state.pool)
+            .await,
+        "delete one web notification",
+    )
+}
+
+fn empty_notification_mutation(
+    result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>,
+    operation: &'static str,
+) -> Response {
+    match result {
+        // The .NET contract deliberately treats zero affected rows as an idempotent success.
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => database_failure(operation, error),
+    }
+}
+
 fn required_token(value: Option<&str>) -> Result<String, MissingToken> {
     optional_token(value).ok_or(MissingToken)
 }
@@ -204,6 +404,13 @@ fn database_failure(operation: &'static str, error: sqlx::Error) -> Response {
         .into_response()
 }
 
+fn serialize_dotnet_utc<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,14 +421,70 @@ mod tests {
     }
 
     #[test]
-    fn route_contract_has_exactly_the_two_authenticated_posts() {
+    fn route_contract_contains_the_complete_notification_group() {
         assert_eq!(
-            [REGISTER_TOKEN_PATH, UNREGISTER_TOKEN_PATH],
             [
-                "/api/notifications/register-token",
-                "/api/notifications/unregister-token"
+                ("GET", FEED_PATH),
+                ("POST", REGISTER_TOKEN_PATH),
+                ("POST", UNREGISTER_TOKEN_PATH),
+                ("POST", READ_ONE_PATH),
+                ("POST", READ_ALL_PATH),
+                ("DELETE", DELETE_READ_PATH),
+                ("DELETE", DELETE_ONE_PATH),
+            ],
+            [
+                ("GET", "/api/notifications"),
+                ("POST", "/api/notifications/register-token"),
+                ("POST", "/api/notifications/unregister-token"),
+                ("POST", "/api/notifications/{id}/read"),
+                ("POST", "/api/notifications/read-all"),
+                ("DELETE", "/api/notifications/read"),
+                ("DELETE", "/api/notifications/{id}"),
             ]
         );
+    }
+
+    #[test]
+    fn feed_limit_matches_dotnet_clamping() {
+        assert_eq!(FeedQuery::default().take(), 30);
+        assert_eq!(FeedQuery { limit: Some(0) }.take(), 1);
+        assert_eq!(FeedQuery { limit: Some(500) }.take(), 50);
+    }
+
+    #[test]
+    fn feed_json_matches_camel_case_and_millisecond_utc_contract() {
+        let created_at = DateTime::parse_from_rfc3339("2026-08-28T01:02:03.987654Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let value = serde_json::to_value(NotificationFeed {
+            unread: 1,
+            items: vec![NotificationItem {
+                id: 7,
+                title: "Tiêu đề".to_owned(),
+                body: "Nội dung".to_owned(),
+                category: "task".to_owned(),
+                link: "/tasks/7".to_owned(),
+                app_target: "task:7".to_owned(),
+                notif_id: "task:7:created".to_owned(),
+                created_at,
+                read: false,
+            }],
+        })
+        .unwrap();
+
+        assert_eq!(value["items"][0]["appTarget"], "task:7");
+        assert_eq!(value["items"][0]["notifId"], "task:7:created");
+        assert_eq!(value["items"][0]["createdAt"], "2026-08-28T01:02:03.987Z");
+        assert_eq!(value["items"][0]["read"], false);
+    }
+
+    #[test]
+    fn every_feed_mutation_is_scoped_to_the_authenticated_owner() {
+        for sql in [READ_ONE_SQL, READ_ALL_SQL, DELETE_READ_SQL, DELETE_ONE_SQL] {
+            let sql = compact_sql(sql);
+            assert!(sql.contains("lower(username) = lower($"), "{sql}");
+        }
+        assert!(compact_sql(DELETE_READ_SQL).contains("read_at IS NOT NULL"));
     }
 
     #[test]

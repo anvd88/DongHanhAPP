@@ -119,13 +119,6 @@ này sẽ không tính lại đúng lúc. Cần chuyển sang state hoặc tính
   thủ quỹ (role Kế toán + phòng ban `is_accounting`), lập phiếu, rồi quét QR ký nhận bằng ứng dụng.
   Cân nhắc để lại nhóm này tới sau.
 
-### Nhóm F — Thông báo trò chuyện (2) · rủi ro VỪA–CAO
-
-`ChatNotifications.tsx:94, 121` — dựng đăng ký realtime khi đăng nhập, và tải lại khi vào `/chats`.
-Đây là hạ tầng thông báo dùng chung toàn hệ thống; hỏng thì mất chuông và huy hiệu chưa đọc.
-**Kiểm:** cần **hai tài khoản** nhắn tin qua lại, xem toast + số chưa đọc + việc tự tải lại khi mở
-trang chat. Không kiểm được kiểu này thì đừng đụng.
-
 ### Nhóm G — Camera & chấm công (19) · rủi ro CAO — **làm cuối**
 
 | Tệp | Số | Ghi chú |

@@ -1,0 +1,47 @@
+# /api/directory/org-chart
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].position : string
+  $[].reports : array
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].position : string
+  $[].reports : array
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].position : string
+  $[].reports : array
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].position : string
+  $[].reports : array
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].departmentName : string
+  $[].fullName : string
+  $[].id : string
+  $[].position : string
+  $[].reports : array

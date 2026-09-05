@@ -1,0 +1,62 @@
+# /api/hr/manager/summary
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.date : string
+  $.departments : array
+  $.departments[] : object
+  $.departments[].absent : number
+  $.departments[].business : number
+  $.departments[].departmentId : string
+  $.departments[].departmentName : string
+  $.departments[].leave : number
+  $.departments[].present : number
+  $.departments[].total : number
+  $.headcount : object
+  $.headcount.absent : number
+  $.headcount.active : number
+  $.headcount.alerts : number
+  $.headcount.business : number
+  $.headcount.expiringContracts : number
+  $.headcount.late : number
+  $.headcount.leave : number
+  $.headcount.overtime : number
+  $.headcount.pendingApprovals : number
+  $.headcount.present : number
+  $.headcount.total : number
+  $.headcount.unassigned : number
+  $.month : string
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : object
+  $.date : string
+  $.departments : array
+  $.departments[] : object
+  $.departments[].absent : number
+  $.departments[].business : number
+  $.departments[].departmentId : string
+  $.departments[].departmentName : string
+  $.departments[].leave : number
+  $.departments[].present : number
+  $.departments[].total : number
+  $.headcount : object
+  $.headcount.absent : number
+  $.headcount.active : number
+  $.headcount.alerts : number
+  $.headcount.business : number
+  $.headcount.expiringContracts : number
+  $.headcount.late : number
+  $.headcount.leave : number
+  $.headcount.overtime : number
+  $.headcount.pendingApprovals : number
+  $.headcount.present : number
+  $.headcount.total : number
+  $.headcount.unassigned : number
+  $.month : string
+
+[Driver] 403 
+
+[Employee] 403 

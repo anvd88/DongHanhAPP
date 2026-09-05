@@ -430,75 +430,8 @@ interface HrApi {
     @POST("api/chamcong/qr")
     suspend fun qrAttendance(@Body body: QrAttendanceBody): ChamCongResult
 
-    // --- Danh bạ gọi nội bộ (đồng nghiệp + trạng thái online) ---
-    @GET("api/chat/contacts")
-    suspend fun chatContacts(@Query("search") search: String? = null): List<com.ketoanapk.hr.data.CallContact>
-
-    @GET("api/chat/conversations")
-    suspend fun chatConversations(): List<com.ketoanapk.hr.data.ChatConversation>
-
-    @POST("api/chat/direct/{username}")
-    suspend fun openDirectConversation(@Path("username") username: String): com.ketoanapk.hr.data.ChatConversationId
-
-    @GET("api/chat/conversations/{id}/messages")
-    suspend fun chatMessages(
-        @Path("id") id: String,
-        @Query("beforeId") beforeId: Long? = null,
-        @Query("take") take: Int = 50,
-        @Query("search") search: String? = null,
-    ): List<com.ketoanapk.hr.data.ChatMessage>
-
-    @POST("api/chat/conversations/{id}/messages")
-    suspend fun sendChatMessage(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.SendChatMessageBody): com.ketoanapk.hr.data.ChatMessage
-
-    @PUT("api/chat/conversations/{id}/messages/{messageId}")
-    suspend fun editChatMessage(@Path("id") id: String, @Path("messageId") messageId: Long, @Body body: com.ketoanapk.hr.data.EditChatMessageBody): retrofit2.Response<Unit>
-
-    @DELETE("api/chat/conversations/{id}/messages/{messageId}")
-    suspend fun deleteChatMessage(@Path("id") id: String, @Path("messageId") messageId: Long): retrofit2.Response<Unit>
-
-    @POST("api/chat/conversations/{id}/messages/{messageId}/react")
-    suspend fun reactChatMessage(@Path("id") id: String, @Path("messageId") messageId: Long, @Body body: com.ketoanapk.hr.data.ReactChatMessageBody): retrofit2.Response<Unit>
-
-    @POST("api/chat/conversations/{id}/pin")
-    suspend fun pinChatConversation(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.PinChatConversationBody): retrofit2.Response<Unit>
-
-    @POST("api/chat/conversations/{id}/messages/file")
-    suspend fun createChatFileMessage(@Path("id") id: String, @Body body: com.ketoanapk.hr.data.SendChatFileBody): com.ketoanapk.hr.data.ChatMessage
-
-    @Headers("Content-Type: application/octet-stream")
-    @POST("api/chat/conversations/{id}/messages/{messageId}/upload")
-    suspend fun uploadChatFile(@Path("id") id: String, @Path("messageId") messageId: Long, @Body body: okhttp3.RequestBody): retrofit2.Response<Unit>
-
-    @Streaming
-    @GET("api/chat/conversations/{id}/messages/{messageId}/download")
-    suspend fun downloadChatFile(@Path("id") id: String, @Path("messageId") messageId: Long): retrofit2.Response<ResponseBody>
-
-    // --- Đổ chuông / hủy chuông cuộc gọi qua FCM (để máy nhận reo cả khi app đóng/nền) ---
-    @POST("api/chat/call/ring")
-    suspend fun ringCall(@Body body: CallRingBody): retrofit2.Response<Unit>
-
-    @POST("api/chat/call/cancel")
-    suspend fun cancelCallRing(@Body body: CallCancelBody): retrofit2.Response<Unit>
-
-    @POST("api/chat/call/missed")
-    suspend fun missedCall(@Body body: CallMissedBody): retrofit2.Response<Unit>
-
-    @GET("api/chat/call/missed")
-    suspend fun missedCalls(): List<com.ketoanapk.hr.data.MissedCall>
-
-    @POST("api/chat/call/missed/seen")
-    suspend fun markMissedCallsSeen(): retrofit2.Response<Unit>
-
-    @POST("api/chat/call/history")
-    suspend fun recordCall(@Body body: com.ketoanapk.hr.data.RecordCallBody): retrofit2.Response<Unit>
-
-    @GET("api/chat/call/history")
-    suspend fun callHistory(@Query("take") take: Int = 100): List<com.ketoanapk.hr.data.CallHistoryItem>
-
-    // TURN credential động (có hạn giờ) cho WebRTC — để gọi được khi 2 máy khác mạng qua Internet.
-    @GET("api/chat/call/turn")
-    suspend fun turnCredentials(): TurnCredsResponse
+    @GET("api/directory")
+    suspend fun directoryContacts(@Query("search") search: String? = null): List<com.ketoanapk.hr.data.DirectoryContact>
 
     // --- Tự đăng ký khuôn mặt (mỗi tài khoản một lần, nhiều góc) ---
     @GET("api/chamcong/dangky/cua-toi")
@@ -510,20 +443,3 @@ interface HrApi {
 
 @kotlinx.serialization.Serializable
 data class DecisionBody(val comment: String = "")
-
-@kotlinx.serialization.Serializable
-data class CallRingBody(val toUsername: String, val callId: String, val media: String)
-
-@kotlinx.serialization.Serializable
-data class CallCancelBody(val toUsername: String, val callId: String)
-
-@kotlinx.serialization.Serializable
-data class CallMissedBody(val toUsername: String, val callId: String, val media: String)
-
-@kotlinx.serialization.Serializable
-data class TurnCredsResponse(
-    val urls: List<String> = emptyList(),
-    val username: String = "",
-    val credential: String = "",
-    val ttl: Int = 0,
-)

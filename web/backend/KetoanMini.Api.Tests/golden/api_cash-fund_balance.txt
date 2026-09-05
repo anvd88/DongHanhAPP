@@ -1,0 +1,24 @@
+# /api/cash-fund/balance
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.balance : number
+  $.month : string
+  $.monthCount : number
+  $.monthIn : number
+  $.monthOut : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.balance : number
+  $.month : string
+  $.monthCount : number
+  $.monthIn : number
+  $.monthOut : number
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

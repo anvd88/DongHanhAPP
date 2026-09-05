@@ -1,10 +1,10 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Security.Cryptography;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
-using KetoanMini.Api.Realtime;
+using KetoanMini.Api.BuildingBlocks.Realtime;
 using KetoanMini.Api.Security;
-using Microsoft.AspNetCore.SignalR;
+using KetoanMini.Api.Services;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -34,7 +34,7 @@ public static class UserEndpoints
             return Results.Ok(catalog);
         }).RequirePermission(Permissions.UsersManage);
 
-        g.MapGet("/", async (Database db, string? search, string? role) =>
+        g.MapGet("/", async (Database db, RedisRealtimeCoordinator redis, string? search, string? role) =>
         {
             await using var conn = await db.OpenAsync();
             var where = "WHERE u.is_deleted = FALSE";
@@ -80,7 +80,7 @@ public static class UserEndpoints
                    LEFT JOIN web_diamond_members du ON du.username = u.username
                    LEFT JOIN LATERAL (
                        SELECT
-                           BOOL_OR(us.is_active = TRUE AND us.last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds') AS is_online,
+                           BOOL_OR({KetoanMini.Api.Realtime.PresencePolicy.IsOnlineSql("us")}) AS is_online,
                            MAX(us.last_seen) AS last_seen
                        FROM user_sessions us
                        WHERE us.username = u.username
@@ -101,11 +101,16 @@ public static class UserEndpoints
                     r.Bool("is_online"), r.DtNull("last_seen"), r.Bool("verified"), r.Bool("is_diamond"), secondary,
                     r.Bool("roles_managed_by_positions")));
             }
+            await r.DisposeAsync();
+            if (redis.Available)
+                for (var i = 0; i < list.Count; i++)
+                    if (await redis.IsUserOnlineAsync(list[i].Username) is bool online)
+                        list[i] = list[i] with { IsOnline = online };
             return Results.Ok(list);
         });
 
         g.MapPost("/", async (CreateUserRequest req, ClaimsPrincipal u, Database db,
-            IHubContext<ChangesHub> hub, HttpContext http) =>
+            BusinessEventWriter businessEvents, HttpContext http) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập và mật khẩu." });
@@ -159,22 +164,24 @@ public static class UserEndpoints
                 roleSync = await EmployeePositionRoleService.SyncAsync(
                     conn, eid, u.Username(), http.Connection.RemoteIpAddress?.ToString() ?? "", tx);
             }
-            await tx.CommitAsync();
-
-            await db.RecordAudit(u.Username(), "Tạo người dùng", "User", req.Username, "Admin tạo tài khoản (web).");
+            await conn.RecordAudit(tx, u.Username(), "Tạo người dùng", "User", req.Username,
+                "Admin tạo tài khoản (web).", http.RequestAborted);
             if (roleSync is { Changed: true })
             {
-                await db.RecordAudit(u.Username(), "Đồng bộ vai trò theo chức vụ", "User", roleSync.Username,
-                    $"[{roleSync.RolesBefore}] → [{roleSync.RolesAfter}] (web).");
-                try { await hub.Clients.User(roleSync.Username).SendAsync("changed", "access"); } catch { }
+                await conn.RecordAudit(tx, u.Username(), "Đồng bộ vai trò theo chức vụ", "User", roleSync.Username,
+                    $"[{roleSync.RolesBefore}] → [{roleSync.RolesAfter}] (web).", http.RequestAborted);
+                await businessEvents.WriteAsync(conn, tx, "identity.access.changed.v1",
+                    "identity.access.changed.v1", "access", $"user:{roleSync.Username}", u.Username(),
+                    roleSync.Username, null, http.RequestAborted);
             }
+            await tx.CommitAsync();
             return Results.Ok(new { id });
         });
 
         // Đổi vai trò CHÍNH của một tài khoản đã có. Không có endpoint này thì role Accounting/HR chỉ đặt
         // được lúc tạo tài khoản — tức là không cấp được quyền kế toán cho người đang làm việc.
         g.MapPost("/{id:guid}/role", async (Guid id, SetRoleRequest req, ClaimsPrincipal u, Database db,
-            IHubContext<ChangesHub> hub, HttpContext http) =>
+            BusinessEventWriter businessEvents, HttpContext http) =>
         {
             var role = AppRoles.Normalize(req.Role);
             if (role is null || !AppRoles.Assignable.Contains(role))
@@ -212,10 +219,10 @@ public static class UserEndpoints
                     return Results.Conflict(new { message = "Không thể hạ quyền quản trị viên hoạt động cuối cùng." });
             }
 
-            var before = await SnapshotRolesAsync(conn, target);
+            var before = await SnapshotRolesAsync(conn, target, tx);
             await conn.Cmd("UPDATE app_users SET role=@r WHERE id=@id", tx).With("@id", id).With("@r", role)
                 .ExecuteNonQueryAsync();
-            await AfterAuthorizationChangeAsync(conn, db, hub, http, u.Username(), target,
+            await AfterAuthorizationChangeAsync(conn, tx, businessEvents, http, u.Username(), target,
                 "Đổi vai trò chính", before, req.Reason);
             await tx.CommitAsync();
             return Results.NoContent();
@@ -225,7 +232,7 @@ public static class UserEndpoints
         // tới vai trò chính — một người có thể vừa là Kế toán vừa được cấp thêm Thủ kho.
         // ExpiresAt cho phép ỦY QUYỀN TẠM (vd trưởng phòng đi vắng): hết hạn tự mất, không cần nhớ thu hồi.
         g.MapPost("/{id:guid}/secondary-role", async (Guid id, SetSecondaryRoleRequest req, ClaimsPrincipal u,
-            Database db, IHubContext<ChangesHub> hub, HttpContext http) =>
+            Database db, BusinessEventWriter businessEvents, HttpContext http) =>
         {
             var role = AppRoles.Normalize(req.Role);
             // Chỉ cấp được các vai trò nằm trong danh sách vai trò PHỤ hợp lệ. Cố ý không cho cấp
@@ -247,7 +254,7 @@ public static class UserEndpoints
                     message = "Vai trò tài khoản này được quản lý theo chức vụ. Hãy thay đổi chức vụ trong hồ sơ nhân sự."
                 });
 
-            var before = await SnapshotRolesAsync(conn, target);
+            var before = await SnapshotRolesAsync(conn, target, tx);
             if (req.Grant)
                 await conn.Cmd(
                     @"INSERT INTO user_roles (username, role, granted_by, granted_at, expires_at)
@@ -263,7 +270,7 @@ public static class UserEndpoints
                     .With("@u", target).With("@r", role).ExecuteNonQueryAsync();
 
             var what = $"{(req.Grant ? "Cấp" : "Thu hồi")} vai trò {AppRoles.Label(role)}";
-            await AfterAuthorizationChangeAsync(conn, db, hub, http, u.Username(), target, what, before, req.Reason);
+            await AfterAuthorizationChangeAsync(conn, tx, businessEvents, http, u.Username(), target, what, before, req.Reason);
             await tx.CommitAsync();
             return Results.NoContent();
         });
@@ -289,7 +296,7 @@ public static class UserEndpoints
         });
 
         g.MapPost("/{id:guid}/lock", async (Guid id, SetLockRequest req, ClaimsPrincipal u, Database db,
-            IHubContext<ChangesHub> hub) =>
+            BusinessEventWriter businessEvents) =>
         {
             await using var conn = await db.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
@@ -333,12 +340,14 @@ public static class UserEndpoints
                 SET is_active=@active, authorization_version=COALESCE(authorization_version, 1)+1
                 WHERE id=@id AND is_deleted=FALSE
                 """, tx).With("@active", !req.Locked).With("@id", id).ExecuteNonQueryAsync();
-            await tx.CommitAsync();
             if (n > 0)
             {
-                await db.RecordAudit(u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản", "User", username, "(web)");
-                try { await hub.Clients.User(username).SendAsync("changed", "access"); } catch { }
+                await conn.RecordAudit(tx, u.Username(), req.Locked ? "Khóa tài khoản" : "Mở khóa tài khoản",
+                    "User", username, "(web)");
+                await businessEvents.WriteAsync(conn, tx, "identity.access.changed.v1",
+                    "identity.access.changed.v1", "access", $"user:{username}", u.Username(), username);
             }
+            await tx.CommitAsync();
             return n > 0 ? Results.NoContent() : Results.NotFound();
         });
 
@@ -361,7 +370,6 @@ public static class UserEndpoints
             if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
                 return Results.BadRequest(new { message = "Admin luôn có đầy đủ đặc quyền." });
 
-            await ChatEndpoints.EnsureTables(db);
             if (req.Verified)
                 await conn.Cmd(
                     @"INSERT INTO web_verified_users (username, granted_by, granted_at)
@@ -386,7 +394,6 @@ public static class UserEndpoints
                 .With("@id", id).ExecuteScalarAsync())?.Trim();
             if (string.IsNullOrWhiteSpace(username)) return Results.NotFound();
 
-            await ChatEndpoints.EnsureTables(db);
             if (req.IsDiamond)
                 await conn.Cmd(
                     @"INSERT INTO web_diamond_members (username, granted_by, granted_at)
@@ -418,26 +425,29 @@ public static class UserEndpoints
         // Cấp MÃ KHÔI PHỤC cho người dùng tự đặt lại mật khẩu (thay cho reset bằng khuôn mặt đã tắt).
         // Admin đưa mã cho nhân viên → nhân viên dùng ở /api/auth/reset-with-recovery-code. Mã một lần,
         // hết hạn sau 7 ngày, và cấp mã mới sẽ vô hiệu hóa mọi mã cũ chưa dùng của tài khoản đó.
-        g.MapPost("/{id:guid}/recovery-code", async (Guid id, ClaimsPrincipal u, Database db) =>
+        // Kênh chuyển mã do RecoveryCodeDelivery quyết định: hôm nay là cấp tay (trả mã về cho admin
+        // đọc), bật Recovery:Email hoặc Recovery:Zalo thì máy chủ tự gửi và KHÔNG trả mã ra nữa —
+        // lúc đó chỉ chủ tài khoản cần biết mã. Bên gọi ép kênh bằng body { channel: "email" }.
+        g.MapPost("/{id:guid}/recovery-code", async (Guid id, IssueRecoveryCodeRequest? req, ClaimsPrincipal u,
+            Database db, RecoveryCodeDelivery delivery, CancellationToken ct) =>
         {
-            await using var conn = await db.OpenAsync();
+            await using var conn = await db.OpenAsync(ct);
             var username = (await conn.Cmd("SELECT username FROM app_users WHERE id=@id AND is_deleted=FALSE LIMIT 1")
                 .With("@id", id).ExecuteScalarAsync()) as string;
             if (string.IsNullOrWhiteSpace(username)) return Results.NotFound();
 
-            var code = RecoveryCodes.Generate();
-            await conn.Cmd("UPDATE password_recovery_codes SET used_at=CURRENT_TIMESTAMP WHERE username=@u AND used_at IS NULL")
-                .With("@u", username).ExecuteNonQueryAsync();
-            await conn.Cmd(
-                @"INSERT INTO password_recovery_codes (username, code_hash, created_by, expires_at)
-                  VALUES (@u, @h, @by, CURRENT_TIMESTAMP + INTERVAL '7 days')")
-                .With("@u", username)
-                .With("@h", PasswordHasher.Hash(RecoveryCodes.Normalize(code)))
-                .With("@by", u.Username())
-                .ExecuteNonQueryAsync();
+            var code = await IssueRecoveryCodeAsync(conn, username, u.Username(), ct);
+            var recipient = await RecoveryCodeDelivery.LoadRecipientAsync(conn, username, ct)
+                            ?? new RecoveryRecipient(username, username, "", "");
+            var result = await delivery.SendAsync(recipient, code, req?.Channel, ct);
+
             await db.RecordAudit(u.Username(), "Cấp mã khôi phục mật khẩu", "User", id.ToString(),
-                $"Admin cấp mã khôi phục cho '{username}' (hết hạn sau 7 ngày, web).");
-            return Results.Ok(new RecoveryCodeResponse(code));
+                $"Admin cấp mã khôi phục cho '{username}' (hết hạn sau 7 ngày, web). " +
+                $"Kênh: {RecoveryCodeDelivery.ChannelLabel(result.Channel)}" +
+                (result.Delivered ? $" → {result.SentTo}." : ", đọc tay."));
+
+            return Results.Ok(new RecoveryCodeResponse(
+                result.RevealCode ? code : null, result.Channel, result.Delivered, result.Message, result.SentTo));
         });
 
         g.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db) =>
@@ -506,8 +516,9 @@ public static class UserEndpoints
     }
 
     /// <summary>Ảnh chụp vai trò hiện tại của một tài khoản, để ghi audit "trước → sau".</summary>
-    private static async Task<string> SnapshotRolesAsync(NpgsqlConnection conn, string username)
-        => string.Join(", ", await AccessProfileService.LoadRolesAsync(conn, username) ?? []);
+    private static async Task<string> SnapshotRolesAsync(
+        NpgsqlConnection conn, string username, NpgsqlTransaction? tx = null)
+        => string.Join(", ", await AccessProfileService.LoadRolesAsync(conn, username, transaction: tx) ?? []);
 
     /// <summary>
     /// VIỆC PHẢI LÀM SAU MỖI LẦN ĐỔI QUYỀN — gom về một chỗ để không lần nào quên bước nào:
@@ -520,49 +531,37 @@ public static class UserEndpoints
     /// request); tín hiệu realtime chỉ để GIAO DIỆN khỏi hiển thị sai cho tới lần bấm tiếp theo.
     /// </summary>
     private static async Task AfterAuthorizationChangeAsync(
-        NpgsqlConnection conn, Database db, IHubContext<ChangesHub> hub, HttpContext http,
+        NpgsqlConnection conn, NpgsqlTransaction tx, BusinessEventWriter businessEvents, HttpContext http,
         string actor, string target, string action, string rolesBefore, string? reason)
     {
         await conn.Cmd(
-            "UPDATE app_users SET authorization_version = COALESCE(authorization_version, 1) + 1 WHERE username = @u")
+            "UPDATE app_users SET authorization_version = COALESCE(authorization_version, 1) + 1 WHERE username = @u", tx)
             .With("@u", target).ExecuteNonQueryAsync();
 
-        var rolesAfter = await SnapshotRolesAsync(conn, target);
+        var rolesAfter = await SnapshotRolesAsync(conn, target, tx);
         var note = string.IsNullOrWhiteSpace(reason) ? "" : reason.Trim();
-        try
-        {
-            await conn.Cmd(
-                @"INSERT INTO user_role_history (username, changed_by, action, roles_before, roles_after, reason, client_ip)
-                  VALUES (@u, @by, @a, @b, @af, @r, @ip)")
-                .With("@u", target).With("@by", actor).With("@a", action)
-                .With("@b", rolesBefore).With("@af", rolesAfter).With("@r", note)
-                .With("@ip", http.Connection.RemoteIpAddress?.ToString() ?? "")
-                .ExecuteNonQueryAsync();
-        }
-        catch (NpgsqlException) { /* bảng lịch sử chưa có → vẫn còn audit_logs bên dưới */ }
+        await conn.Cmd(
+            @"INSERT INTO user_role_history (username, changed_by, action, roles_before, roles_after, reason, client_ip)
+              VALUES (@u, @by, @a, @b, @af, @r, @ip)", tx)
+            .With("@u", target).With("@by", actor).With("@a", action)
+            .With("@b", rolesBefore).With("@af", rolesAfter).With("@r", note)
+            .With("@ip", http.Connection.RemoteIpAddress?.ToString() ?? "")
+            .ExecuteNonQueryAsync(http.RequestAborted);
 
-        await db.RecordAudit(actor, action, "User", target,
-            $"{action}: [{rolesBefore}] → [{rolesAfter}]{(note.Length > 0 ? $". Lý do: {note}" : "")} (web).");
+        await conn.RecordAudit(tx, actor, action, "User", target,
+            $"{action}: [{rolesBefore}] → [{rolesAfter}]{(note.Length > 0 ? $". Lý do: {note}" : "")} (web).",
+            http.RequestAborted);
 
         // Chỉ gửi cho ĐÚNG người bị đổi quyền (không phát tán ra toàn hệ thống).
-        try { await hub.Clients.User(target).SendAsync("changed", "access"); } catch { /* không online → thôi */ }
+        await businessEvents.WriteAsync(conn, tx, "identity.access.changed.v1",
+            "identity.access.changed.v1", "access", $"user:{target}", actor, target, null,
+            http.RequestAborted);
     }
 
     private static async Task DeleteUserEverywhere(NpgsqlConnection conn, NpgsqlTransaction tx, Guid id, string username)
     {
         var cmd = new NpgsqlCommand(
             @"
-DELETE FROM web_chat_messages msg
-USING web_chat_conversations c
-WHERE c.id = msg.conversation_id
-  AND c.is_group = FALSE
-  AND EXISTS (SELECT 1 FROM web_chat_members mm WHERE mm.conversation_id = c.id AND mm.username = @username);
-
-DELETE FROM web_chat_messages WHERE sender_username = @username;
-DELETE FROM web_chat_members WHERE username = @username;
-DELETE FROM web_chat_conversations c
-WHERE NOT EXISTS (SELECT 1 FROM web_chat_members mm WHERE mm.conversation_id = c.id);
-
 DELETE FROM web_verified_users WHERE username = @username;
 DELETE FROM web_diamond_members WHERE username = @username;
 DELETE FROM user_roles WHERE username = @username;
@@ -599,4 +598,25 @@ DELETE FROM app_users WHERE username = @username;",
 
         await cmd.ExecuteNonQueryAsync();
     }
+
+    /// <summary>
+    /// Sinh mã khôi phục mới cho một tài khoản và ghi vào sổ. Mã cũ chưa dùng bị vô hiệu ngay để một
+    /// tài khoản không bao giờ có hai mã sống cùng lúc.
+    /// </summary>
+    internal static async Task<string> IssueRecoveryCodeAsync(
+        NpgsqlConnection conn, string username, string issuedBy, CancellationToken ct = default)
+    {
+        var code = RecoveryCodes.Generate();
+        await conn.Cmd("UPDATE password_recovery_codes SET used_at=CURRENT_TIMESTAMP WHERE username=@u AND used_at IS NULL")
+            .With("@u", username).ExecuteNonQueryAsync(ct);
+        await conn.Cmd(
+            @"INSERT INTO password_recovery_codes (username, code_hash, created_by, expires_at)
+              VALUES (@u, @h, @by, CURRENT_TIMESTAMP + INTERVAL '7 days')")
+            .With("@u", username)
+            .With("@h", PasswordHasher.Hash(RecoveryCodes.Normalize(code)))
+            .With("@by", issuedBy)
+            .ExecuteNonQueryAsync(ct);
+        return code;
+    }
+
 }

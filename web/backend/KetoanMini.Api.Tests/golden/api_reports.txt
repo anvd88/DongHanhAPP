@@ -1,0 +1,36 @@
+# /api/reports
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.activeCustomers : number
+  $.monthRevenue : number
+  $.monthly : array
+  $.monthly[] : object
+  $.monthly[].documentCount : number
+  $.monthly[].month : number
+  $.monthly[].paymentCount : number
+  $.monthly[].total : number
+  $.monthly[].year : number
+  $.totalDocuments : number
+  $.totalPayments : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.activeCustomers : number
+  $.monthRevenue : number
+  $.monthly : array
+  $.monthly[] : object
+  $.monthly[].documentCount : number
+  $.monthly[].month : number
+  $.monthly[].paymentCount : number
+  $.monthly[].total : number
+  $.monthly[].year : number
+  $.totalDocuments : number
+  $.totalPayments : number
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

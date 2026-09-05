@@ -8,14 +8,24 @@ $manifestPath = Join-Path $packageRoot "SHA256SUMS.txt"
 
 Push-Location $projectRoot
 try {
-    cargo build --release --locked
+    $rustc = Join-Path $env:USERPROFILE ".cargo\bin\rustc.exe"
+    if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) {
+        throw "Khong tim thay rustc. Chay truoc: .\scripts\setup-toolchain-windows.ps1"
+    }
+    $hostTriple = (& $rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Split(':', 2)[1].Trim() })
+    if ($hostTriple -ne 'x86_64-pc-windows-gnullvm') {
+        throw "Sai Rust host '$hostTriple'. Chay: rustup set default-host x86_64-pc-windows-gnullvm"
+    }
+
+    & (Join-Path $PSScriptRoot "cargo-windows.ps1") build --release --locked
+    if ($LASTEXITCODE -ne 0) { throw "Cargo release build that bai." }
 
     $executable = Join-Path $projectRoot "target\release\ketoanmini-server.exe"
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "Release executable was not produced: $executable"
     }
 
-    $rustSysroot = (& rustc --print sysroot).Trim()
+    $rustSysroot = (& $rustc --print sysroot).Trim()
     if (-not $rustSysroot) {
         throw "rustc did not report its sysroot"
     }

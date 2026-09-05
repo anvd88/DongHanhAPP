@@ -1,0 +1,27 @@
+# /api/talent/performance
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.goals : array
+  $.reviews : array
+
+[Accounting] 200 application/json
+  $ : object
+  $.goals : array
+  $.reviews : array
+
+[HR] 200 application/json
+  $ : object
+  $.goals : array
+  $.reviews : array
+
+[Driver] 200 application/json
+  $ : object
+  $.goals : array
+  $.reviews : array
+
+[Employee] 200 application/json
+  $ : object
+  $.goals : array
+  $.reviews : array

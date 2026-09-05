@@ -1,0 +1,14 @@
+# /api/surveys/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : array
+
+[Driver] 403 
+
+[Employee] 403 

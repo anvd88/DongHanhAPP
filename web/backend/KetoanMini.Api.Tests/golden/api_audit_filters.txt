@@ -1,0 +1,24 @@
+# /api/audit/filters
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.actions : array
+  $.actions[] : string
+  $.canSeeAll : bool
+  $.entities : array
+  $.entities[] : string
+  $.groups : array
+  $.groups[] : object
+  $.groups[].key : string
+  $.groups[].label : string
+  $.months : array
+  $.months[] : string
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Security;
@@ -67,6 +67,23 @@ public static class GiaCongEndpoints
             );
 
             ALTER TABLE gia_cong_hang_hoa ADD COLUMN IF NOT EXISTS quy_cach varchar(200) NOT NULL DEFAULT '';
+
+            -- GẮN GIA CÔNG VÀO DANH MỤC. Trước đây đối tác và tên hàng đều là chữ tự do, nên phiếu
+            -- gia công đứng ngoài mọi thống kê: không biết "thép tấm 10mm" ở đây có phải cùng một
+            -- mặt hàng với thép tấm 10mm bên phiếu bán hay không, cũng không biết xưởng đối tác có
+            -- phải nhà cung cấp đã có hồ sơ hay không.
+            --
+            -- Hai khoá này CHƯA đụng vào công thức tồn kho: hàng đi gia công là hàng rời kho nhưng
+            -- vẫn của mình, cộng trừ thế nào là một quyết định nghiệp vụ riêng. Ở đây mới nối khoá
+            -- để dữ liệu ghép được, làm tiếp thì không phải sửa lại phiếu cũ.
+            ALTER TABLE gia_cong_phieu ADD COLUMN IF NOT EXISTS doi_tac_id uuid NULL
+                REFERENCES suppliers(id) ON DELETE SET NULL;
+            ALTER TABLE gia_cong_hang_hoa ADD COLUMN IF NOT EXISTS product_id uuid NULL
+                REFERENCES products(id) ON DELETE SET NULL;
+            CREATE INDEX IF NOT EXISTS ix_gia_cong_phieu_doi_tac
+                ON gia_cong_phieu (doi_tac_id) WHERE doi_tac_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_gia_cong_hang_hoa_product
+                ON gia_cong_hang_hoa (product_id) WHERE product_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_gia_cong_phieu_filter ON gia_cong_phieu (id DESC, ngay_lap DESC);
             CREATE INDEX IF NOT EXISTS ix_gia_cong_hang_hoa_phieu ON gia_cong_hang_hoa (phieu_id);
             """).ExecuteNonQueryAsync();
@@ -234,6 +251,33 @@ public static class GiaCongEndpoints
         return filters.Count == 0 ? "" : " AND " + string.Join(" AND ", filters);
     }
 
+
+    /// <summary>Tên đối tác gia công thành hồ sơ nhà cung cấp: tên thật, rồi bí danh, cuối cùng tạo mới.</summary>
+    private static async Task<Guid?> ResolveDoiTac(NpgsqlConnection conn, NpgsqlTransaction tx, string? name)
+    {
+        name = (name ?? "").Trim();
+        if (name.Length == 0) return null;
+
+        await using (var byName = await conn.Cmd(
+                "SELECT id FROM suppliers WHERE lower(name) = lower(@n)", tx)
+            .With("@n", name).ExecuteReaderAsync())
+        {
+            if (await byName.ReadAsync()) return byName.Guid("id");
+        }
+
+        await using (var byAlias = await conn.Cmd(
+                @"SELECT sa.supplier_id FROM supplier_aliases sa WHERE lower(sa.alias) = lower(@n)", tx)
+            .With("@n", name).ExecuteReaderAsync())
+        {
+            if (await byAlias.ReadAsync()) return byAlias.Guid("supplier_id");
+        }
+
+        var newId = Guid.NewGuid();
+        await conn.Cmd("INSERT INTO suppliers (id, name, is_active) VALUES (@id, @n, TRUE)", tx)
+            .With("@id", newId).With("@n", name).ExecuteNonQueryAsync();
+        return newId;
+    }
+
     private static NpgsqlCommand CreateReportCommand(NpgsqlConnection conn, string sql, string? doiTac, DateOnly? from, DateOnly? to)
     {
         var cmd = conn.Cmd(sql);
@@ -257,6 +301,9 @@ public static class GiaCongEndpoints
         try
         {
             long phieuId;
+            // Đối tác gia công cũng là một nhà cung cấp: gõ tên nào cũng phải về đúng một hồ sơ,
+            // tra theo tên thật rồi bí danh, chưa có thì dựng mới — y hệt phiếu nhập mua.
+            var doiTacId = await ResolveDoiTac(conn, tx, req.DoiTac);
             var loaiPhieu = NormalizePhieuType(req.LoaiPhieu);
             var ngay = req.NgayLap;
             object han = req.HanHoanThanh is { } h ? h : DBNull.Value;
@@ -266,22 +313,24 @@ public static class GiaCongEndpoints
                 phieuId = Convert.ToInt64(await new NpgsqlCommand("SELECT nextval(pg_get_serial_sequence('gia_cong_phieu', 'id'))", conn, tx).ExecuteScalarAsync());
                 var maPhieu = $"GC{phieuId:D6}";
                 var cmd = new NpgsqlCommand(
-                    @"INSERT INTO gia_cong_phieu (id, ma_phieu, loai_phieu, doi_tac, nhan_vien, ngay_lap, han_hoan_thanh, ghi_chu, updated_at)
-                      VALUES (@id, @mp, @lp, @dt, @nv, @ng, @han, @gc, CURRENT_TIMESTAMP)", conn, tx);
+                    @"INSERT INTO gia_cong_phieu (id, ma_phieu, loai_phieu, doi_tac, doi_tac_id, nhan_vien, ngay_lap, han_hoan_thanh, ghi_chu, updated_at)
+                      VALUES (@id, @mp, @lp, @dt, @dtid, @nv, @ng, @han, @gc, CURRENT_TIMESTAMP)", conn, tx);
                 cmd.Parameters.AddWithValue("@id", phieuId);
                 cmd.Parameters.AddWithValue("@mp", maPhieu);
                 FillPhieu(cmd, req, loaiPhieu, ngay, han);
+                cmd.Parameters.AddWithValue("@dtid", (object?)doiTacId ?? DBNull.Value);
                 await cmd.ExecuteNonQueryAsync();
             }
             else
             {
                 phieuId = id.Value;
                 var cmd = new NpgsqlCommand(
-                    @"UPDATE gia_cong_phieu SET loai_phieu=@lp, doi_tac=@dt, nhan_vien=@nv, ngay_lap=@ng,
+                    @"UPDATE gia_cong_phieu SET loai_phieu=@lp, doi_tac=@dt, doi_tac_id=@dtid, nhan_vien=@nv, ngay_lap=@ng,
                         han_hoan_thanh=@han, ghi_chu=@gc, updated_at=CURRENT_TIMESTAMP
                       WHERE id=@id", conn, tx);
                 cmd.Parameters.AddWithValue("@id", phieuId);
                 FillPhieu(cmd, req, loaiPhieu, ngay, han);
+                cmd.Parameters.AddWithValue("@dtid", (object?)doiTacId ?? DBNull.Value);
                 if (await cmd.ExecuteNonQueryAsync() == 0) { await tx.RollbackAsync(); return Results.NotFound(); }
                 await new NpgsqlCommand("DELETE FROM gia_cong_hang_hoa WHERE phieu_id=@id", conn, tx)
                     { Parameters = { new("@id", phieuId) } }.ExecuteNonQueryAsync();
@@ -290,9 +339,15 @@ public static class GiaCongEndpoints
             foreach (var line in req.Lines ?? new())
             {
                 var donGia = IsNhap(loaiPhieu) ? line.DonGiaGiaCong : 0m;
+                // Giống phiếu bán và phiếu nhập mua: máy khách không gửi mã hàng thì máy chủ tự
+                // khớp theo tên cộng quy cách, để phiếu gõ tay vẫn ghép được vào danh mục.
                 var lc = new NpgsqlCommand(
-                    @"INSERT INTO gia_cong_hang_hoa (phieu_id, loai_dong, ma_hang, ten_hang, quy_cach, don_vi_tinh, so_luong, don_gia_gia_cong, ghi_chu)
-                      VALUES (@p, @ld, @mh, @th, @qc, @dv, @sl, @dg, @gc)", conn, tx);
+                    @"INSERT INTO gia_cong_hang_hoa (phieu_id, loai_dong, ma_hang, ten_hang, quy_cach, don_vi_tinh, so_luong, don_gia_gia_cong, ghi_chu, product_id)
+                      VALUES (@p, @ld, @mh, @th, @qc, @dv, @sl, @dg, @gc,
+                              COALESCE(@pid::uuid, (SELECT pr.id FROM products pr
+                                                    WHERE lower(pr.name) = lower(BTRIM(@th))
+                                                      AND lower(pr.spec) = lower(BTRIM(@qc))
+                                                    LIMIT 1)))", conn, tx);
                 lc.Parameters.AddWithValue("@p", phieuId);
                 lc.Parameters.AddWithValue("@ld", loaiPhieu);
                 lc.Parameters.AddWithValue("@mh", line.MaHang ?? "");
@@ -302,6 +357,7 @@ public static class GiaCongEndpoints
                 lc.Parameters.AddWithValue("@sl", line.SoLuong);
                 lc.Parameters.AddWithValue("@dg", donGia);
                 lc.Parameters.AddWithValue("@gc", line.GhiChu ?? "");
+                lc.Parameters.AddWithValue("@pid", (object?)line.ProductId ?? DBNull.Value);
                 await lc.ExecuteNonQueryAsync();
             }
 

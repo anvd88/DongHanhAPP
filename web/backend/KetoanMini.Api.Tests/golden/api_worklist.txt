@@ -1,0 +1,78 @@
+# /api/worklist/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].description : string
+  $.items[].dueAt : string
+  $.items[].key : string
+  $.items[].kind : string
+  $.items[].priority : string
+  $.items[].route : string
+  $.items[].title : string
+  $.summary : object
+  $.summary.approvals : number
+  $.summary.contracts : number
+  $.summary.documents : number
+  $.summary.notices : number
+  $.summary.overdue : number
+  $.summary.payslips : number
+  $.summary.total : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.items : array
+  $.summary : object
+  $.summary.approvals : number
+  $.summary.contracts : number
+  $.summary.documents : number
+  $.summary.notices : number
+  $.summary.overdue : number
+  $.summary.payslips : number
+  $.summary.total : number
+
+[HR] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].description : string
+  $.items[].dueAt : string
+  $.items[].key : string
+  $.items[].kind : string
+  $.items[].priority : string
+  $.items[].route : string
+  $.items[].title : string
+  $.summary : object
+  $.summary.approvals : number
+  $.summary.contracts : number
+  $.summary.documents : number
+  $.summary.notices : number
+  $.summary.overdue : number
+  $.summary.payslips : number
+  $.summary.total : number
+
+[Driver] 200 application/json
+  $ : object
+  $.items : array
+  $.summary : object
+  $.summary.approvals : number
+  $.summary.contracts : number
+  $.summary.documents : number
+  $.summary.notices : number
+  $.summary.overdue : number
+  $.summary.payslips : number
+  $.summary.total : number
+
+[Employee] 200 application/json
+  $ : object
+  $.items : array
+  $.summary : object
+  $.summary.approvals : number
+  $.summary.contracts : number
+  $.summary.documents : number
+  $.summary.notices : number
+  $.summary.overdue : number
+  $.summary.payslips : number
+  $.summary.total : number

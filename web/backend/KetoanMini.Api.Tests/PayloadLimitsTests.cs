@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.RegularExpressions;
 using KetoanMini.Api.Security;
 using Xunit;
@@ -24,8 +24,11 @@ public sealed class PayloadLimitsTests
     private static readonly string[] FaceEnrollPath =
         ["Ketoanapk", "android", "app", "src", "main", "kotlin", "com", "ketoanapk", "hr", "ui", "FaceEnrollScreen.kt"];
 
+    // Bản viết lại frontend (2026-08-31) gộp trạm chấm công vào một tệp màn hình; hằng số chụp
+    // liên tiếp đổi tên từ MAX_AIM_FRAMES sang BURST_FRAMES. Test này trỏ vào tệp cũ nên đã im
+    // tiếng từ đó — chốt lại theo tệp mới.
     private static readonly string[] CheckInScannerPath =
-        ["frontend", "src", "features", "chamcong", "CheckInScanner.tsx"];
+        ["frontend", "src", "pages", "cham-cong.tsx"];
 
     [Fact]
     public void AndroidAttendanceBurst_FitsServerLimit()
@@ -78,7 +81,7 @@ public sealed class PayloadLimitsTests
     public void WebCheckInBurst_FitsServerLimit()
     {
         var src = ReadClientSource(CheckInScannerPath);
-        var maxFrames = ReadConstant(src, @"const MAX_AIM_FRAMES\s*=\s*(\d+)", "MAX_AIM_FRAMES (CheckInScanner.tsx)");
+        var maxFrames = ReadConstant(src, @"const BURST_FRAMES\s*=\s*(\d+)", "BURST_FRAMES (cham-cong.tsx)");
 
         Assert.True(
             maxFrames <= PayloadLimits.MaxImagesPerRequest,

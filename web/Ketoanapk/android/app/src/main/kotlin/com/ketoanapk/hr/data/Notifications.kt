@@ -51,7 +51,7 @@ private const val MISSED_CHECKOUT_ENTITY_PREFIX = "forgot-checkout:"
  */
 @Serializable
 enum class NotificationKind {
-    Request, Approval, Penalty, Attendance, Chat, System,
+    Request, Approval, Penalty, Attendance, System,
     Delivery, Collection, Document, Payout, Task,
 }
 
@@ -66,7 +66,6 @@ internal fun notificationKindFromCategory(category: String?): NotificationKind =
         "request" -> NotificationKind.Request
         "penalty" -> NotificationKind.Penalty
         "attendance" -> NotificationKind.Attendance
-        "chat" -> NotificationKind.Chat
         else -> NotificationKind.System
     }
 
@@ -649,7 +648,6 @@ internal fun requestIdFromNotificationId(value: String): String? {
 }
 
 internal fun entityIdFromNotificationId(value: String): String? {
-    if (value.startsWith("chat:")) return value.split(':').getOrNull(1)?.takeIf { it.isNotBlank() }
     missedCheckoutEntityIdFromNotificationId(value)?.let { return it }
     return requestIdFromNotificationId(value)
 }

@@ -113,60 +113,106 @@ public sealed class InfrastructureTests
         var sql = DatabaseChangePublisher.FunctionSql;
 
         Assert.Contains("pg_notify('ketoanmini_changes'", sql, StringComparison.Ordinal);
+        Assert.Contains("TG_NAME IN ('ketoanmini_publish_change_ins'", sql, StringComparison.Ordinal);
+        Assert.Contains("trg.tgname = 'ketoanmini_publish_change'",
+            DatabaseChangePublisher.LegacyTriggerCleanupSql, StringComparison.Ordinal);
         // Vòng quét checksum toàn bảng 1.5 giây đã bị thay hẳn bằng LISTEN/NOTIFY.
         Assert.DoesNotContain("COUNT(*) FROM documents", sql, StringComparison.Ordinal);
 
         // Một hành động nghiệp vụ có thể chạm nhiều dòng; trigger mức STATEMENT chỉ phát một lần.
-        // Chấm công phát 'attendance' (không còn đi chung scope bắt-tất 'data') + 'hr' cho bảng công.
+        // Chấm công phát 'attendance' (chủ đề riêng, không đi chung với kế toán) + 'hr' cho bảng công.
         var chamCong = Array.Find(DatabaseChangePublisher.Watched, w => w.Table == "cham_cong_log");
         Assert.Equal(["attendance", "hr"], chamCong.Scopes);
     }
 
-    [Fact]
-    public async Task RealtimeChanges_PublishCommittedDatabaseStatements()
+    /// <summary>
+    /// Khối kế toán từng dùng chung một chủ đề tên "data", nên sửa một phiếu là đánh thức mọi màn
+    /// hình của mọi máy đang mở. Bảng dưới đây chốt việc chẻ nhỏ: mỗi bảng chỉ gọi tên đúng những
+    /// màn hình đọc nó. Đổi một dòng ở đây mà quên đổi khoá truy vấn bên frontend là màn hình đó
+    /// đứng im — nên hai nơi phải sửa cùng lúc.
+    /// </summary>
+    [Theory]
+    [InlineData("documents", new[] { "sales", "debts", "cash" })]
+    [InlineData("document_lines", new[] { "sales", "debts", "cash" })]
+    [InlineData("payments", new[] { "debts" })]
+    [InlineData("customers", new[] { "debts" })]
+    [InlineData("products", new[] { "catalog" })]
+    [InlineData("purchases", new[] { "purchases" })]
+    [InlineData("cash_fund_manual_entries", new[] { "cash" })]
+    [InlineData("hr_payout_vouchers", new[] { "cash", "hr" })]
+    public void AccountingTables_PublishNarrowTopicsInsteadOfOneCatchAll(string table, string[] expected)
     {
-        using var scope = _factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<Database>();
-        await DatabaseChangePublisher.EnsureAsync(db);
-
-        await using var listener = await db.OpenAsync();
-        var payloads = new List<string>();
-        listener.Notification += (_, notification) => payloads.Add(notification.Payload);
-        await listener.Cmd($"LISTEN {DatabaseChangePublisher.ChannelName}").ExecuteNonQueryAsync();
-
-        // A statement-level trigger also fires for a zero-row update. This exercises the complete
-        // Pub/Sub path without changing business data in the shared integration-test database.
-        await using (var writer = await db.OpenAsync())
-            await writer.Cmd("UPDATE customers SET updated_at = updated_at WHERE FALSE").ExecuteNonQueryAsync();
-
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await listener.WaitAsync(timeout.Token);
-        Assert.Contains("data", payloads);
+        var watched = Array.Find(DatabaseChangePublisher.Watched, w => w.Table == table);
+        Assert.Equal(table, watched.Table);
+        Assert.Equal(expected, watched.Scopes);
     }
 
-    [Theory]
-    [InlineData("UPDATE work_tasks SET updated_at = updated_at WHERE FALSE", "tasks")]
-    [InlineData("UPDATE app_portal_posts SET updated_at = updated_at WHERE FALSE", "portal")]
-    [InlineData("UPDATE app_config SET updated_at = updated_at WHERE FALSE", "config")]
-    [InlineData("UPDATE audit_logs SET occurred_at = occurred_at WHERE FALSE", "audit")]
-    [InlineData("UPDATE hr_onboarding_tasks SET created_at = created_at WHERE FALSE", "talent")]
-    [InlineData("UPDATE cham_cong_log SET occurred_at = occurred_at WHERE FALSE", "attendance")]
-    public async Task RealtimeChanges_PublishGranularScopes(string statement, string expectedScope)
+    /// <summary>
+    /// Đường Pub/Sub đầy đủ, đo trên một bảng nháp do chính bài kiểm thử dựng lên rồi xoá đi.
+    ///
+    /// Vì sao không đo trên bảng nghiệp vụ: bài này từng chạy một câu UPDATE khớp 0 dòng để "không
+    /// đụng dữ liệu", nhưng hàm trigger nay bỏ qua đúng những câu như thế (xem cửa đầu tiên trong
+    /// FunctionSql) nên nó không thể xanh trở lại. Còn ghi thật vào bảng nghiệp vụ thì bẩn CSDL dùng
+    /// chung. Bảng nháp cho phép ghi thật, và tên chủ đề sinh ngẫu nhiên nên tín hiệu của ứng dụng
+    /// đang chạy cùng CSDL không thể bị nhận nhầm thành tín hiệu của bài kiểm thử.
+    /// </summary>
+    [Fact]
+    public async Task RealtimeChanges_FireOnRealRowChangesOnly()
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Database>();
-        await DatabaseChangePublisher.EnsureAsync(db);
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var table = $"realtime_probe_{suffix}";
+        var topic = $"probe_{suffix}";
 
-        await using var listener = await db.OpenAsync();
-        var payloads = new List<string>();
-        listener.Notification += (_, notification) => payloads.Add(notification.Payload);
-        await listener.Cmd($"LISTEN {DatabaseChangePublisher.ChannelName}").ExecuteNonQueryAsync();
+        await using var owner = await db.OpenAsync();
+        await owner.Cmd($"CREATE TABLE public.{table} (id int PRIMARY KEY, note text NOT NULL DEFAULT '')")
+            .ExecuteNonQueryAsync();
+        try
+        {
+            await DatabaseChangePublisher.EnsureAsync(db, [(table, [topic])]);
 
-        await using (var writer = await db.OpenAsync())
-            await writer.Cmd(statement).ExecuteNonQueryAsync();
+            await using var listener = await db.OpenAsync();
+            var payloads = new List<string>();
+            listener.Notification += (_, notification) => payloads.Add(notification.Payload);
+            await listener.Cmd($"LISTEN {DatabaseChangePublisher.ChannelName}").ExecuteNonQueryAsync();
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await listener.WaitAsync(timeout.Token);
-        Assert.Contains(expectedScope, payloads);
+            // Câu lệnh khớp 0 dòng: lớp xác thực chạy đúng một câu như thế ở MỌI request, nên nếu nó
+            // phát tín hiệu thì mỗi lần bấm chuột của mỗi người là một lượt đánh thức toàn hệ thống.
+            await using (var writer = await db.OpenAsync())
+                await writer.Cmd($"UPDATE public.{table} SET note = note WHERE FALSE").ExecuteNonQueryAsync();
+            Assert.False(await WaitForScopeAsync(listener, payloads, topic, TimeSpan.FromSeconds(2)),
+                "Câu lệnh không đổi dòng nào vẫn phát tín hiệu realtime.");
+
+            // Đổi thật một dòng rồi commit → tín hiệu phải tới.
+            await using (var writer = await db.OpenAsync())
+                await writer.Cmd($"INSERT INTO public.{table}(id) VALUES (1)").ExecuteNonQueryAsync();
+            Assert.True(await WaitForScopeAsync(listener, payloads, topic, TimeSpan.FromSeconds(5)),
+                "Lệnh ghi đã commit nhưng không có tín hiệu realtime nào.");
+        }
+        finally
+        {
+            // DROP TABLE mang theo cả ba trigger. Dòng hàng đợi mà bảng nháp sinh ra thì để nguyên:
+            // projector đang chạy trong chính host kiểm thử có thể đang cầm nó, xoá tay là giành
+            // nhau với nó. Vòng dọn theo hạn giữ sẽ tự lấy đi.
+            await owner.Cmd($"DROP TABLE IF EXISTS public.{table}").ExecuteNonQueryAsync();
+        }
+    }
+
+    /// <summary>
+    /// Chờ đúng chủ đề mình quan tâm chứ không chờ "một tín hiệu bất kỳ": CSDL kiểm thử dùng chung
+    /// với ứng dụng đang chạy, nên tín hiệu của người khác chen vào giữa là chuyện thường.
+    /// </summary>
+    private static async Task<bool> WaitForScopeAsync(
+        Npgsql.NpgsqlConnection listener, List<string> payloads, string scope, TimeSpan window)
+    {
+        using var timeout = new CancellationTokenSource(window);
+        try
+        {
+            while (!payloads.Contains(scope, StringComparer.Ordinal))
+                await listener.WaitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) { }
+        return payloads.Contains(scope, StringComparer.Ordinal);
     }
 }

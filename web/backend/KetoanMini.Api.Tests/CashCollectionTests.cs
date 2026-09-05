@@ -214,13 +214,11 @@ public sealed class CashCollectionTests
             });
             Assert.Equal(HttpStatusCode.OK, collected.StatusCode);
 
-            // Cấp thêm Cashier cũng không giúp người tạo tự nhận tiền của chính lệnh mình tạo.
-            await GrantRoleAsync(world.AccountantUsername, AppRoles.Cashier);
-            var creatorReceives = await accountant.PostAsJsonAsync($"/api/cash-collections/{orderId}/receive", new
-            {
-                lines = new[] { new { denomination = 100_000, quantity = 7 } },
-            });
-            Assert.Equal(HttpStatusCode.BadRequest, creatorReceives.StatusCode);
+            // KHÔNG kiểm tra "người lập lệnh không được tự nhận tiền" ở đây nữa. Chốt bất kiêm nhiệm
+            // đó đã được GỠ CÓ CHỦ Ý (quyết định của người dùng): văn phòng có lúc chỉ còn một người
+            // đủ vai trò, giữ chốt thì lệnh kẹt không ai nhận được tiền. Chốt còn lại — tài xế không
+            // được tự nhận tiền do chính mình bàn giao — vẫn nguyên, xem CashCollectionEndpoints.
+            // ĐỪNG thêm lại assertion này: nó sẽ đỏ trở lại và bị hiểu nhầm là lỗi hồi quy.
             Assert.Equal(0, await PaymentCountAsync(orderId));
 
             // Thủ quỹ đếm khác tài xế: Kế toán trưởng trả về cho tài xế khai lại.

@@ -271,10 +271,6 @@ public sealed class PushService
         ON CONFLICT DO NOTHING
         """;
 
-    /// <summary>Tin nhắn chat đã có badge riêng trên chuông; ghi thêm vào hộp thư là đếm hai lần.</summary>
-    private static bool SkipInbox(string? target) =>
-        string.Equals(target, "Chat", StringComparison.OrdinalIgnoreCase);
-
     /// <summary>
     /// Màn hình web tương ứng với "màn hình app" mà thông báo trỏ tới. Nhờ ánh xạ này, các nghiệp vụ
     /// đã có push từ trước tự có đường dẫn đúng trên web mà không phải sửa lại từng endpoint.
@@ -289,7 +285,6 @@ public sealed class PushService
         "Attendance" => "/chamcong",
         "Settings" => "/caidat",
         "AppUpdate" => "/tai-apk",
-        "Chat" => "/chats",
         _ => "",
     };
 
@@ -303,7 +298,6 @@ public sealed class PushService
         "Attendance" => "attendance",
         "Settings" => "security",
         "AppUpdate" => "system",
-        "Chat" => "chat",
         _ => "general",
     };
 
@@ -328,7 +322,7 @@ public sealed class PushService
     internal static string AppTargetFor(string? target, string? category)
     {
         var raw = (target ?? "").Trim();
-        if (raw is "Tasks" or "Approval" or "Requests" or "Penalty" or "Attendance" or "Chat"
+        if (raw is "Tasks" or "Approval" or "Requests" or "Penalty" or "Attendance"
             or "Settings" or "AppUpdate" or "Payout" or "CashCollections") return raw;
         if (raw == "CashCollection") return "CashCollections";
         return (category ?? "").Trim().ToLowerInvariant() switch
@@ -353,7 +347,6 @@ public sealed class PushService
     private async Task RecordInboxAsync(string username, string title, string body, string notifId,
         string? target, string? link, string? category)
     {
-        if (SkipInbox(target)) return;
         try
         {
             await using var conn = await _db.OpenAsync();
@@ -377,7 +370,6 @@ public sealed class PushService
         string title, string body, string notifId, string? target, string? link, string? category,
         CancellationToken ct)
     {
-        if (SkipInbox(target)) return;
         const string savepoint = "km_inbox";
         try
         {
@@ -409,7 +401,6 @@ public sealed class PushService
     private async Task RecordInboxForAdminsAsync(string title, string body, string notifId,
         string? target, string? link, string? category)
     {
-        if (SkipInbox(target)) return;
         try
         {
             var admins = new List<string>();
@@ -437,9 +428,9 @@ public sealed class PushService
 
     /// <summary>
     /// Khoá khử trùng của một việc trong hàng chờ. PHẢI gồm NGƯỜI NHẬN chứ không chỉ chữ ký sự kiện:
-    /// một tin nhắn chat gửi cho nhiều người dùng CHUNG notif_id (<c>chat:{conv}:{msg}</c>), nếu khoá
-    /// chỉ có chữ ký thì chỉ người đầu tiên được xếp hàng, những người còn lại bị coi là trùng và MẤT
-    /// thông báo. Chuẩn hoá chữ thường vì username so sánh không phân biệt hoa thường ở mọi nơi khác.
+    /// một sự kiện gửi cho nhiều người dùng có thể dùng CHUNG notif_id; nếu khoá chỉ có chữ ký thì
+    /// chỉ người đầu tiên được xếp hàng, những người còn lại bị coi là trùng và MẤT thông báo.
+    /// Chuẩn hoá chữ thường vì username so sánh không phân biệt hoa thường ở mọi nơi khác.
     /// </summary>
     internal static string DedupeKey(string kind, string? recipient, string notifId)
         => string.IsNullOrWhiteSpace(recipient)
@@ -454,7 +445,7 @@ public sealed class PushService
         return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
     }
 
-    /// <summary>Gửi THẲNG, không qua hàng chờ — dùng cho việc đã tới hạn xử lý (worker) hoặc cuộc gọi.</summary>
+    /// <summary>Gửi THẲNG, không qua hàng chờ — dùng cho việc đã tới hạn xử lý bởi worker.</summary>
     private async Task<bool> SendNowAsync(List<string> tokens, string title, string body, string notifId,
         string? target, string recipientScope)
     {
@@ -505,68 +496,6 @@ public sealed class PushService
         var username = await conn.Cmd("SELECT username FROM hr_employees WHERE id=@id")
             .With("@id", employeeId).ExecuteScalarAsync() as string;
         await SendToUserAsync(username, title, body, notifId, target);
-    }
-
-    /// <summary>
-    /// Đẩy LỜI MỜI GỌI (thoại/video) tới mọi thiết bị của người nhận — để máy đổ chuông kể cả khi app
-    /// đang ĐÓNG/nền (SignalR chỉ chạy khi app mở). Data-only, ưu tiên cao, TTL ngắn 30s để cuộc gọi
-    /// nhỡ không "đổ chuông trễ". Bắt tay + media thật vẫn đi qua WebRTC (mã hóa DTLS-SRTP).
-    /// </summary>
-    public async Task SendCallInviteAsync(string? toUsername, string fromUsername, string callerName, string callId, string media)
-    {
-        if (!_enabled || string.IsNullOrWhiteSpace(toUsername)) return;
-        var tokens = await LoadTokensAsync(
-            "SELECT token FROM hr_device_tokens WHERE lower(username)=lower(@u)", ("@u", toUsername!));
-        await DispatchCallAsync(tokens, new Dictionary<string, string>
-        {
-            ["type"] = "call_invite",
-            ["call_id"] = callId,
-            // "from" là KHÓA BỊ CẤM trong data payload của FCM (bị từ chối INVALID_ARGUMENT) → dùng "caller".
-            ["caller"] = fromUsername,
-            ["caller_name"] = callerName,
-            ["media"] = media,
-            ["recipient_scope"] = RecipientScope(toUsername),
-        });
-    }
-
-    /// <summary>Báo HỦY/nhỡ cuộc gọi để tắt chuông + thông báo ở máy người nhận (khi người gọi cúp trước).</summary>
-    public async Task SendCallCancelAsync(string? toUsername, string fromUsername, string callId)
-    {
-        if (!_enabled || string.IsNullOrWhiteSpace(toUsername)) return;
-        var tokens = await LoadTokensAsync(
-            "SELECT token FROM hr_device_tokens WHERE lower(username)=lower(@u)", ("@u", toUsername!));
-        await DispatchCallAsync(tokens, new Dictionary<string, string>
-        {
-            ["type"] = "call_cancel",
-            ["call_id"] = callId,
-            ["caller"] = fromUsername, // "from" là khóa bị cấm trong FCM data payload
-            ["recipient_scope"] = RecipientScope(toUsername),
-        });
-    }
-
-    private async Task DispatchCallAsync(List<string> tokens, Dictionary<string, string> data)
-    {
-        if (tokens.Count == 0) return;
-        for (var offset = 0; offset < tokens.Count; offset += 500)
-        {
-            var batch = tokens.GetRange(offset, Math.Min(500, tokens.Count - offset));
-            try
-            {
-                var message = new MulticastMessage
-                {
-                    Tokens = batch,
-                    Data = data,
-                    // Ưu tiên cao + TTL ngắn: cuộc gọi cần tới ngay, và không còn ý nghĩa sau ~30s.
-                    Android = new AndroidConfig { Priority = Priority.High, TimeToLive = TimeSpan.FromSeconds(30) },
-                };
-                var response = await FirebaseMessaging.DefaultInstance.SendEachForMulticastAsync(message);
-                if (response.FailureCount > 0) await PruneDeadTokensAsync(batch, response);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning("PushService gửi FCM cuộc gọi lỗi: {Msg}", ex.Message);
-            }
-        }
     }
 
     private async Task<List<string>> LoadTokensAsync(string sql, params (string Name, object Value)[] ps)

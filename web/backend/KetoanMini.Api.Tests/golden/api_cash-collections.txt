@@ -1,0 +1,13 @@
+# /api/cash-collections/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 403 
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 200 application/json
+  $ : array
+
+[Employee] 403 

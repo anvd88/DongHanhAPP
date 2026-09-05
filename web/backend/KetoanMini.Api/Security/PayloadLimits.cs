@@ -45,12 +45,6 @@ public static class PayloadLimits
         if (path.StartsWithSegments("/api/qr"))
             return MaxQrActionBodyBytes;
 
-        // Upload blob chat: nới tới trần tệp thường (lớn nhất). Voice siết xuống MaxVoiceBlobBytes trong
-        // handler — phân biệt voice/tệp cần tra DB nên không làm được ở middleware.
-        if (path.StartsWithSegments("/api/chat/conversations")
-            && value.EndsWith("/upload", StringComparison.OrdinalIgnoreCase))
-            return ChatEndpoints.MaxBlobBytes;
-
         return MaxJsonBodyBytes;
     }
 

@@ -1,0 +1,17 @@
+# /api/chat/conversations
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+
+[Accounting] 200 application/json
+  $ : array
+
+[HR] 200 application/json
+  $ : array
+
+[Driver] 200 application/json
+  $ : array
+
+[Employee] 200 application/json
+  $ : array

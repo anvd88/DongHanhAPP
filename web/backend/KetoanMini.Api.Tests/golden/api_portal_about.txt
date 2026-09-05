@@ -1,0 +1,52 @@
+# /api/portal/about
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.address : string
+  $.content : string
+  $.email : string
+  $.hotline : string
+  $.title : string
+  $.updatedAt : string
+  $.website : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.address : string
+  $.content : string
+  $.email : string
+  $.hotline : string
+  $.title : string
+  $.updatedAt : string
+  $.website : string
+
+[HR] 200 application/json
+  $ : object
+  $.address : string
+  $.content : string
+  $.email : string
+  $.hotline : string
+  $.title : string
+  $.updatedAt : string
+  $.website : string
+
+[Driver] 200 application/json
+  $ : object
+  $.address : string
+  $.content : string
+  $.email : string
+  $.hotline : string
+  $.title : string
+  $.updatedAt : string
+  $.website : string
+
+[Employee] 200 application/json
+  $ : object
+  $.address : string
+  $.content : string
+  $.email : string
+  $.hotline : string
+  $.title : string
+  $.updatedAt : string
+  $.website : string

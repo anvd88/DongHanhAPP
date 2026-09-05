@@ -89,4 +89,19 @@ public static class ApiHelpers
         }
         catch { /* không để lỗi audit chặn nghiệp vụ */ }
     }
+
+    /// <summary>
+    /// Mandatory audit written through the caller's transaction. Unlike the legacy convenience
+    /// overload, failures propagate and roll the business mutation back.
+    /// </summary>
+    public static async Task RecordAudit(this NpgsqlConnection conn, NpgsqlTransaction tx,
+        string username, string action, string entity, string entityName, string details,
+        CancellationToken ct = default)
+    {
+        await conn.Cmd(@"INSERT INTO audit_logs (occurred_at, username, action, entity, entity_name, details)
+                         VALUES (CURRENT_TIMESTAMP, @u, @a, @e, @en, @d)", tx)
+            .With("@u", username).With("@a", action).With("@e", entity)
+            .With("@en", entityName).With("@d", details)
+            .ExecuteNonQueryAsync(ct);
+    }
 }

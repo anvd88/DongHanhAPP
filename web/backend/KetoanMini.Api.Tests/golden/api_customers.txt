@@ -1,0 +1,28 @@
+# /api/customers
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].address : string
+  $[].id : string
+  $[].isActive : bool
+  $[].name : string
+  $[].phone : string
+  $[].taxCode : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].address : string
+  $[].id : string
+  $[].isActive : bool
+  $[].name : string
+  $[].phone : string
+  $[].taxCode : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

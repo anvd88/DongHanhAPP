@@ -1,0 +1,37 @@
+# /api/bank-accounts/banks
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].name : string
+  $[].shortName : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].name : string
+  $[].shortName : string
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].name : string
+  $[].shortName : string
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].name : string
+  $[].shortName : string
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].name : string
+  $[].shortName : string

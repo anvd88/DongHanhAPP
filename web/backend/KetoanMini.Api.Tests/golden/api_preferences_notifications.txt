@@ -1,0 +1,47 @@
+# /api/preferences/notifications
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.groups : object
+  $.groups.accounting : bool
+  $.groups.collection : bool
+  $.groups.delivery : bool
+  $.groups.people : bool
+  $.groups.work : bool
+
+[Accounting] 200 application/json
+  $ : object
+  $.groups : object
+  $.groups.accounting : bool
+  $.groups.collection : bool
+  $.groups.delivery : bool
+  $.groups.people : bool
+  $.groups.work : bool
+
+[HR] 200 application/json
+  $ : object
+  $.groups : object
+  $.groups.accounting : bool
+  $.groups.collection : bool
+  $.groups.delivery : bool
+  $.groups.people : bool
+  $.groups.work : bool
+
+[Driver] 200 application/json
+  $ : object
+  $.groups : object
+  $.groups.accounting : bool
+  $.groups.collection : bool
+  $.groups.delivery : bool
+  $.groups.people : bool
+  $.groups.work : bool
+
+[Employee] 200 application/json
+  $ : object
+  $.groups : object
+  $.groups.accounting : bool
+  $.groups.collection : bool
+  $.groups.delivery : bool
+  $.groups.people : bool
+  $.groups.work : bool

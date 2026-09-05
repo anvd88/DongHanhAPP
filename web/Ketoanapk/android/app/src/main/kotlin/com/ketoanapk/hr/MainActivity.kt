@@ -13,8 +13,6 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.ketoanapk.hr.data.AppForeground
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
-import com.ketoanapk.hr.data.CallManager
-import com.ketoanapk.hr.data.CallNotifier
 import com.ketoanapk.hr.data.purgeLegacyAppPinStorage
 import com.ketoanapk.hr.ui.HrApp
 import com.ketoanapk.hr.ui.HrViewModel
@@ -42,7 +40,6 @@ class MainActivity : ComponentActivity() {
 
         // Tạo channel không làm hiện hộp xin quyền. Người dùng tự bật thông báo trong onboarding/Cài đặt.
         AppNotifier.ensureChannel(this)
-        CallManager.init(this)
         AppUpdater.purgeCachedApks(this)
         purgeLegacyAppPinStorage(this)
         handleDeepLink(intent)
@@ -59,7 +56,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         AppForeground.isForeground = true
-        CallManager.onForegroundChanged()
         viewModel.refreshPushPermissionState()
         viewModel.onAppResumed()
     }
@@ -67,11 +63,10 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         AppForeground.isForeground = false
-        CallManager.onForegroundChanged()
         viewModel.onAppPaused()
     }
 
-    /** Mở đúng nội dung từ notification nghiệp vụ hoặc dựng lại cuộc gọi đến sau cold start. */
+    /** Mở đúng nội dung từ notification nghiệp vụ. */
     private fun handleDeepLink(intent: Intent?) {
         intent ?: return
         AppDeepLink.mobileAppLoginRequest(
@@ -93,17 +88,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         try {
-            val callId = intent.getStringExtra(CallNotifier.EXTRA_CALL_ID)
-            if (!callId.isNullOrBlank()) {
-                CallManager.ingestIncomingFromPush(
-                    callId,
-                    intent.getStringExtra(CallNotifier.EXTRA_CALL_FROM).orEmpty(),
-                    intent.getStringExtra(CallNotifier.EXTRA_CALL_NAME).orEmpty(),
-                    intent.getStringExtra(CallNotifier.EXTRA_CALL_MEDIA).orEmpty(),
-                )
-                CallNotifier.dismiss(this)
-                return
-            }
             val target = intent.getStringExtra(AppNotifier.EXTRA_TARGET) ?: return
             viewModel.navigateTo(
                 target = target,
@@ -122,11 +106,6 @@ class MainActivity : ComponentActivity() {
         intent.removeExtra(AppNotifier.EXTRA_ENTITY_ID)
         intent.removeExtra(AppNotifier.EXTRA_NOTIFICATION_ID)
         intent.removeExtra(AppNotifier.EXTRA_ACCOUNT_SCOPE)
-        intent.removeExtra(CallNotifier.EXTRA_CALL_ID)
-        intent.removeExtra(CallNotifier.EXTRA_CALL_FROM)
-        intent.removeExtra(CallNotifier.EXTRA_CALL_NAME)
-        intent.removeExtra(CallNotifier.EXTRA_CALL_MEDIA)
-        intent.removeExtra(CallNotifier.EXTRA_CALL_ACTION)
         intent.removeExtra(NotificationLaunchTrust.EXTRA_TRUST_TOKEN)
     }
 }

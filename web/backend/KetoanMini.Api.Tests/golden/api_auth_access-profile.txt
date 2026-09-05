@@ -1,0 +1,82 @@
+# /api/auth/access-profile
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.authorizationVersion : number
+  $.fullName : string
+  $.landingPath : string
+  $.permissions : array
+  $.permissions[] : string
+  $.primaryRole : string
+  $.roleLabels : array
+  $.roleLabels[] : string
+  $.roles : array
+  $.roles[] : string
+  $.scope : string
+  $.uiProfile : string
+  $.username : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.authorizationVersion : number
+  $.fullName : string
+  $.landingPath : string
+  $.permissions : array
+  $.permissions[] : string
+  $.primaryRole : string
+  $.roleLabels : array
+  $.roleLabels[] : string
+  $.roles : array
+  $.roles[] : string
+  $.scope : string
+  $.uiProfile : string
+  $.username : string
+
+[HR] 200 application/json
+  $ : object
+  $.authorizationVersion : number
+  $.fullName : string
+  $.landingPath : string
+  $.permissions : array
+  $.permissions[] : string
+  $.primaryRole : string
+  $.roleLabels : array
+  $.roleLabels[] : string
+  $.roles : array
+  $.roles[] : string
+  $.scope : string
+  $.uiProfile : string
+  $.username : string
+
+[Driver] 200 application/json
+  $ : object
+  $.authorizationVersion : number
+  $.fullName : string
+  $.landingPath : string
+  $.permissions : array
+  $.permissions[] : string
+  $.primaryRole : string
+  $.roleLabels : array
+  $.roleLabels[] : string
+  $.roles : array
+  $.roles[] : string
+  $.scope : string
+  $.uiProfile : string
+  $.username : string
+
+[Employee] 200 application/json
+  $ : object
+  $.authorizationVersion : number
+  $.fullName : string
+  $.landingPath : string
+  $.permissions : array
+  $.permissions[] : string
+  $.primaryRole : string
+  $.roleLabels : array
+  $.roleLabels[] : string
+  $.roles : array
+  $.roles[] : string
+  $.scope : string
+  $.uiProfile : string
+  $.username : string

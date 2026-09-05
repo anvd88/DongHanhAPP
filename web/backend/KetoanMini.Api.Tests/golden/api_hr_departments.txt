@@ -1,0 +1,57 @@
+# /api/hr/departments
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].employeeCount : number
+  $[].id : string
+  $[].isAccounting : bool
+  $[].managerName : string
+  $[].name : string
+  $[].parentName : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].employeeCount : number
+  $[].id : string
+  $[].isAccounting : bool
+  $[].managerName : string
+  $[].name : string
+  $[].parentName : string
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].employeeCount : number
+  $[].id : string
+  $[].isAccounting : bool
+  $[].managerName : string
+  $[].name : string
+  $[].parentName : string
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].employeeCount : number
+  $[].id : string
+  $[].isAccounting : bool
+  $[].managerName : string
+  $[].name : string
+  $[].parentName : string
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].employeeCount : number
+  $[].id : string
+  $[].isAccounting : bool
+  $[].managerName : string
+  $[].name : string
+  $[].parentName : string

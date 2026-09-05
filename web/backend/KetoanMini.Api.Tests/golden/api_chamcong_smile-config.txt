@@ -1,0 +1,27 @@
+# /api/chamcong/smile-config
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.threshold : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.threshold : number
+
+[HR] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.threshold : number
+
+[Driver] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.threshold : number
+
+[Employee] 200 application/json
+  $ : object
+  $.enabled : bool
+  $.threshold : number

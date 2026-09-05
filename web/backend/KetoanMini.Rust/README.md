@@ -9,13 +9,11 @@ nghiệp vụ.
 Trong thời gian port, Rust đứng trước backend .NET:
 
 - Route đã port chạy trực tiếp bằng Rust.
-- Route chưa port, SPA, upload và SignalR được stream sang .NET; không buffer toàn bộ request/response.
+- Route chưa port, SPA, upload và SSE được stream sang .NET; không buffer toàn bộ request/response.
 - `Authorization`, cookie HttpOnly, `X-CSRF-Token`, status, JSON và `Set-Cookie` được giữ nguyên.
-- WebSocket upgrade được tunnel hai chiều, vì vậy web và Android có thể dùng một base URL Rust ngay từ
-  giai đoạn đầu.
 
 Upstream bị giới hạn cứng ở loopback để token/cookie không thể bị gửi tới máy ngoài do cấu hình sai.
-Rust không ghi URI/query/header vào log vì SignalR và QR có thể chứa token bí mật.
+Rust không ghi URI/query/header vào log vì chúng có thể chứa token hoặc mã QR bí mật.
 
 ## Cấu hình
 
@@ -38,12 +36,23 @@ hoặc Internet. Backend .NET vẫn là migration/worker owner cho tới khi t�
 
 ## Chạy riêng
 
+Toolchain Windows của dự án dùng host `gnullvm`. Trên máy mới, đặt host trước khi để
+`rust-toolchain.toml` tự cài đúng Rust đã ghim:
+
+```powershell
+.\scripts\setup-toolchain-windows.ps1
+```
+
+Script ghim Rust `1.98.0`, LLVM-MinGW `20260616`, kiểm SHA-256 trước khi giải nén và chỉ đặt linker
+trong `PATH` của lệnh Cargo con; không sửa `PATH` toàn máy. Có thể đặt
+`KETOANMINI_LLVM_MINGW_BIN` nếu công ty quản lý LLVM-MinGW ở vị trí khác.
+
 ```powershell
 cd backend/KetoanMini.Rust
 $env:KETOANMINI_COMPAT_UPSTREAM = 'http://127.0.0.1:5239'
 $env:ConnectionStrings__KetoanMini = '<secret hiện tại>'
-cargo test --locked
-cargo run --release --locked
+.\scripts\cargo-windows.ps1 test --locked
+.\scripts\cargo-windows.ps1 run --release --locked
 ```
 
 Kiểm tra qua tiến trình Rust: `http://127.0.0.1:5240/api/info`. Không chuyển tunnel/domain production
@@ -63,15 +72,19 @@ Rust chạy foreground để supervisor quản lý restart và graceful shutdown
 
 ## Phần đã chạy native Rust
 
+Hiện có **68/396 operation** chạy native; bề mặt này được đối chiếu tự động với
+`docs/openapi.baseline.json` trong `tests/native_surface.rs`.
+
 - `/api/info`, `/api/health`
 - `/api/auth/me`, `/api/auth/access-profile`
-- `/api/preferences`
+- `/api/preferences`, `/api/preferences/notifications`
 - `/api/directory`, `/api/directory/org-chart`
 - `/api/schedule/ical`
 - `/api/worklist`
 - `/api/help/faqs`, `/api/help/status`
 - `/api/bank-accounts`, `/api/bank-accounts/banks`
-- `/api/notifications/register-token`, `/api/notifications/unregister-token`
+- `/api/notifications` (feed, đọc, đọc tất cả, xóa đã đọc, xóa một mục, đăng ký/hủy token)
+- `/api/roles/catalog`, `/api/penalties/types`
 - `/api/app-config`
 - `/api/portal/feed`, `/api/portal/posts`, `/api/portal/about`
 - `/api/talent/onboarding`, `/api/talent/performance`, `/api/talent/training`, `/api/talent/benefits`
@@ -80,7 +93,7 @@ Rust chạy foreground để supervisor quản lý restart và graceful shutdown
 - `/api/giacong`
 
 Các route này dùng chung middleware JWT/cookie/CSRF/session/RBAC của Rust. Mọi route còn lại vẫn đi qua
-streaming compatibility gateway nên SPA, Android, upload và SignalR tiếp tục hoạt động trong khi từng
+streaming compatibility gateway nên SPA, Android và upload tiếp tục hoạt động trong khi từng
 bounded context được port và kiểm thử. Rust chỉ kiểm tra schema ở startup bằng transaction read-only;
 .NET vẫn là migration owner trong giai đoạn này. Guard cũng xác minh unique partial index chống gửi khảo
 sát trùng; Rust không tự tạo hoặc sửa index khi khởi động.
@@ -90,4 +103,4 @@ tài khoản, đăng ký mới chuyển token sang đúng người đang xác th
 chính tài khoản đó. Đây là ranh giới bắt buộc để Android không nhận thông báo chéo khi dùng chung máy.
 
 Xem [ARCHITECTURE.md](ARCHITECTURE.md) để biết ranh giới tiến trình, nguyên tắc một writer và thứ tự
-cutover.
+cutover; xem [CUTOVER.md](CUTOVER.md) để chạy health gate và rollback trên máy Windows triển khai.

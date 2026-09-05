@@ -1,0 +1,26 @@
+# /api/products/suggestions
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].lastUsed : string
+  $.items[].name : string
+  $.items[].spec : string
+  $.items[].timesUsed : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].lastUsed : string
+  $.items[].name : string
+  $.items[].spec : string
+  $.items[].timesUsed : number
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

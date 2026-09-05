@@ -71,6 +71,9 @@ public sealed class QrLoginEndpointTests
             await setupConn.Cmd(
                     "INSERT INTO web_user_avatars (user_id, image_data_url, updated_at) VALUES (@id, @avatar, CURRENT_TIMESTAMP)")
                 .With("@id", userId).With("@avatar", avatarUrl).ExecuteNonQueryAsync();
+            var employeeId = await KetoanMini.Api.Endpoints.HrEndpoints.EnsureEmployeeForUser(setupConn, username);
+            await setupConn.Cmd("UPDATE hr_employees SET avatar=@avatar WHERE id=@id")
+                .With("@id", employeeId).With("@avatar", avatarUrl).ExecuteNonQueryAsync();
             appToken = setupScope.ServiceProvider.GetRequiredService<TokenService>().CreateToken(
                 new UserDto(userId, username, "QR Test", "", "Employee", true, "Approved", DateTime.UtcNow));
         }
@@ -149,6 +152,7 @@ public sealed class QrLoginEndpointTests
             .With("@sid", sid).With("@u", username).ExecuteNonQueryAsync();
         await conn.Cmd("DELETE FROM web_login_settings WHERE username=@u").With("@u", username).ExecuteNonQueryAsync();
         await conn.Cmd("DELETE FROM web_user_avatars WHERE user_id=@id").With("@id", userId).ExecuteNonQueryAsync();
+        await conn.Cmd("DELETE FROM hr_employees WHERE username=@u").With("@u", username).ExecuteNonQueryAsync();
         await conn.Cmd("DELETE FROM app_users WHERE username=@u").With("@u", username).ExecuteNonQueryAsync();
     }
 

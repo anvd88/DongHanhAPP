@@ -40,7 +40,6 @@ không bảo vệ được đường đó. Bật Cloudflare Managed Rules cho zo
 | Login | `http.request.method eq "POST" and http.request.uri.path eq "/api/auth/login"` | 5/phút/IP |
 | Face reset | `http.request.method eq "POST" and http.request.uri.path eq "/api/auth/forgot-password-face"` | 2/10 phút/IP |
 | Attendance | `http.request.method eq "POST" and starts_with(http.request.uri.path, "/api/chamcong/")` | 30/phút/IP |
-| SignalR negotiate/connect | `starts_with(http.request.uri.path, "/hubs/changes")` | 20/phút/IP |
 
 Giữ limiter ASP.NET đang có làm lớp bảo vệ origin/LAN. Sau khi bật, chạy burst vượt từng ngưỡng và
 xác nhận cả hostname public lẫn origin trả 429. Theo dõi Security Events 24 giờ đầu để điều chỉnh

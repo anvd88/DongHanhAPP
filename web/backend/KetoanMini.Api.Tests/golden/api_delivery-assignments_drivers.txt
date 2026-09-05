@@ -1,0 +1,30 @@
+# /api/delivery-assignments/drivers
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.drivers : array
+  $.drivers[] : object
+  $.drivers[].attendanceNote : string
+  $.drivers[].attendanceStatus : string
+  $.drivers[].department : string
+  $.drivers[].fullName : string
+  $.drivers[].selectable : bool
+  $.drivers[].username : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.drivers : array
+  $.drivers[] : object
+  $.drivers[].attendanceNote : string
+  $.drivers[].attendanceStatus : string
+  $.drivers[].department : string
+  $.drivers[].fullName : string
+  $.drivers[].selectable : bool
+  $.drivers[].username : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

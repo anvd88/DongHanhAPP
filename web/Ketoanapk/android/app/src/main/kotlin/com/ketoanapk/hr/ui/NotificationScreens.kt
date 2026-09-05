@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.LocalShipping
@@ -184,7 +183,6 @@ private fun notificationIcon(kind: NotificationKind): ImageVector = when (kind) 
     NotificationKind.Approval -> Icons.Filled.Inbox
     NotificationKind.Penalty -> Icons.Filled.Gavel
     NotificationKind.Attendance -> Icons.Filled.Face
-    NotificationKind.Chat -> Icons.Filled.Chat
     NotificationKind.System -> Icons.Filled.NotificationsNone
     NotificationKind.Delivery -> Icons.Filled.LocalShipping
     NotificationKind.Collection -> Icons.Filled.PriceCheck
@@ -199,7 +197,6 @@ private fun notificationColor(kind: NotificationKind): Color = when (kind) {
     NotificationKind.Approval -> MaterialTheme.colorScheme.primary
     NotificationKind.Penalty -> Danger
     NotificationKind.Attendance -> Warning
-    NotificationKind.Chat -> MaterialTheme.colorScheme.primary
     NotificationKind.System -> MaterialTheme.colorScheme.primary
     NotificationKind.Delivery -> MaterialTheme.colorScheme.primary
     NotificationKind.Collection -> Success

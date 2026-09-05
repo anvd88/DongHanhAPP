@@ -1,0 +1,36 @@
+# /api/documents/stack
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].customerName : string
+  $.items[].deliveryMode : string
+  $.items[].deliveryReturnedAt : string
+  $.items[].deliveryTaskStatus : string
+  $.items[].docDate : string
+  $.items[].id : string
+  $.items[].issuedAt : string
+  $.items[].total : number
+  $.items[].voucherNo : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].customerName : string
+  $.items[].deliveryMode : string
+  $.items[].deliveryReturnedAt : string
+  $.items[].deliveryTaskStatus : string
+  $.items[].docDate : string
+  $.items[].id : string
+  $.items[].issuedAt : string
+  $.items[].total : number
+  $.items[].voucherNo : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

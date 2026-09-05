@@ -16,7 +16,7 @@ public static class PermissionDirectory
 {
     /// <summary>
     /// Tài khoản đang hoạt động có ÍT NHẤT MỘT trong các quyền yêu cầu. Trả về username gốc (đúng
-    /// hoa/thường như trong app_users) vì SignalR và bảng thông báo đều khớp theo tên đó.
+    /// hoa/thường như trong app_users) vì các bảng thông báo đều khớp theo tên đó.
     /// </summary>
     public static async Task<List<string>> UsersWithAnyPermissionAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, IReadOnlyCollection<string> permissions,

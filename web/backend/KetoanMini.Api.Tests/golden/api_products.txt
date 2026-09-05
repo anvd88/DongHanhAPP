@@ -1,0 +1,50 @@
+# /api/products
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].boughtAmount : number
+  $.items[].boughtQuantity : number
+  $.items[].code : string
+  $.items[].id : string
+  $.items[].isActive : bool
+  $.items[].lastBoughtDate : string
+  $.items[].lastCost : number
+  $.items[].lastPrice : number
+  $.items[].lastSoldDate : string
+  $.items[].name : string
+  $.items[].note : string
+  $.items[].soldAmount : number
+  $.items[].soldQuantity : number
+  $.items[].spec : string
+  $.items[].timesUsed : number
+  $.items[].unit : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].boughtAmount : number
+  $.items[].boughtQuantity : number
+  $.items[].code : string
+  $.items[].id : string
+  $.items[].isActive : bool
+  $.items[].lastBoughtDate : string
+  $.items[].lastCost : number
+  $.items[].lastPrice : number
+  $.items[].lastSoldDate : string
+  $.items[].name : string
+  $.items[].note : string
+  $.items[].soldAmount : number
+  $.items[].soldQuantity : number
+  $.items[].spec : string
+  $.items[].timesUsed : number
+  $.items[].unit : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

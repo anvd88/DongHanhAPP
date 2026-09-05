@@ -1,0 +1,17 @@
+# /api/payroll/payslips/history
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 400 text/plain
+  (thân phản hồi không phải JSON)
+
+[Accounting] 400 text/plain
+  (thân phản hồi không phải JSON)
+
+[HR] 400 text/plain
+  (thân phản hồi không phải JSON)
+
+[Driver] 400 text/plain
+  (thân phản hồi không phải JSON)
+
+[Employee] 400 text/plain
+  (thân phản hồi không phải JSON)

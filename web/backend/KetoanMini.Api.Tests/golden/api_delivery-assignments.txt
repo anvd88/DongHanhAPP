@@ -1,0 +1,42 @@
+# /api/delivery-assignments
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].assignedAt : string
+  $.items[].assignedBy : string
+  $.items[].customerName : string
+  $.items[].docDate : string
+  $.items[].driverName : string
+  $.items[].driverUsername : string
+  $.items[].id : string
+  $.items[].mode : string
+  $.items[].note : string
+  $.items[].taskNo : string
+  $.items[].taskStatus : string
+  $.items[].voucherNo : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].assignedAt : string
+  $.items[].assignedBy : string
+  $.items[].customerName : string
+  $.items[].docDate : string
+  $.items[].driverName : string
+  $.items[].driverUsername : string
+  $.items[].id : string
+  $.items[].mode : string
+  $.items[].note : string
+  $.items[].taskNo : string
+  $.items[].taskStatus : string
+  $.items[].voucherNo : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

@@ -1,0 +1,112 @@
+# /api/auth/me
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.approvalStatus : string
+  $.canAssignTasks : bool
+  $.createdAt : string
+  $.email : string
+  $.faceEnrollmentPending : bool
+  $.faceRegistered : bool
+  $.fullName : string
+  $.id : string
+  $.isActive : bool
+  $.isAdmin : bool
+  $.isDiamond : bool
+  $.isPending : bool
+  $.permissions : array
+  $.permissions[] : string
+  $.role : string
+  $.roles : array
+  $.roles[] : string
+  $.username : string
+  $.verified : bool
+
+[Accounting] 200 application/json
+  $ : object
+  $.approvalStatus : string
+  $.canAssignTasks : bool
+  $.createdAt : string
+  $.email : string
+  $.faceEnrollmentPending : bool
+  $.faceRegistered : bool
+  $.fullName : string
+  $.id : string
+  $.isActive : bool
+  $.isAdmin : bool
+  $.isDiamond : bool
+  $.isPending : bool
+  $.permissions : array
+  $.permissions[] : string
+  $.role : string
+  $.roles : array
+  $.roles[] : string
+  $.username : string
+  $.verified : bool
+
+[HR] 200 application/json
+  $ : object
+  $.approvalStatus : string
+  $.canAssignTasks : bool
+  $.createdAt : string
+  $.email : string
+  $.faceEnrollmentPending : bool
+  $.faceRegistered : bool
+  $.fullName : string
+  $.id : string
+  $.isActive : bool
+  $.isAdmin : bool
+  $.isDiamond : bool
+  $.isPending : bool
+  $.permissions : array
+  $.permissions[] : string
+  $.role : string
+  $.roles : array
+  $.roles[] : string
+  $.username : string
+  $.verified : bool
+
+[Driver] 200 application/json
+  $ : object
+  $.approvalStatus : string
+  $.canAssignTasks : bool
+  $.createdAt : string
+  $.email : string
+  $.faceEnrollmentPending : bool
+  $.faceRegistered : bool
+  $.fullName : string
+  $.id : string
+  $.isActive : bool
+  $.isAdmin : bool
+  $.isDiamond : bool
+  $.isPending : bool
+  $.permissions : array
+  $.permissions[] : string
+  $.role : string
+  $.roles : array
+  $.roles[] : string
+  $.username : string
+  $.verified : bool
+
+[Employee] 200 application/json
+  $ : object
+  $.approvalStatus : string
+  $.canAssignTasks : bool
+  $.createdAt : string
+  $.email : string
+  $.faceEnrollmentPending : bool
+  $.faceRegistered : bool
+  $.fullName : string
+  $.id : string
+  $.isActive : bool
+  $.isAdmin : bool
+  $.isDiamond : bool
+  $.isPending : bool
+  $.permissions : array
+  $.permissions[] : string
+  $.role : string
+  $.roles : array
+  $.roles[] : string
+  $.username : string
+  $.verified : bool

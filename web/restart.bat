@@ -1,14 +1,16 @@
 @echo off
 setlocal enabledelayedexpansion
-title KetoanMini - Restart (5443 Web + API + Cloudflare Tunnel)
+title KetoanMini - Restart (.NET sidecar + Rust gateway + Cloudflare Tunnel)
 
 set "ROOT=C:\Users\Admin\Desktop\KetoanMiniDotNet_Code_20260615_155926\web"
 set "FE=%ROOT%\frontend"
 set "API=%ROOT%\backend\KetoanMini.Api"
 set "PUBLISH=%API%\bin\Release\net8.0\publish"
+set "RUST=%ROOT%\backend\KetoanMini.Rust"
+set "RUST_RUN=%RUST%\scripts\run-windows.ps1"
 
 echo ============================================================
-echo [1/5] Dung cac tien trinh cu
+echo [1/6] Dung cac tien trinh cu
 echo ============================================================
 rem -- Kill dev server dang listen tren 5173 (node cua Vite)
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":5173 " ^| findstr LISTENING') do (
@@ -16,9 +18,10 @@ for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":5173 " ^| findstr LISTENING
 )
 rem -- Kill backend
 taskkill /F /IM KetoanMini.Api.exe >nul 2>&1 && echo Da dung backend cu.
+taskkill /F /IM ketoanmini-server.exe >nul 2>&1 && echo Da dung Rust gateway cu.
 rem -- Khi chay bang "dotnet run" hoac "dotnet KetoanMini.Api.dll", process co ten dotnet.exe.
 rem -- Chi dung PID dang LISTEN tren cong cua du an, KHONG kill tat ca dotnet tren may.
-for %%P in (5239 5443) do (
+for %%P in (5239 5240 5443) do (
   for /f "tokens=5" %%q in ('netstat -ano ^| findstr ":%%P " ^| findstr LISTENING') do (
     taskkill /F /PID %%q >nul 2>&1 && echo Da dung backend cong %%P ^(PID %%q^).
   )
@@ -27,14 +30,14 @@ timeout /t 2 /nobreak >nul
 
 echo.
 echo ============================================================
-echo [2/5] Build frontend cho web chinh (5443)
+echo [2/6] Build frontend cho web chinh (5443)
 echo ============================================================
 cd /d "%FE%" || goto :error
 call npm.cmd run build || goto :error
 
 echo.
 echo ============================================================
-echo [3/5] Publish Release va chay backend + web chinh
+echo [3/6] Publish Release va chay backend .NET sidecar + web chinh
 echo ============================================================
 rem -- Khong dung "dotnet run" tren server: no giu them dotnet host + compiler trong RAM.
 rem -- Tat compiler server cho rieng lenh publish; backend sau do chay truc tiep bang file Release.
@@ -64,7 +67,33 @@ echo Backend da san sang, health check OK.
 
 echo.
 echo ============================================================
-echo [4/5] Dev server Vite (mac dinh TAT de tiet kiem RAM)
+echo [4/6] Rust gateway (opt-in bang KETOANMINI_USE_RUST_GATEWAY=1)
+echo ============================================================
+if /i "%KETOANMINI_USE_RUST_GATEWAY%"=="1" (
+  cd /d "%RUST%" || goto :rust_build_error
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%RUST%\scripts\package-windows.ps1" || goto :rust_build_error
+  start "KetoanMini Rust Gateway (5240)" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -File "%RUST_RUN%" -UsePackaged
+
+  rem -- Chi coi gateway san sang khi schema guard + ket noi DB deu qua.
+  for /l %%i in (1,1,30) do (
+    curl.exe -f -s http://127.0.0.1:5240/api/health >nul 2>&1 && goto :rust_ready
+    timeout /t 1 /nobreak >nul
+  )
+  goto :rust_error
+) else (
+  echo Rust gateway dang tat; .NET tiep tuc phuc vu truc tiep tai :5239 va :5443.
+  echo Thu cutover an toan: set KETOANMINI_USE_RUST_GATEWAY=1 ^&^& restart.bat
+  goto :rust_step_done
+)
+
+:rust_ready
+echo Rust gateway da san sang, health check OK.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%RUST%\scripts\verify-cutover-windows.ps1" || goto :rust_error
+
+:rust_step_done
+echo.
+echo ============================================================
+echo [5/6] Dev server Vite (mac dinh TAT de tiet kiem RAM)
 echo ============================================================
 if /i "%KETOANMINI_START_VITE%"=="1" (
   start "KetoanMini Dev HR (5173)" cmd.exe /k "cd /d ""%FE%"" && npm.cmd run dev"
@@ -75,10 +104,10 @@ if /i "%KETOANMINI_START_VITE%"=="1" (
 
 echo.
 echo ============================================================
-echo [5/5] Dam bao Cloudflare Tunnel (cloudflared) dang chay -> public ra Internet
+echo [6/6] Dam bao Cloudflare Tunnel (cloudflared) dang chay -^> public ra Internet
 echo ============================================================
 rem -- cloudflared cai dang dich vu Windows (tu bat khi khoi dong). Bat lai neu dang tat.
-rem    Tunnel tro vao http://localhost:5239; backend vua khoi dong lai nen tunnel se tu ket noi lai.
+rem    Dashboard/config Cloudflare quyet dinh origin :5239 hay Rust :5240; script KHONG tu doi route public.
 sc query cloudflared >nul 2>&1
 if errorlevel 1 (
   echo [CANH BAO] Chua cai dich vu cloudflared. Xem docs\cloudflare-tunnel-setup.md
@@ -101,6 +130,7 @@ echo ============================================================
 echo XONG. Server tiet kiem RAM dang chay:
 echo   - Web chinh (LAN)  :  https://192.168.1.88:5443
 echo   - Public (Internet):  https://app.ketoancp.click
+if /i "%KETOANMINI_USE_RUST_GATEWAY%"=="1" echo   - Rust gateway       :  http://127.0.0.1:5240 ^(da verify native + compat^)
 if /i "%KETOANMINI_START_VITE%"=="1" echo   - Vite dev (LAN)   :  http://192.168.1.88:5173
 echo Dong cua so backend = tat server.
 echo Tunnel can vai chuc giay de ket noi lai sau khi backend khoi dong.
@@ -123,5 +153,19 @@ exit /b 1
 :backend_error
 echo.
 echo *** LOI: backend khong san sang sau 45 giay. Xem cua so "KetoanMini Backend (5443)" de biet loi chi tiet. ***
+pause
+exit /b 1
+
+:rust_build_error
+echo.
+echo *** LOI: dong goi Rust that bai. .NET van dang chay tai :5239/:5443; KHONG doi Cloudflare sang :5240. ***
+pause
+exit /b 1
+
+:rust_error
+echo.
+echo *** LOI: Rust gateway khong qua health/compat check. .NET van dang chay tai :5239/:5443. ***
+echo *** Neu Cloudflare da tro :5240, rollback origin ve http://localhost:5239 ngay. ***
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":5240 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
 pause
 exit /b 1

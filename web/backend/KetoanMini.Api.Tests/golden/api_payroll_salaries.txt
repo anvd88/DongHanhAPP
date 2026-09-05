@@ -1,0 +1,52 @@
+# /api/payroll/salaries
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].allowance : number
+  $[].baseSalary : number
+  $[].departmentName : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].employeeName : string
+  $[].extraCount : number
+  $[].hardSalary : object
+  $[].hardSalary.amount : number
+  $[].hardSalary.contractBase : number
+  $[].hardSalary.contractEffective : bool
+  $[].hardSalary.contractNo : string
+  $[].hardSalary.contractType : string
+  $[].hardSalary.fromContract : bool
+  $[].hardSalary.raiseTotal : number
+  $[].hardSalary.raises : array
+  $[].hasSalary : bool
+  $[].overtimeRate : number
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].allowance : number
+  $[].baseSalary : number
+  $[].departmentName : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].employeeName : string
+  $[].extraCount : number
+  $[].hardSalary : object
+  $[].hardSalary.amount : number
+  $[].hardSalary.contractBase : number
+  $[].hardSalary.contractEffective : bool
+  $[].hardSalary.contractNo : string
+  $[].hardSalary.contractType : string
+  $[].hardSalary.fromContract : bool
+  $[].hardSalary.raiseTotal : number
+  $[].hardSalary.raises : array
+  $[].hasSalary : bool
+  $[].overtimeRate : number
+
+[Driver] 403 
+
+[Employee] 403 

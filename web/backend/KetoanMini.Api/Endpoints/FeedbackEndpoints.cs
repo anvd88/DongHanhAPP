@@ -1,9 +1,8 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
-using KetoanMini.Api.Realtime;
+using KetoanMini.Api.BuildingBlocks.Realtime;
 using KetoanMini.Api.Security;
-using Microsoft.AspNetCore.SignalR;
 
 namespace KetoanMini.Api.Endpoints;
 
@@ -11,7 +10,7 @@ public static class FeedbackEndpoints
 {
     public static void MapFeedback(this WebApplication app)
     {
-        var g = app.MapGroup("/api/feedback").RequirePermission(Permissions.ChatAccess);
+        var g = app.MapGroup("/api/feedback").RequireAuthorization();
 
         g.MapGet("/", async (ClaimsPrincipal principal, Database db) =>
         {
@@ -28,7 +27,6 @@ public static class FeedbackEndpoints
                        COALESCE(NULLIF(u.full_name, ''), f.reporter_username) AS reporter_name,
                        f.target_name,
                        f.reason,
-                       f.conversation_id,
                        f.created_at
                 FROM app_feedbacks f
                 LEFT JOIN app_users u ON u.username = f.reporter_username
@@ -49,7 +47,6 @@ public static class FeedbackEndpoints
                         r.Str("reporter_name"),
                         r.Str("target_name"),
                         r.Str("reason"),
-                        r.IsDBNull(r.GetOrdinal("conversation_id")) ? null : r.GetGuid(r.GetOrdinal("conversation_id")),
                         r.Dt("created_at")));
                 }
             }
@@ -57,7 +54,7 @@ public static class FeedbackEndpoints
             return Results.Ok(rows);
         });
 
-        g.MapPost("/attendance", async (AttendanceFeedbackRequest req, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/attendance", async (AttendanceFeedbackRequest req, ClaimsPrincipal principal, Database db) =>
         {
             var targetName = (req.TargetName ?? "").Trim();
             var reason = (req.Reason ?? "").Trim();
@@ -68,59 +65,33 @@ public static class FeedbackEndpoints
 
             await using var conn = await db.OpenAsync();
             var reporter = principal.Username();
-            var conversationId = await ChatEndpoints.GetOrCreateDirect(conn, reporter, ChatEndpoints.SupportUsername);
-
             await conn.Cmd(
                 """
-                INSERT INTO app_feedbacks (feedback_type, reporter_username, target_name, reason, conversation_id, created_at)
-                VALUES ('AttendanceIssue', @reporter, @target, @reason, @cid, CURRENT_TIMESTAMP)
+                INSERT INTO app_feedbacks (feedback_type, reporter_username, target_name, reason, created_at)
+                VALUES ('AttendanceIssue', @reporter, @target, @reason, CURRENT_TIMESTAMP)
                 """)
                 .With("@reporter", reporter)
                 .With("@target", targetName)
                 .With("@reason", reason)
-                .With("@cid", conversationId)
                 .ExecuteNonQueryAsync();
-
-            var detail = string.IsNullOrWhiteSpace(reason) ? "Không ghi thêm nội dung." : reason;
-            var userMessage = $"Phản hồi chấm công: {targetName}\n{detail}";
-            var supportMessage = "Hỗ Trợ Người Dùng đã nhận phản hồi chấm công của bạn. Admin sẽ kiểm tra và phản hồi tại đây.";
-            await conn.Cmd(
-                """
-                INSERT INTO web_chat_messages (conversation_id, sender_username, body, created_at)
-                VALUES
-                    (@cid, @reporter, @userMessage, CURRENT_TIMESTAMP),
-                    (@cid, @support, @supportMessage, CURRENT_TIMESTAMP + INTERVAL '1 millisecond');
-
-                UPDATE web_chat_members
-                SET is_hidden = FALSE, deleted_at = NULL
-                WHERE conversation_id = @cid;
-                """)
-                .With("@cid", conversationId)
-                .With("@reporter", reporter)
-                .With("@support", ChatEndpoints.SupportUsername)
-                .With("@userMessage", userMessage)
-                .With("@supportMessage", supportMessage)
-                .ExecuteNonQueryAsync();
-
-            await ChatEndpoints.NotifyChat(hub, conn, conversationId);
             return Results.NoContent();
         });
 
-        g.MapPost("/{id:long}/resolve", async (long id, ClaimsPrincipal principal, Database db, IHubContext<ChangesHub> hub) =>
+        g.MapPost("/{id:long}/resolve", async (long id, ClaimsPrincipal principal, Database db, BusinessEventWriter businessEvents) =>
         {
             if (!principal.Can(Permissions.UsersManage)) return Results.Forbid();
 
             await using var conn = await db.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
             string reporter;
             string type;
             string target;
-            long? legacyChatReportId;
             await using (var r = await conn.Cmd(
                 """
-                SELECT reporter_username, feedback_type, target_name, legacy_chat_report_id
+                SELECT reporter_username, feedback_type, target_name
                 FROM app_feedbacks
                 WHERE id = @id
-                """)
+                """, tx)
                 .With("@id", id)
                 .ExecuteReaderAsync())
             {
@@ -128,44 +99,20 @@ public static class FeedbackEndpoints
                 reporter = r.Str("reporter_username");
                 type = r.Str("feedback_type");
                 target = r.Str("target_name");
-                legacyChatReportId = r.LongNull("legacy_chat_report_id");
             }
 
-            await conn.Cmd("DELETE FROM app_feedbacks WHERE id = @id")
+            await conn.Cmd("DELETE FROM app_feedbacks WHERE id = @id", tx)
                 .With("@id", id)
                 .ExecuteNonQueryAsync();
 
-            if (legacyChatReportId is long legacyId)
-            {
-                await conn.Cmd("DELETE FROM web_chat_reports WHERE id = @id")
-                    .With("@id", legacyId)
-                    .ExecuteNonQueryAsync();
-            }
-
             var label = TypeLabel(type);
-            var message = string.IsNullOrWhiteSpace(target)
-                ? $"Phản hồi \"{label}\" của bạn đã được quản trị viên giải quyết."
-                : $"Phản hồi \"{label}\" về {target} đã được quản trị viên giải quyết.";
+            await conn.RecordAudit(tx, principal.Username(), "Giải quyết phản hồi", "Feedback",
+                id.ToString(), label);
+            await businessEvents.WriteAsync(conn, tx, "feedback.resolved.v1",
+                "portal.feedback.resolved.v1", "feedback", $"user:{reporter}", principal.Username(),
+                id.ToString());
+            await tx.CommitAsync();
 
-            var supportConversationId = await ChatEndpoints.GetOrCreateDirect(conn, reporter, ChatEndpoints.SupportUsername);
-            await conn.Cmd(
-                """
-                INSERT INTO web_chat_messages (conversation_id, sender_username, body, created_at)
-                VALUES (@cid, @support, @message, CURRENT_TIMESTAMP);
-
-                UPDATE web_chat_members
-                SET is_hidden = FALSE, deleted_at = NULL
-                WHERE conversation_id = @cid;
-                """)
-                .With("@cid", supportConversationId)
-                .With("@support", ChatEndpoints.SupportUsername)
-                .With("@message", message)
-                .ExecuteNonQueryAsync();
-
-            await ChatEndpoints.NotifyChat(hub, conn, supportConversationId);
-            await hub.Clients.User(reporter).SendAsync("feedbackResolved", message);
-
-            await db.RecordAudit(principal.Username(), "Giải quyết phản hồi", "Feedback", id.ToString(), label);
             return Results.NoContent();
         });
 
@@ -192,8 +139,6 @@ public static class FeedbackEndpoints
                 reporter_username varchar(128) NOT NULL,
                 target_name varchar(256) NOT NULL DEFAULT '',
                 reason varchar(500) NOT NULL DEFAULT '',
-                conversation_id uuid NULL,
-                legacy_chat_report_id bigint NULL UNIQUE,
                 created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -203,21 +148,12 @@ public static class FeedbackEndpoints
             CREATE TABLE IF NOT EXISTS app_survey_responses(id uuid PRIMARY KEY,survey_id uuid NOT NULL REFERENCES app_surveys(id) ON DELETE CASCADE,username varchar(128) NOT NULL,answers jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE(survey_id,username));
             CREATE TABLE IF NOT EXISTS app_general_feedback(id uuid PRIMARY KEY,username varchar(128) NOT NULL DEFAULT '',anonymous boolean NOT NULL DEFAULT FALSE,message text NOT NULL,status varchar(20) NOT NULL DEFAULT 'open',response text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE IF NOT EXISTS app_support_tickets(id uuid PRIMARY KEY,ticket_code varchar(20) NOT NULL UNIQUE,username varchar(128) NOT NULL,message text NOT NULL,app_version varchar(40) NOT NULL DEFAULT '',device_model varchar(160) NOT NULL DEFAULT '',status varchar(20) NOT NULL DEFAULT 'open',response text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP);
-
-            INSERT INTO app_feedbacks
-                (feedback_type, reporter_username, target_name, reason, conversation_id, legacy_chat_report_id, created_at)
-            SELECT 'ChatReport', reporter_username, 'Cuộc trò chuyện', reason, conversation_id, id, created_at
-            FROM web_chat_reports r
-            WHERE NOT EXISTS (
-                SELECT 1 FROM app_feedbacks f WHERE f.legacy_chat_report_id = r.id
-            );
             """)
             .ExecuteNonQueryAsync(ct);
     }
 
     private static string TypeLabel(string type) => type switch
     {
-        "ChatReport" => "Báo xấu trò chuyện",
         "AttendanceIssue" => "Báo lỗi chấm công",
         _ => "Phản hồi",
     };

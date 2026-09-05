@@ -1,0 +1,32 @@
+# /api/preferences/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.eyeReminderEnabled : bool
+  $.keepCreateVoucherOpen : bool
+  $.waterReminderEnabled : bool
+
+[Accounting] 200 application/json
+  $ : object
+  $.eyeReminderEnabled : bool
+  $.keepCreateVoucherOpen : bool
+  $.waterReminderEnabled : bool
+
+[HR] 200 application/json
+  $ : object
+  $.eyeReminderEnabled : bool
+  $.keepCreateVoucherOpen : bool
+  $.waterReminderEnabled : bool
+
+[Driver] 200 application/json
+  $ : object
+  $.eyeReminderEnabled : bool
+  $.keepCreateVoucherOpen : bool
+  $.waterReminderEnabled : bool
+
+[Employee] 200 application/json
+  $ : object
+  $.eyeReminderEnabled : bool
+  $.keepCreateVoucherOpen : bool
+  $.waterReminderEnabled : bool

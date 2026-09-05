@@ -1,0 +1,14 @@
+# /api/giacong/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+
+[Accounting] 200 application/json
+  $ : array
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

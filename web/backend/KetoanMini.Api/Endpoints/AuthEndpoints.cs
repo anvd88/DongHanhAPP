@@ -1,10 +1,10 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
-using Microsoft.AspNetCore.SignalR;
+using KetoanMini.Api.BuildingBlocks.Realtime;
 using Microsoft.AspNetCore.RateLimiting;
 using Npgsql;
 
@@ -34,7 +34,7 @@ public static class AuthEndpoints
         }).AllowAnonymous().RequireRateLimiting("login-bootstrap");
 
         g.MapPost("/login", async (LoginRequest req, Database db, TokenService tokens,
-            LoginBootstrapService bootstraps, HttpContext http, IHubContext<ChangesHub> hub, PushService push) =>
+            LoginBootstrapService bootstraps, HttpContext http, BusinessEventWriter businessEvents, PushService push) =>
         {
             var isNative = IsNativeClient(req.Client);
             if (!isNative && !bootstraps.ValidateCookie(http, req.Sid))
@@ -98,7 +98,7 @@ public static class AuthEndpoints
 
             user = user with
             {
-                AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                AvatarUrl = await LoadAvatarUrl(conn, user.Id, user.Username),
                 Verified = await LoadVerified(conn, user.Username, user.Role),
                 IsDiamond = await LoadDiamond(conn, user.Username, user.Role),
                 FaceRegistered = await LoadFaceRegistered(conn, user.Username),
@@ -109,11 +109,10 @@ public static class AuthEndpoints
             // (phục vụ thu hồi từ xa). Đăng nhập mới luôn gỡ cờ thu hồi cũ của chính thiết bị đó.
             var clientKind = isNative ? "App" : "Web";
             var requestedSid = WebSessionId(req.Sid, user.Username);
+            await using var loginTx = await conn.BeginTransactionAsync(http.RequestAborted);
             var registration = await RegisterDeviceSessionAsync(
                 conn, user.Username, requestedSid, UserAgentOf(http), clientKind);
             var sid = registration.Sid;
-            if (!registration.WasKnown)
-                await push.SendToUserAsync(user.Username,"Đăng nhập trên thiết bị mới",$"Tài khoản vừa đăng nhập từ {clientKind}: {UserAgentOf(http)}",$"security:{sid}","Settings");
 
             // MỖI TÀI KHOẢN CHỈ 1 APP (nhưng cho phép dùng web song song). Chỉ áp khi đăng nhập từ ỨNG
             // DỤNG: thu hồi các phiên APP khác (KHÔNG đụng phiên Web) → app cũ bị đá (request kế nhận 401);
@@ -121,20 +120,36 @@ public static class AuthEndpoints
             // Đăng nhập từ WEB thì không đá ai — web + app dùng đồng thời thoải mái.
             if (isNative)
             {
+                var revokedSessionIds = new List<string>();
+                await using (var revokedReader = await conn.Cmd("""
+                    SELECT session_token FROM user_sessions
+                    WHERE username=@u AND session_token<>@sid AND client_kind='App'
+                      AND is_active=TRUE AND revoked=FALSE
+                    FOR UPDATE
+                    """, loginTx).With("@u", user.Username).With("@sid", sid)
+                    .ExecuteReaderAsync(http.RequestAborted))
+                {
+                    while (await revokedReader.ReadAsync(http.RequestAborted))
+                        revokedSessionIds.Add(revokedReader.GetString(0));
+                }
                 await conn.Cmd(
                     @"UPDATE user_sessions
                          SET revoked = TRUE, revoked_at = CURRENT_TIMESTAMP, revoked_by = @u, is_active = FALSE
-                       WHERE username = @u AND session_token <> @sid AND client_kind = 'App'")
+                       WHERE username = @u AND session_token <> @sid AND client_kind = 'App'", loginTx)
                     .With("@u", user.Username).With("@sid", sid).ExecuteNonQueryAsync();
-                await conn.Cmd("DELETE FROM hr_device_tokens WHERE lower(username) = lower(@u)")
+                await conn.Cmd("DELETE FROM hr_device_tokens WHERE lower(username) = lower(@u)", loginTx)
                     .With("@u", user.Username).ExecuteNonQueryAsync();
-
-                // Đá NGAY app cũ đang online qua SignalR: phát "kicked" kèm sid MỚI; app nào có sid khác
-                // thì tự đăng xuất tức thì (không chờ heartbeat). Web không nghe sự kiện này nên không sao.
-                try { await hub.Clients.User(user.Username).SendAsync("kicked", sid); } catch { /* không có kết nối → bỏ qua */ }
+                foreach (var revokedSid in revokedSessionIds)
+                    await businessEvents.WriteAsync(conn, loginTx,
+                        "identity.session.revoked.v1", "identity.session.revoked.v1", "access",
+                        $"session:{revokedSid}", user.Username, user.Username, null, http.RequestAborted);
             }
 
-            await db.RecordAudit(user.Username, "Đăng nhập", "Auth", user.Username, $"Đăng nhập ({clientKind}).");
+            await conn.RecordAudit(loginTx, user.Username, "Đăng nhập", "Auth", user.Username,
+                $"Đăng nhập ({clientKind}).", http.RequestAborted);
+            await loginTx.CommitAsync(http.RequestAborted);
+            if (!registration.WasKnown)
+                await push.SendToUserAsync(user.Username,"Đăng nhập trên thiết bị mới",$"Tài khoản vừa đăng nhập từ {clientKind}: {UserAgentOf(http)}",$"security:{sid}","Settings");
 
             return IssueSession(http, tokens, user, sid, isNative);
         }).AllowAnonymous().RequireRateLimiting("login");
@@ -223,7 +238,7 @@ public static class AuthEndpoints
             if (user is null || user.IsPending || !user.IsActive)
                 return Results.NotFound(new { message = "Phiên QR không còn chờ xác nhận." });
 
-            return Results.Ok(new { avatarUrl = await LoadAvatarUrl(conn, user.Id) });
+            return Results.Ok(new { avatarUrl = await LoadAvatarUrl(conn, user.Id, user.Username) });
         }).AllowAnonymous().RequireRateLimiting("qr-poll");
 
         // Người dùng từ chối tại màn xác nhận trên điện thoại: web hiển thị kết quả bị từ chối và yêu
@@ -277,7 +292,7 @@ public static class AuthEndpoints
 
                 user = user with
                 {
-                    AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                    AvatarUrl = await LoadAvatarUrl(conn, user.Id, user.Username),
                     FaceRegistered = await LoadFaceRegistered(conn, user.Username),
                     FaceEnrollmentPending = await LoadFaceEnrollmentPending(conn, user.Username)
                 };
@@ -465,7 +480,7 @@ public static class AuthEndpoints
 
                 user = user with
                 {
-                    AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                    AvatarUrl = await LoadAvatarUrl(conn, user.Id, user.Username),
                     FaceRegistered = await LoadFaceRegistered(conn, user.Username),
                     FaceEnrollmentPending = await LoadFaceEnrollmentPending(conn, user.Username)
                 };
@@ -677,6 +692,57 @@ public static class AuthEndpoints
             return Results.NoContent();
         }).AllowAnonymous().RequireRateLimiting("face-reset");
 
+        /// <summary>
+        /// Người dùng TỰ XIN mã khôi phục ở màn quên mật khẩu.
+        ///
+        /// Chỉ chạy khi đã bật một kênh gửi tự động (Recovery:Email hoặc Recovery:Zalo). Chưa bật thì
+        /// trả 409 kèm code "channel_unavailable" để giao diện nhắc liên hệ quản trị viên — đúng như
+        /// cách hệ thống đang vận hành hôm nay.
+        ///
+        /// Vì sao chặn khi chưa bật kênh: cấp mã mới sẽ vô hiệu hoá mã cũ chưa dùng. Nếu để ngỏ,
+        /// người lạ gõ đúng tên đăng nhập là xoá được mã mà quản trị viên vừa cấp tay cho nhân viên.
+        /// Có kênh tự động thì mã mới đi thẳng tới chủ tài khoản nên không còn cửa phá đó.
+        ///
+        /// Phản hồi KHÔNG tiết lộ tài khoản có tồn tại hay không: mọi trường hợp hợp lệ đều trả cùng
+        /// một thông điệp.
+        /// </summary>
+        g.MapPost("/request-recovery-code", async (RequestRecoveryCodeRequest req, Database db,
+            RecoveryCodeDelivery delivery, CancellationToken ct) =>
+        {
+            var username = (req?.Username ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(username))
+                return Results.BadRequest(new { message = "Vui lòng nhập tên đăng nhập." });
+
+            if (delivery.AutoChannels.Count == 0)
+                return Results.Json(new
+                {
+                    code = "channel_unavailable",
+                    message = "Hệ thống chưa bật gửi mã tự động. Vui lòng liên hệ quản trị viên để nhận mã.",
+                }, statusCode: 409);
+
+            await using var conn = await db.OpenAsync(ct);
+            var user = await ReadUserByUsername(conn, username);
+            if (user is not null && user.IsActive && !user.IsPending)
+            {
+                var recipient = await RecoveryCodeDelivery.LoadRecipientAsync(conn, user.Username, ct);
+                if (recipient is not null && delivery.CanAutoSend(recipient))
+                {
+                    var code = await UserEndpoints.IssueRecoveryCodeAsync(conn, user.Username, "self-service", ct);
+                    var result = await delivery.SendAsync(recipient, code, null, ct);
+                    await db.RecordAudit(user.Username, "Tự xin mã khôi phục", "Auth", user.Username,
+                        $"Kênh: {RecoveryCodeDelivery.ChannelLabel(result.Channel)}" +
+                        (result.Delivered ? $" → {result.SentTo}." : ", gửi không thành công."));
+                }
+            }
+
+            // Cùng một câu trả lời cho mọi trường hợp — kể cả tài khoản không tồn tại.
+            return Results.Ok(new
+            {
+                sent = true,
+                message = "Nếu tài khoản tồn tại và có thông tin liên hệ, mã khôi phục đã được gửi đi.",
+            });
+        }).AllowAnonymous().RequireRateLimiting("face-reset");
+
         // KIỂM TRA mã khôi phục (không đổi mật khẩu, không đánh dấu đã dùng) — phục vụ màn hình
         // quên mật khẩu 3 bước: nhập tên đăng nhập → nhập mã → chỉ khi mã đúng mới cho đặt mật khẩu mới.
         // Dùng chung hạn mức "face-reset" nên không mở thêm cửa dò mã: sai vài lần là bị chặn.
@@ -719,7 +785,7 @@ public static class AuthEndpoints
             if (user is null) return Results.Unauthorized();
             return Results.Ok(user with
             {
-                AvatarUrl = await LoadAvatarUrl(conn, user.Id),
+                AvatarUrl = await LoadAvatarUrl(conn, user.Id, user.Username),
                 IsDiamond = await LoadDiamond(conn, user.Username, user.Role),
                 FaceRegistered = await LoadFaceRegistered(conn, user.Username),
                 FaceEnrollmentPending = await LoadFaceEnrollmentPending(conn, user.Username)
@@ -766,11 +832,12 @@ public static class AuthEndpoints
 
             var updated = await ReadUserByUsername(conn, username);
             if (updated is null) return Results.Unauthorized();
-            return Results.Ok(updated with { AvatarUrl = await LoadAvatarUrl(conn, updated.Id) });
+            return Results.Ok(updated with { AvatarUrl = await LoadAvatarUrl(conn, updated.Id, updated.Username) });
         }).RequireAuthorization();
 
-        // Lưu ảnh đại diện cho bản web (data URL ảnh đã thu nhỏ/nén ở client). Lưu trong bảng
-        // web-only web_user_avatars để KHÔNG đụng schema dùng chung với app desktop.
+        // Lưu ảnh đại diện (data URL ảnh đã thu nhỏ/nén ở client) vào hr_employees.avatar — CÙNG cột
+        // mà app ghi qua PUT /api/hr/me/avatar. Hai cửa ghi, một chỗ lưu: đổi ảnh ở đâu cũng hiện ở
+        // mọi nơi (header web, danh bạ, Hồ sơ trên app).
         g.MapPut("/avatar", async (UpdateAvatarRequest req, ClaimsPrincipal principal, Database db) =>
         {
             var dataUrl = (req.ImageDataUrl ?? "").Trim();
@@ -786,14 +853,11 @@ public static class AuthEndpoints
             var user = await ReadUserByUsername(conn, username);
             if (user is null) return Results.Unauthorized();
 
-            await EnsureAvatarTableOn(conn);
-            await conn.Cmd(@"
-                INSERT INTO web_user_avatars (user_id, image_data_url, updated_at)
-                VALUES (@id, @v, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    image_data_url = EXCLUDED.image_data_url,
-                    updated_at = EXCLUDED.updated_at;")
-                .With("@id", user.Id).With("@v", dataUrl).ExecuteNonQueryAsync();
+            // EnsureEmployeeForUser: người chưa có hồ sơ nhân viên (tài khoản mới) vẫn đổi được ảnh —
+            // hồ sơ được dựng ngay tại đây, đúng như khi họ mở trang Hồ sơ lần đầu.
+            var employeeId = await HrEndpoints.EnsureEmployeeForUser(conn, username);
+            await conn.Cmd("UPDATE hr_employees SET avatar = @v, updated_at = CURRENT_TIMESTAMP WHERE id = @id")
+                .With("@id", employeeId).With("@v", dataUrl).ExecuteNonQueryAsync();
 
             await db.RecordAudit(username, "Cập nhật ảnh đại diện", "User", username, "Đổi ảnh đại diện (web).");
             return Results.Ok(user with { AvatarUrl = dataUrl });
@@ -807,9 +871,9 @@ public static class AuthEndpoints
             var user = await ReadUserByUsername(conn, username);
             if (user is null) return Results.Unauthorized();
 
-            await EnsureAvatarTableOn(conn);
-            await conn.Cmd("DELETE FROM web_user_avatars WHERE user_id = @id")
-                .With("@id", user.Id).ExecuteNonQueryAsync();
+            var employeeId = await HrEndpoints.EnsureEmployeeForUser(conn, username);
+            await conn.Cmd("UPDATE hr_employees SET avatar = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = @id")
+                .With("@id", employeeId).ExecuteNonQueryAsync();
 
             await db.RecordAudit(username, "Xóa ảnh đại diện", "User", username, "Xóa ảnh đại diện (web).");
             return Results.Ok(user with { AvatarUrl = (string?)null });
@@ -998,8 +1062,8 @@ public static class AuthEndpoints
         // Nhịp tim hiện diện + KIỂM TRA PHIÊN: cập nhật last_seen trong user_sessions và trả 401 khi
         // phiên bị thu hồi/khóa (middleware Program.cs chặn) để client tự đăng xuất.
         //
-        // HIỆN DIỆN GIỜ CHỦ YẾU ĐI QUA KẾT NỐI SignalR (ChangesHub.OnConnectedAsync + HubPresenceRefresher):
-        // web bỏ hẳn đường này, app CHỈ còn gọi khi SignalR tắt (ở nền) hoặc ping thưa làm lưới an toàn
+        // Hiện diện foreground đi qua SSE/Redis TTL. App vẫn gọi heartbeat ở nền hoặc ping thưa làm
+        // lưới an toàn kiểm tra phiên; endpoint này không phụ thuộc transport realtime.
         // phát hiện phiên bị thu hồi. ON CONFLICT giữ nguyên client_kind đặt lúc đăng nhập (App/Web) nên
         // phiên App không bị hiểu nhầm thành Web. CURRENT_TIMESTAMP để ghi cùng chuẩn started_at/last_seen.
         g.MapPost("/heartbeat", async (HeartbeatRequest _, ClaimsPrincipal principal, Database db, HttpContext http) =>
@@ -1412,14 +1476,27 @@ public static class AuthEndpoints
         catch { return false; }
     }
 
-    // Đọc data URL ảnh đại diện (web) của một người dùng; null nếu chưa có (hoặc bảng chưa tồn tại).
-    private static async Task<string?> LoadAvatarUrl(NpgsqlConnection conn, Guid userId)
+    // Đọc data URL ảnh đại diện của một người dùng; null nếu chưa có.
+    //
+    // NGUỒN DUY NHẤT là hr_employees.avatar — cùng cột mà app ghi khi chụp ảnh chân dung
+    // (PUT /api/hr/me/avatar) và mà trang Hồ sơ web đọc. Trước đây web dùng bảng riêng
+    // web_user_avatars nên một người có HAI ảnh không liên quan gì nhau: đổi ảnh trên web thì
+    // app không thấy, chụp chân dung trên app thì header web vẫn trống. Xem
+    // <see cref="MergeWebAvatarsIntoEmployees"/> cho phần chuyển dữ liệu cũ.
+    //
+    // Ghép theo user_id trước, rồi mới tới username (hồ sơ cũ có thể chưa gắn user_id); chỉ số
+    // ux_hr_employees_username_ci bảo đảm không thể có hai hồ sơ cùng username.
+    private static async Task<string?> LoadAvatarUrl(NpgsqlConnection conn, Guid userId, string username)
     {
         try
         {
-            await using var reader = await conn.Cmd(
-                "SELECT image_data_url FROM web_user_avatars WHERE user_id = @id")
-                .With("@id", userId).ExecuteReaderAsync();
+            await using var reader = await conn.Cmd("""
+                SELECT avatar FROM hr_employees
+                WHERE user_id = @id OR lower(username) = lower(@u)
+                ORDER BY (user_id = @id) DESC NULLS LAST
+                LIMIT 1
+                """)
+                .With("@id", userId).With("@u", username ?? "").ExecuteReaderAsync();
             if (await reader.ReadAsync() && !reader.IsDBNull(0))
             {
                 var value = reader.GetString(0);
@@ -1430,11 +1507,47 @@ public static class AuthEndpoints
         return null;
     }
 
-    /// <summary>Tạo bảng ảnh đại diện web-only nếu chưa có (gọi best-effort lúc khởi động).</summary>
+    /// <summary>Tạo bảng ảnh đại diện web cũ nếu chưa có (gọi best-effort lúc khởi động).</summary>
+    /// <remarks>
+    /// Bảng này KHÔNG còn được đọc/ghi kể từ khi ảnh đại diện gộp về <c>hr_employees.avatar</c>; giữ
+    /// lại làm BẢN LƯU để còn đường lùi nếu đợt gộp có gì sai. Xem <see cref="MergeWebAvatarsIntoEmployees"/>.
+    /// </remarks>
     public static async Task EnsureAvatarTable(Database db, CancellationToken ct = default)
     {
         await using var conn = await db.OpenAsync(ct);
         await EnsureAvatarTableOn(conn, ct);
+    }
+
+    /// <summary>
+    /// Chuyển ảnh đại diện web cũ (<c>web_user_avatars</c>) vào <c>hr_employees.avatar</c> — nguồn duy
+    /// nhất sau khi gộp. CHẠY ĐÚNG MỘT LẦN cho mỗi dòng: cột <c>merged_at</c> đánh dấu dòng đã chuyển,
+    /// nên lần khởi động sau sẽ không đè lại ảnh chân dung mà nhân viên vừa chụp trên app.
+    ///
+    /// Thứ tự ưu tiên khi một người có CẢ hai ảnh: lấy ảnh web (thường là ảnh mới hơn, do người dùng
+    /// tự chọn), ảnh chân dung cũ trong hồ sơ bị thay. Bảng cũ được giữ nguyên làm bản lưu.
+    ///
+    /// Phải gọi SAU <c>HrEndpoints.EnsureTables</c> vì cần bảng hr_employees đã tồn tại.
+    /// </summary>
+    public static async Task MergeWebAvatarsIntoEmployees(Database db, CancellationToken ct = default)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        await EnsureAvatarTableOn(conn, ct);
+        await conn.Cmd("ALTER TABLE web_user_avatars ADD COLUMN IF NOT EXISTS merged_at timestamptz NULL")
+            .ExecuteNonQueryAsync(ct);
+
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await conn.Cmd("""
+            UPDATE hr_employees e
+            SET avatar = wa.image_data_url, updated_at = CURRENT_TIMESTAMP
+            FROM web_user_avatars wa
+            JOIN app_users u ON u.id = wa.user_id
+            WHERE wa.merged_at IS NULL
+              AND btrim(COALESCE(wa.image_data_url, '')) <> ''
+              AND (e.user_id = wa.user_id OR lower(e.username) = lower(u.username))
+            """, tx).ExecuteNonQueryAsync(ct);
+        await conn.Cmd("UPDATE web_user_avatars SET merged_at = CURRENT_TIMESTAMP WHERE merged_at IS NULL", tx)
+            .ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     private static async Task EnsureAvatarTableOn(NpgsqlConnection conn, CancellationToken ct = default)

@@ -1,0 +1,560 @@
+/* Styles extracted from the KetoanMini web host. This file is not imported by the current app. */
+
+/* Nút mở hồ sơ trên header chat: hover nhẹ ở sáng, KHÔNG phát sáng accent ở tối */
+.chat-id-trigger:hover { background: var(--accent-soft); }
+html[data-theme="dark"] .chat-id-trigger:hover { background: rgba(148, 163, 184, 0.12); }
+.chat-mobile-back { display: none; }
+.chat-profile-back { display: none; }
+.chat-home-button { display: none; }
+
+.chat-mobile-shell {
+  --text: #10233f;
+  --text-secondary: #52647f;
+  --text-muted: #7a8ba4;
+  --glass-bg-strong: #ffffff;
+  --glass-border: rgba(148, 163, 184, 0.32);
+}
+
+.chat-mobile-shell .gc-panel,
+.chat-profile-shell > .gc-panel {
+  border-color: rgba(148, 163, 184, 0.34);
+  background: #eef3fa;
+  box-shadow:
+    0 18px 48px -28px rgba(15, 23, 42, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.chat-mobile-shell .gc-panel::before,
+.chat-profile-shell > .gc-panel::before {
+  display: none;
+}
+
+.chat-mobile-shell input,
+.chat-mobile-shell textarea,
+.chat-mobile-shell button {
+  color: inherit;
+}
+
+html[data-theme="dark"] .chat-mobile-shell {
+  --text: #f0f5fb;
+  --text-secondary: #b9c5d6;
+  --text-muted: #8e9bb0;
+  --glass-bg-strong: rgba(16, 25, 39, 0.96);
+  --glass-border: rgba(148, 163, 184, 0.24);
+}
+
+html[data-theme="dark"] .chat-mobile-shell .gc-panel,
+html[data-theme="dark"] .chat-profile-shell > .gc-panel {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: #111b2a;
+  box-shadow:
+    0 18px 48px -28px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.chat-conversation-list button,
+.chat-thread-panel button {
+  transition:
+    background-color 0.18s ease,
+    box-shadow 0.18s ease,
+    outline-color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.chat-conversation-list button:hover,
+.chat-conversation-list button:focus-visible,
+.chat-thread-panel button:hover,
+.chat-thread-panel button:focus-visible {
+  outline: 1px solid rgba(var(--accent-rgb), 0.42);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 3px rgba(var(--accent-rgb), 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.chat-conversation-list button:hover,
+.chat-thread-panel button:hover {
+  transform: translateY(-1px);
+}
+
+.chat-conversation-list .chat-conversation-menu-button:hover,
+.chat-conversation-list .chat-conversation-menu-button:focus-visible {
+  outline: none;
+  box-shadow: none;
+  transform: none;
+}
+
+.chat-conversation-actions {
+  display: grid;
+  width: 34px;
+  min-height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  align-self: center;
+}
+
+.chat-conversation-actions.has-unread {
+  align-self: stretch;
+  grid-template-rows: 1fr auto;
+  padding-bottom: 2px;
+}
+
+.chat-conversation-actions.has-unread .chat-conversation-menu-button {
+  align-self: start;
+}
+
+.chat-conversation-unread-badge {
+  display: inline-grid;
+  min-width: 22px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  padding: 0 7px;
+  font-size: 0.64rem;
+  font-weight: 850;
+  line-height: 1;
+  box-shadow: 0 5px 12px rgba(var(--accent-rgb), 0.26);
+}
+
+.chat-message-bubble {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-theme="dark"] .chat-conversation-list button:hover,
+html[data-theme="dark"] .chat-conversation-list button:focus-visible,
+html[data-theme="dark"] .chat-thread-panel button:hover,
+html[data-theme="dark"] .chat-thread-panel button:focus-visible {
+  box-shadow:
+    0 0 0 3px rgba(var(--accent-rgb), 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+html[data-theme="dark"] .chat-conversation-list .chat-conversation-menu-button:hover,
+html[data-theme="dark"] .chat-conversation-list .chat-conversation-menu-button:focus-visible {
+  box-shadow: none;
+}
+
+@media (max-width: 767px) {
+  .km-page:has(.chat-mobile-shell) {
+    height: 100dvh;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .km-main-shell:has(.chat-mobile-shell.is-composer-focused) .km-page {
+    height: var(--chat-visual-height, 100dvh);
+  }
+
+  .km-app-shell:has(.chat-mobile-shell) .km-main-shell {
+    gap: 0;
+  }
+
+  .km-app-shell:has(.chat-mobile-shell) .km-header {
+    display: none;
+  }
+
+  .km-app-shell:has(.chat-mobile-shell) .km-mobile-bottom-nav {
+    display: none;
+  }
+
+  .chat-mobile-shell {
+    position: relative;
+    display: block;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .chat-mobile-shell.is-composer-focused {
+    height: var(--chat-visual-height, 100dvh);
+  }
+
+  .chat-conversation-list,
+  .chat-thread-panel {
+    width: 100% !important;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .chat-thread-panel {
+    display: none;
+  }
+
+  .chat-mobile-shell.is-chat-open .chat-conversation-list {
+    display: none;
+  }
+
+  .chat-mobile-shell.is-chat-open .chat-thread-panel {
+    display: flex;
+  }
+
+  .chat-mobile-back {
+    display: grid;
+  }
+
+  .chat-profile-back {
+    display: grid;
+  }
+
+  .chat-home-button {
+    display: grid;
+  }
+
+  .chat-thread-panel > header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    flex: 0 0 auto;
+    gap: 8px;
+    padding: 10px;
+    background: #eef3fa;
+  }
+
+  html[data-theme="dark"] .chat-thread-panel > header {
+    background: #111b2a;
+  }
+
+  .chat-thread-panel > header .chat-id-trigger {
+    flex: 1 1 auto;
+  }
+
+  .chat-thread-panel > header .chat-id-trigger .max-w-\[220px\] {
+    max-width: min(52vw, 220px);
+  }
+
+  .chat-thread-panel > header .ml-auto > button:nth-child(-n + 3) {
+    display: none;
+  }
+
+  .chat-thread-panel > .scroll-thin {
+    min-height: 0;
+    padding: 12px 10px;
+  }
+
+  .chat-message-bubble {
+    cursor: default;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  .chat-thread-panel > footer {
+    flex: 0 0 auto;
+    gap: 8px;
+    padding: 10px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
+  .chat-thread-panel > footer > div {
+    min-width: 0;
+    padding-left: 12px;
+    padding-right: 10px;
+  }
+
+  .chat-profile-shell {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    margin-left: 0 !important;
+  }
+
+  .chat-profile-shell.pointer-events-none {
+    display: none;
+  }
+
+  .chat-profile-shell:not(.pointer-events-none) {
+    width: 100% !important;
+  }
+
+  .chat-profile-shell > .gc-panel {
+    width: 100% !important;
+    border-radius: 18px;
+  }
+}
+
+.km-chat-toast-host {
+  position: fixed;
+  right: clamp(14px, 2.5vw, 30px);
+  bottom: clamp(18px, 3vh, 34px);
+  z-index: 95;
+  pointer-events: none;
+}
+
+/* ----- Prompt nhận tệp qua LAN (P2P) ----- */
+.km-filetransfer-host {
+  position: fixed;
+  right: clamp(14px, 2.5vw, 30px);
+  top: clamp(16px, 3vh, 30px);
+  z-index: 97;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+.km-filetransfer-prompt {
+  position: relative;
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  width: min(360px, calc(100vw - 24px));
+  border-radius: 18px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18);
+  padding: 0.9rem 1rem;
+  color: var(--text);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  animation: km-ft-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes km-ft-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.km-filetransfer-icon {
+  display: grid;
+  place-items: center;
+  height: 42px;
+  width: 42px;
+  flex-shrink: 0;
+  border-radius: 13px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.km-filetransfer-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.km-filetransfer-kicker {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.km-filetransfer-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.km-filetransfer-size {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.km-filetransfer-actions {
+  margin-top: 0.55rem;
+  display: flex;
+  gap: 0.5rem;
+}
+.km-filetransfer-accept {
+  flex: 1;
+  border-radius: 10px;
+  padding: 0.42rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  transition: opacity 0.15s;
+}
+.km-filetransfer-accept:hover {
+  opacity: 0.9;
+}
+.km-filetransfer-decline {
+  border-radius: 10px;
+  padding: 0.42rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+}
+.km-filetransfer-decline:hover {
+  background: var(--accent-soft);
+}
+.km-filetransfer-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  height: 26px;
+  width: 26px;
+  border-radius: 9999px;
+  color: var(--text-muted);
+  transition: background 0.15s;
+}
+.km-filetransfer-close:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.km-chat-toast {
+  position: relative;
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.95rem;
+  width: min(390px, calc(100vw - 24px));
+  min-height: 106px;
+  overflow: hidden;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.94), rgba(241, 248, 255, 0.82));
+  box-shadow: 0 24px 54px rgba(52, 87, 213, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  padding: 1rem 1.05rem;
+  color: var(--text);
+  text-align: left;
+  backdrop-filter: blur(20px) saturate(1.35);
+  -webkit-backdrop-filter: blur(20px) saturate(1.35);
+  animation: kmChatToastIn 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html[data-theme="dark"] .km-chat-toast {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: linear-gradient(150deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.7));
+  box-shadow: 0 24px 54px rgba(2, 6, 23, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.km-chat-toast-avatar {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 16px;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 900;
+  background: linear-gradient(145deg, #3457d5, #6f88ee);
+  box-shadow: 0 10px 22px rgba(47, 109, 246, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.km-chat-toast-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.km-chat-toast-body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.km-chat-toast-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.km-chat-toast-title {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 1.02rem;
+  font-weight: 900;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.km-chat-toast-message {
+  display: -webkit-box;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 650;
+  line-height: 1.28;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.km-chat-toast-bars {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -1px;
+  z-index: 2;
+  display: flex;
+  margin: 0;
+  pointer-events: none;
+}
+
+.km-chat-toast-bars span {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 20px 20px 0 0;
+  background: rgba(52, 87, 213, 0.14);
+}
+
+.km-chat-toast-bars span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand-sapphire), var(--brand-jade));
+  transform-origin: left center;
+  animation: kmChatToastBar 6.5s linear forwards;
+}
+
+@keyframes kmChatToastIn {
+  from { opacity: 0; transform: translateX(430px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes kmChatToastBar {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* Enterprise-theme overrides formerly supplied by the main application. */
+.km-filetransfer-prompt,
+.km-chat-toast,
+html[data-theme="dark"] .km-chat-toast {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.km-chat-toast-avatar,
+.km-filetransfer-icon {
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.km-chat-toast-bars span::after {
+  background: var(--accent);
+}
+
+.km-filetransfer-accept,
+.km-filetransfer-decline {
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.km-bell-icon--chat { background: #db2777; }

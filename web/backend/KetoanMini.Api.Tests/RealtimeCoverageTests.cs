@@ -19,28 +19,27 @@ public sealed class RealtimeCoverageTests
     /// </summary>
     private static readonly Dictionary<string, string> Exempt = new(StringComparer.Ordinal)
     {
-        // Tín hiệu chat phải nhắm ĐÚNG thành viên cuộc trò chuyện, không broadcast cả công ty.
-        // Trigger chỉ biết bảng chứ không biết ai là thành viên → dùng ChatEndpoints.NotifyChat.
-        ["web_chat_conversations"] = "chat nhắm đúng thành viên qua NotifyChat",
-        ["web_chat_members"] = "chat nhắm đúng thành viên qua NotifyChat",
-        ["web_chat_messages"] = "chat nhắm đúng thành viên qua NotifyChat",
-        ["web_chat_reactions"] = "chat nhắm đúng thành viên qua NotifyChat",
-
         // Đối soát phiếu: hai bảng này CHỈ được ghi trong cùng giao dịch với documents, và documents
-        // đã phát tín hiệu "data". Thêm trigger riêng chỉ nhân đôi cùng một lần đánh thức client.
-        ["document_issued_lines"] = "luôn ghi kèm documents (đã phát scope data)",
-        ["document_line_edits"] = "luôn ghi kèm documents (đã phát scope data)",
+        // đã phát tín hiệu rồi. Thêm trigger riêng chỉ nhân đôi cùng một lần đánh thức client.
+        ["document_issued_lines"] = "luôn ghi kèm documents (documents đã phát tín hiệu)",
+        ["document_line_edits"] = "luôn ghi kèm documents (documents đã phát tín hiệu)",
 
         // Không hiện trên giao diện nào: hạ tầng nội bộ.
         ["hr_device_tokens"] = "token FCM, không hiển thị",
-        ["web_call_events"] = "bản ghi tín hiệu WebRTC, không hiển thị",
-        ["web_call_history"] = "lịch sử cuộc gọi nằm trong luồng chat đã nhắm riêng",
         ["web_user_preferences"] = "tuỳ chọn riêng của từng người, chính máy đó vừa đặt",
         ["web_login_settings"] = "cấu hình trang đăng nhập, đọc lúc mở trang",
         ["password_recovery_codes"] = "mã dùng một lần trong luồng khôi phục, không hiển thị",
+        // Mã bảo mật 6 số của app: không màn hình nào liệt kê, và chính thiết bị vừa đặt/mở khoá đã
+        // biết kết quả từ phản hồi HTTP. Phát tín hiệu ở đây chỉ đánh thức mọi máy vì một việc riêng tư.
+        ["app_pin_codes"] = "mã PIN của app, không hiển thị ở màn hình nào",
 
         // Hạ tầng nội bộ, không có màn hình nào đọc.
         ["app_outbox"] = "hàng chờ nội bộ của OutboxWorker",
+        ["integration_outbox"] = "transactional integration outbox, không phải dữ liệu giao diện",
+        ["inbox_messages"] = "khử trùng consumer nội bộ",
+        ["realtime_events"] = "event store SSE ngắn hạn, không tự phát event cho chính nó",
+        ["api_idempotency"] = "kết quả command/idempotency nội bộ",
+        ["messaging_dead_letters"] = "runbook DLQ nội bộ, chỉ thay đổi qua endpoint quản trị",
         ["schema_migrations"] = "sổ di trú lược đồ",
         ["canonical_role_positions"] = "bảng tạm chỉ tồn tại trong migration chuẩn hóa vai trò, không phải dữ liệu giao diện",
         // Sổ chỉ-ghi-thêm để tra soát phân quyền về sau; chưa màn hình nào đọc trực tiếp, và người
@@ -132,26 +131,11 @@ public sealed class RealtimeCoverageTests
     }
 
     /// <summary>
-    /// Endpoint KHÔNG được tự gọi hub nữa. Chỉ còn vài ngoại lệ, mỗi cái vì một lý do trigger không
-    /// làm thay được: nhắm đúng người (chat, đá thiết bị, trả lời góp ý, đổi quyền) hoặc dữ liệu chỉ
-    /// nằm trong bộ nhớ (số đo liveness). Thêm lời gọi hub mới ngoài danh sách này là đi ngược "một đường".
+    /// Endpoint KHÔNG được tự gọi hub cho business realtime.
     /// </summary>
     [Fact]
     public void EndpointsDoNotPublishRealtimeByHand()
     {
-        var allowed = new[]
-        {
-            ("AuthEndpoints.cs", "kicked"),           // đá thiết bị cũ: nhắm đúng một người
-            ("ChatEndpoints.cs", "chat"),              // nhắm đúng thành viên cuộc trò chuyện
-            ("FeedbackEndpoints.cs", "feedbackResolved"), // báo riêng người đã gửi góp ý
-            ("ChamCongEndpoints.cs", "liveness"),      // số đo trong RAM, không có bảng để gắn trigger
-            // Đổi quyền: chỉ MỘT người cần biết. Trigger trên app_users/user_roles sẽ bắt cả công ty
-            // nạp lại hồ sơ truy cập mỗi lần admin sửa quyền của một ai đó — đúng thứ "realtime scoping"
-            // muốn tránh. Quyền mới vẫn có hiệu lực ngay dù tín hiệu này không tới (server chốt theo DB).
-            ("UserEndpoints.cs", "\"access\""),
-            ("HrEndpoints.cs", "\"access\""), // đổi chức vụ làm đổi quyền, nhắm đúng nhân viên
-        };
-
         var offenders = new List<string>();
         foreach (var file in Directory.EnumerateFiles(EndpointsDir(), "*.cs"))
         {
@@ -161,7 +145,6 @@ public sealed class RealtimeCoverageTests
                 if (!line.Contains("Clients.All", StringComparison.Ordinal) &&
                     !line.Contains("Clients.User", StringComparison.Ordinal) &&
                     !line.Contains("Clients.Users", StringComparison.Ordinal)) continue;
-                if (allowed.Any(a => a.Item1 == name && line.Contains(a.Item2, StringComparison.Ordinal))) continue;
                 offenders.Add($"{name}: {line.Trim()}");
             }
         }

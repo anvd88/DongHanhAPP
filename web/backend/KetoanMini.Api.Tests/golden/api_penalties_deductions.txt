@@ -1,0 +1,14 @@
+# /api/penalties/deductions
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 400 text/plain
+  (thân phản hồi không phải JSON)
+
+[Accounting] 403 
+
+[HR] 400 text/plain
+  (thân phản hồi không phải JSON)
+
+[Driver] 403 
+
+[Employee] 403 

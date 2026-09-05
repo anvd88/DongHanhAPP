@@ -4,9 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using KetoanMini.Api.Data;
-using KetoanMini.Api.Realtime;
+using KetoanMini.Api.BuildingBlocks.Realtime;
 using KetoanMini.Api.Security;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -618,13 +617,15 @@ public static class HrEndpoints
             var emp = await EnsureEmployeeForUser(conn, u.Username());
             var list = new List<object>();
             await using var r = await conn.Cmd("""
-                SELECT id,doc_type,title,issued_by,issued_date,doc_number,expires_at,approval_status,file_name,mime_type,note
+                SELECT id,doc_type,title,issued_by,issued_date,doc_number,expires_at,approval_status,file_name,mime_type,
+                       file_url,note,(file_content IS NOT NULL) AS has_file
                 FROM hr_documents WHERE employee_id=@e ORDER BY created_at DESC
                 """).With("@e", emp).ExecuteReaderAsync();
             while (await r.ReadAsync()) list.Add(new {
                 id=r.Guid("id"), docType=r.Str("doc_type"), title=r.Str("title"), issuedBy=r.Str("issued_by"),
                 issuedDate=DateOrNull(r,"issued_date"), docNumber=r.Str("doc_number"), expiresAt=DateOrNull(r,"expires_at"),
-                approvalStatus=r.Str("approval_status"), fileName=r.Str("file_name"), mimeType=r.Str("mime_type"), note=r.Str("note")
+                approvalStatus=r.Str("approval_status"), fileName=r.Str("file_name"), mimeType=r.Str("mime_type"),
+                fileUrl=r.Str("file_url"), hasFile=r.Bool("has_file"), note=r.Str("note")
             });
             return Results.Ok(list);
         });
@@ -736,7 +737,7 @@ public static class HrEndpoints
         });
 
         g.MapPost("/employees", async (SaveEmployeeReq req, ClaimsPrincipal u, Database db,
-            IHubContext<ChangesHub> hub, HttpContext http) =>
+            BusinessEventWriter businessEvents, HttpContext http) =>
         {
             if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             if (string.IsNullOrWhiteSpace(req.FullName)) return Results.BadRequest(new { message = "Vui lòng nhập họ tên." });
@@ -862,13 +863,13 @@ public static class HrEndpoints
             {
                 await db.RecordAudit(u.Username(), "Đồng bộ vai trò theo chức vụ", "User", roleSync.Username,
                     $"[{roleSync.RolesBefore}] → [{roleSync.RolesAfter}] (web).");
-                try { await hub.Clients.User(roleSync.Username).SendAsync("changed", "access"); } catch { }
+                await businessEvents.AccessChangedAsync(roleSync.Username, u.Username(), http.RequestAborted);
             }
             return Results.Ok(new { id, employeeCode = code, username = loginUsername, accountCreated, password = temporaryPassword });
         });
 
         g.MapPut("/employees/{id:guid}", async (Guid id, SaveEmployeeReq req, ClaimsPrincipal u, Database db,
-            IHubContext<ChangesHub> hub, HttpContext http) =>
+            BusinessEventWriter businessEvents, HttpContext http) =>
         {
             await using var conn = await db.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
@@ -1012,10 +1013,13 @@ public static class HrEndpoints
                     ? selection.EffectiveAccessRole
                     : preservePositionContract ? currentAccessRole : NormalizeAccessRole(req.AccessRole);
 
+                // CỐ Ý không có avatar: ảnh đại diện chỉ đi qua PUT /api/auth/avatar (web) và
+                // PUT /api/hr/me/avatar (app). Form hồ sơ gửi kèm ảnh CŨ mà nó đọc được lúc mở form,
+                // nên nếu ghi ở đây thì một cú "Lưu" thông tin liên hệ sẽ đè mất ảnh vừa chụp trên app.
                 cmd = conn.Cmd("""
                     UPDATE hr_employees SET employee_code=@code, username=@username, full_name=@fn, dob=@dob,
                         gender=@gender, phone=@phone, email=@email, address=@addr, department_id=@dept,
-                        position=@pos, position_id=@posId, manager_id=@mgr, hire_date=@hire, status=@status, avatar=@avatar,
+                        position=@pos, position_id=@posId, manager_id=@mgr, hire_date=@hire, status=@status,
                         location_id=@loc, access_role=@arole,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE id=@id
@@ -1027,20 +1031,19 @@ public static class HrEndpoints
                     .With("@pos", employeePosition).With("@posId", (object?)employeePositionId ?? DBNull.Value)
                     .With("@mgr", (object?)req.ManagerId ?? DBNull.Value)
                     .With("@hire", (object?)req.HireDate ?? DBNull.Value).With("@status", req.Status ?? "Active")
-                    .With("@avatar", (object?)req.Avatar ?? DBNull.Value)
                     .With("@loc", (object?)req.LocationId ?? DBNull.Value).With("@arole", employeeAccessRole);
             }
             else
             {
-                // Nhân viên chỉ được cập nhật liên hệ cá nhân.
+                // Nhân viên chỉ được cập nhật liên hệ cá nhân. Ảnh đại diện KHÔNG đi qua đây (xem
+                // chú thích ở nhánh trên) — chỉ qua PUT /api/auth/avatar hoặc PUT /api/hr/me/avatar.
                 cmd = conn.Cmd("""
                     UPDATE hr_employees SET phone=@phone, email=@email, address=@addr, dob=@dob,
-                        gender=@gender, avatar=@avatar, updated_at=CURRENT_TIMESTAMP
+                        gender=@gender, updated_at=CURRENT_TIMESTAMP
                     WHERE id=@id
                     """, tx)
                     .With("@phone", req.Phone ?? "").With("@email", req.Email ?? "").With("@addr", req.Address ?? "")
-                    .With("@dob", (object?)req.Dob ?? DBNull.Value).With("@gender", req.Gender ?? "")
-                    .With("@avatar", (object?)req.Avatar ?? DBNull.Value);
+                    .With("@dob", (object?)req.Dob ?? DBNull.Value).With("@gender", req.Gender ?? "");
             }
             cmd.With("@id", id);
             var n = await cmd.ExecuteNonQueryAsync();
@@ -1075,18 +1078,18 @@ public static class HrEndpoints
                     : "Đồng bộ vai trò theo chức vụ";
                 await db.RecordAudit(u.Username(), accessAction, "User", roleSync.Username,
                     $"[{roleSync.RolesBefore}] → [{roleSync.RolesAfter}] (web).");
-                try { await hub.Clients.User(roleSync.Username).SendAsync("changed", "access"); } catch { }
+                await businessEvents.AccessChangedAsync(roleSync.Username, u.Username(), http.RequestAborted);
             }
             else if (canManageHr && hasAccount
                      && !string.Equals(req.Status ?? "Active", "Active", StringComparison.OrdinalIgnoreCase))
             {
-                try { await hub.Clients.User(accountUsername).SendAsync("changed", "access"); } catch { }
+                await businessEvents.AccessChangedAsync(accountUsername, u.Username(), http.RequestAborted);
             }
             return Results.NoContent();
         });
 
         g.MapDelete("/employees/{id:guid}", async (Guid id, ClaimsPrincipal u, Database db,
-            IHubContext<ChangesHub> hub, HttpContext http) =>
+            BusinessEventWriter businessEvents, HttpContext http) =>
         {
             if (!u.Can(Permissions.HrManage)) return Results.Forbid();
             await using var conn = await db.OpenAsync();
@@ -1184,7 +1187,7 @@ public static class HrEndpoints
             {
                 await db.RecordAudit(u.Username(), "Khóa tài khoản khi xóa hồ sơ", "User", linkedUsername,
                     "Tài khoản bị vô hiệu hóa, hạ về Nhân viên và toàn bộ phiên bị thu hồi; không xóa dữ liệu tài khoản.");
-                try { await hub.Clients.User(linkedUsername).SendAsync("changed", "access"); } catch { }
+                await businessEvents.AccessChangedAsync(linkedUsername, u.Username(), http.RequestAborted);
             }
             return Results.NoContent();
         });
@@ -1532,13 +1535,17 @@ public static class HrEndpoints
         });
 
         // ---------------- Bằng cấp / chứng chỉ / khen thưởng ----------------
+        // Giấy tờ của MỘT hồ sơ (web dùng; app dùng /me/documents). Hai đường trả CÙNG MỘT bộ trường —
+        // trước đây đường này chỉ đọc 6 cột nên giấy tờ nhân viên nộp từ app hiện trên web thành dòng
+        // trống: không hạn, không số, không trạng thái, không tệp.
         g.MapGet("/employees/{id:guid}/documents", async (Guid id, ClaimsPrincipal u, Database db) =>
         {
             await using var conn = await db.OpenAsync();
             if (!u.IsHrManager() && !await IsEmployeeOwner(conn, id, u.Username())) return Results.Forbid();
             var list = new List<object>();
             await using var r = await conn.Cmd("""
-                SELECT id, doc_type, title, issued_by, issued_date, file_url, note
+                SELECT id, doc_type, title, issued_by, issued_date, doc_number, expires_at, approval_status,
+                       file_name, mime_type, file_url, note, (file_content IS NOT NULL) AS has_file
                 FROM hr_documents WHERE employee_id=@id ORDER BY issued_date DESC NULLS LAST, created_at DESC
                 """).With("@id", id).ExecuteReaderAsync();
             while (await r.ReadAsync())
@@ -1549,10 +1556,54 @@ public static class HrEndpoints
                     title = r.Str("title"),
                     issuedBy = r.Str("issued_by"),
                     issuedDate = DateOrNull(r, "issued_date"),
+                    docNumber = r.Str("doc_number"),
+                    expiresAt = DateOrNull(r, "expires_at"),
+                    approvalStatus = r.Str("approval_status"),
+                    fileName = r.Str("file_name"),
+                    mimeType = r.Str("mime_type"),
                     fileUrl = r.Str("file_url"),
+                    hasFile = r.Bool("has_file"),
                     note = r.Str("note"),
                 });
             return Results.Ok(list);
+        });
+
+        // Tải tệp đính kèm. App tải lên bằng file_content (bytea); trước đây web chỉ biết cột file_url
+        // nên mọi tệp nhân viên nộp từ điện thoại đều không mở được trên web.
+        g.MapGet("/documents/{did:guid}/file", async (Guid did, ClaimsPrincipal u, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            await using var r = await conn.Cmd("""
+                SELECT d.file_content, d.file_name, d.mime_type, e.username
+                FROM hr_documents d JOIN hr_employees e ON e.id = d.employee_id
+                WHERE d.id=@id
+                """).With("@id", did).ExecuteReaderAsync();
+            if (!await r.ReadAsync()) return Results.NotFound();
+            var owner = r.Str("username");
+            if (!u.IsHrManager() && !string.Equals(owner, u.Username(), StringComparison.OrdinalIgnoreCase))
+                return Results.Forbid();
+            if (r.IsDBNull(r.GetOrdinal("file_content")))
+                return Results.NotFound(new { message = "Hồ sơ này không có tệp đính kèm." });
+            var bytes = (byte[])r["file_content"];
+            var name = r.Str("file_name");
+            var mime = r.Str("mime_type");
+            return Results.File(bytes,
+                string.IsNullOrWhiteSpace(mime) ? "application/octet-stream" : mime,
+                string.IsNullOrWhiteSpace(name) ? $"ho-so-{did}" : name);
+        });
+
+        // HR duyệt giấy tờ nhân viên nộp từ app. Trước đây KHÔNG có đường nào chuyển 'pending' sang
+        // 'approved' nên nhãn "Chờ HR duyệt" trong app là ngõ cụt vĩnh viễn.
+        g.MapPost("/documents/{did:guid}/approve", async (Guid did, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.Can(Permissions.HrManage)) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            var title = await conn.Cmd("""
+                UPDATE hr_documents SET approval_status='approved' WHERE id=@id RETURNING title
+                """).With("@id", did).ExecuteScalarAsync() as string;
+            if (title is null) return Results.NotFound();
+            await Signal(db, u, "Duyệt hồ sơ nhân viên", "EmployeeDocument", title);
+            return Results.NoContent();
         });
 
         g.MapPost("/employees/{id:guid}/documents", async (Guid id, SaveDocumentReq req, ClaimsPrincipal u, Database db) =>
@@ -1562,13 +1613,19 @@ public static class HrEndpoints
             var isSelf = string.Equals(mine, u.Username(), StringComparison.OrdinalIgnoreCase);
             if (!u.Can(Permissions.HrManage) && !isSelf) return Results.Forbid();
             var did = Guid.NewGuid();
+            // Cùng luật với /me/documents: nhân viên tự nộp thì phải chờ duyệt, HR nhập hộ thì duyệt luôn.
+            var approval = u.Can(Permissions.HrManage) ? "approved" : "pending";
             await conn.Cmd("""
-                INSERT INTO hr_documents (id, employee_id, doc_type, title, issued_by, issued_date, file_url, note)
-                VALUES (@id, @emp, @type, @title, @by, @date, @url, @note)
+                INSERT INTO hr_documents (id, employee_id, doc_type, title, issued_by, issued_date,
+                    doc_number, expires_at, approval_status, file_url, note)
+                VALUES (@id, @emp, @type, @title, @by, @date, @no, @exp, @approval, @url, @note)
                 """)
                 .With("@id", did).With("@emp", id).With("@type", req.DocType ?? "certificate")
                 .With("@title", req.Title ?? "").With("@by", req.IssuedBy ?? "")
-                .With("@date", (object?)req.IssuedDate ?? DBNull.Value).With("@url", req.FileUrl ?? "").With("@note", req.Note ?? "")
+                .With("@date", (object?)req.IssuedDate ?? DBNull.Value)
+                .With("@no", req.DocNumber ?? "").With("@exp", (object?)req.ExpiresAt ?? DBNull.Value)
+                .With("@approval", approval)
+                .With("@url", req.FileUrl ?? "").With("@note", req.Note ?? "")
                 .ExecuteNonQueryAsync();
             await Signal(db, u, "Thêm hồ sơ bằng cấp", "EmployeeDocument", req.Title ?? "");
             return Results.Ok(new { id = did });
@@ -3148,5 +3205,6 @@ public static class HrEndpoints
     public record SavePayslipReq(string? Period, decimal WorkDays, decimal OvertimeHours, decimal BaseSalary,
         decimal Allowance, decimal OvertimePay, decimal Deductions, string? Note, bool Published);
     public record SaveLeaveBalanceReq(int Year, string? LeaveType, decimal TotalDays, decimal UsedDays);
-    public record SaveDocumentReq(string? DocType, string? Title, string? IssuedBy, DateOnly? IssuedDate, string? FileUrl, string? Note);
+    public record SaveDocumentReq(string? DocType, string? Title, string? IssuedBy, DateOnly? IssuedDate,
+        string? FileUrl, string? Note, string? DocNumber = null, DateOnly? ExpiresAt = null);
 }

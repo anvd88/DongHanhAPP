@@ -1,0 +1,45 @@
+# /api/tasks/meta
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.assignees : array
+  $.assignees[] : object
+  $.assignees[].attendanceNote : string
+  $.assignees[].attendanceStatus : string
+  $.assignees[].department : string
+  $.assignees[].fullName : string
+  $.assignees[].position : string
+  $.assignees[].selectable : bool
+  $.assignees[].username : string
+  $.canAssign : bool
+  $.priorities : array
+  $.priorities[] : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.assignees : array
+  $.canAssign : bool
+  $.priorities : array
+  $.priorities[] : string
+
+[HR] 200 application/json
+  $ : object
+  $.assignees : array
+  $.canAssign : bool
+  $.priorities : array
+  $.priorities[] : string
+
+[Driver] 200 application/json
+  $ : object
+  $.assignees : array
+  $.canAssign : bool
+  $.priorities : array
+  $.priorities[] : string
+
+[Employee] 200 application/json
+  $ : object
+  $.assignees : array
+  $.canAssign : bool
+  $.priorities : array
+  $.priorities[] : string

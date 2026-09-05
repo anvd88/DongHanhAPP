@@ -1,0 +1,28 @@
+# /api/users/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].approvalStatus : string
+  $[].createdAt : string
+  $[].email : string
+  $[].fullName : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isDiamond : bool
+  $[].isOnline : bool
+  $[].lastSeen : string
+  $[].role : string
+  $[].rolesManagedByPositions : bool
+  $[].secondaryRoles : array
+  $[].username : string
+  $[].verified : bool
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

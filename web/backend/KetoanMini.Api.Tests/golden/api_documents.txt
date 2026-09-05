@@ -1,0 +1,46 @@
+# /api/documents
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].cancelReason : string
+  $[].cancelledBy : string
+  $[].content : string
+  $[].createdBy : string
+  $[].customerName : string
+  $[].date : string
+  $[].deliveryDriverName : string
+  $[].deliveryMode : string
+  $[].deliveryReturnedAt : string
+  $[].deliveryTaskStatus : string
+  $[].documentType : string
+  $[].id : string
+  $[].issuedAt : string
+  $[].total : number
+  $[].voucherNo : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].cancelReason : string
+  $[].cancelledBy : string
+  $[].content : string
+  $[].createdBy : string
+  $[].customerName : string
+  $[].date : string
+  $[].deliveryDriverName : string
+  $[].deliveryMode : string
+  $[].deliveryReturnedAt : string
+  $[].deliveryTaskStatus : string
+  $[].documentType : string
+  $[].id : string
+  $[].issuedAt : string
+  $[].total : number
+  $[].voucherNo : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

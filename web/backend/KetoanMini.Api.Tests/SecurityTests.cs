@@ -52,10 +52,6 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     // '__test_employee__' — kể cả class không hề dùng tới — trong khi SecurityTests đang dùng dở.
     // Tên riêng cho từng fixture: mỗi fixture chỉ xóa đúng tài khoản của mình.
     public string EmpUser { get; } = $"__test_emp_{Guid.NewGuid():N}__";
-    // Nhiều test class tạo ApiFactory song song nhưng ChatEndpoints giữ blob root static trong cùng process;
-    // dùng chung một thư mục theo PID để các host test không đổi root qua lại giữa request.
-    private static readonly string ChatBlobDirectory =
-        Path.Combine(Path.GetTempPath(), $"ketoanmini-chat-tests-{Environment.ProcessId}");
     // APK test cũng ra thư mục tạm (cùng lý do): không để tệp vài chục MB rơi vào cây mã nguồn.
     private static readonly string ReleaseBlobDirectory =
         Path.Combine(Path.GetTempPath(), $"ketoanmini-apk-tests-{Environment.ProcessId}");
@@ -108,7 +104,6 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 // Integration tests invoke ReconcileAsync with a fixed clock. Never let the hosted
                 // reminder worker race fixture seed/cleanup against the real wall clock.
                 ["AttendanceReminder:Enabled"] = "false",
-                ["Chat:BlobDirectory"] = ChatBlobDirectory,
                 ["Releases:BlobDirectory"] = ReleaseBlobDirectory,
                 ["QrScanner:AllowedHttpsHosts:0"] = "example.com",
                 ["QrScanner:Actions:0:Id"] = "test-message",
@@ -346,13 +341,9 @@ public sealed class SecurityTests
     // Endpoint có trần riêng: web gọi "/api/releases/" nên cả hai dạng path phải ra trần APK.
     [InlineData("POST", "/api/releases", PayloadLimits.MaxApkBytes)]
     [InlineData("POST", "/api/releases/", PayloadLimits.MaxApkBytes)]
-    [InlineData("POST", "/api/chat/conversations/6f1b1e6e-0000-4000-8000-000000000001/messages/42/upload",
-        ChatEndpoints.MaxBlobBytes)]
     [InlineData("POST", "/api/qr/resolve", PayloadLimits.MaxQrActionBodyBytes)]
     [InlineData("POST", "/api/qr/decision", PayloadLimits.MaxQrActionBodyBytes)]
-    // Phần còn lại giữ trần JSON, kể cả các path chat/releases KHÔNG phải upload.
-    [InlineData("POST", "/api/chat/conversations/6f1b1e6e-0000-4000-8000-000000000001/messages/file",
-        PayloadLimits.MaxJsonBodyBytes)]
+    // Phần còn lại giữ trần JSON, kể cả các path releases KHÔNG phải upload.
     [InlineData("GET", "/api/releases", PayloadLimits.MaxJsonBodyBytes)]
     [InlineData("POST", "/api/chamcong/nhandien", PayloadLimits.MaxJsonBodyBytes)]
     public void MaxRequestBytesFor_UsesPerEndpointLimit(string method, string path, long expected)

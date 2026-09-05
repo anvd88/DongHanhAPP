@@ -558,6 +558,10 @@ public static class CashCollectionEndpoints
             await using var tx = await conn.BeginTransactionAsync();
             var before = await LoadOrder(conn, id, true, tx);
             if (before is null) return Results.NotFound();
+            // Chốt bất kiêm nhiệm DUY NHẤT còn lại ở bước nhận tiền: người bàn giao không được tự
+            // kiểm đếm phần mình nộp. Chốt "người LẬP lệnh không được nhận tiền của lệnh đó" đã được
+            // GỠ CÓ CHỦ Ý: văn phòng có lúc chỉ còn một người đủ vai trò, giữ chốt thì lệnh kẹt lại
+            // không ai nhận được tiền. ĐỪNG thêm lại — xem CashCollectionTests, chỗ đã ghi rõ lý do.
             if (SameUser(before.DriverUsername, u.Username()))
                 return Results.BadRequest(new { message = "Tài xế không được tự nhận và kiểm đếm tiền do mình bàn giao." });
             if (before.Status is not (StatusPendingHandover or StatusVariance))

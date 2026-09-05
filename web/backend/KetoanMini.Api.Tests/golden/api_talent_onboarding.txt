@@ -1,0 +1,27 @@
+# /api/talent/onboarding
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.mentorName : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.items : array
+  $.mentorName : string
+
+[HR] 200 application/json
+  $ : object
+  $.items : array
+  $.mentorName : string
+
+[Driver] 200 application/json
+  $ : object
+  $.items : array
+  $.mentorName : string
+
+[Employee] 200 application/json
+  $ : object
+  $.items : array
+  $.mentorName : string

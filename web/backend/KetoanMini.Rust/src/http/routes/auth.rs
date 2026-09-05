@@ -190,7 +190,12 @@ async fn load_profile_extras(
                       WHERE lower(username) = lower($1)
                         AND status = 'pending'
                         AND expires_at > CURRENT_TIMESTAMP) AS face_enrollment_pending,
-               (SELECT image_data_url FROM web_user_avatars WHERE user_id = $2) AS avatar_url,
+               -- Ảnh đại diện: nguồn DUY NHẤT là hr_employees.avatar (giống .NET sau đợt gộp); bảng
+               -- web_user_avatars chỉ còn là bản lưu. Ghép user_id trước, username sau.
+               (SELECT e.avatar FROM hr_employees e
+                 WHERE e.user_id = $2 OR lower(e.username) = lower($1)
+                 ORDER BY (e.user_id = $2) DESC NULLS LAST
+                 LIMIT 1) AS avatar_url,
                COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
                          FROM user_roles ur
                          WHERE ur.username = $1
@@ -219,8 +224,9 @@ async fn load_profile_extras(
                 verified: load_verified(&mut *connection, username, role).await,
                 is_diamond: load_diamond(&mut *connection, username, role).await,
                 face_registered: load_face_registered(&mut *connection, username).await,
-                face_enrollment_pending: load_face_enrollment_pending(&mut *connection, username).await,
-                avatar_url: load_avatar_url(&mut *connection, user_id).await,
+                face_enrollment_pending: load_face_enrollment_pending(&mut *connection, username)
+                    .await,
+                avatar_url: load_avatar_url(&mut *connection, user_id, username).await,
                 roles: load_all_roles(&mut *connection, username, role).await,
             }
         }
@@ -302,11 +308,19 @@ async fn load_face_enrollment_pending(connection: &mut PgConnection, username: &
     .is_some()
 }
 
-async fn load_avatar_url(connection: &mut PgConnection, user_id: Uuid) -> Option<String> {
+async fn load_avatar_url(
+    connection: &mut PgConnection,
+    user_id: Uuid,
+    username: &str,
+) -> Option<String> {
     sqlx::query_scalar::<_, Option<String>>(
-        "SELECT image_data_url FROM web_user_avatars WHERE user_id = $1",
+        "SELECT e.avatar FROM hr_employees e \
+         WHERE e.user_id = $1 OR lower(e.username) = lower($2) \
+         ORDER BY (e.user_id = $1) DESC NULLS LAST \
+         LIMIT 1",
     )
     .bind(user_id)
+    .bind(username)
     .fetch_optional(&mut *connection)
     .await
     .ok()
@@ -590,7 +604,7 @@ fn landing_path_for(
         "hr" => "/quanly-nhansu",
         "accounting" => "/ketoan",
         _ if effective_permissions.contains(permissions::HR_SELF_ACCESS) => "/nhan-su",
-        _ => "/chats",
+        _ => "/tai-apk",
     }
 }
 
@@ -737,7 +751,7 @@ mod tests {
             face_registered: false,
             face_enrollment_pending: false,
             roles: vec![roles::EMPLOYEE.to_owned()],
-            permissions: vec![permissions::CHAT_ACCESS.to_owned()],
+            permissions: vec![],
             can_assign_tasks: false,
         })
         .unwrap();

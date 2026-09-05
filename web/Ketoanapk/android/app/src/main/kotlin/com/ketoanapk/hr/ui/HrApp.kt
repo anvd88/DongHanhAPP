@@ -74,7 +74,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
-import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -351,7 +350,7 @@ fun HrApp(vm: HrViewModel) {
                     )
                 }
 
-                // Thư tri ân nằm trên nội dung ứng dụng nhưng nhường ưu tiên cho cuộc gọi/đăng nhập QR.
+                // Thư tri ân nằm trên nội dung ứng dụng nhưng nhường ưu tiên cho đăng nhập QR.
                 // Chỉ dựng sau intro và hướng dẫn quyền để nhân viên không nhận nhiều popup cùng lúc.
                 if (
                     vm.authState is AuthState.SignedIn &&
@@ -368,10 +367,9 @@ fun HrApp(vm: HrViewModel) {
                     }
                 }
 
-                // Màn xác nhận lương là một nhánh độc quyền: không cho call/QR/web-login tạo lớp phủ
+                // Màn xác nhận lương là một nhánh độc quyền: không cho QR/web-login tạo lớp phủ
                 // hoặc semantics tương tác khác cho tới khi xác nhận xong (hoặc đóng lượt tự nguyện).
                 if (!vm.payslipConfirmationVisible) {
-                    CallHost(vm)
                     QrScanDialog(qrScanner)
                     MobileAppLoginDialog(vm)
                 }
@@ -660,7 +658,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
     // trong app nhận Back — và chỉ làm một việc: lùi ngăn xếp màn.
     //
     // Mỗi màn con tự khai BackHandler của nó ngay chỗ nó được dựng (Cài đặt, Cổng thông tin, Phiếu lương,
-    // Chấm công, Chat, Đơn từ, Quản lý nhân sự...). Nhờ vậy thêm màn con mới KHÔNG phải sửa gì ở đây.
+    // Chấm công, Đơn từ, Quản lý nhân sự...). Nhờ vậy thêm màn con mới KHÔNG phải sửa gì ở đây.
     BackHandler(enabled = vm.canGoBack) { vm.goBack() }
 
     // Khai SAU cái trên nên được ưu tiên hơn: đang mở tìm kiếm thì Back đóng tìm kiếm, chưa rời màn.
@@ -696,17 +694,12 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
         HrDestination.CashCollections -> vm.cashCollectionState.loading
         HrDestination.Portal -> vm.portalState.loading
         HrDestination.Tasks -> vm.homeState.loading || vm.workTasksState.loading
-        HrDestination.Chat -> vm.realChatState.loading
         HrDestination.Directory -> vm.directoryState.loading
-        HrDestination.Calls -> vm.callHistoryState.loading
         else -> vm.homeState.loading
     }
     val footerDestinations = vm.bottomDestinations(user)
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Chat là "mini app": chiếm trọn màn, tự dựng header + thanh tab riêng nên ẩn hẳn header và
-        // thanh dưới của HR ở đây.
-        val chatFullScreen = vm.selected == HrDestination.Chat
         Scaffold(
             // Khóa vùng nội dung vào safe drawing kể cả trong lúc màn camera phủ ngoài Scaffold đổi
             // trạng thái; tiêu đề và kết quả chấm công luôn nằm dưới status bar/navigation bar.
@@ -715,12 +708,11 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
             snackbarHost = {
                 SnackbarHost(
                     hostState = snackbar,
-                    modifier = Modifier.padding(bottom = if (chatFullScreen) 0.dp else BottomBarHeight),
+                    modifier = Modifier.padding(bottom = BottomBarHeight),
                 )
             },
             topBar = {
-                if (chatFullScreen) Unit
-                else if (vm.searchOpen) SearchTopBar(
+                if (vm.searchOpen) SearchTopBar(
                     query = vm.searchQuery,
                     onQuery = vm::typeSearch,
                     onClose = vm::closeSearch,
@@ -746,13 +738,6 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                         )
                     },
                     actions = {
-                        // Màn Đơn từ có nút "Hỗ trợ" ở góc phải: mở thẳng Chat nội bộ (thay cho tab Chat cũ).
-                        if (vm.selected == HrDestination.Requests) {
-                            SupportButton(
-                                unread = vm.chatUnreadCount,
-                                onClick = { vm.select(HrDestination.Chat) },
-                            )
-                        }
                         NotificationBell(count = vm.unreadCount, onClick = vm::openNotifications)
                         Spacer(Modifier.width(4.dp))
                     },
@@ -766,7 +751,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     .padding(padding),
             ) {
                 // Thanh cập nhật nằm ngoài nội dung từng màn nên luôn được ghim ở cùng một vị trí,
-                // kể cả Chat toàn màn hình. Không có nút tắt; bấm vào sẽ mở lại bảng chi tiết.
+                // Không có nút tắt; bấm vào sẽ mở lại bảng chi tiết.
                 val availableUpdate = vm.availableUpdate
                 AnimatedVisibility(
                     visible = availableUpdate != null && !vm.updateSheetVisible,
@@ -897,9 +882,7 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
                     HrDestination.Requests -> RequestsScreen(vm)
                     HrDestination.Tasks -> TaskCenterScreen(vm)
                     HrDestination.TaskHistory -> TaskHistoryScreen(vm)
-                    HrDestination.Chat -> RealChatScreen(vm)
                     HrDestination.Directory -> DirectoryScreen(vm)
-                    HrDestination.Calls -> CallHistoryScreen(vm)
                     HrDestination.Approval -> StaffRequestsScreen(vm)
                     HrDestination.Penalty -> PenaltyScreen(user, vm.homeState, vm::startPenaltyAppeal)
                     HrDestination.People -> AdminPeopleScreen(vm)
@@ -925,16 +908,14 @@ private fun HrShell(user: HrUser, vm: HrViewModel, qrScanner: QrScanController) 
             }
         }
 
-        if (!chatFullScreen) {
-            BottomBar(
-                items = footerDestinations,
-                selected = vm.selected,
-                badgeCount = vm::badgeCount,
-                onSelect = vm::select,
-                onScanQr = qrScanner.startScan,
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
-        }
+        BottomBar(
+            items = footerDestinations,
+            selected = vm.selected,
+            badgeCount = vm::badgeCount,
+            onSelect = vm::select,
+            onScanQr = qrScanner.startScan,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
 
         // Camera quét khuôn mặt phủ TOÀN MÀN HÌNH (ngoài Scaffold) → không dính thanh tiêu đề/điều hướng.
         if (vm.selected == HrDestination.Scan && vm.attendanceCapture == AttendanceCapture.Collecting) {
@@ -1417,23 +1398,6 @@ private fun BottomBar(
             active = selected == HrDestination.Scan,
             modifier = Modifier.align(Alignment.TopCenter),
         )
-    }
-}
-
-/** Nút "Hỗ trợ" ở góc phải màn Đơn từ → mở Chat nội bộ. Kèm huy hiệu số tin nhắn chưa đọc. */
-@Composable
-private fun SupportButton(unread: Int, onClick: () -> Unit) {
-    TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 10.dp)) {
-        BadgedBox(badge = { if (unread > 0) CountBadge(unread) }) {
-            Icon(
-                Icons.Filled.SupportAgent,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-        Spacer(Modifier.width(6.dp))
-        Text("Hỗ trợ", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
     }
 }
 

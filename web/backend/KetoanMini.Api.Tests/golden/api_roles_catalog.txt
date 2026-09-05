@@ -1,0 +1,22 @@
+# /api/roles/catalog
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].assignable : bool
+  $[].label : string
+  $[].permissions : array
+  $[].permissions[] : object
+  $[].permissions[].key : string
+  $[].permissions[].label : string
+  $[].role : string
+  $[].technical : bool
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

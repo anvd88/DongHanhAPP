@@ -28,8 +28,8 @@ class HrMessagingService : FirebaseMessagingService() {
         }
         if (identityAtCallback.first.isBlank() || identityAtCallback.second.isBlank()) return
         val repo = HrRepository(applicationContext)
-        // Đăng ký token BẤT KỂ công tắc thông báo — để server luôn gọi được tới máy này (cuộc gọi cần
-        // token dù người dùng tắt thông báo nghiệp vụ). Chốt cả username + JWT: callback của A chạy
+        // Đăng ký token BẤT KỂ công tắc thông báo để máy chủ có thể gửi thông báo nghiệp vụ.
+        // Chốt cả username + JWT: callback của A chạy
         // muộn sau khi B đăng nhập không được phép đăng ký token bằng phiên B.
         scope.launch {
             val identityNow = runCatching {
@@ -45,28 +45,11 @@ class HrMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
-        // Mọi push theo người nhận, kể cả cuộc gọi, phải khớp hồ sơ đã xác thực gần nhất. Đọc scope
-        // trước nhánh call để token còn sót của A không thể chạm CallManager sau khi đã chuyển sang B.
+        // Mọi push theo người nhận phải khớp hồ sơ đã xác thực gần nhất.
         val accountId = runBlocking { TokenStore(applicationContext).cachedUser()?.username }.orEmpty()
         if (accountId.isBlank()) return
         val currentScope = notificationAccountScope(accountId)
         val recipientScope = data["recipient_scope"].orEmpty().trim()
-
-        // CUỘC GỌI đến/hủy: LUÔN xử lý (đổ chuông toàn màn hình) — KHÔNG phụ thuộc công tắc "thông báo
-        // push" của người dùng, vì cuộc gọi quan trọng và phải reo được kể cả khi họ tắt thông báo
-        // nghiệp vụ. Scope là bắt buộc cho call data-only; backend hiện hành luôn gửi trường này.
-        when (data["type"]) {
-            "call_invite" -> {
-                if (!callRecipientMatches(currentScope, recipientScope)) return
-                handleCallInvite(data)
-                return
-            }
-            "call_cancel" -> {
-                if (!callRecipientMatches(currentScope, recipientScope)) return
-                handleCallCancel(data)
-                return
-            }
-        }
 
         val title = data["title"] ?: message.notification?.title ?: "Thông báo"
         val body = data["body"] ?: message.notification?.body ?: ""
@@ -76,8 +59,7 @@ class HrMessagingService : FirebaseMessagingService() {
         val isAppUpdate = target == APP_UPDATE_NOTIFICATION_TARGET
         if (!notificationRecipientMatches(kind, currentScope, recipientScope)) return
 
-        // Tắt thông báo chỉ tắt phần HIỂN THỊ, không được tắt tín hiệu đồng bộ dữ liệu. Nếu không,
-        // tin chat/voice đã tới FCM nhưng màn đang mở vẫn đứng im khi SignalR vừa reconnect.
+        // Tắt thông báo chỉ tắt phần HIỂN THỊ, không được tắt tín hiệu đồng bộ dữ liệu.
         val pushEnabled = runBlocking { HrRepository(applicationContext).pushNotificationsEnabled() }
         if (!pushEnabled) {
             // Công tắc push chỉ tắt THÔNG BÁO KHAY. Khi app đang mở, phát hành APK vẫn phải dựng
@@ -107,34 +89,6 @@ class HrMessagingService : FirebaseMessagingService() {
         else if (kind != NotificationKind.System) AppEvents.signalDataChanged()
     }
 
-    /** Lời mời gọi đến: dựng phiên "đang đổ chuông" + reo toàn màn hình (nếu app không ở tiền cảnh). */
-    private fun handleCallInvite(data: Map<String, String>) {
-        val callId = data["call_id"].orEmpty()
-        // "caller" = username người gọi (KHÔNG dùng "from" vì đó là khóa bị FCM cấm trong data payload).
-        val from = data["caller"].orEmpty()
-        if (callId.isBlank() || from.isBlank()) return
-        val name = data["caller_name"].orEmpty()
-        val media = data["media"].orEmpty()
-        CallManager.init(applicationContext) // đảm bảo có context (cold-start từ push)
-        // Dựng phiên để lớp phủ CallHost hiện màn nghe máy khi app mở lên (idempotent theo callId).
-        CallManager.ingestIncomingFromPush(callId, from, name, media)
-        // App đang mở → SignalR + overlay lo hết, khỏi reo trùng bằng thông báo hệ thống.
-        if (!AppForeground.isForeground) {
-            CallNotifier.showIncoming(applicationContext, callId, from, name, media)
-        }
-    }
-
-    /** Người gọi hủy trước khi bắt máy → tắt màn đổ chuông + thông báo. */
-    private fun handleCallCancel(data: Map<String, String>) {
-        data["call_id"]?.takeIf { it.isNotBlank() }?.let { CallManager.cancelIncomingFromPush(it) }
-        CallNotifier.dismiss(applicationContext)
-    }
-
-    /** Cuộc gọi là dữ liệu cá nhân/actionable nên thiếu scope cũng phải fail-closed. */
-    private fun callRecipientMatches(currentScope: String, incomingScope: String): Boolean =
-        currentScope.isNotBlank() && incomingScope.isNotBlank() &&
-            currentScope.equals(incomingScope, ignoreCase = true)
-
     /**
      * Đoán nhóm từ CHỮ KÝ sự kiện. Chữ ký do máy chủ đặt (xem các endpoint nghiệp vụ) nên tiền tố ở
      * đây phải khớp với chúng — nếu không, thông báo vẫn hiện nhưng đeo nhầm icon/màu. Cùng một sự
@@ -145,7 +99,6 @@ class HrMessagingService : FirebaseMessagingService() {
         notifId.startsWith("req:") -> NotificationKind.Request
         notifId.startsWith("inbox:") -> NotificationKind.Approval
         notifId.startsWith("pen:") -> NotificationKind.Penalty
-        notifId.startsWith("chat:") -> NotificationKind.Chat
         notifId.startsWith("attendance:") -> NotificationKind.Attendance
         notifId.startsWith("delivery:") -> NotificationKind.Delivery
         notifId.startsWith("cash-collection:") -> NotificationKind.Collection
@@ -155,7 +108,6 @@ class HrMessagingService : FirebaseMessagingService() {
         target == "Requests" -> NotificationKind.Request
         target == "Approval" -> NotificationKind.Approval
         target == "Penalty" -> NotificationKind.Penalty
-        target == "Chat" -> NotificationKind.Chat
         target == "CashCollections" -> NotificationKind.Collection
         target == "Payout" -> NotificationKind.Payout
         target == "Tasks" -> NotificationKind.Task

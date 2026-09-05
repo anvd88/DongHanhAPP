@@ -14,12 +14,12 @@ Web + Android
  ketoanmini-server :5240
       |-- native Rust route ------ PostgreSQL
       |-- compatibility stream --- ASP.NET :5239
-                                      |-- SignalR / FCM / face
+                                      |-- FCM / face
                                       |-- Excel COM / printer / blob worker
 ```
 
-Gateway không buffer toàn bộ body, giữ nguyên Authorization/cookie/CSRF/status/Set-Cookie và tunnel
-WebSocket hai chiều. Upstream bị giới hạn cứng ở HTTP loopback để cấu hình sai không gửi credential ra
+Gateway không buffer toàn bộ body và giữ nguyên Authorization/cookie/CSRF/status/Set-Cookie. Upstream
+bị giới hạn cứng ở HTTP loopback để cấu hình sai không gửi credential ra
 máy khác. URI, query và header không được ghi log vì có thể chứa JWT hoặc mã QR.
 
 ## Cấu trúc source
@@ -27,7 +27,7 @@ máy khác. URI, query và header không được ghi log vì có thể chứa J
 ```text
 src/
   auth/       JWT, cookie/CSRF, session freshness, role, permission, password hash
-  compat/     streaming reverse proxy và WebSocket tunnel
+  compat/     streaming reverse proxy cho HTTP/SSE
   http/       router, security headers, native route modules
   db.rs       pool và parser connection string Npgsql/PostgreSQL
   schema.rs   startup guard read-only; tuyệt đối không chạy DDL
@@ -47,14 +47,12 @@ ID từ body để quyết định ownership. SQL luôn bind parameter. JSON gi�
 3. Workflow phải được chuyển nguyên khối cùng transaction, `FOR UPDATE`, advisory lock, audit và outbox.
 4. Contract test so status, JSON, content type, header, cookie và binary body; không chỉ so dữ liệu cuối.
 5. DDL trong thời gian rollback phải additive/backward-compatible.
-6. PostgreSQL, chat volume và release volume phải được snapshot cùng một mốc trước cutover.
-7. Mọi state phía client có dữ liệu theo tài khoản (toast, hội thoại, WebRTC, tệp P2P, callback async)
+6. PostgreSQL và release volume phải được snapshot cùng một mốc trước cutover.
+7. Mọi state phía client có dữ liệu theo tài khoản (toast và callback async)
    phải bị hủy hoặc đổi generation tại ranh giới đăng xuất/đăng nhập; xóa DOM hiện tại thôi chưa đủ.
 
 ## Thành phần giữ sidecar ban đầu
 
-- `/hubs/changes`: SignalR, presence, WebRTC relay và targeted events `signal`, `kicked`,
-  `feedbackResolved`.
 - Firebase/outbox delivery: giữ đúng lease 2 phút, retry, dedupe, TTL và token pruning.
 - Face: ONNX/OpenCV, liveness và AES-GCM embedding `KME1` cho đến khi có golden corpus.
 - Excel COM/máy in vật lý: chạy trong interactive Windows session của đúng user.

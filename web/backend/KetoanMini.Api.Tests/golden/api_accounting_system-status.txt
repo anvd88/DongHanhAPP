@@ -1,0 +1,42 @@
+# /api/accounting/system-status
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.checkedAt : string
+  $.printer : object
+  $.printer.available : bool
+  $.printer.message : string
+  $.printer.name : string
+  $.printer.queuedJobs : number
+  $.printer.ready : bool
+  $.printer.statusCode : number
+  $.server : object
+  $.server.message : string
+  $.server.name : string
+  $.server.online : bool
+  $.server.printServiceReady : bool
+  $.server.uptimeSeconds : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.checkedAt : string
+  $.printer : object
+  $.printer.available : bool
+  $.printer.message : string
+  $.printer.name : string
+  $.printer.queuedJobs : number
+  $.printer.ready : bool
+  $.printer.statusCode : number
+  $.server : object
+  $.server.message : string
+  $.server.name : string
+  $.server.online : bool
+  $.server.printServiceReady : bool
+  $.server.uptimeSeconds : number
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

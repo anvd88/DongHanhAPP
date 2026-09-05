@@ -1,0 +1,12 @@
+# /api/health/ready
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 404 
+
+[Accounting] 404 
+
+[HR] 404 
+
+[Driver] 404 
+
+[Employee] 404 

@@ -1,0 +1,41 @@
+{
+  "policies": [
+    {
+      "vhost": "ketoan",
+      "name": "ketoan-main-quorum-safety",
+      "pattern": "^(notifications|realtime-projection|cache-invalidation)\\.q$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "dead-letter-exchange": "ketoan.events.dlx",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 4
+      }
+    },
+    {
+      "vhost": "ketoan",
+      "name": "ketoan-retry-5s",
+      "pattern": "\\.retry\\.5s$",
+      "apply-to": "quorum_queues",
+      "priority": 20,
+      "definition": { "message-ttl": 5000, "dead-letter-exchange": "ketoan.events", "dead-letter-strategy": "at-least-once", "overflow": "reject-publish" }
+    },
+    {
+      "vhost": "ketoan",
+      "name": "ketoan-retry-30s",
+      "pattern": "\\.retry\\.30s$",
+      "apply-to": "quorum_queues",
+      "priority": 20,
+      "definition": { "message-ttl": 30000, "dead-letter-exchange": "ketoan.events", "dead-letter-strategy": "at-least-once", "overflow": "reject-publish" }
+    },
+    {
+      "vhost": "ketoan",
+      "name": "ketoan-retry-2m",
+      "pattern": "\\.retry\\.2m$",
+      "apply-to": "quorum_queues",
+      "priority": 20,
+      "definition": { "message-ttl": 120000, "dead-letter-exchange": "ketoan.events", "dead-letter-strategy": "at-least-once", "overflow": "reject-publish" }
+    }
+  ]
+}

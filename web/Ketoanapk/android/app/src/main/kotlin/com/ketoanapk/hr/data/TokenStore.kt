@@ -120,6 +120,25 @@ class TokenStore(private val context: Context) {
         return generated
     }
 
+    private suspend fun sseCursorKey(username: String): Preferences.Key<Long> {
+        val identity = username.trim().lowercase() + ":" + sessionId()
+        return longPreferencesKey("sse_cursor_" + identity.hashCode().toUInt().toString(16))
+    }
+
+    suspend fun sseCursor(username: String): Long =
+        context.dataStore.data.first()[sseCursorKey(username)] ?: 0L
+
+    suspend fun saveSseCursor(username: String, cursor: Long) {
+        if (cursor < 0) return
+        val key = sseCursorKey(username)
+        context.dataStore.edit { it[key] = cursor }
+    }
+
+    suspend fun clearSseCursor(username: String) {
+        val key = sseCursorKey(username)
+        context.dataStore.edit { it.remove(key) }
+    }
+
     private fun encrypt(token: String): String =
         Base64.encodeToString(OfflineCrypto.encrypt(token.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
 

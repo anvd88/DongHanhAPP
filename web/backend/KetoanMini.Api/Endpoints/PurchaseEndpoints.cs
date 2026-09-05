@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
 using Npgsql;
@@ -38,8 +38,13 @@ public static class PurchaseEndpoints
                        COALESCE(p.purchase_count, 0)::int AS purchase_count,
                        COALESCE(p.purchased_total, 0) AS purchased_total,
                        COALESCE(p.paid_total, 0) AS paid_total,
-                       p.last_purchase_date
+                       p.last_purchase_date,
+                       COALESCE(a.aliases, '{}'::text[]) AS aliases
                 FROM suppliers s
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(sa.alias ORDER BY sa.alias) AS aliases
+                    FROM supplier_aliases sa WHERE sa.supplier_id = s.id
+                ) a ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT COUNT(*)::int AS purchase_count,
                            SUM(COALESCE(t.total, 0)) AS purchased_total,
@@ -53,7 +58,9 @@ public static class PurchaseEndpoints
                     WHERE pu.supplier_id = s.id AND pu.cancelled_at IS NULL
                 ) p ON TRUE
                 WHERE (@all OR s.is_active = TRUE)
-                  AND (@kw = '' OR s.name ILIKE @like OR s.tax_code ILIKE @like OR s.phone ILIKE @like)
+                  AND (@kw = '' OR s.name ILIKE @like OR s.tax_code ILIKE @like OR s.phone ILIKE @like
+                       OR EXISTS (SELECT 1 FROM supplier_aliases sa2
+                                  WHERE sa2.supplier_id = s.id AND sa2.alias ILIKE @like))
                 ORDER BY s.is_active DESC, s.name
                 LIMIT 500
                 """)
@@ -79,8 +86,68 @@ public static class PurchaseEndpoints
                     balance = purchased - paid,
                     lastPurchaseDate = r.IsDBNull(r.GetOrdinal("last_purchase_date"))
                         ? (DateOnly?)null : r.DateOnly("last_purchase_date"),
+                    aliases = r.GetFieldValue<string[]>(r.GetOrdinal("aliases")),
                 });
             }
+            return Results.Ok(new { items });
+        });
+
+        // HÀNG CỦA NHÀ CUNG CẤP NÀY CÒN LẠI BAO NHIÊU — nhìn theo chiều ngược với
+        // /products/{id}/sources: ở đó là "mặt hàng này lấy của những ai", ở đây là "của người này
+        // còn những gì". Thủ kho đi đếm hàng thật trong kho cần đúng bảng này.
+        //
+        // Chỉ những mặt hàng có trong danh mục mới đếm được: dòng phiếu gõ tay không có mã hàng thì
+        // không có gì để cộng hai vế nhập và xuất vào với nhau.
+        api.MapGet("/suppliers/{supplierId:guid}/stock", async (Guid supplierId, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var items = new List<object>();
+            await using var r = await conn.Cmd("""
+                SELECT p.id, p.code, p.name, p.spec, p.unit,
+                       b.bought,
+                       COALESCE(x.sold, 0) AS sold,
+                       b.bought - COALESCE(x.sold, 0) AS remaining,
+                       b.last_cost, b.last_bought_date
+                FROM products p
+                JOIN LATERAL (
+                    SELECT SUM(pl.quantity) AS bought,
+                           (SELECT pl2.unit_price
+                            FROM purchase_lines pl2
+                            JOIN purchases p2 ON p2.id = pl2.purchase_id
+                            WHERE pl2.product_id = p.id AND p2.supplier_id = @sid AND p2.cancelled_at IS NULL
+                            ORDER BY p2.doc_date DESC, p2.created_at DESC LIMIT 1) AS last_cost,
+                           MAX(pu.doc_date) AS last_bought_date
+                    FROM purchase_lines pl
+                    JOIN purchases pu ON pu.id = pl.purchase_id
+                    WHERE pl.product_id = p.id AND pu.supplier_id = @sid AND pu.cancelled_at IS NULL
+                ) b ON b.bought IS NOT NULL
+                LEFT JOIN LATERAL (
+                    -- Phiếu bán trừ đi, phiếu khách trả về cộng lại.
+                    SELECT SUM(CASE WHEN d.document_type = 'return' THEN -l.quantity ELSE l.quantity END) AS sold
+                    FROM document_lines l
+                    JOIN documents d ON d.id = l.document_id
+                    WHERE l.product_id = p.id AND l.supplier_id = @sid
+                      AND d.document_type IN ('document', 'return')
+                      AND d.cancelled_at IS NULL
+                ) x ON TRUE
+                ORDER BY remaining DESC, p.name
+                """).With("@sid", supplierId).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                items.Add(new
+                {
+                    productId = r.Guid("id"),
+                    code = r.Str("code"),
+                    name = r.Str("name"),
+                    spec = r.Str("spec"),
+                    unit = r.Str("unit"),
+                    bought = r.Dec("bought"),
+                    sold = r.Dec("sold"),
+                    remaining = r.Dec("remaining"),
+                    lastCost = r.IsDBNull(r.GetOrdinal("last_cost")) ? (decimal?)null : r.Dec("last_cost"),
+                    lastBoughtDate = r.IsDBNull(r.GetOrdinal("last_bought_date"))
+                        ? (DateOnly?)null
+                        : r.DateOnly("last_bought_date"),
+                });
             return Results.Ok(new { items });
         });
 
@@ -139,6 +206,78 @@ public static class PurchaseEndpoints
             if (changed == 0) return Results.NotFound();
             await db.RecordAudit(u.Username(), "Sửa nhà cung cấp", "Supplier", name, "");
             return Results.NoContent();
+        });
+
+        // ── Bí danh nhà cung cấp ────────────────────────────────────────────────────────────
+        //
+        // "Công ty Đại Phát" trên giấy tờ nhưng người trong kho gọi là "anh A - Đại Phát". Gõ tên
+        // nào cũng phải về đúng một nhà cung cấp, nếu không mỗi cách gọi lại đẻ ra một hồ sơ mới và
+        // công nợ phải trả bị chẻ nhỏ.
+        api.MapPost("/suppliers/{id:guid}/aliases", async (Guid id, SaveAliasReq req, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.Can(Permissions.VouchersCreate)) return Results.Forbid();
+            var alias = (req.Alias ?? "").Trim();
+            if (alias.Length == 0) return Results.BadRequest(new { message = "Vui lòng nhập bí danh." });
+
+            await using var conn = await db.OpenAsync();
+            var supplier = await conn.Cmd("SELECT name FROM suppliers WHERE id=@id")
+                .With("@id", id).ExecuteScalarAsync() as string;
+            if (supplier is null) return Results.NotFound();
+
+            // Bí danh trùng TÊN THẬT của một nhà cung cấp khác là cái bẫy tệ nhất: lúc gán tự động,
+            // tên thật thắng nên bí danh nằm đó vô dụng, còn người đặt thì tưởng đã xong.
+            var clash = await conn.Cmd("SELECT id FROM suppliers WHERE lower(name) = lower(@a) AND id <> @id")
+                .With("@a", alias).With("@id", id).ExecuteScalarAsync();
+            if (clash is Guid)
+                return Results.Conflict(new { message = $"\"{alias}\" đang là tên của một nhà cung cấp khác." });
+
+            try
+            {
+                await conn.Cmd("INSERT INTO supplier_aliases (supplier_id, alias, created_by) VALUES (@id, @a, @by)")
+                    .With("@id", id).With("@a", alias).With("@by", u.Username()).ExecuteNonQueryAsync();
+            }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                var owner = await conn.Cmd("""
+                    SELECT s.name FROM supplier_aliases sa
+                    JOIN suppliers s ON s.id = sa.supplier_id
+                    WHERE lower(sa.alias) = lower(@a)
+                    """).With("@a", alias).ExecuteScalarAsync() as string ?? "";
+                return Results.Conflict(new { message = $"Bí danh này đã gán cho \"{owner}\"." });
+            }
+
+            await db.RecordAudit(u.Username(), "Thêm bí danh nhà cung cấp", "Supplier", supplier, alias);
+            return Results.Ok(new { alias });
+        });
+
+        api.MapDelete("/suppliers/{id:guid}/aliases/{aliasId:long}", async (
+            Guid id, long aliasId, ClaimsPrincipal u, Database db) =>
+        {
+            if (!u.Can(Permissions.VouchersCreate)) return Results.Forbid();
+            await using var conn = await db.OpenAsync();
+            var alias = await conn.Cmd("DELETE FROM supplier_aliases WHERE id=@aid AND supplier_id=@id RETURNING alias")
+                .With("@aid", aliasId).With("@id", id).ExecuteScalarAsync() as string;
+            if (alias is null) return Results.NotFound();
+            await db.RecordAudit(u.Username(), "Xoá bí danh nhà cung cấp", "Supplier", alias, "");
+            return Results.NoContent();
+        });
+
+        api.MapGet("/suppliers/{id:guid}/aliases", async (Guid id, Database db) =>
+        {
+            await using var conn = await db.OpenAsync();
+            var items = new List<object>();
+            await using var r = await conn.Cmd(
+                "SELECT id, alias, created_by, created_at FROM supplier_aliases WHERE supplier_id=@id ORDER BY alias")
+                .With("@id", id).ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                items.Add(new
+                {
+                    id = r.Long("id"),
+                    alias = r.Str("alias"),
+                    createdBy = r.Str("created_by"),
+                    createdAt = r.Dt("created_at"),
+                });
+            return Results.Ok(new { items });
         });
 
         // ── Phiếu nhập mua ──────────────────────────────────────────────────────────────────
@@ -275,6 +414,41 @@ public static class PurchaseEndpoints
         });
     }
 
+    /// <summary>
+    /// Tên gõ tay thành hồ sơ nhà cung cấp. Thứ tự tra: tên thật, rồi bí danh, cuối cùng mới tạo mới.
+    /// </summary>
+    /// <remarks>
+    /// Bí danh phải đứng TRƯỚC bước tạo mới, nếu không "anh A - Đại Phát" sẽ đẻ ra một nhà cung cấp
+    /// thứ hai bên cạnh "Công ty Đại Phát" — đúng thứ mà bảng bí danh sinh ra để chặn.
+    ///
+    /// Tên trả về là tên THẬT của nhà cung cấp chứ không phải chữ vừa gõ: phiếu nhập phải ghi tên
+    /// trên giấy tờ, còn bí danh chỉ là lối vào cho nhanh.
+    /// </remarks>
+    private static async Task<(Guid Id, string Name)> ResolveSupplier(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string name)
+    {
+        await using (var byName = await conn.Cmd(
+                "SELECT id, name FROM suppliers WHERE lower(name) = lower(@n)", tx)
+            .With("@n", name).ExecuteReaderAsync())
+        {
+            if (await byName.ReadAsync()) return (byName.Guid("id"), byName.Str("name"));
+        }
+
+        await using (var byAlias = await conn.Cmd(
+                @"SELECT s.id, s.name FROM supplier_aliases sa
+                  JOIN suppliers s ON s.id = sa.supplier_id
+                  WHERE lower(sa.alias) = lower(@n)", tx)
+            .With("@n", name).ExecuteReaderAsync())
+        {
+            if (await byAlias.ReadAsync()) return (byAlias.Guid("id"), byAlias.Str("name"));
+        }
+
+        var newId = Guid.NewGuid();
+        await conn.Cmd("INSERT INTO suppliers (id, name, is_active) VALUES (@id, @n, TRUE)", tx)
+            .With("@id", newId).With("@n", name).ExecuteNonQueryAsync();
+        return (newId, name);
+    }
+
     private static async Task<IResult> SavePurchase(Database db, ClaimsPrincipal u, Guid? id, SavePurchaseReq req)
     {
         var supplierName = (req.SupplierName ?? "").Trim();
@@ -296,12 +470,20 @@ public static class PurchaseEndpoints
 
         // Tên nhà cung cấp lưu KÈM trên phiếu (không chỉ khoá ngoại): đổi tên nhà cung cấp về sau
         // không được làm phiếu cũ hiện tên khác với tờ giấy đã lưu.
+        Guid? resolvedSupplierId = req.SupplierId;
         if (req.SupplierId is { } supplierId)
         {
             var known = await conn.Cmd("SELECT name FROM suppliers WHERE id=@id", tx)
                 .With("@id", supplierId).ExecuteScalarAsync() as string;
             if (known is null) return Results.BadRequest(new { message = "Nhà cung cấp không tồn tại." });
             if (supplierName.Length == 0) supplierName = known;
+        }
+        else
+        {
+            // Gõ tay một cái tên chưa có trong danh mục thì phải DỰNG hồ sơ nhà cung cấp, y như bên
+            // bán hàng vẫn tự tạo khách mới. Trước đây phiếu lưu với supplier_id rỗng: công nợ phải
+            // trả không cộng vào ai cả, và tồn theo nguồn hàng không thấy lô hàng đó tồn tại.
+            (resolvedSupplierId, supplierName) = await ResolveSupplier(conn, tx, supplierName);
         }
 
         var purchaseId = id ?? Guid.NewGuid();
@@ -316,7 +498,7 @@ public static class PurchaseEndpoints
                 """, tx)
                 .With("@id", purchaseId).With("@no", voucherNo)
                 .With("@date", req.Date ?? DateOnly.FromDateTime(DateTime.Now))
-                .With("@sid", (object?)req.SupplierId ?? DBNull.Value).With("@sname", supplierName)
+                .With("@sid", (object?)resolvedSupplierId ?? DBNull.Value).With("@sname", supplierName)
                 .With("@inv", (req.SupplierInvoiceNo ?? "").Trim()).With("@note", (req.Note ?? "").Trim())
                 .With("@paid", paid).With("@by", me)
                 .ExecuteNonQueryAsync();
@@ -335,7 +517,7 @@ public static class PurchaseEndpoints
                 WHERE id=@id
                 """, tx)
                 .With("@id", purchaseId).With("@date", req.Date ?? DateOnly.FromDateTime(DateTime.Now))
-                .With("@sid", (object?)req.SupplierId ?? DBNull.Value).With("@sname", supplierName)
+                .With("@sid", (object?)resolvedSupplierId ?? DBNull.Value).With("@sname", supplierName)
                 .With("@inv", (req.SupplierInvoiceNo ?? "").Trim()).With("@note", (req.Note ?? "").Trim())
                 .With("@paid", paid)
                 .ExecuteNonQueryAsync();
@@ -384,6 +566,8 @@ public static class PurchaseEndpoints
     public record PurchaseLineReq(Guid? ProductId, string? LineContent, string? Spec,
         decimal Quantity, decimal UnitPrice, string? Note);
     /// <param name="PaidAmount">Đã trả nhà cung cấp bao nhiêu. Còn nợ = tổng phiếu − số này.</param>
+    public record SaveAliasReq(string? Alias);
+
     public record SavePurchaseReq(string? VoucherNo, DateOnly? Date, Guid? SupplierId, string? SupplierName,
         string? SupplierInvoiceNo, string? Note, decimal? PaidAmount, List<PurchaseLineReq>? Lines);
     public record CancelPurchaseReq(string? Reason);

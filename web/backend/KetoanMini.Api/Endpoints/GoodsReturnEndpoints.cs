@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
 using Npgsql;
@@ -211,10 +211,19 @@ public static class GoodsReturnEndpoints
                     lineNo++;
                     var s = item.Source;
                     returnTotal += item.Quantity * s.UnitPrice;
+                    // Mặt hàng và NGUỒN HÀNG chép lại từ chính dòng đã bán: hàng quay đầu là hàng
+                    // của nhà cung cấp đó quay lại kho, nên tồn theo từng nguồn mới cộng ngược đúng.
+                    // LEFT JOIN từ một hàng giả để câu lệnh luôn chèn đúng một dòng, kể cả khi dòng
+                    // nguồn biến mất giữa chừng.
                     await conn.Cmd("""
                         INSERT INTO document_lines (document_id, line_no, line_content, spec, quantity,
-                            unit_price, note, source_document_id, source_line_no)
-                        VALUES (@doc, @no, @content, @spec, @q, @price, @note, @sdoc, @sline)
+                            unit_price, note, source_document_id, source_line_no,
+                            product_id, supplier_id, supplier_name)
+                        SELECT @doc, @no, @content, @spec, @q, @price, @note, @sdoc, @sline,
+                               src.product_id, src.supplier_id, COALESCE(src.supplier_name, '')
+                        FROM (SELECT 1) one
+                        LEFT JOIN document_lines src
+                          ON src.document_id = @sdoc AND src.line_no = @sline
                         """, tx)
                         .With("@doc", returnId).With("@no", lineNo).With("@content", s.Content)
                         .With("@spec", s.Spec).With("@q", item.Quantity).With("@price", s.UnitPrice)

@@ -50,3 +50,15 @@ backend/KetoanMini.Api/certs/
 *.pfx
 *.p12
 rootCA-key.pem
+
+# Rác do agent/skill sinh ra trong lúc phân rã BE — KHÔNG commit
+.hallmark/
+.claude/worktrees/
+
+# Kết quả chạy test .NET
+TestResults/
+*.trx
+
+# File rác do lỗi redirect "echo ... -> public" trong restart.bat (đã sửa).
+# Giữ dòng này để lỡ chạy bản .bat cũ thì cũng không commit lại.
+/backend/KetoanMini.Api/public

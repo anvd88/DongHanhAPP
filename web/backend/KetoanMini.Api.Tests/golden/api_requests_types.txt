@@ -1,0 +1,92 @@
+# /api/requests/types
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].category : string
+  $[].fields : array
+  $[].fields[] : object
+  $[].fields[].hint : string
+  $[].fields[].key : string
+  $[].fields[].label : string
+  $[].fields[].options : array
+  $[].fields[].options[] : object
+  $[].fields[].options[].label : string
+  $[].fields[].options[].value : string
+  $[].fields[].required : bool
+  $[].fields[].type : string
+  $[].label : string
+  $[].type : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].category : string
+  $[].fields : array
+  $[].fields[] : object
+  $[].fields[].hint : string
+  $[].fields[].key : string
+  $[].fields[].label : string
+  $[].fields[].options : array
+  $[].fields[].options[] : object
+  $[].fields[].options[].label : string
+  $[].fields[].options[].value : string
+  $[].fields[].required : bool
+  $[].fields[].type : string
+  $[].label : string
+  $[].type : string
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].category : string
+  $[].fields : array
+  $[].fields[] : object
+  $[].fields[].hint : string
+  $[].fields[].key : string
+  $[].fields[].label : string
+  $[].fields[].options : array
+  $[].fields[].options[] : object
+  $[].fields[].options[].label : string
+  $[].fields[].options[].value : string
+  $[].fields[].required : bool
+  $[].fields[].type : string
+  $[].label : string
+  $[].type : string
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].category : string
+  $[].fields : array
+  $[].fields[] : object
+  $[].fields[].hint : string
+  $[].fields[].key : string
+  $[].fields[].label : string
+  $[].fields[].options : array
+  $[].fields[].options[] : object
+  $[].fields[].options[].label : string
+  $[].fields[].options[].value : string
+  $[].fields[].required : bool
+  $[].fields[].type : string
+  $[].label : string
+  $[].type : string
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].category : string
+  $[].fields : array
+  $[].fields[] : object
+  $[].fields[].hint : string
+  $[].fields[].key : string
+  $[].fields[].label : string
+  $[].fields[].options : array
+  $[].fields[].options[] : object
+  $[].fields[].options[].label : string
+  $[].fields[].options[].value : string
+  $[].fields[].required : bool
+  $[].fields[].type : string
+  $[].label : string
+  $[].type : string

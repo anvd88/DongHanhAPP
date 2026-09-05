@@ -1,0 +1,42 @@
+# /api/dashboard
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.activeCustomers : number
+  $.month : number
+  $.monthRevenue : number
+  $.recent : array
+  $.recent[] : object
+  $.recent[].content : string
+  $.recent[].customerName : string
+  $.recent[].date : string
+  $.recent[].id : string
+  $.recent[].total : number
+  $.recent[].voucherNo : string
+  $.totalDocuments : number
+  $.totalPayments : number
+  $.year : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.activeCustomers : number
+  $.month : number
+  $.monthRevenue : number
+  $.recent : array
+  $.recent[] : object
+  $.recent[].content : string
+  $.recent[].customerName : string
+  $.recent[].date : string
+  $.recent[].id : string
+  $.recent[].total : number
+  $.recent[].voucherNo : string
+  $.totalDocuments : number
+  $.totalPayments : number
+  $.year : number
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

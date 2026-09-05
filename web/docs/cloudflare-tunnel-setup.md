@@ -22,7 +22,7 @@ Domain thực tế đang dùng: **`ketoancp.click`** (đã ở Cloudflare). Tunn
    cloudflared (chạy trên máy chủ Windows)
         │  https://localhost:5443  (noTLSVerify)
         ▼
-   KetoanMini.Api (Kestrel, wwwroot + /api + /hubs)
+   KetoanMini.Api (Kestrel, wwwroot + /api + SSE)
 ```
 
 Backend **không đổi**: tunnel trỏ thẳng vào endpoint HTTPS 5443 sẵn có. CORS đã mở, `AllowedHosts=*`, nên `<DOMAIN>` hoạt động ngay.
@@ -110,7 +110,7 @@ ingress:
     originRequest:
       # cert Kestrel tự ký cho 192.168.1.88/localhost -> bỏ qua verify ở chặng nội bộ localhost
       noTLSVerify: true
-      # giữ WebSocket cho SignalR (/hubs) sống lâu
+      # SSE business realtime cần stream không buffer; heartbeat 17s giữ kết nối sống.
       connectTimeout: 30s
   - service: http_status:404
 ```

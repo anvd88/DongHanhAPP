@@ -5,6 +5,11 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using KetoanMini.Api.Data;
+using KetoanMini.Api.BuildingBlocks.Messaging;
+using KetoanMini.Api.BuildingBlocks.Outbox;
+using KetoanMini.Api.BuildingBlocks.Persistence;
+using KetoanMini.Api.BuildingBlocks.Realtime;
+using KetoanMini.Api.BuildingBlocks.Idempotency;
 using KetoanMini.Api.Endpoints;
 using KetoanMini.Api.Json;
 using KetoanMini.Api.Realtime;
@@ -15,6 +20,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 
@@ -25,10 +31,6 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
     .AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
-
-// Blob voice phải nằm ngoài bin/Debug|Release để dotnet clean/build không làm mất lịch sử âm thanh.
-// Production nên trỏ Chat:BlobDirectory tới volume dữ liệu cố định và đưa thư mục này vào backup.
-ChatEndpoints.ConfigureBlobDirectory(builder.Configuration["Chat:BlobDirectory"], builder.Environment.ContentRootPath);
 
 // APK các bản phát hành nằm trên đĩa (không nhét vào DB/RAM). Cũng phải nằm ngoài bin/ và được backup:
 // mất thư mục này là mất mọi bản đã phát hành. Production nên trỏ Releases:BlobDirectory tới volume dữ liệu.
@@ -54,6 +56,11 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
     o.SwaggerDoc("v1", new() { Title = "KetoanMini API", Version = "v1" });
+    // Tên schema phải DUY NHẤT trên toàn API. Mặc định Swashbuckle chỉ lấy tên lớp lồng ("ReasonReq"),
+    // nên hai module cùng đặt tên DTO giống nhau (CashFund vs CashCollection) làm CẢ tài liệu OpenAPI
+    // ném lỗi 500 — tức mất luôn hợp đồng API cho web/APK và kiểm thử contract. Lấy theo tên đầy đủ
+    // (đổi '+' của lớp lồng thành '.') để không bao giờ đụng nhau nữa.
+    o.CustomSchemaIds(t => (t.FullName ?? t.Name).Replace('+', '.').Replace("KetoanMini.Api.", ""));
     o.AddSecurityDefinition("Bearer", new()
     {
         Name = "Authorization",
@@ -77,6 +84,30 @@ builder.Services.Configure<FormOptions>(o =>
 });
 
 builder.Services.AddSingleton<Database>();
+// EF Core is introduced only for new bounded contexts. MessagingSchema's idempotent SQL migration
+// owns upgrades; this factory must not call EnsureCreated against the existing legacy database.
+builder.Services.AddDbContextFactory<MessagingDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("KetoanMini")));
+builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("Messaging:RabbitMq"));
+builder.Services.Configure<RealtimeOptions>(builder.Configuration.GetSection("Realtime"));
+builder.Services.Configure<MessagingRetentionOptions>(builder.Configuration.GetSection("Messaging"));
+builder.Services.Configure<RedisOptions>(builder.Configuration.GetSection("Redis"));
+builder.Services.AddSingleton<IntegrationOutbox>();
+builder.Services.AddSingleton<MessagingReadiness>();
+builder.Services.AddSingleton<RealtimeEventStore>();
+builder.Services.AddSingleton<BusinessEventWriter>();
+builder.Services.AddSingleton<IdempotencyStore>();
+builder.Services.AddSingleton<RealtimeWakeHub>();
+builder.Services.AddSingleton<OutboxSignal>();
+builder.Services.AddHostedService<PostgresWakeListener>();
+builder.Services.AddSingleton<RedisRealtimeCoordinator>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RedisRealtimeCoordinator>());
+builder.Services.AddHostedService<RabbitOutboxPublisher>();
+builder.Services.AddHostedService<RabbitConsumersWorker>();
+builder.Services.AddHostedService<LocalRealtimeProjector>();
+builder.Services.AddHostedService<RealtimeRetentionWorker>();
+builder.Services.AddHostedService<IdempotencyRetentionWorker>();
+builder.Services.AddHostedService<MessagingObservabilityWorker>();
 builder.Services.AddSingleton<TokenService>();
 // Phiếu xuất kho được điền vào workbook mẫu rồi Microsoft Excel gửi thẳng tới máy in mặc định của máy chủ.
 builder.Services.AddSingleton<WarehouseVoucherPrintService>();
@@ -98,8 +129,14 @@ builder.Services.AddSingleton<FieldCipher>();
 // từ CSDL. Xem Security/AccessProfileService.cs — mọi quyết định phân quyền phải đi qua đây.
 builder.Services.AddSingleton<AccessProfileService>();
 
-// HttpClient (dùng gọi API Cloudflare TURN cấp credential cho WebRTC).
+// Đường đưa MÃ KHÔI PHỤC MẬT KHẨU tới người dùng. Mặc định chỉ có kênh "cấp tay" (quản trị viên đọc
+// mã); bật khối Recovery:Email hoặc Recovery:Zalo trong appsettings.Local.json là hệ thống tự gửi,
+// không phải sửa mã nguồn. Xem Services/RecoveryCodeDelivery.cs.
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IRecoveryCodeSender, ZaloRecoveryCodeSender>();
+builder.Services.AddSingleton<IRecoveryCodeSender, EmailRecoveryCodeSender>();
+builder.Services.AddSingleton<IRecoveryCodeSender, ManualRecoveryCodeSender>();
+builder.Services.AddSingleton<RecoveryCodeDelivery>();
 
 // Thông báo đẩy tức thì qua Firebase Cloud Messaging (tắt an toàn nếu chưa cấu hình Firebase:CredentialsPath).
 // Hàng chờ bền cho việc-có-hậu-quả: endpoint chỉ ghi một dòng, worker mới gọi FCM. Xem OutboxQueue.
@@ -134,18 +171,6 @@ builder.Services.AddSingleton<AttendancePreviewTokens>();
 // Vòng đệm số đo Silent-Face gần nhất (hiển thị lên panel để hiệu chỉnh ngưỡng chống ảnh/màn hình).
 builder.Services.AddSingleton<LivenessMetricsLog>();
 
-// Tín hiệu real-time: hub WebSocket + dịch vụ nền theo dõi thay đổi DB.
-builder.Services.AddSignalR();
-// Định danh kết nối hub theo username để phát tín hiệu chat đúng thành viên (Clients.Users).
-builder.Services.AddSingleton<Microsoft.AspNetCore.SignalR.IUserIdProvider, NameUserIdProvider>();
-// HIỆN DIỆN ONLINE qua chính kết nối SignalR (thay nhịp tim HTTP 45s cho web; app foreground cũng
-// dùng): hub đánh dấu online khi kết nối, service nền làm tươi last_seen theo lô mỗi 45s cho các phiên
-// đang mở socket. Xem HubPresenceRegistry.
-builder.Services.AddSingleton<HubPresenceRegistry>();
-builder.Services.AddHostedService<HubPresenceRefresher>();
-builder.Services.AddHostedService<ChangeWatcher>();
-// Dọn tệp "giữ tạm" (gửi tệp qua LAN khi người nhận offline) đã quá hạn khỏi đĩa.
-builder.Services.AddHostedService<LanFileCleanupService>();
 // Enforce the 14-day retention limit for encrypted biometric templates awaiting HR verification.
 // The worker sweeps immediately at host start and hourly afterwards, independent of API traffic.
 builder.Services.AddHostedService<FaceEnrollmentCleanupService>();
@@ -193,11 +218,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 // Thứ tự tìm token, dừng ở cái đầu tiên có:
                 //  1. Header Authorization — ỨNG DỤNG ANDROID (giữ nguyên, không đụng gì).
                 //  2. Cookie HttpOnly km_auth — TRÌNH DUYỆT. JavaScript không đọc được cookie này,
-                //     nên XSS không mang được phiên đăng nhập ra khỏi máy. Cookie cũng tự đi theo
-                //     WebSocket handshake của SignalR nên hub không cần token trên URL nữa.
-                //  3. Query "access_token" cho /hubs — CHỈ còn cho app native (WebSocket của app
-                //     không gắn được header Authorization). Web không dùng đường này nữa: token
-                //     nằm trên URL sẽ lọt vào log máy chủ, proxy và lịch sử trình duyệt.
+                //     nên XSS không mang được phiên đăng nhập ra khỏi máy.
                 if (!string.IsNullOrEmpty(ctx.Request.Headers.Authorization)) return Task.CompletedTask;
 
                 var cookie = ctx.Request.Cookies[AuthCookies.AuthCookie];
@@ -207,12 +228,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     return Task.CompletedTask;
                 }
 
-                var accessToken = ctx.Request.Query["access_token"];
-                if (!string.IsNullOrEmpty(accessToken) &&
-                    ctx.HttpContext.Request.Path.StartsWithSegments("/hubs"))
-                {
-                    ctx.Token = accessToken;
-                }
                 return Task.CompletedTask;
             },
         };
@@ -303,11 +318,6 @@ builder.Services.AddRateLimiter(options =>
         {
             PermitLimit = 90, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
         }));
-    options.AddPolicy("signalr", http => RateLimitPartition.GetFixedWindowLimiter(
-        RateLimitKey(http), _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
-        }));
 });
 
 // CORS: chỉ cho phép origin trong Cors:Origins (domain thật) + origin cục bộ/LAN (dev). KHÔNG còn
@@ -388,7 +398,7 @@ app.Use(async (ctx, next) =>
 });
 
 // Trả 413 rõ ràng khi Content-Length đã vượt trần. Request chunked vẫn bị Kestrel chặn bởi
-// MaxRequestBodySize; các endpoint nhận payload lớn (APK, blob chat) tự đặt trần riêng trong handler
+// MaxRequestBodySize; các endpoint nhận payload lớn (APK) tự đặt trần riêng trong handler
 // trước khi đọc body. Trần ở đây phải theo TỪNG endpoint (PayloadLimits.MaxRequestBytesFor): áp trần
 // JSON 16MB cho tất cả thì payload hợp lệ bị chính chốt này trả 413 trước khi handler kịp chạy.
 app.Use(async (ctx, next) =>
@@ -455,28 +465,6 @@ if (AuthCookies.Enabled(app.Configuration))
     {
         if (AuthCookies.UsesCookieAuth(ctx))
         {
-            // ── /hubs: chốt bằng ORIGIN, không bằng CSRF token ──────────────────────────────────
-            // WebSocket KHÔNG bị CORS chặn, nên với phiên cookie thì trang web lạ có thể mở kết nối
-            // realtime dưới danh nghĩa người đang đăng nhập và nghe lén tín hiệu của họ
-            // (Cross-Site WebSocket Hijacking). Header Origin do trình duyệt tự đặt, JavaScript không
-            // sửa được, nên nó chặn đúng thứ cần chặn — cho CẢ negotiate (POST, có Origin khi chéo
-            // site) LẪN WebSocket handshake (GET, không gắn được header tuỳ ý nên CSRF token bất lực).
-            //
-            // Vì Origin đã bao trùm, /hubs không đi qua chốt CSRF: bắt SignalR tự gắn header cho
-            // negotiate là thứ rất dễ vỡ (kết nối dựng một lần rồi thử lại mãi với header đã cũ).
-            if (ctx.Request.Path.StartsWithSegments("/hubs"))
-            {
-                if (!AuthCookies.IsAllowedOrigin(ctx, corsOrigins))
-                {
-                    app.Logger.LogWarning("Chan ket noi hub tu origin la: {Origin}", ctx.Request.Headers.Origin.ToString());
-                    ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-                    await ctx.Response.WriteAsJsonAsync(new { message = "Origin không được phép.", code = "origin_denied" });
-                    return;
-                }
-                await next();
-                return;
-            }
-
             if (!AuthCookies.ValidateCsrf(ctx))
             {
                 app.Logger.LogWarning("Chan request thieu/sai CSRF token: {Method} {Path}",
@@ -540,6 +528,7 @@ app.Use(async (ctx, next) =>
             var sessionInactive = false;
             var accountStateVerified = false;
             var sessionAlive = false;
+            var lastSeenStale = false;
             // Vai trò HIỆN HÀNH đọc từ DB (chính + phụ) để thay cho claim trong JWT — xem phần ghi
             // claim bên dưới. null = chưa đọc được (DB lỗi) → giữ nguyên claim cũ, không đá người dùng.
             List<string>? freshRoles = null;
@@ -550,13 +539,16 @@ app.Use(async (ctx, next) =>
                 var db = ctx.RequestServices.GetRequiredService<Database>();
                 await using var conn = await db.OpenAsync(ctx.RequestAborted);
                 await using (var r = await conn.Cmd(
-                    @"SELECT u.is_active,
+                    $@"SELECT u.is_active,
                              s.session_token IS NOT NULL AS session_exists,
                              COALESCE(s.is_active, FALSE) AS session_active,
                              COALESCE(s.revoked, FALSE) AS revoked,
                              (s.session_token IS NOT NULL AND s.last_seen IS NOT NULL
                               AND @idleDays > 0
                               AND s.last_seen < CURRENT_TIMESTAMP - make_interval(days => @idleDays)) AS idle_expired,
+                             (s.session_token IS NOT NULL
+                              AND (s.last_seen IS NULL
+                                   OR s.last_seen < CURRENT_TIMESTAMP - INTERVAL '{PresencePolicy.TouchThrottle}')) AS last_seen_stale,
                              u.role,
                              COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
                                        FROM user_roles ur
@@ -584,11 +576,13 @@ app.Use(async (ctx, next) =>
                         idleExpired = !r.IsDBNull(4) && Convert.ToBoolean(r.GetValue(4));
                         sessionAlive = !locked && sessionExists && sessionActive && !revoked && !idleExpired;
 
+                        lastSeenStale = !r.IsDBNull(5) && Convert.ToBoolean(r.GetValue(5));
+
                         // Gộp vai trò chính + phụ theo đúng cách TokenService dựng claim lúc đăng nhập
                         // (chính thiếu/không hợp lệ thì coi là Employee) để hai đường cho kết quả giống nhau.
                         freshRoles = AccessProfileService.Combine(
-                            r.IsDBNull(5) ? null : r.GetString(5),
-                            r.IsDBNull(6) ? "" : r.GetString(6));
+                            r.IsDBNull(6) ? null : r.GetString(6),
+                            r.IsDBNull(7) ? "" : r.GetString(7));
                     }
                     accountStateVerified = true;
                 }
@@ -597,12 +591,17 @@ app.Use(async (ctx, next) =>
                 // TRỪ vòng poll nền của app (WorkManager ~15 phút, chạy cả khi app đã đóng): nó không
                 // phải người dùng đang dùng app, tính vào đây thì phiên không bao giờ hết hạn nhàn rỗi.
                 // Client tự gắn cờ này; kẻ gian có giả cờ cũng chỉ làm phiên CỦA MÌNH hết hạn sớm hơn.
-                if (sessionAlive && !ctx.Request.Headers.ContainsKey("X-Background-Poll"))
+                //
+                // lastSeenStale đọc từ chính câu SELECT bên trên: câu UPDATE chỉ được GỬI khi thật sự
+                // tới hạn ghi. Trước đây nó chạy ở mọi request và gần như luôn khớp 0 dòng — một vòng
+                // đi-về DB thừa cho mỗi lần bấm, và (khi trigger chưa lọc) một lượt phát 'presence'
+                // cho toàn bộ máy đang mở.
+                if (sessionAlive && lastSeenStale && !ctx.Request.Headers.ContainsKey("X-Background-Poll"))
                     await conn.Cmd(
-                        @"UPDATE user_sessions SET last_seen = CURRENT_TIMESTAMP
+                        $@"UPDATE user_sessions SET last_seen = CURRENT_TIMESTAMP
                           WHERE session_token = @sid AND username = @u
                             AND is_active = TRUE AND revoked = FALSE
-                            AND last_seen < CURRENT_TIMESTAMP - INTERVAL '2 minutes'")
+                            AND last_seen < CURRENT_TIMESTAMP - INTERVAL '{PresencePolicy.TouchThrottle}'")
                         .With("@sid", sid!).With("@u", username)
                         .ExecuteNonQueryAsync(ctx.RequestAborted);
             }
@@ -730,13 +729,68 @@ app.MapGet("/api/health", async (Database db, HttpContext ctx) =>
         return Results.Json(new { db = "error" }, statusCode: 503);
     }
 });
+app.MapGet("/api/health/ready", async (Database db, MessagingReadiness messaging,
+    RedisRealtimeCoordinator redis, Microsoft.Extensions.Options.IOptions<RabbitMqOptions> rabbit,
+    Microsoft.Extensions.Options.IOptions<RedisOptions> redisOptions, HttpContext ctx) =>
+{
+    if (!IsInternalRequest(ctx)) return Results.NotFound();
+    try
+    {
+        await using var connection = await db.OpenAsync(ctx.RequestAborted);
+        await connection.Cmd("SELECT 1").ExecuteScalarAsync(ctx.RequestAborted);
+        var rabbitReady = !rabbit.Value.Enabled ||
+            (messaging.PublisherConnected && messaging.ConsumersConnected);
+        // Redis degradation is reported but does not make the business command path unready.
+        var redisState = !redisOptions.Value.Enabled ? "disabled" : redis.Available ? "connected" : "degraded";
+        return Results.Json(new
+        {
+            database = "connected",
+            rabbit = rabbit.Value.Enabled ? rabbitReady ? "connected" : "unavailable" : "disabled",
+            redis = redisState,
+        }, statusCode: rabbitReady ? 200 : 503);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Readiness check failed");
+        return Results.Json(new { database = "unavailable" }, statusCode: 503);
+    }
+}).AllowAnonymous();
 
 // Schema danh tính là điều kiện an toàn bắt buộc. Không được chạy API trên schema cũ/mơ hồ khi
 // migration tài khoản thất bại; ghi log Critical rồi để host dừng để bộ giám sát/triển khai rollback.
-try { await PostgresSchema.EnsureAsync(app.Services.GetRequiredService<Database>(), app.Configuration, app.Logger); }
+try
+{
+    var startupDatabase = app.Services.GetRequiredService<Database>();
+    // Tự cứu DB từng dừng giữa lần nâng cấp realtime: trigger gộp đời cũ có thể gọi hàm mới vốn đọc
+    // transition table, làm PostgresSchema chết 42P01 trước khi bridge kịp tự cài lại.
+    await DatabaseChangePublisher.RemoveLegacyCombinedTriggersAsync(startupDatabase);
+    await PostgresSchema.EnsureAsync(startupDatabase, app.Configuration, app.Logger);
+}
 catch (Exception ex)
 {
     app.Logger.LogCritical(ex, "Khong khoi tao duoc schema PostgreSQL bat buoc; dung khoi dong de dong mac dinh.");
+    throw;
+}
+// Gỡ sổ kế toán kép cũ. Chạy sau PostgresSchema (cần bảng schema_migrations) và trước bridge
+// realtime, để lượt cài trigger ngay dưới không còn thấy nhóm bảng core_* nữa.
+try
+{
+    await using var conn = await app.Services.GetRequiredService<Database>().OpenAsync();
+    await CoreAccountingRemovalMigration.ApplyAsync(conn);
+}
+catch (Exception ex) { app.Logger.LogWarning("Khong go duoc bang ke toan loi cu: {Msg}", ex.Message); }
+
+try
+{
+    await MessagingSchema.EnsureAsync(app.Services.GetRequiredService<Database>());
+    var skippedRealtimeTables = await DatabaseChangePublisher.EnsureAsync(app.Services.GetRequiredService<Database>());
+    if (skippedRealtimeTables.Count > 0)
+        app.Logger.LogWarning("Realtime bridge skipped tables not present yet: {Tables}",
+            string.Join(", ", skippedRealtimeTables));
+}
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "Cannot install durable messaging schema/transactional realtime bridge.");
     throw;
 }
 
@@ -748,14 +802,12 @@ catch (Exception ex) { app.Logger.LogWarning("Khong chuyen duoc APK tu DB ra dia
 app.MapAuth();
 app.MapQrActions();
 app.MapAccounting();
-app.MapCoreAccounting();
 app.MapAudit();
 app.MapGiaCong();
 app.MapChamCong();
 app.MapUsers();
 app.MapReleases();
 app.MapPreferences();
-app.MapChat();
 app.MapFeedback();
 app.MapHr();
 app.MapRequests();
@@ -783,11 +835,8 @@ app.MapSurveys();
 app.MapDirectory();
 app.MapSchedule();
 app.MapHelp();
-
-// Hub tín hiệu real-time (web + desktop kết nối tới đây).
-app.MapHub<ChangesHub>("/hubs/changes")
-    .RequireAuthorization()
-    .RequireRateLimiting("signalr");
+app.MapBusinessRealtime();
+app.MapMessagingAdmin();
 
 // SPA fallback: mọi route không phải /api và không phải file tĩnh → trả index.html
 // để React Router xử lý (deep-link /dashboard, /giacong… reload không 404).
@@ -828,9 +877,6 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tuy chon nguoi
 try { await AuthEndpoints.EnsureAvatarTable(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang anh dai dien luc khoi dong: {Msg}", ex.Message); }
 
-try { await ChatEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
-catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang tro chuyen luc khoi dong: {Msg}", ex.Message); }
-
 try { await FeedbackEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang phan hoi luc khoi dong: {Msg}", ex.Message); }
 
@@ -843,6 +889,12 @@ catch (Exception ex)
     app.Logger.LogCritical(ex, "Khong khoi tao duoc nen tang role/nhan su bat buoc; dung khoi dong de dong mac dinh.");
     throw;
 }
+
+// Gộp ảnh đại diện web cũ vào hr_employees.avatar. PHẢI đứng sau HrEndpoints.EnsureTables (cần bảng
+// hr_employees) và chỉ chuyển mỗi dòng đúng một lần. Best-effort: lỗi ở đây chỉ làm một số người tạm
+// thời mất ảnh cũ, không đáng để chặn khởi động.
+try { await AuthEndpoints.MergeWebAvatarsIntoEmployees(app.Services.GetRequiredService<Database>()); }
+catch (Exception ex) { app.Logger.LogWarning("Khong gop duoc anh dai dien web vao ho so nhan vien: {Msg}", ex.Message); }
 
 try { await RequestEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex)
@@ -898,9 +950,6 @@ catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang cau hinh ung d
 
 try { await AuditEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong nang cap duoc bang nhat ky luc khoi dong: {Msg}", ex.Message); }
-
-try { await CoreAccountingEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
-catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang ke toan loi luc khoi dong: {Msg}", ex.Message); }
 
 try { await PortalEndpoints.EnsureTables(app.Services.GetRequiredService<Database>()); }
 catch (Exception ex) { app.Logger.LogWarning("Khong tao duoc bang cong thong tin luc khoi dong: {Msg}", ex.Message); }

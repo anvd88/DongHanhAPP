@@ -1,0 +1,25 @@
+# /api/audit/
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].action : string
+  $.items[].details : string
+  $.items[].entity : string
+  $.items[].entityName : string
+  $.items[].id : number
+  $.items[].occurredAt : string
+  $.items[].username : string
+  $.page : number
+  $.pageSize : number
+  $.total : number
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

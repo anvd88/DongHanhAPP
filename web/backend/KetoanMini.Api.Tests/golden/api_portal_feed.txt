@@ -1,0 +1,67 @@
+# /api/portal/feed
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.about : object
+  $.about.address : string
+  $.about.content : string
+  $.about.email : string
+  $.about.hotline : string
+  $.about.title : string
+  $.about.updatedAt : string
+  $.about.website : string
+  $.events : array
+  $.news : array
+
+[Accounting] 200 application/json
+  $ : object
+  $.about : object
+  $.about.address : string
+  $.about.content : string
+  $.about.email : string
+  $.about.hotline : string
+  $.about.title : string
+  $.about.updatedAt : string
+  $.about.website : string
+  $.events : array
+  $.news : array
+
+[HR] 200 application/json
+  $ : object
+  $.about : object
+  $.about.address : string
+  $.about.content : string
+  $.about.email : string
+  $.about.hotline : string
+  $.about.title : string
+  $.about.updatedAt : string
+  $.about.website : string
+  $.events : array
+  $.news : array
+
+[Driver] 200 application/json
+  $ : object
+  $.about : object
+  $.about.address : string
+  $.about.content : string
+  $.about.email : string
+  $.about.hotline : string
+  $.about.title : string
+  $.about.updatedAt : string
+  $.about.website : string
+  $.events : array
+  $.news : array
+
+[Employee] 200 application/json
+  $ : object
+  $.about : object
+  $.about.address : string
+  $.about.content : string
+  $.about.email : string
+  $.about.hotline : string
+  $.about.title : string
+  $.about.updatedAt : string
+  $.about.website : string
+  $.events : array
+  $.news : array

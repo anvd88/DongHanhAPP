@@ -1,0 +1,229 @@
+/* Ô nhập mã khôi phục kiểu OTP + hoạt cảnh xác thực (quay quanh tâm, chốt ✓, rung rồi vỡ).
+   Màu lấy thẳng từ token của hệ giao diện (styles/theme.css) nên tự đổi theo sáng/tối. */
+.recovery-otp {
+  --otp-line: var(--line);
+  --otp-bg: var(--panel);
+  --otp-ink: var(--ink);
+  --otp-accent: var(--brand);
+  --otp-ring: var(--brand-ring);
+  --otp-ok: var(--ok);
+  --otp-bad: var(--danger);
+  display: block;
+  width: 100%;
+}
+
+.recovery-otp-stage {
+  position: relative;
+  width: 100%;
+  overflow: visible;
+}
+
+.recovery-otp-orbit,
+.recovery-otp-debris {
+  position: absolute;
+  inset: 0;
+}
+
+.recovery-otp-cell {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--otp-line);
+  border-radius: var(--radius-lg, 6px);
+  background: var(--otp-bg);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.recovery-otp-cell[data-filled='true'] {
+  border-color: color-mix(in srgb, var(--otp-accent) 55%, var(--otp-line));
+}
+.recovery-otp-cell[data-active='true'],
+.recovery-otp-cell:focus-within {
+  border-color: var(--otp-accent);
+  box-shadow: 0 0 0 2px var(--otp-ring);
+}
+
+.recovery-otp-input {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--otp-ink);
+  font: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  text-transform: uppercase;
+  caret-color: var(--otp-accent);
+}
+.recovery-otp-input:disabled {
+  color: var(--otp-ink);
+  opacity: 1;
+  -webkit-text-fill-color: var(--otp-ink);
+}
+
+/* Đang xác thực: ô khoá lại, viền dịu, tâm có vòng cung chạy. */
+.recovery-otp[data-status='verifying'] .recovery-otp-cell {
+  border-color: color-mix(in srgb, var(--otp-accent) 45%, var(--otp-line));
+}
+
+/* Vòng chờ ở tâm cụm. Căn giữa bằng margin âm, không dùng transform để không đụng motion. */
+.recovery-otp-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  animation: recovery-otp-core-in 0.28s ease-out both;
+}
+.recovery-otp-core svg {
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 50%;
+  animation: recovery-otp-core-spin 1.4s linear infinite;
+}
+.recovery-otp-core circle {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.recovery-otp-core-track {
+  stroke: var(--otp-ring);
+}
+.recovery-otp-core-arc {
+  stroke: var(--otp-accent);
+  stroke-dasharray: 28 200;
+}
+
+@keyframes recovery-otp-core-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes recovery-otp-core-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Đúng mã: các ô thu về tâm, đĩa xanh nở ra rồi nét ✓ được vẽ. */
+.recovery-otp[data-status='success'] .recovery-otp-cell {
+  border-color: var(--otp-ok);
+}
+
+.recovery-otp-seal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 60px;
+  height: 60px;
+  margin: -30px 0 0 -30px;
+}
+.recovery-otp-seal svg {
+  width: 100%;
+  height: 100%;
+}
+.recovery-otp-seal-disc {
+  fill: var(--otp-ok);
+  transform-origin: 50% 50%;
+  animation: recovery-otp-seal-in 0.44s cubic-bezier(0.22, 1.2, 0.36, 1) 0.1s both;
+}
+.recovery-otp-seal-check {
+  fill: none;
+  stroke: var(--panel);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  animation: recovery-otp-seal-check 0.36s cubic-bezier(0.65, 0, 0.35, 1) 0.34s forwards;
+}
+
+@keyframes recovery-otp-seal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.35);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes recovery-otp-seal-check {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Sai mã: rung ngang, viền đỏ, rồi từng ô vỡ thành mảnh rơi xuống. */
+.recovery-otp[data-status='error'] .recovery-otp-cell {
+  border-color: var(--otp-bad);
+  background: var(--danger-wash);
+}
+.recovery-otp[data-stage='shake'] .recovery-otp-stage {
+  animation: recovery-otp-shake 0.38s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.recovery-otp-shard {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--otp-bad);
+  border-radius: var(--radius-lg, 6px);
+  background: var(--danger-wash);
+  color: var(--otp-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+@keyframes recovery-otp-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  14% {
+    transform: translateX(-10px);
+  }
+  30% {
+    transform: translateX(9px);
+  }
+  46% {
+    transform: translateX(-7px);
+  }
+  62% {
+    transform: translateX(5px);
+  }
+  80% {
+    transform: translateX(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recovery-otp[data-stage='shake'] .recovery-otp-stage {
+    animation: none;
+  }
+  .recovery-otp-core svg {
+    animation: none;
+  }
+  .recovery-otp-seal-disc {
+    animation: none;
+    opacity: 1;
+  }
+  .recovery-otp-seal-check {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}

@@ -1,0 +1,34 @@
+# /api/hr/job-positions
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].defaultAccessRole : string
+  $[].defaultRole : string
+  $[].defaultRoleLabel : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isSystem : bool
+  $[].name : string
+  $[].sortOrder : number
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].defaultAccessRole : string
+  $[].defaultRole : string
+  $[].defaultRoleLabel : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isSystem : bool
+  $[].name : string
+  $[].sortOrder : number
+
+[Driver] 403 
+
+[Employee] 403 

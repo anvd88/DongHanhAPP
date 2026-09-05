@@ -14,7 +14,17 @@ public record RecoveryResetRequest(string Username, string Code, string NewPassw
 // Chỉ KIỂM TRA mã khôi phục ở bước 2 của màn hình quên mật khẩu (chưa đổi mật khẩu).
 public record RecoveryVerifyRequest(string Username, string Code);
 // Trả về mã khôi phục vừa tạo cho admin xem một lần (không lưu bản rõ ở server).
-public record RecoveryCodeResponse(string Code);
+/// <param name="Code">
+/// Chỉ có giá trị khi mã được CẤP TAY — quản trị viên phải đọc cho người dùng. Khi máy chủ đã gửi
+/// qua thư điện tử hay Zalo thì trường này là null: chỉ chủ tài khoản cần biết mã.
+/// </param>
+public record RecoveryCodeResponse(string? Code, string Channel, bool Delivered, string Message, string? SentTo);
+
+/// <summary>Ép kênh gửi mã; để trống là để máy chủ tự chọn kênh tốt nhất đang bật.</summary>
+public record IssueRecoveryCodeRequest(string? Channel);
+
+/// <summary>Người dùng tự xin mã ở màn quên mật khẩu (chỉ chạy khi đã bật một kênh gửi tự động).</summary>
+public record RequestRecoveryCodeRequest(string? Username);
 /// <summary>Token CHỈ có với client native (ứng dụng Android). Với trình duyệt, phiên nằm trong cookie
 /// HttpOnly và trường này là null — cố ý, để JavaScript không cầm được token (xem Security/AuthCookies.cs).</summary>
 public record LoginResponse(string? Token, UserDto User);
@@ -85,10 +95,8 @@ public record AppPinResetRequest(string Password);
 // Cài đặt đăng nhập của tài khoản: cho phép đăng nhập bản web hay không (app native luôn dùng được).
 public record AccountLoginSettingsDto(bool WebLoginEnabled);
 public record AccountLoginSettingsPatch(bool WebLoginEnabled);
-public record UserPreferencesDto(bool WaterReminderEnabled, bool EyeReminderEnabled, bool KeepCreateVoucherOpen,
-    bool MessagePreviewEnabled);
-public record UserPreferencePatchRequest(bool? WaterReminderEnabled, bool? EyeReminderEnabled, bool? KeepCreateVoucherOpen,
-    bool? MessagePreviewEnabled);
+public record UserPreferencesDto(bool WaterReminderEnabled, bool EyeReminderEnabled, bool KeepCreateVoucherOpen);
+public record UserPreferencePatchRequest(bool? WaterReminderEnabled, bool? EyeReminderEnabled, bool? KeepCreateVoucherOpen);
 public record UserDto(Guid Id, string Username, string FullName, string Email, string Role, bool IsActive,
     string ApprovalStatus, DateTime? CreatedAt)
 {
@@ -148,8 +156,12 @@ public record DocumentListItemDto(Guid Id, string VoucherNo, DateOnly Date, stri
 /// Mã hàng trong danh mục, nếu người lập phiếu chọn từ đó. NULL = gõ tay (vẫn hợp lệ: phiếu cũ,
 /// hàng lạ, hàng gia công một lần). Có mã thì thống kê bám theo mã chứ không theo chính tả.
 /// </param>
+/// <param name="SupplierId">
+/// Nguồn hàng: cuộn vừa xuất là hàng nhập của nhà cung cấp nào. Chỉ dùng nội bộ — không in ra phiếu
+/// và không xuất hiện trong sổ công nợ PDF gửi khách.
+/// </param>
 public record DocumentLineDto(string LineContent, string Spec, decimal Quantity, decimal UnitPrice, string Note,
-    Guid? ProductId = null)
+    Guid? ProductId = null, Guid? SupplierId = null, string SupplierName = "")
 {
     public decimal Amount => Quantity * UnitPrice;
 }
@@ -169,7 +181,12 @@ public record MonthlyRowDto(int Year, int Month, int DocumentCount, int PaymentC
 public record AuditDto(DateTime OccurredAt, string Username, string Action, string Entity, string EntityName, string Details);
 
 // ----- Customers -----
-public record CustomerDto(Guid Id, string Name, string TaxCode, string Phone, string Address, bool IsActive);
+public record CustomerDto(Guid Id, string Name, string TaxCode, string Phone, string Address, bool IsActive)
+{
+    /// <summary>Các tên gọi khác cùng trỏ về khách này. Chỉ danh sách khách hàng trả về; nơi khác để rỗng.</summary>
+    public IReadOnlyList<string> Aliases { get; init; } = Array.Empty<string>();
+}
+public record SaveAliasRequest(string? Alias);
 public record SaveCustomerRequest(string Name, string TaxCode, string Phone, string Address);
 public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal Total, decimal ReceiptTotal,
     decimal PaymentTotal, decimal SalesTotal, List<DocumentListItemDto> Documents);
@@ -179,14 +196,26 @@ public record CustomerReportDto(CustomerDto Customer, int DocumentCount, decimal
 /// Hàng khách trả về (theo giá của chính đơn đã bán). Đứng riêng chứ không gộp vào
 /// <paramref name="CollectedTotal"/>: trả hàng không phải là trả tiền.
 /// </param>
+/// <param name="CarriedBalance">
+/// Dư nợ mang sang: số dư luỹ kế tính đến ngay trước ngày đầu kỳ đang xem, gồm cả số dư ban đầu do
+/// kế toán nhập. Không lọc kỳ thì bằng <paramref name="OpeningBalance"/>.
+/// </param>
+/// <param name="SalesTotal">Chỉ tính phát sinh trong kỳ đang xem, giống <paramref name="ReturnsTotal"/> và <paramref name="CollectedTotal"/>.</param>
+/// <param name="Balance">Dư cuối kỳ = <paramref name="CarriedBalance"/> + bán − trả hàng − đã thu.</param>
 public record DebtSummaryDto(CustomerDto Customer, decimal OpeningBalance, DateOnly? OpeningDate,
     string OpeningNote, decimal SalesTotal, decimal ReturnsTotal, decimal CollectedTotal, decimal Balance,
-    int InvoiceCount, DateOnly? LastActivityDate);
+    int InvoiceCount, DateOnly? LastActivityDate, decimal CarriedBalance);
 public record DebtOverviewDto(decimal TotalOpeningBalance, decimal TotalSales, decimal TotalReturns,
-    decimal TotalCollected, decimal TotalReceivable, int DebtorCount, List<DebtSummaryDto> Customers);
+    decimal TotalCollected, decimal TotalReceivable, int DebtorCount, List<DebtSummaryDto> Customers,
+    decimal TotalCarried, DateOnly? From, DateOnly? To);
 public record DebtTransactionDto(Guid Id, DateOnly Date, string Reference, string Kind, string Description,
     decimal Debit, decimal Credit, decimal RunningBalance, bool Cancelled);
-public record DebtDetailDto(CustomerDto Customer, DebtSummaryDto Summary, List<DebtTransactionDto> Transactions);
+public record DebtDetailDto(CustomerDto Customer, DebtSummaryDto Summary, List<DebtTransactionDto> Transactions,
+    DateOnly? From, DateOnly? To);
+/// <summary>Một dòng hàng trên phiếu, dùng cho phần chi tiết mua bán của sổ công nợ in ra.</summary>
+public record DebtVoucherLineDto(string Content, string Spec, decimal Quantity, decimal UnitPrice, decimal Amount);
+public record DebtVoucherDto(Guid Id, DateOnly Date, string VoucherNo, string Kind, string Content,
+    decimal Total, List<DebtVoucherLineDto> Lines);
 public record SaveDebtPaymentRequest(decimal Amount, DateOnly Date, string? Note);
 public record SaveOpeningBalanceRequest(decimal Amount, DateOnly AsOfDate, string? Note);
 
@@ -206,59 +235,15 @@ public record SetVerifiedRequest(bool Verified);
 public record SetDiamondRequest(bool IsDiamond);
 public record ResetPasswordResponse(string Code);
 
-// ----- Chat (Trò chuyện, web-only) -----
-public record ChatContactDto(string Username, string DisplayName, string? AvatarUrl, bool IsOnline, bool Verified, bool IsDiamond, string Role,
-    string EmployeeId = "", string EmployeeCode = "", string DepartmentId = "", string DepartmentName = "", string Position = "",
-    string Phone = "", string Email = "", string ManagerUsername = "", string ManagerName = "", bool IsDirectManager = false,
-    bool SameDepartment = false);
-// Đổ chuông / hủy chuông / báo nhỡ cuộc gọi (thoại/video) qua FCM.
-public record CallRingRequest(string ToUsername, string CallId, string? Media);
-public record CallCancelRequest(string ToUsername, string CallId);
-public record CallMissedRequest(string ToUsername, string CallId, string? Media);
-public record MissedCallDto(long Id, string FromUsername, string FromName, string Media, string CallId, DateTime CreatedAt);
-public record CallHistoryDto(long Id, string PeerUsername, string PeerName, string CallId, string Media, string Direction,
-    string Outcome, DateTime? StartedAt, DateTime EndedAt, int DurationSeconds);
-public record RecordCallRequest(string PeerUsername, string? PeerName, string CallId, string? Media, string? Direction,
-    string? Outcome, long? StartedAtEpochMs, long EndedAtEpochMs);
-// TURN credential động cho WebRTC (cấp có hạn giờ qua HMAC — xem /api/chat/call/turn).
-public record TurnCredsDto(string[] Urls, string Username, string Credential, int Ttl);
-public record ChatConversationDto(Guid Id, bool IsGroup, string Title, string? Username, string? AvatarUrl,
-    bool IsOnline, bool Verified, bool IsDiamond, string Preview, DateTime? LastAt, int Unread, DateTime? LastSeen,
-    bool Pinned = false, bool SupportConversation = false);
-public record ChatMessageDto(long Id, string SenderUsername, string SenderName, bool Mine, string Body, DateTime CreatedAt,
-    DateTime? EditedAt, bool Removed, bool Forwarded, IReadOnlyList<ChatReactionDto>? Reactions = null,
-    // kind=file: metadata tệp LAN, blob chỉ được giữ tạm. kind=voice: tin thoại có blob bền vững tới khi gỡ.
-    // HasBlob cho biết nội dung hiện sẵn sàng tải/phát; tải hoặc đánh dấu đã đọc không được làm mất voice.
-    string Kind = "text", string? FileName = null, long? FileSize = null, string? FileMime = null,
-    bool HasBlob = false, bool Read = false);
-// Một biểu cảm (cảm xúc) gộp theo emoji trên một tin nhắn: số người thả + tôi có thả hay không.
-public record ChatReactionDto(string Emoji, int Count, bool Mine);
-public record SendMessageRequest(string Body, bool Forwarded = false, bool SendAsSupport = false);
-// kind=file cho tệp đính kèm; recorder phải gửi kind=voice. Backend xác thực MIME/đuôi trước khi nhận voice.
-public record SendFileMessageRequest(
-    string FileName,
-    long FileSize,
-    string? FileMime = null,
-    string? Kind = null,
-    string? ClientMessageId = null);
-public record EditMessageRequest(string Body);
-public record ReactRequest(string Emoji);
-public record SetConversationPinnedRequest(bool Pinned);
-public record ChatReportRequest(string? Reason);
-
 // ----- Feedback (Phan hoi) -----
 public record FeedbackDto(long Id, string Type, string TypeLabel, string ReporterUsername, string ReporterName,
-    string TargetName, string Reason, Guid? ConversationId, DateTime CreatedAt);
+    string TargetName, string Reason, DateTime CreatedAt);
 public record AttendanceFeedbackRequest(string TargetName, string? Reason);
 
-// Dung lượng DB của mục Trò chuyện (admin xem trong trang Hệ thống).
-public record ChatTableUsageDto(string Table, string Label, long Rows, long DataKb, long IndexKb, long TotalKb);
-public record ChatDbUsageDto(long TotalKb, long DataKb, long IndexKb, long MessageCount, long ConversationCount,
-    long MemberCount, long DatabaseTotalKb, IReadOnlyList<ChatTableUsageDto> Tables);
-
 // ----- Gia công -----
+/// <param name="ProductId">Mã hàng trong danh mục, để phiếu gia công ghép được với phiếu bán và phiếu nhập mua.</param>
 public record GiaCongLineDto(long Id, string LoaiDong, string MaHang, string TenHang, string QuyCach, string DonViTinh,
-    decimal SoLuong, decimal DonGiaGiaCong, string GhiChu)
+    decimal SoLuong, decimal DonGiaGiaCong, string GhiChu, Guid? ProductId = null)
 {
     public decimal ThanhTien => SoLuong * DonGiaGiaCong;
 }
@@ -267,7 +252,7 @@ public record GiaCongListItemDto(long Id, string MaPhieu, string LoaiPhieu, stri
     decimal TongGiaTri, decimal SoLuongXuat, decimal SoLuongNhap, decimal SoLuongConTaiCongTy,
     decimal TienGiaCongPhaiTra);
 public record GiaCongDetailDto(long Id, string MaPhieu, string LoaiPhieu, string DoiTac, string NhanVienPhuTrach,
-    DateOnly NgayLap, DateOnly? HanHoanThanh, string GhiChu, List<GiaCongLineDto> Lines);
+    DateOnly NgayLap, DateOnly? HanHoanThanh, string GhiChu, List<GiaCongLineDto> Lines, Guid? DoiTacId = null);
 public record SaveGiaCongRequest(string LoaiPhieu, string DoiTac, string NhanVienPhuTrach, DateOnly NgayLap,
     DateOnly? HanHoanThanh, string GhiChu, List<GiaCongLineDto> Lines);
 public record GiaCongReportDto(decimal SoLuongXuat, decimal SoLuongNhap, decimal SoLuongConTaiCongTy,

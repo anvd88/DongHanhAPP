@@ -52,7 +52,7 @@ public static class AuthCookies
             // Secure; còn dev chạy http://localhost thì không đặt Secure, nếu không trình duyệt vứt
             // cookie đi và không ai đăng nhập được ở máy lập trình.
             Secure = ctx.Request.IsHttps,
-            // Lax chứ không Strict: Strict thì người dùng bấm link từ email/chat vào hệ thống sẽ hiện
+            // Lax chứ không Strict: Strict thì người dùng bấm liên kết ngoài vào hệ thống sẽ hiện
             // ra như CHƯA đăng nhập (cookie không được gửi ở điều hướng đầu tiên), phải tải lại trang
             // mới thấy mình đã đăng nhập — khó hiểu với người dùng mà đổi lại chẳng thêm bao nhiêu an
             // toàn, vì fetch/XHR chéo site đã bị Lax chặn sẵn.
@@ -93,33 +93,6 @@ public static class AuthCookies
     public static bool UsesCookieAuth(HttpContext ctx)
         => !ctx.Request.Headers.ContainsKey("Authorization")
            && !string.IsNullOrEmpty(ctx.Request.Cookies[AuthCookie]);
-
-    /// <summary>
-    /// Origin của request có phải chính hệ thống này không.
-    ///
-    /// VÌ SAO CẦN: WebSocket KHÔNG bị CORS chặn. Khi phiên đi bằng cookie, một trang web lạ có thể mở
-    /// WebSocket tới /hubs của ta và trình duyệt sẽ ngoan ngoãn đính cookie của người đang đăng nhập
-    /// vào — nghĩa là trang đó nghe được tín hiệu realtime (kể cả tin nhắn) của nạn nhân. Đây là lỗ
-    /// "Cross-Site WebSocket Hijacking", và nó CHỈ xuất hiện khi chuyển sang cookie: hồi còn Bearer
-    /// thì trang lạ không có token nên không kết nối được.
-    ///
-    /// Header Origin do TRÌNH DUYỆT tự đặt, mã JavaScript không sửa được, nên đây là chốt đúng chỗ.
-    /// Không có Origin ⇒ không phải trình duyệt (ứng dụng Android dùng Bearer) ⇒ để đường khác lo.
-    /// </summary>
-    public static bool IsAllowedOrigin(HttpContext ctx, string[] configuredOrigins)
-    {
-        var origin = ctx.Request.Headers.Origin.ToString();
-        if (string.IsNullOrEmpty(origin)) return true;
-
-        var self = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
-        if (string.Equals(origin, self, StringComparison.OrdinalIgnoreCase)) return true;
-
-        // Sau Cloudflare Tunnel, scheme mà Kestrel thấy có thể là http trong khi trình duyệt gửi
-        // https — so thêm phần host để không tự chặn chính mình.
-        if (origin.EndsWith($"://{ctx.Request.Host}", StringComparison.OrdinalIgnoreCase)) return true;
-
-        return CorsPolicy.IsAllowed(origin, configuredOrigins);
-    }
 
     private static readonly string[] SafeMethods = ["GET", "HEAD", "OPTIONS", "TRACE"];
 

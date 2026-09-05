@@ -1,0 +1,30 @@
+# /api/chamcong/log
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].fullName : string
+  $[].ghiChu : string
+  $[].id : number
+  $[].loai : string
+  $[].occurredAt : string
+  $[].similarity : number
+  $[].username : string
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].fullName : string
+  $[].ghiChu : string
+  $[].id : number
+  $[].loai : string
+  $[].occurredAt : string
+  $[].similarity : number
+  $[].username : string
+
+[Driver] 403 
+
+[Employee] 403 

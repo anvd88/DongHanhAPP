@@ -1,0 +1,22 @@
+# /api/hr/anniversary/template
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.body : string
+  $.enabled : bool
+  $.signature : string
+  $.title : string
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : object
+  $.body : string
+  $.enabled : bool
+  $.signature : string
+  $.title : string
+
+[Driver] 403 
+
+[Employee] 403 

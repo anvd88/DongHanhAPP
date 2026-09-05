@@ -36,3 +36,11 @@ src/KetoanMini/config/database.json
 publish/
 artifacts/
 *.nupkg
+
+# Worktree phụ của agent/codex (bản sao cả repo) — chỉ nằm trên máy, KHÔNG commit
+.codex-donghanh-rename/
+.claude/
+.codex/
+.agents/
+.codex-build/
+.codex-work/

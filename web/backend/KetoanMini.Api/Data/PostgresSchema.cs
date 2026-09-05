@@ -418,6 +418,23 @@ public static class PostgresSchema
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_suppliers_name ON suppliers (lower(name));
 
+        -- BÍ DANH nhà cung cấp: cùng một nơi nhưng mỗi người gọi một kiểu — "Đại Phát",
+        -- "anh A - Đại Phát", "kho Đại Phát". Không có bảng này thì mỗi cách gõ đẻ ra một nhà cung
+        -- cấp mới, công nợ phải trả và tồn theo nguồn bị chẻ nhỏ ra không cộng lại được.
+        --
+        -- Khoá duy nhất theo lower(alias) là điều kiện sống còn: một bí danh chỉ được trỏ về ĐÚNG
+        -- MỘT nhà cung cấp, nếu không lúc gán tự động máy phải đoán, mà đoán sai là ghi tiền vào
+        -- nhầm nhà cung cấp.
+        CREATE TABLE IF NOT EXISTS supplier_aliases (
+            id bigserial NOT NULL PRIMARY KEY,
+            supplier_id uuid NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+            alias varchar(256) NOT NULL,
+            created_by varchar(128) NOT NULL DEFAULT '',
+            created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_supplier_aliases_alias ON supplier_aliases (lower(alias));
+        CREATE INDEX IF NOT EXISTS ix_supplier_aliases_supplier ON supplier_aliases (supplier_id);
+
         -- Phiếu nhập mua đứng RIÊNG, không dùng chung bảng documents như phiếu bán/thu/chi/trả hàng.
         -- Lý do: documents đã gánh quá nhiều thứ của vòng đời phiếu BÁN (số phiếu in ra bất biến,
         -- giao hàng, đối soát, hàng trả về, công nợ phải THU). Nhét chiều mua vào đó là mỗi truy vấn
@@ -458,6 +475,24 @@ public static class PostgresSchema
         CREATE INDEX IF NOT EXISTS ix_purchase_lines_product
             ON purchase_lines (product_id) WHERE product_id IS NOT NULL;
 
+        -- NGUỒN HÀNG của một dòng phiếu bán: cuộn vừa xuất là hàng nhập của nhà cung cấp nào.
+        --
+        -- Cùng một mặt hàng nhập từ nhiều nhà cung cấp với giá khác nhau, nên tồn kho chỉ đúng khi
+        -- lúc xuất có ghi lấy hàng của ai. Không có cột này thì tổng tồn vẫn đúng nhưng tồn theo
+        -- từng nguồn thì sai, mà đó mới là số thủ kho cần khi đi đếm hàng thật trong kho.
+        --
+        -- CHỈ DÙNG NỘI BỘ: cột này không có mặt trên phiếu in, trên ảnh chụp lúc phát hành
+        -- (document_issued_lines) và trên sổ công nợ PDF gửi khách. Khách mua hàng không cần biết —
+        -- và không nên biết — hàng lấy từ đâu.
+        --
+        -- ON DELETE SET NULL kèm ảnh chụp tên: xoá nhà cung cấp khỏi danh mục không được làm hỏng
+        -- phiếu cũ, nhưng phiếu vẫn phải đọc được là hàng của ai.
+        ALTER TABLE document_lines ADD COLUMN IF NOT EXISTS supplier_id uuid NULL
+            REFERENCES suppliers(id) ON DELETE SET NULL;
+        ALTER TABLE document_lines ADD COLUMN IF NOT EXISTS supplier_name varchar(256) NOT NULL DEFAULT '';
+        CREATE INDEX IF NOT EXISTS ix_document_lines_supplier
+            ON document_lines (supplier_id, product_id) WHERE supplier_id IS NOT NULL;
+
 
         CREATE TABLE IF NOT EXISTS payments (
             id uuid NOT NULL PRIMARY KEY,
@@ -470,12 +505,39 @@ public static class PostgresSchema
             created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- BÍ DANH khách hàng, đối xứng với supplier_aliases.
+        --
+        -- Bảng này có từ thời app desktop nhưng chưa từng có chỗ nào ĐỌC: mọi cách gọi khác của một
+        -- khách vẫn đẻ ra khách mới và chẻ nhỏ công nợ phải thu. Mấy dòng dưới nối nó vào luồng lập
+        -- phiếu, giữ nguyên dữ liệu cũ.
         CREATE TABLE IF NOT EXISTS customer_aliases (
             id bigserial NOT NULL PRIMARY KEY,
             customer_id uuid NULL REFERENCES customers(id) ON DELETE CASCADE,
             customer_name varchar(256) NOT NULL DEFAULT '',
             alias varchar(256) NOT NULL DEFAULT ''
         );
+        ALTER TABLE customer_aliases ADD COLUMN IF NOT EXISTS created_by varchar(128) NOT NULL DEFAULT '';
+        ALTER TABLE customer_aliases ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
+        -- Dòng cũ chỉ có tên khách dạng chữ: nối lại thành khoá thật khi tên còn khớp.
+        UPDATE customer_aliases a
+           SET customer_id = c.id
+          FROM customers c
+         WHERE a.customer_id IS NULL AND lower(c.name) = lower(BTRIM(a.customer_name));
+
+        -- Khoá duy nhất theo bí danh là điều kiện để gán tự động không phải đoán. Dữ liệu cũ có thể
+        -- đang trùng, nên bọc trong khối bắt lỗi: trùng thì bỏ qua chứ KHÔNG xoá dữ liệu của ai, và
+        -- lớp API vẫn tự kiểm tra trước khi thêm. Dọn xong trùng lặp rồi khởi động lại là có khoá.
+        DO $customer_alias_index$
+        BEGIN
+            BEGIN
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_customer_aliases_alias
+                    ON customer_aliases (lower(alias)) WHERE customer_id IS NOT NULL;
+            EXCEPTION WHEN unique_violation THEN
+                RAISE NOTICE 'customer_aliases còn bí danh trùng nhau, chưa tạo được khoá duy nhất.';
+            END;
+        END
+        $customer_alias_index$;
+        CREATE INDEX IF NOT EXISTS ix_customer_aliases_customer ON customer_aliases (customer_id);
 
         CREATE TABLE IF NOT EXISTS audit_logs (
             id bigserial NOT NULL PRIMARY KEY,

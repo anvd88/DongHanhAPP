@@ -34,9 +34,10 @@ public sealed class AccessProfileService(Database db, ILogger<AccessProfileServi
 
     /// <summary>Như trên nhưng dùng lại kết nối sẵn có (tránh mở thêm kết nối trong một request).</summary>
     public static async Task<IReadOnlyList<string>?> LoadRolesAsync(
-        NpgsqlConnection conn, string username, CancellationToken ct = default)
+        NpgsqlConnection conn, string username, CancellationToken ct = default,
+        NpgsqlTransaction? transaction = null)
     {
-        await using var r = await conn.Cmd(
+        const string sql =
             @"SELECT u.role,
                      COALESCE((SELECT string_agg(ur.role, ',' ORDER BY ur.role)
                                FROM user_roles ur
@@ -44,8 +45,9 @@ public sealed class AccessProfileService(Database db, ILogger<AccessProfileServi
                                  AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)), '') AS extra
               FROM app_users u
               WHERE u.username = @u AND u.is_deleted = FALSE
-              LIMIT 1")
-            .With("@u", username).ExecuteReaderAsync(ct);
+              LIMIT 1";
+        await using var command = transaction is null ? conn.Cmd(sql) : conn.Cmd(sql, transaction);
+        await using var r = await command.With("@u", username).ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
         return Combine(r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? "" : r.GetString(1));
     }
@@ -170,8 +172,8 @@ public sealed class AccessProfileService(Database db, ILogger<AccessProfileServi
         "executive" => "/dashboard",
         "kiosk" => "/kiosk",
         "hr" => "/quanly-nhansu",
-        "accounting" => "/ketoan",
-        _ => permissions.Contains(Permissions.HrSelfAccess) ? "/nhan-su" : "/chats",
+        "accounting" => "/dashboard",
+        _ => permissions.Contains(Permissions.HrSelfAccess) ? "/nhan-su" : "/tai-apk",
     };
 
     /// <summary>Quyền hiện hành gắn vào request (do middleware dựng lại từ CSDL). Rỗng = chưa xác định được.</summary>

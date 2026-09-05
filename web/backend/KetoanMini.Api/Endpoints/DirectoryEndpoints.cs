@@ -9,7 +9,7 @@ namespace KetoanMini.Api.Endpoints;
 /// <summary>
 /// Danh bạ &amp; sơ đồ tổ chức — Đợt 2, nhiệm vụ 6. Cung cấp:
 ///  • Danh bạ toàn công ty: tìm theo tên/chức vụ (TIẾNG VIỆT KHÔNG DẤU), lọc theo phòng ban.
-///  • Trạng thái online (từ user_sessions, giống chat).
+///  • Trạng thái online (từ user_sessions).
 ///  • Sơ đồ tổ chức theo quan hệ quản lý–nhân viên (manager_id) dạng cây.
 ///  • PHÂN QUYỀN xem số điện thoại &amp; email: Admin/HR xem tất cả; quản lý xem của nhân viên mình;
 ///    người khác chỉ thấy tên/chức vụ/phòng ban (ẩn liên hệ), riêng bản thân luôn xem được.
@@ -36,7 +36,7 @@ public static class DirectoryEndpoints
                 LEFT JOIN hr_departments d ON d.id = e.department_id
                 LEFT JOIN hr_employees m ON m.id = e.manager_id
                 LEFT JOIN LATERAL (
-                    SELECT BOOL_OR(us.is_active = TRUE AND us.last_seen >= CURRENT_TIMESTAMP - INTERVAL '90 seconds') AS is_online
+                    SELECT BOOL_OR({KetoanMini.Api.Realtime.PresencePolicy.IsOnlineSql("us")}) AS is_online
                     FROM user_sessions us WHERE us.username = e.username
                 ) pres ON TRUE
                 WHERE e.status = 'Active' {deptFilter}

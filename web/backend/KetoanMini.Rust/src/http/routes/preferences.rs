@@ -14,13 +14,19 @@ use uuid::Uuid;
 const WATER_REMINDER_ENABLED: &str = "waterReminderEnabled";
 const EYE_REMINDER_ENABLED: &str = "eyeReminderEnabled";
 const KEEP_CREATE_VOUCHER_OPEN: &str = "keepCreateVoucherOpen";
-const MESSAGE_PREVIEW_ENABLED: &str = "messagePreviewEnabled";
+const NOTIFICATION_GROUPS_PATH: &str = "/api/preferences/notifications";
+const NOTIFY_PREFIX: &str = "notifyGroup.";
+const DELIVERY_GROUP: &str = "delivery";
+const COLLECTION_GROUP: &str = "collection";
+const ACCOUNTING_GROUP: &str = "accounting";
+const WORK_GROUP: &str = "work";
+const PEOPLE_GROUP: &str = "people";
 
 const LOAD_SQL: &str = r#"
     SELECT preference_key, preference_value
     FROM web_user_preferences
     WHERE user_id = $1
-      AND preference_key IN ($2, $3, $4, $5)
+      AND preference_key IN ($2, $3, $4)
 "#;
 
 const UPSERT_SQL: &str = r#"
@@ -31,11 +37,22 @@ const UPSERT_SQL: &str = r#"
         updated_at = EXCLUDED.updated_at
 "#;
 
+const LOAD_NOTIFICATION_GROUPS_SQL: &str = r#"
+    SELECT preference_key, preference_value
+    FROM web_user_preferences
+    WHERE user_id = $1 AND preference_key LIKE 'notifyGroup.%'
+"#;
+
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route(
-        "/api/preferences",
-        get(get_preferences).put(put_preferences),
-    )
+    Router::new()
+        .route(
+            "/api/preferences",
+            get(get_preferences).put(put_preferences),
+        )
+        .route(
+            NOTIFICATION_GROUPS_PATH,
+            get(get_notification_groups).put(put_notification_groups),
+        )
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -44,16 +61,14 @@ struct UserPreferencePatchRequest {
     water_reminder_enabled: Option<bool>,
     eye_reminder_enabled: Option<bool>,
     keep_create_voucher_open: Option<bool>,
-    message_preview_enabled: Option<bool>,
 }
 
 impl UserPreferencePatchRequest {
-    fn entries(self) -> [(&'static str, Option<bool>); 4] {
+    fn entries(self) -> [(&'static str, Option<bool>); 3] {
         [
             (WATER_REMINDER_ENABLED, self.water_reminder_enabled),
             (EYE_REMINDER_ENABLED, self.eye_reminder_enabled),
             (KEEP_CREATE_VOUCHER_OPEN, self.keep_create_voucher_open),
-            (MESSAGE_PREVIEW_ENABLED, self.message_preview_enabled),
         ]
     }
 }
@@ -64,7 +79,6 @@ struct UserPreferencesDto {
     water_reminder_enabled: bool,
     eye_reminder_enabled: bool,
     keep_create_voucher_open: bool,
-    message_preview_enabled: bool,
 }
 
 impl UserPreferencesDto {
@@ -73,9 +87,54 @@ impl UserPreferencesDto {
             water_reminder_enabled: parse_bool(values, WATER_REMINDER_ENABLED, true),
             eye_reminder_enabled: parse_bool(values, EYE_REMINDER_ENABLED, true),
             keep_create_voucher_open: parse_bool(values, KEEP_CREATE_VOUCHER_OPEN, false),
-            message_preview_enabled: parse_bool(values, MESSAGE_PREVIEW_ENABLED, true),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+struct NotificationGroupValues {
+    delivery: bool,
+    collection: bool,
+    accounting: bool,
+    work: bool,
+    people: bool,
+}
+
+impl Default for NotificationGroupValues {
+    fn default() -> Self {
+        Self {
+            delivery: true,
+            collection: true,
+            accounting: true,
+            work: true,
+            people: true,
+        }
+    }
+}
+
+impl NotificationGroupValues {
+    fn apply(&mut self, group: &str, enabled: bool) {
+        match group {
+            DELIVERY_GROUP => self.delivery = enabled,
+            COLLECTION_GROUP => self.collection = enabled,
+            ACCOUNTING_GROUP => self.accounting = enabled,
+            WORK_GROUP => self.work = enabled,
+            PEOPLE_GROUP => self.people = enabled,
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+struct NotificationGroupResponse {
+    groups: NotificationGroupValues,
+}
+
+#[derive(Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+struct NotificationGroupPatch {
+    #[serde(alias = "Groups")]
+    groups: Option<HashMap<String, bool>>,
 }
 
 async fn get_preferences(
@@ -131,6 +190,57 @@ async fn put_preferences(
     }
 }
 
+async fn get_notification_groups(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+) -> Response {
+    let Some(user_id) = auth.user_id else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    match load_notification_groups(&state.pool, user_id).await {
+        Ok(groups) => Json(NotificationGroupResponse { groups }).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "could not load notification-group preferences");
+            database_unavailable().into_response()
+        }
+    }
+}
+
+async fn put_notification_groups(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    payload: Result<Json<NotificationGroupPatch>, JsonRejection>,
+) -> Response {
+    let Some(user_id) = auth.user_id else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let patch = match payload {
+        Ok(Json(patch)) => patch,
+        Err(rejection) => {
+            let status = if rejection.status() == StatusCode::UNPROCESSABLE_ENTITY {
+                StatusCode::BAD_REQUEST
+            } else {
+                rejection.status()
+            };
+            return status.into_response();
+        }
+    };
+
+    if let Err(error) = save_notification_groups(&state.pool, user_id, patch).await {
+        tracing::error!(%error, "could not save notification-group preferences");
+        return database_unavailable().into_response();
+    }
+
+    match load_notification_groups(&state.pool, user_id).await {
+        Ok(groups) => Json(NotificationGroupResponse { groups }).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "could not reload notification-group preferences");
+            database_unavailable().into_response()
+        }
+    }
+}
+
 fn database_unavailable() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -169,7 +279,6 @@ async fn load_preferences(pool: &PgPool, user_id: Uuid) -> Result<UserPreference
         .bind(WATER_REMINDER_ENABLED)
         .bind(EYE_REMINDER_ENABLED)
         .bind(KEEP_CREATE_VOUCHER_OPEN)
-        .bind(MESSAGE_PREVIEW_ENABLED)
         .fetch_all(pool)
         .await?;
 
@@ -178,6 +287,60 @@ async fn load_preferences(pool: &PgPool, user_id: Uuid) -> Result<UserPreference
         .map(|(key, value)| (normalize_key(&key), value))
         .collect();
     Ok(UserPreferencesDto::from_values(&values))
+}
+
+async fn save_notification_groups(
+    pool: &PgPool,
+    user_id: Uuid,
+    patch: NotificationGroupPatch,
+) -> Result<(), sqlx::Error> {
+    // Match .NET: unknown keys are ignored, known keys are applied independently without wrapping
+    // the whole patch in a transaction.
+    let mut connection = pool.acquire().await?;
+    for (group, enabled) in patch.groups.unwrap_or_default() {
+        let Some(key) = notification_group_preference_key(&group) else {
+            continue;
+        };
+        sqlx::query(UPSERT_SQL)
+            .bind(user_id)
+            .bind(key)
+            .bind(if enabled { "true" } else { "false" })
+            .execute(&mut *connection)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn load_notification_groups(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<NotificationGroupValues, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (String, String)>(LOAD_NOTIFICATION_GROUPS_SQL)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+
+    let mut groups = NotificationGroupValues::default();
+    for (key, value) in rows {
+        let Some(group) = key.strip_prefix(NOTIFY_PREFIX) else {
+            continue;
+        };
+        if notification_group_preference_key(group).is_some() {
+            groups.apply(group, !value.eq_ignore_ascii_case("false"));
+        }
+    }
+    Ok(groups)
+}
+
+fn notification_group_preference_key(group: &str) -> Option<&'static str> {
+    match group {
+        DELIVERY_GROUP => Some("notifyGroup.delivery"),
+        COLLECTION_GROUP => Some("notifyGroup.collection"),
+        ACCOUNTING_GROUP => Some("notifyGroup.accounting"),
+        WORK_GROUP => Some("notifyGroup.work"),
+        PEOPLE_GROUP => Some("notifyGroup.people"),
+        _ => None,
+    }
 }
 
 type PreferenceValues = HashMap<String, String>;
@@ -219,7 +382,6 @@ mod tests {
                 water_reminder_enabled: true,
                 eye_reminder_enabled: false,
                 keep_create_voucher_open: true,
-                message_preview_enabled: true,
             }
         );
     }
@@ -230,7 +392,6 @@ mod tests {
             water_reminder_enabled: true,
             eye_reminder_enabled: false,
             keep_create_voucher_open: true,
-            message_preview_enabled: false,
         })
         .unwrap();
 
@@ -239,8 +400,7 @@ mod tests {
             json!({
                 "waterReminderEnabled": true,
                 "eyeReminderEnabled": false,
-                "keepCreateVoucherOpen": true,
-                "messagePreviewEnabled": false
+                "keepCreateVoucherOpen": true
             })
         );
     }
@@ -248,14 +408,53 @@ mod tests {
     #[test]
     fn patch_is_partial_and_uses_camel_case_input() {
         let patch: UserPreferencePatchRequest = serde_json::from_value(json!({
-            "waterReminderEnabled": false,
-            "messagePreviewEnabled": null
+            "waterReminderEnabled": false
         }))
         .unwrap();
 
         assert_eq!(patch.water_reminder_enabled, Some(false));
         assert_eq!(patch.eye_reminder_enabled, None);
         assert_eq!(patch.keep_create_voucher_open, None);
-        assert_eq!(patch.message_preview_enabled, None);
+    }
+
+    #[test]
+    fn notification_groups_default_on_and_serialize_in_the_existing_shape() {
+        let value = serde_json::to_value(NotificationGroupResponse {
+            groups: NotificationGroupValues::default(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "groups": {
+                    "delivery": true,
+                    "collection": true,
+                    "accounting": true,
+                    "work": true,
+                    "people": true
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn notification_group_patch_ignores_unknown_keys_and_keeps_known_key_names() {
+        let patch: NotificationGroupPatch = serde_json::from_value(json!({
+            "groups": {
+                "delivery": false,
+                "security": false,
+                "unknown": true
+            }
+        }))
+        .unwrap();
+        let groups = patch.groups.unwrap();
+        assert_eq!(groups.get("delivery"), Some(&false));
+        assert_eq!(
+            notification_group_preference_key("delivery"),
+            Some("notifyGroup.delivery")
+        );
+        assert_eq!(notification_group_preference_key("security"), None);
+        assert_eq!(notification_group_preference_key("unknown"), None);
     }
 }

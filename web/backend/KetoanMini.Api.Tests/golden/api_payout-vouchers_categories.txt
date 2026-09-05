@@ -1,0 +1,57 @@
+# /api/payout-vouchers/categories
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].description : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isSystem : bool
+  $[].name : string
+  $[].sortOrder : number
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].description : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isSystem : bool
+  $[].name : string
+  $[].sortOrder : number
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].description : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isSystem : bool
+  $[].name : string
+  $[].sortOrder : number
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].description : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isSystem : bool
+  $[].name : string
+  $[].sortOrder : number
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].code : string
+  $[].description : string
+  $[].id : string
+  $[].isActive : bool
+  $[].isSystem : bool
+  $[].name : string
+  $[].sortOrder : number

@@ -1,4 +1,7 @@
 using System.Security.Claims;
+using System.Text.Json;
+using KetoanMini.Api.BuildingBlocks.Idempotency;
+using KetoanMini.Api.BuildingBlocks.Realtime;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Security;
 using Npgsql;
@@ -49,9 +52,11 @@ public static class CashFundEndpoints
                 reversed_at timestamptz NULL,
                 reversed_by varchar(128) NOT NULL DEFAULT '',
                 reverse_reason text NOT NULL DEFAULT '',
+                version bigint NOT NULL DEFAULT 1,
                 CHECK (direction IN ('in','out')),
                 CHECK (amount > 0)
             );
+            ALTER TABLE cash_fund_manual_entries ADD COLUMN IF NOT EXISTS version bigint NOT NULL DEFAULT 1;
             CREATE INDEX IF NOT EXISTS ix_cash_fund_manual_occurred
                 ON cash_fund_manual_entries (occurred_at DESC);
             -- Số dư đầu kỳ chỉ được khai một lần; khai lại phải hủy bút toán cũ trước.
@@ -215,7 +220,8 @@ public static class CashFundEndpoints
 
         // Bút toán THỦ CÔNG: chỉ dành cho tiền ra/vào không có chứng từ nào khác trong hệ thống
         // (khai số dư đầu kỳ, nộp tiền vào ngân hàng, rút tiền về quỹ, điều chỉnh kiểm kê…).
-        g.MapPost("/entries", async (ManualEntryReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/entries", async (ManualEntryReq req, ClaimsPrincipal u, Database db,
+            IdempotencyStore idempotency, BusinessEventWriter businessEvents, HttpContext http) =>
         {
             var direction = (req.Direction ?? "").Trim().ToLowerInvariant();
             if (direction is not (DirectionIn or DirectionOut))
@@ -241,6 +247,20 @@ public static class CashFundEndpoints
 
             await using var conn = await db.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
+            var key = http.Request.Headers["Idempotency-Key"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                var lease = await idempotency.BeginAsync(conn, tx, u.Username(), "cash-fund.entry.create",
+                    key, JsonSerializer.Serialize(req), http.RequestAborted);
+                if (lease.Decision == IdempotencyDecision.Conflict)
+                    return Results.Conflict(new { message = "Idempotency-Key đang xử lý hoặc đã dùng với payload khác." });
+                if (lease.Decision == IdempotencyDecision.Replay)
+                {
+                    http.Response.Headers.ETag = "\"1\"";
+                    return Results.Content(lease.ResponseBody ?? "{}", "application/json",
+                        statusCode: lease.ResponseStatus ?? 200);
+                }
+            }
             if (opening)
             {
                 var existed = await conn.Cmd(
@@ -262,32 +282,73 @@ public static class CashFundEndpoints
                 .With("@reason", opening ? ReasonOpening : reason).With("@party", counterparty)
                 .With("@note", note).With("@opening", opening).With("@by", u.Username())
                 .ExecuteNonQueryAsync();
-            await tx.CommitAsync();
-
-            await db.RecordAudit(u.Username(),
+            await conn.RecordAudit(tx, u.Username(),
                 direction == DirectionIn ? "Ghi thu quỹ tiền mặt" : "Ghi chi quỹ tiền mặt",
                 "CashFund", no, $"{decimal.Truncate(req.Amount):N0} đồng; {(opening ? ReasonOpening : reason)}.");
-            return Results.Ok(new { id, entryNo = no });
+            await businessEvents.WriteAsync(conn, tx, "accounting.cash-fund.entry-created.v1",
+                "accounting.cash-fund.entry-created.v1", "data", "all", u.Username(), id.ToString(), 1,
+                http.RequestAborted);
+            var responseBody = JsonSerializer.Serialize(new { id, entryNo = no, version = 1 });
+            if (!string.IsNullOrWhiteSpace(key))
+                await idempotency.CompleteAsync(conn, tx, u.Username(), "cash-fund.entry.create", key,
+                    200, responseBody, http.RequestAborted);
+            await tx.CommitAsync(http.RequestAborted);
+            http.Response.Headers.ETag = "\"1\"";
+            return Results.Content(responseBody, "application/json", statusCode: 200);
         }).RequirePermission(Permissions.CashFundManage);
 
         // Chỉ HỦY được bút toán thủ công. Dòng sinh từ lệnh thu/phiếu chi/phiếu thu-chi phải sửa ở
         // chứng từ gốc, nếu không sổ quỹ sẽ nói khác chứng từ.
-        g.MapPost("/entries/{id:guid}/reverse", async (Guid id, ReasonReq req, ClaimsPrincipal u, Database db) =>
+        g.MapPost("/entries/{id:guid}/reverse", async (Guid id, ReasonReq req, ClaimsPrincipal u, Database db,
+            IdempotencyStore idempotency, BusinessEventWriter businessEvents, HttpContext http) =>
         {
             var reason = (req.Reason ?? "").Trim();
             if (reason.Length == 0) return Results.BadRequest(new { message = "Vui lòng nhập lý do hủy bút toán." });
             if (reason.Length > 1000) return Results.BadRequest(new { message = "Lý do không được vượt quá 1.000 ký tự." });
             await using var conn = await db.OpenAsync();
-            var entryNo = await conn.Cmd("""
+            await using var tx = await conn.BeginTransactionAsync();
+            var key = http.Request.Headers["Idempotency-Key"].FirstOrDefault();
+            var expectedVersion = ParseIfMatch(http.Request.Headers.IfMatch.FirstOrDefault());
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                var lease = await idempotency.BeginAsync(conn, tx, u.Username(), "cash-fund.entry.reverse", key,
+                    JsonSerializer.Serialize(new { id, reason, expectedVersion }), http.RequestAborted);
+                if (lease.Decision == IdempotencyDecision.Conflict)
+                    return Results.Conflict(new { message = "Idempotency-Key đang xử lý hoặc đã dùng với payload khác." });
+                if (lease.Decision == IdempotencyDecision.Replay)
+                    return Results.Content(lease.ResponseBody ?? "{}", "application/json",
+                        statusCode: lease.ResponseStatus ?? 200);
+            }
+            await using var changed = await conn.Cmd("""
                 UPDATE cash_fund_manual_entries
-                SET reversed_at = CURRENT_TIMESTAMP, reversed_by = @by, reverse_reason = @reason
-                WHERE id = @id AND reversed_at IS NULL
-                RETURNING entry_no
-                """).With("@id", id).With("@by", u.Username()).With("@reason", reason).ExecuteScalarAsync();
-            if (entryNo is null or DBNull)
+                SET reversed_at=CURRENT_TIMESTAMP,reversed_by=@by,reverse_reason=@reason,version=version+1
+                WHERE id=@id AND reversed_at IS NULL AND (@version IS NULL OR version=@version)
+                RETURNING entry_no,version
+                """, tx).With("@id", id).With("@by", u.Username()).With("@reason", reason)
+                .With("@version", (object?)expectedVersion ?? DBNull.Value).ExecuteReaderAsync(http.RequestAborted);
+            if (!await changed.ReadAsync(http.RequestAborted))
+            {
+                await changed.DisposeAsync();
+                if (expectedVersion.HasValue && await conn.Cmd(
+                    "SELECT 1 FROM cash_fund_manual_entries WHERE id=@id", tx).With("@id", id)
+                    .ExecuteScalarAsync(http.RequestAborted) is not null)
+                    return Results.Json(new { message = "Phiên bản bút toán đã thay đổi." }, statusCode: 412);
                 return Results.BadRequest(new { message = "Bút toán không tồn tại hoặc đã bị hủy." });
-            await db.RecordAudit(u.Username(), "Hủy bút toán quỹ tiền mặt", "CashFund", entryNo.ToString() ?? "", reason);
-            return Results.NoContent();
+            }
+            var entryNo = changed.GetString(0);
+            var version = changed.GetInt64(1);
+            await changed.DisposeAsync();
+            await conn.RecordAudit(tx, u.Username(), "Hủy bút toán quỹ tiền mặt", "CashFund", entryNo, reason);
+            await businessEvents.WriteAsync(conn, tx, "accounting.cash-fund.entry-reversed.v1",
+                "accounting.cash-fund.entry-reversed.v1", "data", "all", u.Username(), id.ToString(), version,
+                http.RequestAborted);
+            var responseBody = JsonSerializer.Serialize(new { id, entryNo, version });
+            if (!string.IsNullOrWhiteSpace(key))
+                await idempotency.CompleteAsync(conn, tx, u.Username(), "cash-fund.entry.reverse", key,
+                    200, responseBody, http.RequestAborted);
+            await tx.CommitAsync(http.RequestAborted);
+            http.Response.Headers.ETag = $"\"{version}\"";
+            return Results.Content(responseBody, "application/json", statusCode: 200);
         }).RequirePermission(Permissions.CashFundManage);
 
         // Danh sách bút toán thủ công (kể cả đã hủy) — chỗ duy nhất nhìn thấy dấu vết bút toán bị hủy.
@@ -299,7 +360,7 @@ public static class CashFundEndpoints
             var rows = new List<object>();
             await using var r = await conn.Cmd("""
                 SELECT id, entry_no, direction, amount, occurred_at, reason, counterparty, note,
-                       is_opening, created_by, created_at, reversed_at, reversed_by, reverse_reason
+                       is_opening, created_by, created_at, reversed_at, reversed_by, reverse_reason, version
                 FROM cash_fund_manual_entries
                 WHERE occurred_at >= @from AND occurred_at < @to
                 ORDER BY occurred_at DESC, entry_no DESC
@@ -321,6 +382,7 @@ public static class CashFundEndpoints
                     reversedAt = r.DtNull("reversed_at"),
                     reversedBy = r.Str("reversed_by"),
                     reverseReason = r.Str("reverse_reason"),
+                    version = r.Long("version"),
                 });
             return Results.Ok(new { month = period, entries = rows });
         }).RequirePermission(Permissions.CashFundRead);
@@ -333,8 +395,30 @@ public static class CashFundEndpoints
         return $"QTM{DateTime.Now:yyMM}-{seq:D5}";
     }
 
+    private static long? ParseIfMatch(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var normalized = value.Trim();
+        if (normalized.StartsWith("W/", StringComparison.OrdinalIgnoreCase)) normalized = normalized[2..];
+        normalized = normalized.Trim('"');
+        return long.TryParse(normalized, out var version) && version > 0 ? version : null;
+    }
+
+    /// <summary>
+    /// Tháng đã chuẩn hoá "yyyy-MM". Lấy thẳng từ <c>start</c> mà <see cref="TryMonthRange"/> LUÔN gán
+    /// (tháng hợp lệ, hoặc tháng hiện tại khi thiếu/sai định dạng) nên đúng ở mọi nhánh.
+    ///
+    /// Trước đây viết <c>TryMonthRange(month, out _, out _) ? month!.Trim() : …</c>. Sai vì
+    /// TryMonthRange cũng trả TRUE khi month = null (nó tự thay bằng tháng hiện tại rồi parse thành
+    /// công) ⇒ rơi vào nhánh <c>month!</c> ⇒ NullReferenceException. Hệ quả: CẢ BA endpoint sổ quỹ
+    /// (/, /balance, /entries) trả 500 mỗi khi máy khách không gửi ?month= — tức trang quỹ tiền mặt
+    /// hỏng hoàn toàn ở lần mở đầu tiên.
+    /// </summary>
     private static string NormalizeMonth(string? month)
-        => TryMonthRange(month, out _, out _) ? month!.Trim() : DateTime.Now.ToString("yyyy-MM");
+    {
+        TryMonthRange(month, out var start, out _);
+        return start.ToString("yyyy-MM", System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     /// <summary>
     /// "yyyy-MM" → khoảng [đầu tháng, đầu tháng sau). Lọc bằng KHOẢNG chứ không to_char(...) để

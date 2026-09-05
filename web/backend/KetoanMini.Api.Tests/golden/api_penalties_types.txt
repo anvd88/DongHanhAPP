@@ -1,0 +1,32 @@
+# /api/penalties/types
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].label : string
+  $[].type : string
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].label : string
+  $[].type : string
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].label : string
+  $[].type : string
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].label : string
+  $[].type : string
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].label : string
+  $[].type : string

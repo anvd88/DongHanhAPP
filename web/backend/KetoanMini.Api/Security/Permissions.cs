@@ -88,9 +88,6 @@ public static class Permissions
     public const string PortalRead = "portal.read";
     public const string PortalManage = "portal.manage";
 
-    // ── Trò chuyện ────────────────────────────────────────────────────────────
-    public const string ChatAccess = "chat.access";
-
     /// <summary>Loại claim mang quyền trong ClaimsPrincipal (do middleware dựng lại từ DB mỗi request).</summary>
     public const string ClaimType = "perm";
 
@@ -112,13 +109,12 @@ public static class Permissions
         PenaltyRead, PenaltyManage,
         TasksSelf, TasksAssign,
         PortalRead, PortalManage,
-        ChatAccess,
     ];
 
     /// <summary>Quyền tối thiểu của MỌI nhân viên đã đăng nhập (trừ máy kiosk).</summary>
     private static readonly string[] BaseEmployee =
     [
-        HrSelfAccess, AttendanceSelf, RequestsSelf, TasksSelf, ChatAccess, PortalRead, PenaltyRead,
+        HrSelfAccess, AttendanceSelf, RequestsSelf, TasksSelf, PortalRead, PenaltyRead,
     ];
 
     /// <summary>Quyền nền của Kế toán. Kế toán trưởng mở rộng chính mảng này để không thể bị thiếu
@@ -281,7 +277,6 @@ public static class Permissions
         TasksAssign => "Giao việc & nghiệm thu",
         PortalRead => "Xem cổng thông tin",
         PortalManage => "Quản trị cổng thông tin",
-        ChatAccess => "Trò chuyện",
         _ => permission,
     };
 }

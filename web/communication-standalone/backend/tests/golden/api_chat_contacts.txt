@@ -1,0 +1,112 @@
+# /api/chat/contacts
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : array
+  $[] : object
+  $[].avatarUrl : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].displayName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].isDiamond : bool
+  $[].isDirectManager : bool
+  $[].isOnline : bool
+  $[].managerName : string
+  $[].managerUsername : string
+  $[].phone : string
+  $[].position : string
+  $[].role : string
+  $[].sameDepartment : bool
+  $[].username : string
+  $[].verified : bool
+
+[Accounting] 200 application/json
+  $ : array
+  $[] : object
+  $[].avatarUrl : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].displayName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].isDiamond : bool
+  $[].isDirectManager : bool
+  $[].isOnline : bool
+  $[].managerName : string
+  $[].managerUsername : string
+  $[].phone : string
+  $[].position : string
+  $[].role : string
+  $[].sameDepartment : bool
+  $[].username : string
+  $[].verified : bool
+
+[HR] 200 application/json
+  $ : array
+  $[] : object
+  $[].avatarUrl : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].displayName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].isDiamond : bool
+  $[].isDirectManager : bool
+  $[].isOnline : bool
+  $[].managerName : string
+  $[].managerUsername : string
+  $[].phone : string
+  $[].position : string
+  $[].role : string
+  $[].sameDepartment : bool
+  $[].username : string
+  $[].verified : bool
+
+[Driver] 200 application/json
+  $ : array
+  $[] : object
+  $[].avatarUrl : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].displayName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].isDiamond : bool
+  $[].isDirectManager : bool
+  $[].isOnline : bool
+  $[].managerName : string
+  $[].managerUsername : string
+  $[].phone : string
+  $[].position : string
+  $[].role : string
+  $[].sameDepartment : bool
+  $[].username : string
+  $[].verified : bool
+
+[Employee] 200 application/json
+  $ : array
+  $[] : object
+  $[].avatarUrl : string
+  $[].departmentId : string
+  $[].departmentName : string
+  $[].displayName : string
+  $[].email : string
+  $[].employeeCode : string
+  $[].employeeId : string
+  $[].isDiamond : bool
+  $[].isDirectManager : bool
+  $[].isOnline : bool
+  $[].managerName : string
+  $[].managerUsername : string
+  $[].phone : string
+  $[].position : string
+  $[].role : string
+  $[].sameDepartment : bool
+  $[].username : string
+  $[].verified : bool

@@ -1,6 +1,7 @@
 pub mod app_config;
 pub mod auth;
 pub mod bank_accounts;
+pub mod catalogs;
 pub mod directory;
 pub mod gia_cong;
 pub mod help;

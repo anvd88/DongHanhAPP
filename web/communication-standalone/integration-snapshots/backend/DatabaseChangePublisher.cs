@@ -1,0 +1,263 @@
+﻿using System.Text;
+using System.Text.RegularExpressions;
+using KetoanMini.Api.Data;
+
+namespace KetoanMini.Api.Realtime;
+
+/// <summary>
+/// Cài trigger mức STATEMENT cho các bảng legacy. Trigger ghi integration outbox trong chính
+/// transaction nguồn; pg_notify chỉ còn là wake-up chuyển tiếp trong giai đoạn cutover.
+///
+/// Danh sách bảng nằm trong C# (<see cref="Watched"/>) chứ không nhúng trong chuỗi SQL, để lúc cài
+/// còn ĐỐI CHIẾU được bảng nào chưa tồn tại mà BÁO ĐỘNG. Trước đây khối DO trong SQL lặng lẽ bỏ qua
+/// bảng thiếu: không lỗi, không log, chỉ là màn hình đó vĩnh viễn không tự cập nhật — đúng kiểu hỏng
+/// âm thầm mà một xương sống không được phép có.
+/// </summary>
+public static class DatabaseChangePublisher
+{
+    public const string ChannelName = "ketoanmini_changes";
+    private const string TriggerName = "ketoanmini_publish_change";
+
+    /// <summary>
+    /// Bảng → các phạm vi (scope) phát khi bảng đổi. Giữ khớp với scope mà lib/realtime.ts và
+    /// useApi.ts đang nghe; scope lạ sẽ bị ChangeWatcher.AllowedScopes chặn.
+    /// Muốn một màn hình tự làm mới: thêm bảng vào đây — KHÔNG gọi hub trong endpoint
+    /// (RealtimeCoverageTests cưỡng chế quy tắc này).
+    /// </summary>
+    internal static readonly (string Table, string[] Scopes)[] Watched =
+    [
+        ("documents", ["data"]),
+        ("document_lines", ["data"]),
+        ("payments", ["data"]),
+        ("cash_collection_orders", ["data", "hr"]),
+        ("cash_count_sessions", ["data", "hr"]),
+        ("cash_count_lines", ["data", "hr"]),
+        ("cash_collection_events", ["data", "hr"]),
+        // Bút toán tay là MỘT trong bốn nguồn của view cash_fund_ledger. Thiếu trigger ở đây thì
+        // người vừa nộp/rút quỹ thấy số mới, còn máy của người khác giữ số dư cũ tới lần ghi sau —
+        // sổ quỹ lệch mà không ai biết. Chỉ scope "data": /api/cash-fund rơi vào nhánh mặc định của
+        // useApi (xem scopesForPath), thêm "hr" chỉ làm màn nhân sự tải lại vô ích.
+        ("cash_fund_manual_entries", ["data"]),
+        ("customers", ["data"]),
+        ("products", ["data"]),
+        ("suppliers", ["data"]),
+        ("purchases", ["data"]),
+        ("purchase_lines", ["data"]),
+        ("customer_opening_balances", ["data"]),
+        ("customer_aliases", ["data"]),
+        // Kế toán lõi: mọi thay đổi tài khoản, bút toán, kỳ, đối chiếu và ngân sách
+        // cùng phát scope nghiệp vụ để các máy đang mở sổ tự làm mới sau khi giao dịch commit.
+        ("core_accounts", ["data"]),
+        ("core_periods", ["data"]),
+        ("core_journal_entries", ["data"]),
+        ("core_journal_lines", ["data"]),
+        ("core_budgets", ["data"]),
+        ("core_reconciliations", ["data"]),
+        ("core_period_events", ["data"]),
+        ("gia_cong_phieu", ["data"]),
+        ("gia_cong_hang_hoa", ["data"]),
+        // Chấm công đứng riêng scope 'attendance' thay vì đi chung 'data'. 'data' là scope BẮT-TẤT của
+        // useApi (mọi path không khớp luật nào đều nghe nó), nên để chung có hai chiều lãng phí: một bút
+        // toán kế toán làm trang chấm công tải lại, và một lượt chấm công làm mọi màn kế toán tải lại.
+        // Vẫn giữ 'hr' vì bảng công/hồ sơ nhân sự tính trực tiếp từ các bảng này.
+        ("cham_cong_face", ["attendance", "hr"]),
+        ("cham_cong_face_enrollments", ["attendance", "hr"]),
+        ("cham_cong_face_enrollment_samples", ["attendance", "hr"]),
+        ("cham_cong_log", ["attendance", "hr"]),
+
+        ("app_users", ["presence"]),
+        ("user_sessions", ["presence"]),
+        ("user_roles", ["presence"]),
+        ("system_roles", ["presence"]),
+        // Nhóm dưới đây phục vụ /api/users mà useApi ánh xạ sang scope 'presence', nên dùng chung
+        // scope đó thì màn hình quản trị tài khoản tự làm mới đúng chỗ.
+        ("work_access_requests", ["presence"]),
+        ("password_reset_requests", ["presence"]),
+        ("registration_codes", ["presence"]),
+        ("web_verified_users", ["presence"]),
+        ("web_diamond_members", ["presence"]),
+        ("web_user_avatars", ["presence"]),
+        ("app_settings", ["presence"]),
+
+        ("help_faqs", ["data"]),
+
+        ("hr_departments", ["hr"]),
+        ("hr_job_positions", ["hr"]),
+        ("hr_employee_positions", ["hr"]),
+        // Thêm 'presence': ảnh đại diện nay nằm ở hr_employees.avatar, mà danh bạ/chat (/api/directory,
+        // /api/chat/contacts) nghe scope 'presence'. Thiếu nó thì đổi ảnh xong danh bạ vẫn giữ ảnh cũ
+        // tới lần tải trang sau. Hồ sơ nhân sự đổi rất thưa nên không gây bão tải lại.
+        ("hr_employees", ["hr", "presence"]),
+        ("hr_contracts", ["hr"]),
+        ("hr_salary_raises", ["hr"]),
+        ("hr_payslips", ["hr"]),
+        ("hr_payslip_history", ["hr"]),
+        ("hr_leave_balances", ["hr"]),
+        ("hr_documents", ["hr"]),
+        ("hr_anniversary_letter", ["hr"]),
+        ("hr_shifts", ["hr"]),
+        ("hr_shift_assignments", ["hr"]),
+        ("hr_requests", ["hr"]),
+        ("hr_request_approvals", ["hr"]),
+        ("hr_request_attachments", ["hr"]),
+        ("hr_approval_delegations", ["hr"]),
+        ("hr_attendance_corrections", ["attendance", "hr"]),
+        ("hr_attendance_reminders", ["attendance", "hr"]),
+        ("hr_locations", ["hr"]),
+        ("hr_holidays", ["hr"]),
+        ("cham_cong_offline", ["attendance", "hr"]),
+        ("cham_cong_qr_sites", ["attendance", "hr"]),
+        ("web_system_settings", ["hr"]),
+
+        // Lương / phạt / chi tiền / tài khoản ngân hàng: trước đây các endpoint này tự gọi hub.
+        ("hr_salaries", ["hr"]),
+        ("hr_payslip_inquiries", ["hr"]),
+        ("hr_penalties", ["hr"]),
+        ("hr_penalty_ledger", ["hr"]),
+        ("hr_penalty_refunds", ["hr"]),
+        ("hr_payout_categories", ["hr"]),
+        ("hr_payout_vouchers", ["hr"]),
+        ("hr_payout_voucher_events", ["hr"]),
+        ("hr_bank_accounts", ["hr"]),
+
+        ("work_tasks", ["tasks"]),
+        ("work_task_events", ["tasks"]),
+
+        ("app_portal_posts", ["portal"]),
+        ("app_portal_about", ["portal"]),
+
+        ("app_config", ["config"]),
+        ("audit_logs", ["audit"]),
+
+        ("app_releases", ["release"]),
+
+        ("app_feedbacks", ["feedback"]),
+        ("app_general_feedback", ["feedback"]),
+        ("app_support_tickets", ["feedback"]),
+        // Báo cáo tin nhắn xấu hiện ở hộp thư xử lý cùng chỗ với góp ý nên dùng chung scope 'feedback'.
+        // Các bảng web_chat_* CÒN LẠI cố ý KHÔNG có trigger: tín hiệu chat phải nhắm đúng thành viên
+        // cuộc trò chuyện (ChatEndpoints.NotifyChat).
+        ("web_chat_reports", ["feedback"]),
+
+        ("surveys", ["data"]),
+        ("survey_questions", ["data"]),
+        ("survey_answers", ["data"]),
+        ("survey_responses", ["data"]),
+        ("app_survey_responses", ["data"]),
+
+        ("hr_onboarding_tasks", ["talent"]),
+        ("hr_performance_goals", ["talent"]),
+        ("hr_performance_reviews", ["talent"]),
+        ("hr_training_courses", ["talent"]),
+        ("hr_training_enrollments", ["talent"]),
+        ("hr_employee_benefits", ["talent"]),
+        ("hr_employee_rewards", ["talent"]),
+
+        // Hộp thư thông báo của web. Trigger phát sau khi giao dịch nghiệp vụ COMMIT, nên cái chuông
+        // không bao giờ hiện một thông báo của lần ghi đã rollback. Tín hiệu chỉ mang tên scope, mỗi
+        // máy khách tự gọi /api/notifications để lấy đúng phần của mình.
+        ("web_notifications", ["notify"]),
+    ];
+
+    /// <summary>
+    /// Hàm trigger dùng chung: mỗi transaction/scope chỉ có một invalidation durable. Không gắn
+    /// trigger vào chính outbox/inbox/realtime store nên không thể tạo vòng lặp.
+    /// </summary>
+    internal const string FunctionSql = $"""
+        CREATE OR REPLACE FUNCTION public.{TriggerName}()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+            scope_name text;
+            event_uuid uuid;
+            occurred timestamptz;
+            bridge_dedupe text;
+        BEGIN
+            FOREACH scope_name IN ARRAY TG_ARGV
+            LOOP
+                occurred := clock_timestamp();
+                event_uuid := md5(random()::text || occurred::text || txid_current()::text || scope_name)::uuid;
+                bridge_dedupe := 'tx:' || txid_current()::text || ':scope:' || scope_name;
+                INSERT INTO integration_outbox
+                    (id,event_type,routing_key,aggregate_type,aggregate_id,aggregate_version,
+                     payload,headers,occurred_at,bridge_key)
+                VALUES
+                    (event_uuid,'realtime.invalidate.v1','legacy.realtime.invalidated.v1',TG_TABLE_NAME,
+                     NULL,NULL,
+                     jsonb_build_object(
+                        'eventId',event_uuid,
+                        'eventType','realtime.invalidate.v1',
+                        'occurredAt',occurred,
+                        'producer','KetoanMini.Host/legacy-trigger-bridge',
+                        'aggregateId',NULL,
+                        'aggregateVersion',NULL,
+                        'actor',NULL,
+                        'correlationId','pg-tx:' || txid_current()::text,
+                        'causationId',NULL,
+                        'audience',jsonb_build_array('all'),
+                        'data',jsonb_build_object('scope',scope_name)),
+                     jsonb_build_object('bridge','postgres-trigger','table',TG_TABLE_NAME),
+                     occurred,bridge_dedupe)
+                ON CONFLICT DO NOTHING;
+                PERFORM pg_notify('{ChannelName}', scope_name);
+            END LOOP;
+            RETURN NULL;
+        END;
+        $function$;
+        """;
+
+    // Tên bảng/scope đều là hằng trong mã nguồn này chứ không đến từ người dùng, nhưng vẫn chặn ký tự
+    // lạ trước khi ghép vào DDL: nếu sau này ai đó nạp danh sách từ cấu hình thì cửa này đã khoá sẵn.
+    private static readonly Regex SafeIdentifier = new("^[a-z_][a-z0-9_]*$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Cài hàm + trigger cho mọi bảng trong <see cref="Watched"/> ĐANG TỒN TẠI, và trả về danh sách
+    /// bảng bị bỏ qua vì chưa có trong lược đồ. Bảng thiếu không làm hỏng realtime của bảng khác
+    /// (một module tắt không kéo sập cả hệ thống), nhưng người gọi PHẢI báo động — xem ChangeWatcher.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> EnsureAsync(Database db, CancellationToken ct = default)
+        => await EnsureAsync(db, Watched, ct);
+
+    internal static async Task<IReadOnlyList<string>> EnsureAsync(
+        Database db, IReadOnlyCollection<(string Table, string[] Scopes)> watched, CancellationToken ct = default)
+    {
+        foreach (var (table, scopes) in watched)
+        {
+            if (!SafeIdentifier.IsMatch(table))
+                throw new InvalidOperationException($"Tên bảng realtime không hợp lệ: {table}");
+            foreach (var scope in scopes)
+                if (!SafeIdentifier.IsMatch(scope))
+                    throw new InvalidOperationException($"Tên scope realtime không hợp lệ: {scope}");
+        }
+
+        await using var conn = await db.OpenAsync(ct);
+        await conn.Cmd(FunctionSql).ExecuteNonQueryAsync(ct);
+
+        // Hỏi MỘT lượt xem bảng nào có thật, thay vì mỗi bảng một vòng đi-về.
+        var names = watched.Select(w => w.Table).ToArray();
+        var existing = new HashSet<string>(StringComparer.Ordinal);
+        await using (var r = await conn.Cmd(
+            "SELECT n FROM unnest(@names) AS n WHERE to_regclass('public.' || quote_ident(n)) IS NOT NULL")
+            .With("@names", names).ExecuteReaderAsync(ct))
+        {
+            while (await r.ReadAsync(ct)) existing.Add(r.GetString(0));
+        }
+
+        var ddl = new StringBuilder();
+        foreach (var (table, scopes) in watched)
+        {
+            if (!existing.Contains(table)) continue;
+            var args = string.Join(", ", scopes.Select(s => $"'{s}'"));
+            // Nháy kép quanh tên bảng: mọi tên ở đây đều chữ thường nên nháy không đổi ý nghĩa, nhưng
+            // che được trường hợp tên trùng từ khoá SQL (vd một bảng tên "user") làm vỡ câu lệnh.
+            ddl.AppendLine($"DROP TRIGGER IF EXISTS {TriggerName} ON public.\"{table}\";");
+            ddl.AppendLine(
+                $"CREATE TRIGGER {TriggerName} AFTER INSERT OR UPDATE OR DELETE ON public.\"{table}\" " +
+                $"FOR EACH STATEMENT EXECUTE FUNCTION public.{TriggerName}({args});");
+        }
+        if (ddl.Length > 0) await conn.Cmd(ddl.ToString()).ExecuteNonQueryAsync(ct);
+
+        return names.Where(n => !existing.Contains(n)).ToArray();
+    }
+}

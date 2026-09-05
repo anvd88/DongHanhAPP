@@ -1,0 +1,22 @@
+# /api/auth/account-settings
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.webLoginEnabled : bool
+
+[Accounting] 200 application/json
+  $ : object
+  $.webLoginEnabled : bool
+
+[HR] 200 application/json
+  $ : object
+  $.webLoginEnabled : bool
+
+[Driver] 200 application/json
+  $ : object
+  $.webLoginEnabled : bool
+
+[Employee] 200 application/json
+  $ : object
+  $.webLoginEnabled : bool

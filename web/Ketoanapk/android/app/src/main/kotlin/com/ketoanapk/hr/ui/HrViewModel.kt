@@ -14,9 +14,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Contacts
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Face
@@ -53,7 +51,6 @@ import com.ketoanapk.hr.data.AuditEntry
 import com.ketoanapk.hr.data.AppEvents
 import com.ketoanapk.hr.data.AppNotification
 import com.ketoanapk.hr.data.APP_UPDATE_NOTIFICATION_TARGET
-import com.ketoanapk.hr.data.CallManager
 import com.ketoanapk.hr.data.AppNotifier
 import com.ketoanapk.hr.data.AppUpdater
 import com.ketoanapk.hr.data.CapturedFrame
@@ -61,7 +58,6 @@ import com.ketoanapk.hr.data.ChamCongResult
 import com.ketoanapk.hr.data.AttendancePolicy
 import com.ketoanapk.hr.data.OfflineAttendanceItem
 import com.ketoanapk.hr.data.OfflineAttendanceRecord
-import com.ketoanapk.hr.data.ChatConversation
 import com.ketoanapk.hr.data.CreateRequestBody
 import com.ketoanapk.hr.data.Department
 import com.ketoanapk.hr.data.DeviceSession
@@ -87,7 +83,7 @@ import com.ketoanapk.hr.data.notificationAccountScope
 import com.ketoanapk.hr.data.Penalty
 import com.ketoanapk.hr.data.PortalFeed
 import com.ketoanapk.hr.data.PortalPost
-import com.ketoanapk.hr.data.RealtimeClient
+import com.ketoanapk.hr.data.SseRealtimeClient
 import com.ketoanapk.hr.data.ReleaseInfo
 import com.ketoanapk.hr.data.RequestDetail
 import com.ketoanapk.hr.data.RequestListItem
@@ -137,8 +133,6 @@ import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.YearMonth
 
-/** Tab trong mini app Chat. Chat chiếm trọn màn nên có thanh tab riêng, không dùng thanh dưới của HR. */
-enum class ChatTab(val label: String) { Conversations("Hội thoại"), Directory("Danh bạ"), Calls("Cuộc gọi") }
 
 sealed interface AuthState {
     data object Loading : AuthState
@@ -191,9 +185,7 @@ enum class HrDestination(
     // Màn RIÊNG (không phải hộp thoại) tra lại việc ĐÃ HOÀN THÀNH theo tuần/tháng. Không nằm trong
     // homeActions: chỉ vào từ nút "Lịch sử" của màn Việc cần làm để không đẻ thêm một ô ở Trang chủ.
     TaskHistory("Lịch sử công việc", "Lịch sử việc", Icons.Filled.FactCheck),
-    Chat("Chat nội bộ", "Chat", Icons.Filled.Chat),
     Directory("Danh bạ", "Danh bạ", Icons.Filled.Contacts),
-    Calls("Lịch sử cuộc gọi", "Cuộc gọi", Icons.Filled.Call),
     // Nhân viên tự xem các phiếu lương đã nhận (mỗi tháng một thẻ).
     MyPayslips("Phiếu lương", "Phiếu lương", Icons.Filled.ReceiptLong),
     // Phiếu chi tiền mặt: nhân viên xem phiếu của mình; kế toán lập phiếu + hiện QR ngay trên app.
@@ -533,26 +525,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     private var notificationCenter = NotificationCenter(application, "signed-out")
     private val tokenStore = TokenStore(application)
     private val anniversaryStore = com.ketoanapk.hr.data.AnniversaryGreetingStore(application)
-    // Client SignalR (realtime tức thì khi app đang mở, như bản web). Bật/tắt theo foreground.
-    private val realtime = RealtimeClient(tokenStore)
+    // Business realtime dùng SSE durable.
+    private val businessRealtime = SseRealtimeClient(tokenStore)
 
-    init {
-        // Cắm kênh đẩy "chuông" FCM cho CallManager: khi bắt đầu/hủy gọi, gọi REST để máy người nhận
-        // reo cả khi app họ đang đóng/nền. Best-effort — lỗi mạng không làm hỏng cuộc gọi.
-        CallManager.bindPush(
-            inviter = { to, id, media -> viewModelScope.launch { repo.ringCall(to, id, media) } },
-            canceler = { to, id -> viewModelScope.launch { repo.cancelCallRing(to, id) } },
-            misser = { to, id, media -> viewModelScope.launch { repo.missedCall(to, id, media) } },
-        )
-        // Cắm kênh nạp TURN credential ĐỘNG (backend cấp có hạn giờ) để gọi được khi 2 máy khác mạng —
-        // không nhúng mật khẩu TURN vào APK. Best-effort: lỗi mạng thì tự lùi về STUN.
-        CallManager.bindTurn { viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } }
-        CallManager.bindHistory { session, reason, endedAt ->
-            viewModelScope.launch { repo.recordCall(session, reason, endedAt) }
-        }
-    }
-
-    // ── Trạng thái kết nối (báo mất mạng cho người dùng) ──────────────────────────────────
+   // ── Trạng thái kết nối (báo mất mạng cho người dùng) ──────────────────────────────────
     /** Trạng thái kết nối hiện tại — UI hiện banner khi khác [ConnectionStatus.Online]. */
     var connection: ConnectionStatus by mutableStateOf(ConnectionStatus.Online)
         private set
@@ -611,6 +587,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // trên web mà không cần người dùng kéo làm mới. Dừng khi app xuống nền để tiết kiệm pin
     // (nền đã có WorkManager + push FCM lo thông báo).
     private var foregroundPollJob: Job? = null
+    private var directoryPresenceJob: Job? = null
     private var payslipRequirementJob: Job? = null
     private val payslipRequirementMutex = Mutex()
     private var payslipRequirementServerGeneration = 0L
@@ -712,11 +689,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     // Nhật ký của ô ngày đang chọn trên lịch bảng công.
     var dayLogState by mutableStateOf(DayLogUiState())
         private set
-    var realChatState by mutableStateOf(RealChatUiState())
-        private set
     var directoryState by mutableStateOf(DirectoryUiState())
-        private set
-    var callHistoryState by mutableStateOf(CallHistoryUiState())
         private set
     // Nháp khiếu nại mở thẳng từ màn Kỷ luật (bấm đề nghị trên một quyết định phạt). RequestsScreen đọc
     // để mở luôn form penalty_appeal đã điền sẵn án phạt; xoá đi sau khi rời luồng tạo đơn.
@@ -844,12 +817,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     val pendingApprovalCount: Int get() = homeState.inbox.count { it.status.equals("Pending", true) }
     val taskCenterItems: List<TaskCenterItem>
         get() = buildTaskCenterItems(homeState.inbox, homeState.timesheet, managerState.summary?.headcount)
-    val chatUnreadCount: Int get() = realChatState.conversations.sumOf { it.unread }
 
     /**
      * Thanh dưới theo vai trò: nhân viên cần Bảng công + Đơn từ, quản trị cần Chờ duyệt + Quản lý
-     * nhân sự. Ô cuối là "Cá nhân" (hồ sơ) — thay cho nút ảnh đại diện trên header đã bỏ; Chat đã chuyển
-     * thành nút "Hỗ trợ" trong màn Đơn từ nên không còn ở thanh dưới.
+     * nhân sự. Ô cuối là "Cá nhân" (hồ sơ) — thay cho nút ảnh đại diện trên header đã bỏ.
      *
      * RÀNG BUỘC: đúng 5 mục và nút QR nổi LUÔN ở giữa (chỉ số 2) — nút tròn nổi được căn TopCenter nên
      * đổi thứ tự sẽ khiến nút lệch khỏi khe trống. Vị trí giữa (Scan) chỉ là chỗ trống giữ khe cho nút QR.
@@ -893,7 +864,6 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         HrDestination.Payout,
         HrDestination.CashCollections,
         HrDestination.Penalty,
-        HrDestination.Chat,
         HrDestination.Help,
         HrDestination.Onboarding,
         HrDestination.Performance,
@@ -916,7 +886,6 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun hubFor(destination: HrDestination): List<HrDestination> {
         val user = (authState as? AuthState.SignedIn)?.user ?: return emptyList()
         val destinations = when (destination) {
-            // Chat không có ở đây: Danh bạ/Cuộc gọi là TAB trong mini app Chat, xem ChatMiniApp.
             // Người duyệt đã có tab "Chờ duyệt" ở thanh dưới nên không lặp lại nó ở đây.
             HrDestination.Requests ->
                 if (user.can(AppPermissions.RequestsApprove)) listOf(HrDestination.Penalty)
@@ -935,7 +904,6 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun badgeCount(destination: HrDestination): Int = when (destination) {
         HrDestination.Approval -> pendingApprovalCount
         HrDestination.Tasks -> taskCenterItems.size + workTasksState.badge
-        HrDestination.Chat -> chatUnreadCount
         HrDestination.CashCollections -> cashCollectionState.items.count {
             if (canReadAllCollections) it.status in setOf("PendingHandover", "Variance")
             else it.mine && it.status in setOf("Assigned", "Accepted", "PendingHandover", "Variance")
@@ -951,10 +919,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 if (authState is AuthState.SignedIn && !loggingOut) {
                     pollLiveData(changeScope)
                     if (changeScope == "release") schedulePublishedReleaseCheck()
-                    // "all" phát sau khi SignalR nối lại: kiểm tra theo throttle để bắt bản đã lỡ lúc mất mạng.
+                    // "all" do SSE resync phát: kiểm tra theo throttle để bắt bản đã lỡ ngoài retention.
                     if (changeScope == "all") autoCheckForUpdate(force = true)
-                    if ((changeScope == "chat" || changeScope == "all") && selected == HrDestination.Chat)
-                        refreshChatRealtime()
                     if (changeScope == "config" || changeScope == "all") loadAppConfig(force = true)
                     if (changeScope == "access") refreshCurrentAccess()
                     if ((changeScope == "portal" || changeScope == "all") && selected == HrDestination.Portal)
@@ -980,15 +946,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun consumeActionMessage() { actionMessage = null }
 
-    /** Báo một dòng ngắn lên snackbar từ màn hình (ghi âm hỏng micro, giữ quá nhanh…). */
+    /** Báo một dòng ngắn lên snackbar từ màn hình. */
     fun showActionMessage(text: String) { actionMessage = text }
-
-    /** Kiểm tra công tắc gọi (remote config) trước khi mở cuộc gọi; false + báo lý do nếu bị tắt từ xa. */
-    fun ensureCallAllowed(video: Boolean): Boolean {
-        if (!CallManager.callsEnabled) { actionMessage = "Tính năng gọi đang tạm tắt."; return false }
-        if (video && !CallManager.videoCallEnabled) { actionMessage = "Gọi video đang tạm tắt."; return false }
-        return true
-    }
 
     fun login(username: String, password: String, remember: Boolean) {
         if (username.isBlank() || password.isBlank()) {
@@ -1069,13 +1028,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
         startPayslipRequirementMonitor()
         startForegroundUpdateMonitor()
-        CallManager.setSelfIdentity(user.displayName) // tên thật (DB) gửi kèm lời mời gọi
-        realtime.start(user.username) // realtime + kênh tín hiệu gọi (app đang mở lúc đăng nhập)
-        viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } // TURN sẵn sàng trước cuộc gọi đầu
+        businessRealtime.start(user.username)
         loadNotifications()
-        syncMissedCalls() // hiện cuộc gọi nhỡ đã lưu server (kể cả lúc bị gọi đang offline)
         syncPushDelivery()
-        registerPush() // LUÔN đăng ký token FCM để NHẬN ĐƯỢC CUỘC GỌI dù người dùng tắt thông báo nghiệp vụ
+        registerPush()
         refreshHome(user, silent = false)
         loadTimesheet(currentMonthKey(), silent = false)
         loadWorkTasks(silent = true) // để huy hiệu "Giao việc" trên Trang chủ có số ngay
@@ -1305,10 +1261,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Đăng xuất. [kickedMessage] != null nghĩa là bị BUỘC đăng xuất (đăng nhập ở máy khác / phiên hết
-     * hạn) — hiện lý do ở màn đăng nhập. Bỏ qua nếu đã đăng xuất rồi (chống gọi trùng từ heartbeat + SignalR).
+     * hạn) — hiện lý do ở màn đăng nhập. Bỏ qua nếu đã đăng xuất rồi (chống gọi trùng từ heartbeat + SSE).
      */
     fun logout(kickedMessage: String? = null) {
         if (authState is AuthState.SignedOut || loggingOut) return
+        val accountAtLogout = (authState as? AuthState.SignedIn)?.user?.username.orEmpty()
         loggingOut = true
         // Chốt token + vô hiệu callback Firebase trước mọi suspend. Token đã chốt được unregister ở
         // dưới trong khi JWT của tài khoản cũ vẫn còn; callback đến muộn chỉ thấy epoch đã đổi và no-op.
@@ -1343,6 +1300,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 repo.logout()
                 stopHeartbeat()
                 onAppPaused() // dừng vòng poll foreground
+                if (accountAtLogout.isNotBlank()) businessRealtime.clearCursor(accountAtLogout)
                 NotificationWorker.cancel(getApplication<Application>())
                 centerAtLogout.reset() // đồng thời gỡ toàn bộ notification khay thuộc tài khoản này
                 notificationCenter = NotificationCenter(getApplication<Application>(), "signed-out")
@@ -1418,38 +1376,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Lấy cuộc gọi NHỠ đã lưu bền ở server và đưa vào chuông thông báo trong app. Chạy khi mở app/đăng
-     * nhập → người nhận thấy cuộc gọi nhỡ DÙ lúc bị gọi đang offline, chưa đăng ký token, hay tắt push.
-     * Chống trùng với push đã đến nhờ chữ ký `callmiss:{callId}`.
-     */
-    fun syncMissedCalls() {
-        val account = (authState as? AuthState.SignedIn)?.user?.username ?: return
-        val center = notificationCenter
-        viewModelScope.launch {
-            val missed = repo.fetchMissedCalls()
-            val activeAccount = (authState as? AuthState.SignedIn)?.user?.username
-            if (!activeAccount.equals(account, ignoreCase = true)) return@launch
-            if (missed.isEmpty()) return@launch
-            var added = false
-            for (m in missed) {
-                val kind = if (m.media.equals("video", true)) "video" else "thoại"
-                val sig = "callmiss:" + m.callId.ifBlank { m.id.toString() }
-                val n = center.ingestFromPush(
-                    sig,
-                    com.ketoanapk.hr.data.NotificationKind.System,
-                    "Cuộc gọi nhỡ",
-                    "Cuộc gọi $kind nhỡ từ ${m.fromName.ifBlank { m.fromUsername }}",
-                    null,
-                )
-                if (n != null) added = true
-            }
-            repo.markMissedCallsSeen()
-            if (added && notificationCenter.accountScope == center.accountScope) notifications = center.current
-        }
-    }
-
-    private fun syncNotifications(user: HrUser, state: HomeUiState) {
+   private fun syncNotifications(user: HrUser, state: HomeUiState) {
         val center = notificationCenter
         viewModelScope.launch {
             val nowVietnam = com.ketoanapk.hr.data.ServerClock.nowVietnam()
@@ -1498,24 +1425,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openNotifications() { goTo(HrDestination.Notifications) }
 
-    // Hồ sơ (tên + ảnh) ĐÃ XÁC THỰC của người trong cuộc gọi hiện tại — tra từ DB nhân viên theo
-    // username (username do server xác thực qua SignalR, KHÔNG tin tên client tự khai). Đây là nguồn
-    // sự thật cho tên/ảnh hiển thị trên màn gọi.
-    var callPeerProfile by mutableStateOf<com.ketoanapk.hr.data.CallContact?>(null)
-        private set
-    private var resolvePeerJob: Job? = null
-    fun resolveCallPeer(username: String) {
-        if (username.isBlank()) return
-        if (callPeerProfile?.username?.equals(username, true) == true) return // đã có
-        resolvePeerJob?.cancel()
-        resolvePeerJob = viewModelScope.launch {
-            runCatching { repo.callContacts(username) }.getOrNull()
-                ?.firstOrNull { it.username.equals(username, true) }
-                ?.let { if (it.username.equals(username, true)) callPeerProfile = it }
-        }
-    }
-
-    fun markNotificationRead(id: String) {
+   fun markNotificationRead(id: String) {
         val center = notificationCenter
         // Tra serverId TRƯỚC khi đánh dấu: sau khi markRead chạy, dòng vẫn còn nhưng lấy từ danh sách
         // đang hiển thị là đủ và rẻ hơn một vòng đọc DataStore nữa.
@@ -1636,25 +1546,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                 else openRequestDetail(id)
             }
             HrDestination.Approval -> openStaffDetail(id)
-            HrDestination.Chat -> openChatNotification(id)
             else -> Unit
         }
     }
 
-    private fun openChatNotification(conversationId: String) {
-        viewModelScope.launch {
-            runCatching { repo.chatConversations() }
-                .onSuccess { conversations ->
-                    realChatState = realChatState.copy(conversations = conversations)
-                    val conversation = conversations.firstOrNull { it.id == conversationId }
-                        ?: ChatConversation(id = conversationId, title = "Hội thoại")
-                    openChatConversation(conversation)
-                }
-                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
-        }
-    }
-
-    /**
+   /**
      * Đổi màn và ghi màn cũ vào lịch sử. MỌI chỗ đổi `selected` phải đi qua đây, nếu không Back sẽ
      * bỏ sót màn đó. Chặn lịch sử ở 20 để bấm qua lại nhiều lần không tích thành hàng dài vô tận.
      */
@@ -1714,21 +1610,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             .replace('Đ', 'D')
             .lowercase()
 
-    /** Tab đang xem trong mini app Chat. Vào lại Chat luôn bắt đầu ở Hội thoại (xem enterDestination). */
-    var chatTab by mutableStateOf(ChatTab.Conversations)
-        private set
-
-    fun openChatTab(tab: ChatTab) {
-        chatTab = tab
-        when (tab) {
-            ChatTab.Conversations -> if (realChatState.conversations.isEmpty()) refreshChat()
-            ChatTab.Directory -> if (directoryState.contacts.isEmpty()) refreshDirectory()
-            ChatTab.Calls -> if (callHistoryState.items.isEmpty()) refreshCallHistory()
-        }
-    }
-
-    /** Còn chỗ để lùi ở cấp màn hình hay không. Trang chủ + lịch sử rỗng = hết, để hệ thống thoát app. */
-    val payslipAccessLocked: Boolean get() = homeState.payslipRequirement.mustAcknowledge
+   val payslipAccessLocked: Boolean get() = homeState.payslipRequirement.mustAcknowledge
 
     /** Id phiếu mà màn xác nhận độc lập đang xử lý; phiếu quá hạn của server luôn thắng lựa chọn tay. */
     val payslipConfirmationId: String?
@@ -1831,6 +1713,11 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      * hàm này thì Back sẽ trả về màn ở trạng thái cũ (ví dụ Cài đặt hiện màn con thay vì màn gốc).
      */
     private fun enterDestination(destination: HrDestination, user: HrUser) {
+        // Rời Danh bạ thì dừng vòng làm mới hiện diện; chỉ màn đó hiển thị chip Online.
+        if (destination != HrDestination.Directory) {
+            directoryPresenceJob?.cancel()
+            directoryPresenceJob = null
+        }
         closeRequestDetail() // đóng chi tiết đơn đang mở (nếu có) khi chuyển màn để vào trạng thái sạch
         portalDetail = null  // luôn vào cổng thông tin ở danh sách, không giữ chi tiết cũ
         payslipOpenPeriod = null // luôn vào Phiếu lương ở danh sách thẻ tháng, không giữ chi tiết cũ
@@ -1851,12 +1738,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Tasks -> refreshTasks()
             // Lịch sử luôn tải lại: việc vừa nghiệm thu xong phải thấy ngay khi mở màn.
             HrDestination.TaskHistory -> loadTaskHistory(silent = taskHistoryState.result != null)
-            HrDestination.Chat -> {
-                chatTab = ChatTab.Conversations // vào mini app Chat luôn bắt đầu ở tab Hội thoại
-                if (realChatState.conversations.isEmpty()) refreshChat()
+            HrDestination.Directory -> {
+                if (directoryState.contacts.isEmpty()) refreshDirectory()
+                startDirectoryPresenceRefresh()
             }
-            HrDestination.Directory -> if (directoryState.contacts.isEmpty()) refreshDirectory()
-            HrDestination.Calls -> if (callHistoryState.items.isEmpty()) refreshCallHistory()
             HrDestination.Settings -> {
                 settingsRoute = SettingsRoute.Home // vào tab Cài đặt luôn bắt đầu ở màn gốc
                 if (settingsState.webLoginEnabled == null) loadSettings()
@@ -1884,9 +1769,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
             HrDestination.Portal -> loadPortal(silent = false)
             HrDestination.Tasks -> refreshTasks()
             HrDestination.TaskHistory -> loadTaskHistory()
-            HrDestination.Chat -> refreshChat()
             HrDestination.Directory -> refreshDirectory()
-            HrDestination.Calls -> refreshCallHistory()
             HrDestination.Settings -> {
                 loadSettings()
                 loadPushNotificationSetting()
@@ -1919,7 +1802,16 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun loadFeedback()=viewModelScope.launch{runCatching{repo.openSurveys()}.onSuccess{surveys=it}.onFailure{actionMessage=readable(it)};runCatching{repo.myGeneralFeedback()}.onSuccess{myFeedback=it}}
     fun answerSurvey(id:String,a:JsonObject)=viewModelScope.launch{runCatching{repo.answerSurvey(id,a)}.onSuccess{actionMessage="Đã gửi câu trả lời khảo sát.";loadFeedback()}.onFailure{actionMessage=readable(it)}}
     fun sendGeneralFeedback(message:String,anonymous:Boolean)=viewModelScope.launch{runCatching{repo.sendGeneralFeedback(message,anonymous)}.onSuccess{actionMessage="Đã gửi góp ý.";loadFeedback()}.onFailure{actionMessage=readable(it)}}
-    fun runDiagnostics()=viewModelScope.launch{val ctx=getApplication<Application>();val map=linkedMapOf<String,String>();map["API"]=if(runCatching{repo.appConfig()}.isSuccess)"OK" else "Lỗi";map["SignalR"]=if(realtime.isConnected())"Đã kết nối" else "Đang kết nối lại";map["FCM"]=if(pushToken.isNullOrBlank())"Chưa có token" else "OK";map["Camera"]=if(ContextCompat.checkSelfPermission(ctx,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED)"Đã cấp quyền" else "Chưa cấp quyền";map["Micro"]=if(ContextCompat.checkSelfPermission(ctx,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)"Đã cấp quyền" else "Chưa cấp quyền";map["TURN"]=if(repo.fetchTurnCreds()?.urls?.isNotEmpty()==true)"OK" else "Chưa cấu hình / không kết nối";diagnostics=map;supportTickets=runCatching{repo.mySupportTickets()}.getOrDefault(emptyList())}
+    fun runDiagnostics() = viewModelScope.launch {
+        val context = getApplication<Application>()
+        diagnostics = linkedMapOf(
+            "API" to if (runCatching { repo.appConfig() }.isSuccess) "OK" else "Lỗi",
+            "SSE/Realtime" to if (businessRealtime.isConnected()) "Đã kết nối" else "Đang kết nối lại",
+            "FCM" to if (pushToken.isNullOrBlank()) "Chưa có token" else "OK",
+            "Camera" to if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) "Đã cấp quyền" else "Chưa cấp quyền",
+        )
+        supportTickets = runCatching { repo.mySupportTickets() }.getOrDefault(emptyList())
+    }
     fun createSupportTicket(message:String)=viewModelScope.launch{runCatching{repo.createSupportTicket(message)}.onSuccess{actionMessage="Đã gửi báo lỗi.";runDiagnostics()}.onFailure{actionMessage=readable(it)}}
     fun closeManagedEmployee(){managedEmployee=null}
     fun updateManagedEmployee(detail:EmployeeDetail,departmentId:String?,positionId:String?,positionIds:List<String>,status:String,managerId:String?=detail.managerId)=viewModelScope.launch{
@@ -2117,81 +2009,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelWorkTask(id: String, note: String) = taskAction("Đã huỷ công việc.", closeDetail = true) { repo.cancelWorkTask(id, note) }
     fun deleteWorkTask(id: String) = taskAction("Đã xoá công việc.", closeDetail = true) { repo.deleteWorkTask(id) }
 
-    fun refreshChat() {
-        viewModelScope.launch {
-            realChatState = realChatState.copy(loading = true, error = null)
-            runCatching { repo.chatConversations() }
-                .onSuccess { realChatState = realChatState.copy(loading = false, conversations = it, error = null, offline = repo.chatUsingCache()) }
-                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
-        }
-    }
-
-    @Suppress("SuspiciousIndentation")
-    private fun refreshChatRealtime() {
-        val selectedConversation = realChatState.selected
-        viewModelScope.launch {
-            val conversations = runCatching { repo.chatConversations() }.getOrNull()
-            val messages = selectedConversation?.let { runCatching { repo.chatMessages(it.id) }.getOrNull() }
-            val mergedMessages = if (messages == null) {
-                realChatState.messages
-            } else {
-                // Bản từ MÁY CHỦ phải đứng TRƯỚC: distinctBy giữ phần tử đầu tiên của mỗi id, nên nếu để
-                // danh sách cũ trước thì mọi thay đổi trên tin ĐÃ CÓ (react, sửa, đã đọc, gỡ) đều bị vứt
-                // đi và chỉ tin mới tinh mới hiện — phải thoát app vào lại mới thấy.
-                (messages + realChatState.messages).distinctBy { it.id }.sortedBy { it.id }
-            }
-            realChatState = realChatState.copy(
-                conversations = conversations ?: realChatState.conversations,
-                messages = mergedMessages,
-            )
-        }
-    }
-
-    fun setChatQuery(value: String) { realChatState = realChatState.copy(query = value) }
-    private var messageSearchJob: Job? = null
-    fun setMessageSearch(value: String) {
-        realChatState = realChatState.copy(messageQuery = value)
-        val conversation = realChatState.selected ?: return
-        messageSearchJob?.cancel()
-        messageSearchJob = viewModelScope.launch {
-            delay(350)
-            realChatState = realChatState.copy(loading = true, error = null)
-            runCatching { repo.chatMessages(conversation.id, search = value) }
-                .onSuccess { realChatState = realChatState.copy(loading = false, messages = it, hasMore = it.size == 50) }
-                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
-        }
-    }
-    fun setChatInput(value: String) { realChatState = realChatState.copy(input = value.take(4000), error = null) }
-
-    fun openNewChat() {
-        realChatState = realChatState.copy(choosingContact = true, selected = null, loading = true, error = null)
-        viewModelScope.launch {
-            runCatching { repo.callContacts(null) }
-                .onSuccess { realChatState = realChatState.copy(loading = false, contacts = it) }
-                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
-        }
-    }
-
-    fun createDirectChat(contact: com.ketoanapk.hr.data.CallContact) {
-        realChatState = realChatState.copy(loading = true, error = null)
-        viewModelScope.launch {
-            runCatching { repo.openDirectConversation(contact.username) }
-                .onSuccess { result ->
-                    val conversation = realChatState.conversations.firstOrNull { it.id == result.id } ?: ChatConversation(
-                        id = result.id,
-                        title = contact.displayName,
-                        username = contact.username,
-                        avatarUrl = contact.avatarUrl,
-                        isOnline = contact.isOnline,
-                    )
-                    realChatState = realChatState.copy(choosingContact = false, loading = false)
-                    openChatConversation(conversation)
-                }
-                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
-        }
-    }
-
-    private var directorySearchJob: Job? = null
+   private var directorySearchJob: Job? = null
     fun setDirectoryQuery(value: String) {
         directoryState = directoryState.copy(query = value)
         directorySearchJob?.cancel()
@@ -2200,184 +2018,15 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setOrganizationMode(enabled: Boolean) { directoryState = directoryState.copy(organizationMode = enabled) }
 
-    fun refreshDirectory() {
-        directoryState = directoryState.copy(loading = true, error = null)
+    fun refreshDirectory(silent: Boolean = false) {
+        directoryState = directoryState.copy(loading = !silent, error = null)
         viewModelScope.launch {
-            runCatching { repo.callContacts(directoryState.query) }
+            runCatching { repo.directoryContacts(directoryState.query) }
                 .onSuccess { directoryState = directoryState.copy(loading = false, contacts = it, error = null) }
                 .onFailure { directoryState = directoryState.copy(loading = false, error = readable(it)) }
         }
     }
 
-    fun chatWithContact(contact: com.ketoanapk.hr.data.CallContact) {
-        goTo(HrDestination.Chat)
-        createDirectChat(contact)
-    }
-
-    fun refreshCallHistory() {
-        callHistoryState = callHistoryState.copy(loading = true, error = null)
-        viewModelScope.launch {
-            runCatching { repo.callHistory() }
-                .onSuccess { callHistoryState = callHistoryState.copy(loading = false, items = it) }
-                .onFailure { callHistoryState = callHistoryState.copy(loading = false, error = readable(it)) }
-        }
-    }
-
-    fun openChatConversation(conversation: ChatConversation) {
-        realChatState = realChatState.copy(selected = conversation, choosingContact = false, messages = emptyList(), loading = true, error = null, messageQuery = "", hasMore = true)
-        viewModelScope.launch {
-            runCatching { repo.chatMessages(conversation.id) }
-                .onSuccess { messages ->
-                    realChatState = realChatState.copy(loading = false, messages = messages, hasMore = messages.size == 50, offline = repo.chatUsingCache())
-                    refreshChatRealtime()
-                }
-                .onFailure { realChatState = realChatState.copy(loading = false, error = readable(it)) }
-        }
-    }
-
-    fun closeChatLayer() {
-        realChatState = if (realChatState.selected != null) {
-            realChatState.copy(selected = null, messages = emptyList(), input = "", error = null)
-        } else {
-            realChatState.copy(choosingContact = false, error = null)
-        }
-        refreshChat()
-    }
-
-    fun sendCurrentChatMessage() {
-        val conversation = realChatState.selected ?: return
-        val text = realChatState.input.trim()
-        if (text.isBlank() || realChatState.sending) return
-        realChatState = realChatState.copy(sending = true, error = null)
-        viewModelScope.launch {
-            runCatching { repo.sendChatMessage(conversation.id, text) }
-                .onSuccess { sent ->
-                    realChatState = realChatState.copy(sending = false, input = "", messages = realChatState.messages + sent)
-                    refreshChatRealtime()
-                }
-                .onFailure { realChatState = realChatState.copy(sending = false, error = readable(it)) }
-        }
-    }
-
-    fun loadOlderChatMessages() {
-        val conversation = realChatState.selected ?: return
-        if (realChatState.loadingMore || !realChatState.hasMore) return
-        val before = realChatState.messages.minOfOrNull { it.id } ?: return
-        realChatState = realChatState.copy(loadingMore = true, error = null)
-        viewModelScope.launch {
-            runCatching { repo.chatMessages(conversation.id, beforeId = before, search = realChatState.messageQuery) }
-                .onSuccess { page ->
-                    realChatState = realChatState.copy(
-                        loadingMore = false,
-                        messages = (page + realChatState.messages).distinctBy { it.id }.sortedBy { it.id },
-                        hasMore = page.size == 50,
-                    )
-                }
-                .onFailure { realChatState = realChatState.copy(loadingMore = false, error = readable(it)) }
-        }
-    }
-
-    fun pinCurrentChat(pinned: Boolean) {
-        val conversation = realChatState.selected ?: return
-        viewModelScope.launch {
-            runCatching { repo.pinChatConversation(conversation.id, pinned) }
-                .onSuccess {
-                    val updated = conversation.copy(pinned = pinned)
-                    realChatState = realChatState.copy(
-                        selected = updated,
-                        conversations = realChatState.conversations.map { if (it.id == updated.id) updated else it },
-                    )
-                }
-                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
-        }
-    }
-
-    fun editCurrentChatMessage(messageId: Long, text: String) {
-        val conversation = realChatState.selected ?: return
-        viewModelScope.launch {
-            runCatching { repo.editChatMessage(conversation.id, messageId, text) }
-                .onSuccess { refreshChatRealtime() }
-                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
-        }
-    }
-
-    fun deleteCurrentChatMessage(messageId: Long) {
-        val conversation = realChatState.selected ?: return
-        viewModelScope.launch {
-            runCatching { repo.deleteChatMessage(conversation.id, messageId) }
-                .onSuccess { refreshChatRealtime() }
-                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
-        }
-    }
-
-    fun reactCurrentChatMessage(messageId: Long, emoji: String) {
-        val conversation = realChatState.selected ?: return
-        viewModelScope.launch {
-            runCatching { repo.reactChatMessage(conversation.id, messageId, emoji) }
-                .onSuccess { refreshChatRealtime() }
-                .onFailure { realChatState = realChatState.copy(error = readable(it)) }
-        }
-    }
-
-    fun sendChatAttachment(
-        context: Context,
-        uri: android.net.Uri,
-        kind: String = "file",
-        onResult: (Boolean) -> Unit = {},
-    ) {
-        val conversation = realChatState.selected ?: run { onResult(false); return }
-        if (realChatState.sending) { onResult(false); return }
-        realChatState = realChatState.copy(sending = true, error = null)
-        viewModelScope.launch {
-            runCatching { repo.sendChatFile(context.applicationContext, conversation.id, uri, kind) }
-                .onSuccess { message ->
-                    realChatState = realChatState.copy(sending = false, messages = realChatState.messages + message)
-                    refreshChatRealtime()
-                    onResult(true)
-                }
-                .onFailure {
-                    realChatState = realChatState.copy(sending = false, error = readable(it))
-                    onResult(false)
-                }
-        }
-    }
-
-    fun forwardChatMessage(message: com.ketoanapk.hr.data.ChatMessage, target: ChatConversation) {
-        if (message.body.isBlank()) { actionMessage = "Chỉ chuyển tiếp được tin nhắn văn bản trong phiên bản này."; return }
-        viewModelScope.launch {
-            runCatching { repo.sendChatMessage(target.id, message.body, forwarded = true) }
-                .onSuccess { actionMessage = "Đã chuyển tiếp tới ${target.title}." }
-                .onFailure { actionMessage = readable(it) }
-        }
-    }
-
-    /**
-     * Tải tệp đính kèm về máy và trả File để phát TRONG app (tin nhắn thoại), thay vì ném ra app ngoài.
-     * Repo đã cache theo tệp nên bấm phát lại lần sau không tải lại.
-     */
-    suspend fun chatAudioFile(context: Context, message: com.ketoanapk.hr.data.ChatMessage): java.io.File? {
-        val conversation = realChatState.selected ?: return null
-        return runCatching { repo.downloadChatFile(context.applicationContext, conversation.id, message) }
-            .onFailure { actionMessage = readable(it) }
-            .getOrNull()
-    }
-
-    fun downloadChatAttachment(context: Context, message: com.ketoanapk.hr.data.ChatMessage) {
-        val conversation = realChatState.selected ?: return
-        viewModelScope.launch {
-            runCatching { repo.downloadChatFile(context.applicationContext, conversation.id, message) }
-                .onSuccess { file ->
-                    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                        setDataAndType(uri, message.fileMime ?: "application/octet-stream")
-                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    runCatching { context.startActivity(intent) }
-                        .onFailure { actionMessage = "Đã tải tệp nhưng thiết bị không có ứng dụng phù hợp để mở." }
-                }
-                .onFailure { actionMessage = readable(it) }
-        }
-    }
 
     // ── Tạo đơn từ + xem chi tiết ────────────────────────────────────────────────
     /**
@@ -3280,13 +2929,10 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         startForegroundPoll() // tự làm mới danh sách/chi tiết đơn khi app đang mở
         startPayslipRequirementMonitor()
         startForegroundUpdateMonitor()
-        CallManager.setSelfIdentity(user.displayName) // tên thật (DB) gửi kèm lời mời gọi
-        realtime.start(user.username) // realtime + kênh tín hiệu gọi (khôi phục phiên)
-        viewModelScope.launch { CallManager.setTurnCreds(repo.fetchTurnCreds()) } // TURN sẵn sàng
+        businessRealtime.start(user.username)
         loadNotifications()
-        syncMissedCalls() // hiện cuộc gọi nhỡ đã lưu server (kể cả lúc bị gọi đang offline)
         syncPushDelivery()
-        registerPush() // LUÔN đăng ký token FCM để nhận được cuộc gọi dù tắt thông báo nghiệp vụ
+        registerPush()
         // Mở lại app sau khi đã thoát HẲN (tiến trình bị thu hồi): hiện NGAY dữ liệu lần trước từ ảnh chụp
         // trên đĩa để không thấy màn trống + vòng quay tải, rồi làm mới IM LẶNG ở nền. Không có ảnh chụp
         // (lần đầu) thì tải bình thường. refreshHome ghi lại ảnh chụp sau mỗi lần tải thành công. Xem
@@ -3436,10 +3082,9 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Nhịp tim THÍCH ỨNG theo SignalR để app chạy nhẹ nhất mà KHÔNG mất an toàn phiên:
-    //  • SignalR đang mở (foreground khỏe) → trạng thái kết nối lấy thẳng từ SignalR (khỏi ping) và hiện
-    //    diện online do hub cập nhật qua chính kết nối; chỉ ping HTTP THƯA (5') làm lưới an toàn thu hồi.
-    //  • SignalR tắt (ở nền) hoặc mất kết nối → ping 45s/10s như cũ, gánh đủ presence + banner + thu hồi.
+    // Nhịp tim THÍCH ỨNG theo SSE để app chạy nhẹ mà không mất an toàn phiên:
+    //  • SSE foreground khỏe → session được server revalidate định kỳ; HTTP ping thưa là lưới an toàn.
+    //  • SSE dừng ở nền hoặc mất kết nối → ping 45s/10s gánh presence/banner/thu hồi.
     // 401 = phiên bị thu hồi (đăng nhập máy khác / bị khoá / quá hạn nhàn rỗi) → đăng xuất kèm ĐÚNG lý do
     // máy chủ trả về. Mất mạng = Unknown → giữ phiên (fail-open).
     private fun startHeartbeat() {
@@ -3447,7 +3092,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         heartbeatJob = viewModelScope.launch {
             var lastBackstopAt = 0L
             while (isActive) {
-                if (realtime.isConnected()) {
+                if (businessRealtime.isConnected()) {
                     // Thu hồi TRONG LÚC đang kết nối đã có sự kiện "kicked" bắt tức thì; ping thưa ở đây chỉ
                     // phòng trường hợp hiếm lỡ mất "kicked" (rớt mạng chớp nhoáng rồi nối lại).
                     connection = ConnectionStatus.Online
@@ -3457,7 +3102,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
                         val status = repo.heartbeat()
                         if (status is SessionStatus.Invalid) { logout(status.message); break }
                     }
-                    // Dò lại nhanh để ĐỔI NHÁNH kịp khi SignalR rớt (không phải chờ hết chu kỳ backstop).
+                    // Dò lại nhanh để đổi nhánh kịp khi SSE rớt.
                     delay(15_000)
                 } else {
                     lastBackstopAt = 0L // nối lại được thì cho ping lưới-an-toàn chạy ngay một nhịp
@@ -3486,9 +3131,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         startForegroundPoll()
         startPayslipRequirementMonitor()
         startForegroundUpdateMonitor()
-        CallManager.setSelfIdentity(signedIn.user.displayName) // tên thật (DB) gửi kèm lời mời gọi
-        realtime.start(signedIn.user.username) // realtime + kênh tín hiệu gọi khi app đang mở
-        syncMissedCalls() // cuộc gọi nhỡ đã lưu server (mỗi lần vào lại app)
+        businessRealtime.start(signedIn.user.username)
+        if (selected == HrDestination.Directory) startDirectoryPresenceRefresh()
         val forceUpdateCheck = pendingForcedUpdateCheck
         pendingForcedUpdateCheck = false
         autoCheckForUpdate(force = forceUpdateCheck)
@@ -3510,7 +3154,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Activity gọi khi app xuống nền: dừng poll + SignalR + NHỊP TIM để đỡ pin/mạng. Ở nền đã có
+     * Activity gọi khi app xuống nền: dừng poll + SSE + nhịp tim để đỡ pin/mạng.
      * WorkManager + push FCM lo thông báo; còn thu hồi phiên (đăng nhập máy khác) sẽ được bắt ngay ở
      * [onAppResumed] khi mở lại — không cần ping HTTP đều đặn suốt lúc app nằm nền.
      */
@@ -3525,7 +3169,25 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         releaseUpdateDebounceJob?.cancel()
         releaseUpdateDebounceJob = null
         stopHeartbeat()
-        realtime.stop()
+        directoryPresenceJob?.cancel()
+        directoryPresenceJob = null
+        businessRealtime.stop()
+    }
+
+    /**
+     * Chip Online TẮT vì im lặng quá cửa sổ hiện diện — mà im lặng thì không có lệnh ghi nào, nên
+     * máy chủ không thể phát sự kiện cho chiều này (xem UpdateGuards trong DatabaseChangePublisher).
+     * Chỉ màn Danh bạ hiện chip đó, nên chỉ nó tự làm mới, và chỉ trong lúc đang mở.
+     */
+    private fun startDirectoryPresenceRefresh() {
+        if (directoryPresenceJob?.isActive == true) return
+        directoryPresenceJob = viewModelScope.launch {
+            while (isActive) {
+                delay(45_000)
+                if (authState !is AuthState.SignedIn || selected != HrDestination.Directory) return@launch
+                refreshDirectory(silent = true)
+            }
+        }
     }
 
     private fun startForegroundPoll() {
@@ -3533,9 +3195,8 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         foregroundPollJob = viewModelScope.launch {
             while (isActive) {
                 delay(pollIntervalMs()) // nhịp lấy từ remote config (admin chỉnh được), chặn 5–3600s
-                // CHỈ poll khi WebSocket ĐANG RỚT — WS khỏe thì server đã đẩy "changed" (qua AppEvents →
-                // pollLiveData) tức thì nên poll định kỳ là THỪA. Đây chỉ còn là lưới dự phòng khi mất WS.
-                if (authState is AuthState.SignedIn && !realtime.isConnected()) pollLiveData()
+                // CHỈ poll khi SSE đang rớt; SSE khỏe thì server đã phát invalidation tức thì.
+                if (authState is AuthState.SignedIn && !businessRealtime.isConnected()) pollLiveData()
             }
         }
     }
@@ -3555,7 +3216,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Lưới dự phòng cho trường hợp FCM bị tắt/mất token và SignalR không nhận được trigger. App để mở
+     * Lưới dự phòng cho trường hợp FCM bị tắt/mất token và SSE không nhận được trigger. App để mở
      * liên tục vẫn hỏi bản mới mỗi 10 phút; [autoCheckForUpdate] tự tiết chế và lỗi mạng hoàn toàn im lặng.
      */
     private fun startForegroundUpdateMonitor() {
@@ -3593,10 +3254,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         if (!force && now - lastConfigFetchAt < 60_000L) return
         lastConfigFetchAt = now
         viewModelScope.launch {
-            runCatching { repo.appConfig() }.onSuccess {
-                appConfig = it
-                CallManager.setCallConfig(it.call) // áp cấu hình gọi từ xa ngay (STUN/relay/timeout/video/công tắc)
-            }
+            runCatching { repo.appConfig() }.onSuccess { appConfig = it }
         }
     }
 
@@ -3607,7 +3265,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun pollLiveData(changeScope: String = "all") {
         val user = (authState as? AuthState.SignedIn)?.user ?: return
-        if (changeScope == "hr" || changeScope == "data" || changeScope == "all") {
+        if (changeScope == "hr" || changeScope == "all") {
             viewModelScope.launch {
                 val mine = runCatching { repo.requests("mine") }.getOrNull()
                 val inbox = runCatching { repo.requests("inbox") }.getOrNull()
@@ -3631,7 +3289,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         // Bảng công + lương dự tính bám thẳng vào log chấm công / hồ sơ nhân sự (scope attendance|hr) →
         // làm mới IM LẶNG khi đang xem tab Bảng công để số liệu đổi tại chỗ (admin sửa công, duyệt đơn…).
         // Chỉ nạp lương khi nhân viên đã mở khoá (data != null) để không lộ/không gọi thừa lúc còn che.
-        if (changeScope == "attendance" || changeScope == "hr" || changeScope == "data" || changeScope == "all") {
+        if (changeScope == "attendance" || changeScope == "hr" || changeScope == "cash" || changeScope == "all") {
             refreshPayslipRequirement()
             if (selected == HrDestination.CashCollections) loadCashCollections(silent = true)
             if (selected == HrDestination.Timesheet) {
@@ -3685,7 +3343,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Dọn cache của ứng dụng (gói cập nhật tải sẵn, ảnh/PDF/âm thanh tạm, cache chat, ảnh chụp Trang chủ).
+     * Dọn cache của ứng dụng (gói cập nhật tải sẵn, ảnh/PDF tạm, ảnh chụp Trang chủ).
      * GIỮ nguyên phiên đăng nhập, đơn nháp và hàng đợi chấm công ngoại tuyến. Xem [com.ketoanapk.hr.data.CacheManager].
      */
     fun clearCache() {
@@ -4356,8 +4014,7 @@ class HrViewModel(application: Application) : AndroidViewModel(application) {
         const val UPDATE_TARGET = APP_UPDATE_NOTIFICATION_TARGET
         /** Bấm "Để sau" thì im 24 giờ (bản bắt buộc không áp dụng). */
         private const val AUDIT_PAGE_SIZE = 50
-        /** Khi SignalR đang mở (foreground): chỉ ping HTTP thưa cỡ này làm lưới an toàn phát hiện phiên
-         *  bị thu hồi phòng khi lỡ sự kiện "kicked". Presence + banner lúc đó đã do kết nối SignalR lo. */
+        /** Khi SSE đang mở (foreground): chỉ ping HTTP thưa làm lưới an toàn phát hiện phiên bị thu hồi. */
         private const val HEARTBEAT_BACKSTOP_MS = 5 * 60_000L
         private const val FOREGROUND_UPDATE_CHECK_MS = 10 * 60_000L
     }

@@ -53,7 +53,7 @@ import com.ketoanapk.hr.ui.theme.Warning
 enum class Tone { Neutral, Success, Warning, Danger, Info, Muted }
 
 /**
- * Danh sách dẫn sang các màn con, dùng cho những màn "chứa" một nhóm màn con (Cá nhân, Chat, Đơn từ,
+ * Danh sách dẫn sang các màn con, dùng cho những màn "chứa" một nhóm màn con (Cá nhân, Đơn từ,
  * Quản lý). Đây là thứ THAY CHO ngăn kéo hamburger đã bỏ: mỗi màn con nằm trong đúng màn cha của nó
  * thay vì gom hết vào một danh sách phẳng 22 mục.
  */

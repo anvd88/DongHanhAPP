@@ -1,0 +1,28 @@
+# /api/chamcong/liveness-metrics
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.antiSpoof : object
+  $.antiSpoof.detail : string
+  $.antiSpoof.level : string
+  $.eyeOpen : object
+  $.eyeOpen.enforce : bool
+  $.eyeOpen.threshold : number
+  $.metrics : array
+
+[Accounting] 403 
+
+[HR] 200 application/json
+  $ : object
+  $.antiSpoof : object
+  $.antiSpoof.detail : string
+  $.antiSpoof.level : string
+  $.eyeOpen : object
+  $.eyeOpen.enforce : bool
+  $.eyeOpen.threshold : number
+  $.metrics : array
+
+[Driver] 403 
+
+[Employee] 403 

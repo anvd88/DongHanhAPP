@@ -1,0 +1,13 @@
+# /api/audit/export
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 text/csv
+  (thân phản hồi không phải JSON)
+
+[Accounting] 403 
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

@@ -128,20 +128,20 @@ public sealed class OutboxTests
     }
 
     /// <summary>
-    /// BẪY đã suýt mắc: một tin nhắn chat gửi cho nhiều người dùng CHUNG một notif_id
-    /// (chat:{conv}:{msg}). Nếu khoá khử trùng chỉ là chữ ký sự kiện thì chỉ người đầu tiên được xếp
+    /// BẪY đã suýt mắc: một sự kiện nghiệp vụ gửi cho nhiều người dùng CHUNG một notif_id.
+    /// Nếu khoá khử trùng chỉ là chữ ký sự kiện thì chỉ người đầu tiên được xếp
     /// hàng, những người còn lại bị coi là trùng và MẤT thông báo. Khoá phải kèm người nhận.
     /// </summary>
     [Fact]
     public async Task SameEventForDifferentRecipients_IsEnqueuedForEach()
     {
         var (queue, db) = await NewQueueAsync(_factory);
-        var notifId = $"chat:{Guid.NewGuid()}:1";
+        var notifId = $"task:{Guid.NewGuid()}:assigned";
         string[] recipients = ["an", "binh", "chi"];
 
         foreach (var who in recipients)
             await queue.EnqueueAsync(OutboxQueue.KindUserPush,
-                new { Username = who, Title = "Tin nhắn mới", Body = "B", NotifId = notifId, Target = "Chat" },
+                new { Username = who, Title = "Việc mới", Body = "B", NotifId = notifId, Target = "Tasks" },
                 $"{OutboxQueue.KindUserPush}|{who}|{notifId}");
 
         await using var conn = await db.OpenAsync();
@@ -203,12 +203,12 @@ public sealed class OutboxTests
     [Fact]
     public void DedupeKey_SeparatesRecipients_ButNotCaseOfUsername()
     {
-        const string notifId = "chat:abc:1";
+        const string notifId = "task:abc:assigned";
         var an = PushService.DedupeKey(OutboxQueue.KindUserPush, "an", notifId);
         var binh = PushService.DedupeKey(OutboxQueue.KindUserPush, "binh", notifId);
         var anHoa = PushService.DedupeKey(OutboxQueue.KindUserPush, "AN", notifId);
 
-        Assert.NotEqual(an, binh);   // cùng tin nhắn, hai người → hai việc
+        Assert.NotEqual(an, binh);   // cùng sự kiện, hai người → hai việc
         Assert.Equal(an, anHoa);     // cùng người viết hoa/thường → vẫn là một việc
 
         // Gửi cho admin và gửi cho một người trùng tên "admins" không được đụng nhau.

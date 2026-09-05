@@ -1,0 +1,32 @@
+# /api/auth/app-pin
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.attemptsBeforeLock : number
+  $.hasPin : bool
+  $.lockedForSeconds : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.attemptsBeforeLock : number
+  $.hasPin : bool
+  $.lockedForSeconds : number
+
+[HR] 200 application/json
+  $ : object
+  $.attemptsBeforeLock : number
+  $.hasPin : bool
+  $.lockedForSeconds : number
+
+[Driver] 200 application/json
+  $ : object
+  $.attemptsBeforeLock : number
+  $.hasPin : bool
+  $.lockedForSeconds : number
+
+[Employee] 200 application/json
+  $ : object
+  $.attemptsBeforeLock : number
+  $.hasPin : bool
+  $.lockedForSeconds : number

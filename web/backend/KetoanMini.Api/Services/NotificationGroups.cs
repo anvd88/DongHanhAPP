@@ -12,7 +12,6 @@ namespace KetoanMini.Api.Services;
 ///   • security — "đăng nhập trên thiết bị mới": đây là cảnh báo an toàn tài khoản, tắt được thì kẻ
 ///     chiếm tài khoản chỉ cần tắt nó là người thật không bao giờ biết.
 ///   • system   — bản cập nhật app, thông báo vận hành.
-///   • chat     — tin nhắn có công tắc riêng của phần chat.
 /// </summary>
 public static class NotificationGroups
 {

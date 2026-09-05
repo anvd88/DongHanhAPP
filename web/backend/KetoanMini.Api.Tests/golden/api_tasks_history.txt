@@ -1,0 +1,77 @@
+# /api/tasks/history
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.from : string
+  $.isAdmin : bool
+  $.items : array
+  $.items[] : object
+  $.items[].assigneeName : string
+  $.items[].assigneeUsername : string
+  $.items[].assignerName : string
+  $.items[].assignerUsername : string
+  $.items[].createdAt : string
+  $.items[].delivery : object
+  $.items[].delivery.customerId : string
+  $.items[].delivery.customerName : string
+  $.items[].delivery.documentId : string
+  $.items[].delivery.voucherNo : string
+  $.items[].description : string
+  $.items[].id : string
+  $.items[].overdue : bool
+  $.items[].priority : string
+  $.items[].progress : number
+  $.items[].rating : number
+  $.items[].reviewNote : string
+  $.items[].reviewedAt : string
+  $.items[].reviewedBy : string
+  $.items[].status : string
+  $.items[].submitNote : string
+  $.items[].submittedAt : string
+  $.items[].taskNo : string
+  $.items[].title : string
+  $.items[].updatedAt : string
+  $.people : array
+  $.people[] : object
+  $.people[].count : number
+  $.people[].fullName : string
+  $.people[].username : string
+  $.to : string
+  $.total : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.from : string
+  $.isAdmin : bool
+  $.items : array
+  $.people : array
+  $.to : string
+  $.total : number
+
+[HR] 200 application/json
+  $ : object
+  $.from : string
+  $.isAdmin : bool
+  $.items : array
+  $.people : array
+  $.to : string
+  $.total : number
+
+[Driver] 200 application/json
+  $ : object
+  $.from : string
+  $.isAdmin : bool
+  $.items : array
+  $.people : array
+  $.to : string
+  $.total : number
+
+[Employee] 200 application/json
+  $ : object
+  $.from : string
+  $.isAdmin : bool
+  $.items : array
+  $.people : array
+  $.to : string
+  $.total : number

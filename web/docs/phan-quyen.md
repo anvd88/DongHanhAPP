@@ -102,26 +102,16 @@ khỏi hiển thị sai.
 | JavaScript đọc được? | **Không** | không liên quan |
 | Hạn | 7 ngày, gia hạn trượt khi còn hoạt động | 365 ngày |
 | Chống CSRF | Cookie `km_csrf` + header `X-CSRF-Token` | không cần (không phải ambient credential) |
-| SignalR | cookie tự đi kèm, chốt bằng Origin | query `access_token` như cũ |
 
-Mã: `Security/AuthCookies.cs` (đặt/xoá/kiểm cookie), `Program.cs` (đọc cookie trong `OnMessageReceived`,
-middleware CSRF + Origin, gia hạn trượt), `frontend/src/lib/api.ts` (`session`, header CSRF).
+Mã: `Security/AuthCookies.cs` (đặt/xoá/kiểm cookie), `Program.cs` (đọc cookie, middleware CSRF,
+gia hạn trượt), `frontend/src/lib/api.ts` (`session`, header CSRF).
 
 **Vì sao đổi:** JWT trong localStorage thì bất kỳ JavaScript nào trên trang cũng đọc được — một lỗ
 XSS (kể cả trong thư viện phụ thuộc) là đủ để lấy trọn phiên còn hạn và dùng lại ở máy khác. Cookie
 HttpOnly thì XSS vẫn có thể gọi API trong lúc trang còn mở, nhưng **không mang phiên đi được**.
 
-**Ba cái bẫy đã vấp và cách xử lý — đừng gỡ bỏ:**
-
-1. `negotiate` của SignalR là POST ⇒ ban đầu bị chốt CSRF chặn, realtime chết. Nay `/hubs` **không**
-   đi qua chốt CSRF mà chốt bằng **Origin**.
-2. Chốt Origin ở `/hubs` không phải cho vui: WebSocket **không bị CORS chặn**, nên khi phiên đi bằng
-   cookie, một trang lạ mở được kết nối realtime dưới danh nghĩa nạn nhân (Cross-Site WebSocket
-   Hijacking). Header `Origin` do trình duyệt đặt, JavaScript không sửa được — đó là chốt đúng chỗ.
-   Test `CookieSessionTests.Hub_TuOriginLa_BiTuChoi` giữ điều này.
-3. Vòng thử lại của realtime trước đây gọi `start()` lại trên **cùng một đối tượng kết nối**. Với
-   cookie thì đối tượng đó ôm luôn trạng thái phiên lúc được tạo ⇒ nếu lần đầu hỏng vì chưa đăng
-   nhập, nó hỏng vĩnh viễn. Nay mỗi lần thử lại là dựng kết nối mới.
+Business realtime dùng SSE cùng origin, tự xác thực lại phiên định kỳ và tạo stream mới khi đổi tài
+khoản. Mã WebSocket của mô-đun giao tiếp đã được tách khỏi hệ thống hiện tại.
 
 **Thu hồi thiết bị từ xa** (`/api/auth/devices`) chạy xuyên qua cả hai kiểu phiên: phiên Bearer thu
 hồi được phiên cookie và ngược lại, vì chốt nằm ở cột `revoked` của `user_sessions` chứ không ở kiểu

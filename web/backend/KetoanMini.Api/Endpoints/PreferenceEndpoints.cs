@@ -10,7 +10,6 @@ public static class PreferenceEndpoints
     private const string WaterReminderEnabledKey = "waterReminderEnabled";
     private const string EyeReminderEnabledKey = "eyeReminderEnabled";
     private const string KeepCreateVoucherOpenKey = "keepCreateVoucherOpen";
-    private const string MessagePreviewEnabledKey = "messagePreviewEnabled";
 
     public static void MapPreferences(this IEndpointRouteBuilder app)
     {
@@ -52,7 +51,6 @@ public static class PreferenceEndpoints
             await SaveBool(WaterReminderEnabledKey, req.WaterReminderEnabled);
             await SaveBool(EyeReminderEnabledKey, req.EyeReminderEnabled);
             await SaveBool(KeepCreateVoucherOpenKey, req.KeepCreateVoucherOpen);
-            await SaveBool(MessagePreviewEnabledKey, req.MessagePreviewEnabled);
 
             var values = await LoadPreferences(db, userId.Value, ct);
             return Results.Ok(ToDto(values));
@@ -150,12 +148,11 @@ public static class PreferenceEndpoints
             SELECT preference_key, preference_value
             FROM web_user_preferences
             WHERE user_id = @userId
-              AND preference_key IN (@water, @eye, @keepCreate, @messagePreview);")
+              AND preference_key IN (@water, @eye, @keepCreate);")
             .With("@userId", userId)
             .With("@water", WaterReminderEnabledKey)
             .With("@eye", EyeReminderEnabledKey)
             .With("@keepCreate", KeepCreateVoucherOpenKey)
-            .With("@messagePreview", MessagePreviewEnabledKey)
             .ExecuteReaderAsync(ct);
 
         while (await reader.ReadAsync(ct))
@@ -168,8 +165,7 @@ public static class PreferenceEndpoints
         => new(
             ParseBool(values, WaterReminderEnabledKey, defaultValue: true),
             ParseBool(values, EyeReminderEnabledKey, defaultValue: true),
-            ParseBool(values, KeepCreateVoucherOpenKey, defaultValue: false),
-            ParseBool(values, MessagePreviewEnabledKey, defaultValue: true));
+            ParseBool(values, KeepCreateVoucherOpenKey, defaultValue: false));
 
     private static bool ParseBool(IReadOnlyDictionary<string, string> values, string key, bool defaultValue)
         => values.TryGetValue(key, out var raw) && bool.TryParse(raw, out var parsed) ? parsed : defaultValue;

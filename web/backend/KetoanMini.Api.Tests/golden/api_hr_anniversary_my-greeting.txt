@@ -1,0 +1,57 @@
+# /api/hr/anniversary/my-greeting
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.anniversaryDate : string
+  $.body : string
+  $.key : string
+  $.preview : bool
+  $.show : bool
+  $.signature : string
+  $.title : string
+  $.years : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.anniversaryDate : string
+  $.body : string
+  $.key : string
+  $.preview : bool
+  $.show : bool
+  $.signature : string
+  $.title : string
+  $.years : number
+
+[HR] 200 application/json
+  $ : object
+  $.anniversaryDate : string
+  $.body : string
+  $.key : string
+  $.preview : bool
+  $.show : bool
+  $.signature : string
+  $.title : string
+  $.years : number
+
+[Driver] 200 application/json
+  $ : object
+  $.anniversaryDate : string
+  $.body : string
+  $.key : string
+  $.preview : bool
+  $.show : bool
+  $.signature : string
+  $.title : string
+  $.years : number
+
+[Employee] 200 application/json
+  $ : object
+  $.anniversaryDate : string
+  $.body : string
+  $.key : string
+  $.preview : bool
+  $.show : bool
+  $.signature : string
+  $.title : string
+  $.years : number

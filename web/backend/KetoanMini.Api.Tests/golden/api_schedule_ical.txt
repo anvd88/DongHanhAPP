@@ -1,0 +1,17 @@
+# /api/schedule/ical
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 text/calendar
+  (thân phản hồi không phải JSON)
+
+[Accounting] 200 text/calendar
+  (thân phản hồi không phải JSON)
+
+[HR] 200 text/calendar
+  (thân phản hồi không phải JSON)
+
+[Driver] 200 text/calendar
+  (thân phản hồi không phải JSON)
+
+[Employee] 200 text/calendar
+  (thân phản hồi không phải JSON)

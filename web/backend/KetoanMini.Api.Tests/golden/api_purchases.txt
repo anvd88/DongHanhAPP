@@ -1,0 +1,42 @@
+# /api/purchases
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].cancelReason : string
+  $.items[].cancelledAt : string
+  $.items[].createdBy : string
+  $.items[].docDate : string
+  $.items[].id : string
+  $.items[].note : string
+  $.items[].paidAmount : number
+  $.items[].remaining : number
+  $.items[].supplierInvoiceNo : string
+  $.items[].supplierName : string
+  $.items[].total : number
+  $.items[].voucherNo : string
+
+[Accounting] 200 application/json
+  $ : object
+  $.items : array
+  $.items[] : object
+  $.items[].cancelReason : string
+  $.items[].cancelledAt : string
+  $.items[].createdBy : string
+  $.items[].docDate : string
+  $.items[].id : string
+  $.items[].note : string
+  $.items[].paidAmount : number
+  $.items[].remaining : number
+  $.items[].supplierInvoiceNo : string
+  $.items[].supplierName : string
+  $.items[].total : number
+  $.items[].voucherNo : string
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

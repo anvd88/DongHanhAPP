@@ -1,0 +1,12 @@
+# /api/realtime/stream
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 401 
+
+[Accounting] 401 
+
+[HR] 401 
+
+[Driver] 401 
+
+[Employee] 401 

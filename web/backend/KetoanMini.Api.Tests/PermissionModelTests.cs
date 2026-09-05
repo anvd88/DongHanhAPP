@@ -39,10 +39,13 @@ public sealed class PermissionMapTests
     public void Admin_CoMoiQuyenKyThuat_NhungKhongTuThamGiaThuTienMat()
     {
         var admin = Permissions.For([AppRoles.Admin]);
+        // Giữ tiền mặt là việc theo CHỨC DANH, không phải đặc quyền quản trị: Admin chỉ tham gia khi
+        // đồng thời giữ vai trò Kế toán/Thủ quỹ/Lái xe. cashfund.manage (ghi bút toán tay vào quỹ)
+        // nằm cùng nhóm đó — Permissions.cs đã loại nó khỏi Admin, danh sách này phải khớp.
         var collectionPermissions = new[]
         {
             Permissions.CollectionsSelf, Permissions.CollectionsReadAll, Permissions.CollectionsCreate,
-            Permissions.CollectionsReceive, Permissions.CollectionsResolve,
+            Permissions.CollectionsReceive, Permissions.CollectionsResolve, Permissions.CashFundManage,
         };
         Assert.Empty(Permissions.All.Except(collectionPermissions).Except(admin));
         Assert.All(collectionPermissions, permission => Assert.DoesNotContain(permission, admin));
@@ -54,7 +57,6 @@ public sealed class PermissionMapTests
         var perms = Permissions.For([AppRoles.Kiosk]);
         Assert.Contains(Permissions.AttendanceKiosk, perms);
         Assert.DoesNotContain(Permissions.HrSelfAccess, perms);
-        Assert.DoesNotContain(Permissions.ChatAccess, perms);
         Assert.DoesNotContain(Permissions.UsersManage, perms);
     }
 

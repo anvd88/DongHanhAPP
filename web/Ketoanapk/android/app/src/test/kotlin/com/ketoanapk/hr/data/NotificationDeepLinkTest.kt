@@ -22,11 +22,6 @@ class NotificationDeepLinkTest {
     }
 
     @Test
-    fun extractsConversationIdFromChatNotification() {
-        assertEquals("conversation-1", entityIdFromNotificationId("chat:conversation-1:42"))
-    }
-
-    @Test
     fun missingCheckoutReminderTargetsPrefilledForgotCheckinForm() {
         val sheet = Timesheet(
             period = "2026-08",

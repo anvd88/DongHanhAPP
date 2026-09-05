@@ -1,18 +1,14 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-// Font toàn cục cho cả app (hiện tại và mai sau): Be Vietnam Pro.
-import '@fontsource/be-vietnam-pro/400.css'
-import '@fontsource/be-vietnam-pro/500.css'
-import '@fontsource/be-vietnam-pro/600.css'
-import '@fontsource/be-vietnam-pro/700.css'
-import '@fontsource/be-vietnam-pro/800.css'
-import './index.css'
-import App from './App.tsx'
-import './enterprise.css'
-import { applyPerfMode } from './lib/perfMode'
+import './styles/theme.css'
+import { App } from './app/App'
+import { readTheme, applyTheme, watchSystemTheme } from './lib/theme'
 
-// Áp chế độ hiệu năng (nhẹ/đầy đủ) TRƯỚC khi render để tránh nháy giao diện nặng trên máy yếu.
-applyPerfMode()
+// Chủ đề đã được /theme-boot.js đặt trước khi tải mã này để tránh nháy nền. Gọi lại một lần ở đây
+// làm phương án dự phòng nếu tệp đó không chạy được, sau đó theo dõi thay đổi sáng/tối của hệ điều
+// hành cho chế độ "theo máy".
+applyTheme(readTheme())
+watchSystemTheme(() => applyTheme(readTheme()))
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

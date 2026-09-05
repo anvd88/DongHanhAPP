@@ -1,11 +1,9 @@
 using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
-using KetoanMini.Api.Realtime;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -154,7 +152,7 @@ public static class QrActionEndpoints
         });
 
         g.MapPost("/decision", async (QrDecisionRequest req, ClaimsPrincipal principal, Database db,
-            QrLoginService qrLogin, QrActionTokenService tokens, IHubContext<ChangesHub> hub, HttpContext http) =>
+            QrLoginService qrLogin, QrActionTokenService tokens, HttpContext http) =>
         {
             NoStore(http);
             var username = principal.Username();

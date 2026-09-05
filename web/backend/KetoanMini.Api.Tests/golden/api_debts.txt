@@ -1,0 +1,60 @@
+# /api/debts
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.customers : array
+  $.customers[] : object
+  $.customers[].balance : number
+  $.customers[].collectedTotal : number
+  $.customers[].customer : object
+  $.customers[].customer.address : string
+  $.customers[].customer.id : string
+  $.customers[].customer.isActive : bool
+  $.customers[].customer.name : string
+  $.customers[].customer.phone : string
+  $.customers[].customer.taxCode : string
+  $.customers[].invoiceCount : number
+  $.customers[].lastActivityDate : string
+  $.customers[].openingBalance : number
+  $.customers[].openingNote : string
+  $.customers[].returnsTotal : number
+  $.customers[].salesTotal : number
+  $.debtorCount : number
+  $.totalCollected : number
+  $.totalOpeningBalance : number
+  $.totalReceivable : number
+  $.totalReturns : number
+  $.totalSales : number
+
+[Accounting] 200 application/json
+  $ : object
+  $.customers : array
+  $.customers[] : object
+  $.customers[].balance : number
+  $.customers[].collectedTotal : number
+  $.customers[].customer : object
+  $.customers[].customer.address : string
+  $.customers[].customer.id : string
+  $.customers[].customer.isActive : bool
+  $.customers[].customer.name : string
+  $.customers[].customer.phone : string
+  $.customers[].customer.taxCode : string
+  $.customers[].invoiceCount : number
+  $.customers[].lastActivityDate : string
+  $.customers[].openingBalance : number
+  $.customers[].openingNote : string
+  $.customers[].returnsTotal : number
+  $.customers[].salesTotal : number
+  $.debtorCount : number
+  $.totalCollected : number
+  $.totalOpeningBalance : number
+  $.totalReceivable : number
+  $.totalReturns : number
+  $.totalSales : number
+
+[HR] 403 
+
+[Driver] 403 
+
+[Employee] 403 

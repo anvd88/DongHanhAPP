@@ -2,10 +2,10 @@ using System.Security.Claims;
 using KetoanMini.Api.Data;
 using KetoanMini.Api.Models;
 using KetoanMini.Api.Realtime;
+using KetoanMini.Api.BuildingBlocks.Realtime;
 using KetoanMini.Api.Security;
 using KetoanMini.Api.Services;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.AspNetCore.SignalR;
 using Npgsql;
 
 namespace KetoanMini.Api.Endpoints;
@@ -591,10 +591,16 @@ public static class ChamCongEndpoints
             await ExpireFaceEnrollmentsAsync(conn);
             var count = 0;
             DateTime? first = null;
-            await using var r = await conn.Cmd(
+            // ĐÓNG reader này TRƯỚC khi mở reader thứ hai bên dưới. Npgsql không cho hai reader cùng
+            // sống trên một kết nối; `await using var` giữ reader tới hết hàm nên nhánh count == 0
+            // (nhân viên CHƯA đăng ký khuôn mặt — đúng đối tượng hay mở màn này nhất) ném
+            // NpgsqlOperationInProgressException, bị middleware bắt thành 503 "mất kết nối CSDL" giả.
+            await using (var r = await conn.Cmd(
                 "SELECT COUNT(*) AS c, MIN(created_at) AS f FROM cham_cong_face WHERE username=@u")
-                .With("@u", me).ExecuteReaderAsync();
-            if (await r.ReadAsync()) { count = r.Int("c"); first = r.DtNull("f"); }
+                .With("@u", me).ExecuteReaderAsync())
+            {
+                if (await r.ReadAsync()) { count = r.Int("c"); first = r.DtNull("f"); }
+            }
 
             if (count > 0)
                 return Results.Ok(new SelfFaceStatusDto(true, count, first, RequestStatus: "registered"));
@@ -1165,7 +1171,7 @@ public static class ChamCongEndpoints
         // Chấm công bằng LOẠT ẢNH: KHÔNG quét trực tiếp liên tục — client chụp 1 loạt khung,
         // server chọn ẢNH TỐT NHẤT (nét, đủ sáng, mặt to & chính diện), kiểm tra tư thế (báo
         // trực tiếp nếu sai), liveness rồi nhận diện và ghi nhật ký. Ẩn danh để dùng ở kiosk.
-        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, LivenessMetricsLog livenessLog, AttendancePreviewTokens previewTokens, IHubContext<ChangesHub> hub, ILoggerFactory lf, HttpContext http, PushService push) =>
+        g.MapPost("/cham", async (ChamCongBurstRequest req, Database db, IFaceEngine engine, ClaimsPrincipal u, FieldCipher cipher, LivenessMetricsLog livenessLog, AttendancePreviewTokens previewTokens, BusinessEventWriter businessEvents, ILoggerFactory lf, HttpContext http, PushService push) =>
         {
             var currentUser = u.Username();
             var selfOnly = !string.IsNullOrWhiteSpace(currentUser) && !u.Can(Permissions.AttendanceManage);
@@ -1328,7 +1334,7 @@ public static class ChamCongEndpoints
             livenessLog.Record(currentUser, liveScores, engine.LivenessThreshold, livePassed, motionSpan, bestEyeOpen);
             // These diagnostics only live in memory, so no database trigger can publish them.
             // Notify the open admin panel instead of making it poll this endpoint every four seconds.
-            try { await hub.Clients.All.SendAsync("changed", "liveness", http.RequestAborted); }
+            try { await businessEvents.InvalidatedAsync("liveness", u.Username(), http.RequestAborted); }
             catch (Exception ex) { lf.CreateLogger("LivenessRealtime").LogDebug(ex, "Could not publish liveness metrics."); }
 
             if (!livePassed)

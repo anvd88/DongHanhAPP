@@ -1,0 +1,32 @@
+# /api/releases/latest
+# Khung phản hồi theo vai trò. Sinh bởi GoldenContractTests; đừng sửa tay.
+
+[Admin] 200 application/json
+  $ : object
+  $.appTarget : string
+  $.currentVersionCode : number
+  $.hasUpdate : bool
+
+[Accounting] 200 application/json
+  $ : object
+  $.appTarget : string
+  $.currentVersionCode : number
+  $.hasUpdate : bool
+
+[HR] 200 application/json
+  $ : object
+  $.appTarget : string
+  $.currentVersionCode : number
+  $.hasUpdate : bool
+
+[Driver] 200 application/json
+  $ : object
+  $.appTarget : string
+  $.currentVersionCode : number
+  $.hasUpdate : bool
+
+[Employee] 200 application/json
+  $ : object
+  $.appTarget : string
+  $.currentVersionCode : number
+  $.hasUpdate : bool
